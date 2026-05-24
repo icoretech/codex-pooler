@@ -104,6 +104,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     do: {:ok, Map.put_new(item, "type", "message")}
 
   defp normalize_input_item(%{"type" => "input_file"} = item), do: {:ok, item}
+  defp normalize_input_item(%{"type" => "item_reference"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{} = item) do
     if ToolResultShape.tool_result?(item) do
@@ -208,9 +209,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_input(%{"input" => input}) when is_binary(input), do: :ok
 
-  defp validate_input(%{"input" => input}) when is_list(input) and input != [] do
+  defp validate_input(%{"input" => input} = payload) when is_list(input) and input != [] do
     Enum.reduce_while(input, :ok, fn item, _acc ->
-      case validate_input_item(item) do
+      case validate_input_item(item, payload) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -225,29 +226,69 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_input(_payload), do: :ok
 
-  defp validate_input_item(%{"type" => "message"} = item), do: validate_message_item(item)
-  defp validate_input_item(%{"role" => _role} = item), do: validate_message_item(item)
-  defp validate_input_item(%{"content" => _content} = item), do: validate_message_item(item)
+  defp validate_input_item(%{"type" => "message"} = item, _payload),
+    do: validate_message_item(item)
 
-  defp validate_input_item(%{"type" => "input_file", "file_id" => file_id})
+  defp validate_input_item(%{"role" => _role} = item, _payload), do: validate_message_item(item)
+
+  defp validate_input_item(%{"content" => _content} = item, _payload),
+    do: validate_message_item(item)
+
+  defp validate_input_item(%{"type" => "input_file", "file_id" => file_id}, _payload)
        when is_binary(file_id) and file_id != "",
        do: :ok
 
-  defp validate_input_item(%{"type" => "function_call_output", "call_id" => call_id} = item)
+  defp validate_input_item(
+         %{"type" => "function_call_output", "call_id" => call_id} = item,
+         _payload
+       )
        when is_binary(call_id) and call_id != "" do
     if Map.has_key?(item, "output") or Map.has_key?(item, "result"),
       do: :ok,
       else: {:error, Error.invalid_request("function_call_output requires output", "input")}
   end
 
-  defp validate_input_item(%{} = item) do
+  defp validate_input_item(%{"type" => "item_reference"} = item, payload),
+    do: validate_item_reference(item, payload)
+
+  defp validate_input_item(%{} = item, _payload) do
     if ToolResultShape.tool_result?(item),
       do: :ok,
       else: {:error, Error.invalid_request("input item shape is not translatable", "input")}
   end
 
-  defp validate_input_item(_item),
+  defp validate_input_item(_item, _payload),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_item_reference(%{"id" => id} = item, payload) when is_binary(id) do
+    cond do
+      !bare_item_reference?(item) ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+      String.trim(id) == "" ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+      !previous_response_id?(payload) ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+      ToolResultShape.items(Map.get(payload, "input")) == [] ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_item_reference(_item, _payload),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp bare_item_reference?(item),
+    do: map_size(item) == 2 and Map.has_key?(item, "id") and Map.has_key?(item, "type")
+
+  defp previous_response_id?(%{"previous_response_id" => value}) when is_binary(value),
+    do: String.trim(value) != ""
+
+  defp previous_response_id?(_payload), do: false
 
   defp validate_message_item(%{"role" => role, "content" => content})
        when role in ["system", "user", "assistant", "developer", "tool"] do
@@ -313,6 +354,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          "type" => "function",
          "function" => %{"name" => name, "parameters" => parameters}
        })
+       when is_binary(name) and name != "" and is_map(parameters),
+       do: :ok
+
+  defp validate_tool(%{"type" => "function", "name" => name, "parameters" => parameters})
        when is_binary(name) and name != "" and is_map(parameters),
        do: :ok
 

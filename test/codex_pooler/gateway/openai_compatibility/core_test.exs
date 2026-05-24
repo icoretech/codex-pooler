@@ -322,6 +322,56 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              payload["input"]
   end
 
+  test "Responses item_reference continuations require previous response tool-result context" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "previous_response_id" => "resp_fixture_previous",
+      "input" => [
+        %{"type" => "item_reference", "id" => "msg_existing_fixture"},
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture",
+          "output" => "{\"ok\":true}"
+        }
+      ]
+    }
+
+    assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+    assert coerced["previous_response_id"] == "resp_fixture_previous"
+
+    assert [
+             %{"type" => "item_reference", "id" => "msg_existing_fixture"},
+             %{"type" => "function_call_output", "call_id" => "call_fixture"}
+           ] = coerced["input"]
+
+    malformed_references = [
+      %{"type" => "item_reference"},
+      %{"type" => "item_reference", "id" => ""},
+      %{"type" => "item_reference", "id" => "msg_existing_fixture", "output" => "bad"}
+    ]
+
+    Enum.each(malformed_references, fn item ->
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+    end)
+
+    assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => [%{"type" => "item_reference", "id" => "msg_existing_fixture"}]
+             })
+
+    assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "previous_response_id" => "resp_fixture_previous",
+               "input" => [
+                 %{"type" => "item_reference", "id" => "msg_existing_fixture"},
+                 %{"role" => "user", "content" => "synthetic ordinary continuation"}
+               ]
+             })
+  end
+
   @tag :unsupported_fields
   test "invalid file purpose and multipart metadata return deterministic reason maps" do
     assert {:error, reason} =
@@ -417,6 +467,31 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     assert {:ok, chat_result} = Chat.coerce(chat_payload)
     assert chat_result.payload["tools"] == chat_payload["tools"]
+  end
+
+  @tag :responses_coercion
+  test "Responses accepts flat function tools emitted by released OpenAI SDK" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "lookup_fixture",
+          "description" => "Lookup synthetic fixture",
+          "parameters" => %{
+            "$schema" => "http://json-schema.org/draft-07/schema#",
+            "type" => "object",
+            "additionalProperties" => false,
+            "properties" => %{"value" => %{"type" => "string"}},
+            "required" => ["value"]
+          }
+        }
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload)
+    assert result.payload["tools"] == payload["tools"]
   end
 
   @tag :responses_coercion

@@ -108,6 +108,78 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     refute persisted_gateway_metadata(setup.pool.id) =~ "resp_v1_tool_origin"
   end
 
+  @tag :tool_result_previous_response
+  test "v1 Responses accepts ai-sdk item references in previous response tool-result continuations",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.require_json_field(
+          "previous_response_id",
+          %{
+            "id" => "resp_v1_ai_sdk_item_reference",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          },
+          %{"error" => %{"code" => "missing_tool_context"}}
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    response_conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_ai_sdk_previous",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+          },
+          %{"type" => "item_reference", "id" => "msg_existing_123"},
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_123",
+            "output" => "{\"ok\":true}"
+          }
+        ],
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "lookup",
+            "description" => "Lookup synthetic fixture",
+            "parameters" => %{
+              "$schema" => "http://json-schema.org/draft-07/schema#",
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{"value" => %{"type" => "string"}},
+              "required" => ["value"]
+            }
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_ai_sdk_item_reference"} = json_response(response_conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["previous_response_id"] == "resp_v1_ai_sdk_previous"
+
+    assert [
+             %{"type" => "message", "role" => "user"},
+             %{"type" => "item_reference", "id" => "msg_existing_123"},
+             %{"type" => "function_call_output", "call_id" => "call_123"}
+           ] = captured.json["input"]
+
+    assert [
+             %{"type" => "function", "name" => "lookup", "parameters" => %{"type" => "object"}}
+           ] = captured.json["tools"]
+
+    refute persisted_gateway_metadata(setup.pool.id) =~ "synthetic follow-up"
+    refute persisted_gateway_metadata(setup.pool.id) =~ "msg_existing_123"
+    refute persisted_gateway_metadata(setup.pool.id) =~ "resp_v1_ai_sdk_previous"
+  end
+
   @tag :input_file_affinity
   test "v1 input_file routes to the uploaded file owner assignment and rejects cross-key or missing refs",
        %{conn: conn} do
