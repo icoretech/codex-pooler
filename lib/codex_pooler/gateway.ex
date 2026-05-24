@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway do
   lifecycle calls live in `CodexPooler.Accounting`.
   """
 
+  require Logger
+
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Catalog.Model
@@ -29,6 +31,7 @@ defmodule CodexPooler.Gateway do
   }
 
   alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
     CodexSession,
     CodexTurn,
     RoutingCircuitState,
@@ -174,8 +177,113 @@ defmodule CodexPooler.Gateway do
   defp prepare_owner_websocket_session(auth, opts) do
     opts = owner_websocket_opts(opts)
 
-    with {:ok, session} <- start_codex_session(auth, opts),
-         :ok <- ensure_local_owner_session(session, opts),
+    with {:ok, session} <- start_codex_session(auth, opts) do
+      prepare_owner_websocket_session_with_recovery(session, opts, true)
+    end
+  end
+
+  defp prepare_owner_websocket_session_with_recovery(session, opts, allow_takeover?) do
+    case attach_local_owner_websocket_session(session, opts) do
+      {:ok, runtime} ->
+        {:ok, runtime}
+
+      {:error, :owner_unavailable} when allow_takeover? ->
+        log_owner_takeover_attempt(session, opts)
+        replace_and_attach_unavailable_owner(session, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp replace_and_attach_unavailable_owner(%CodexSession{} = session, %RequestOptions{} = opts) do
+    case SessionContinuity.replace_unavailable_owner_lease(session, opts) do
+      {:ok, replacement_session} ->
+        attach_replacement_owner(session, replacement_session, opts)
+
+      {:error, reason} = error ->
+        log_owner_takeover_failure(session, opts, reason)
+        error
+    end
+  end
+
+  defp attach_replacement_owner(
+         %CodexSession{} = previous_session,
+         %CodexSession{} = replacement_session,
+         %RequestOptions{} = opts
+       ) do
+    case prepare_owner_websocket_session_with_recovery(replacement_session, opts, false) do
+      {:ok, _runtime} = result ->
+        log_owner_takeover_success(previous_session, replacement_session, opts)
+        result
+
+      {:error, reason} = error ->
+        log_owner_takeover_failure(replacement_session, opts, reason)
+        error
+    end
+  end
+
+  defp log_owner_takeover_attempt(%CodexSession{} = session, %RequestOptions{} = opts) do
+    Logger.warning(
+      "websocket owner takeover attempted " <>
+        owner_takeover_log_metadata(session, opts)
+    )
+  end
+
+  defp log_owner_takeover_success(
+         %CodexSession{} = previous_session,
+         %CodexSession{} = replacement_session,
+         %RequestOptions{} = opts
+       ) do
+    Logger.warning(
+      "websocket owner takeover succeeded " <>
+        owner_takeover_log_metadata(replacement_session, opts) <>
+        " previous_owner_instance_id=#{safe_log_token(previous_session.owner_instance_id)}"
+    )
+  end
+
+  defp log_owner_takeover_failure(%CodexSession{} = session, %RequestOptions{} = opts, reason) do
+    Logger.warning(
+      "websocket owner takeover failed " <>
+        owner_takeover_log_metadata(session, opts) <>
+        " failure_reason=#{owner_takeover_reason(reason)}"
+    )
+  end
+
+  defp owner_takeover_log_metadata(%CodexSession{} = session, %RequestOptions{} = opts) do
+    [
+      "codex_session_id=#{safe_log_token(session.id)}",
+      "request_id=#{safe_log_token(request_id(opts))}",
+      "owner_instance_id=#{safe_log_token(session.owner_instance_id)}",
+      "proxy_instance_id=#{safe_log_token(Atom.to_string(node()))}",
+      "owner_lease_expires_at=#{safe_log_datetime(session.owner_lease_expires_at)}",
+      "last_heartbeat_at=#{safe_log_datetime(session.last_heartbeat_at)}",
+      "session_status=#{safe_log_token(session.status)}"
+    ]
+    |> Enum.join(" ")
+  end
+
+  defp owner_takeover_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp owner_takeover_reason({reason, _details}) when is_atom(reason), do: Atom.to_string(reason)
+  defp owner_takeover_reason(_reason), do: "unavailable"
+
+  defp safe_log_datetime(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp safe_log_datetime(_value), do: "none"
+
+  defp safe_log_token(value) when is_binary(value) do
+    value
+    |> String.replace(~r/[^a-zA-Z0-9_.:@-]+/, "_")
+    |> String.slice(0, 160)
+    |> case do
+      "" -> "none"
+      value -> value
+    end
+  end
+
+  defp safe_log_token(_value), do: "none"
+
+  defp attach_local_owner_websocket_session(session, opts) do
+    with :ok <- ensure_local_owner_session(session, opts),
          {:ok, downstream} <- attach_owner_downstream(session, opts) do
       {:ok,
        %{
@@ -359,7 +467,51 @@ defmodule CodexPooler.Gateway do
   @spec cleanup_expired_runtime_state(DateTime.t()) ::
           {:ok, map()} | {:error, term()}
   def cleanup_expired_runtime_state(now \\ now()) do
-    RuntimeCleanup.cleanup_expired(now)
+    with {:ok, recovered_summary} <- recover_expired_owner_runtime_state(now),
+         {:ok, cleanup_summary} <- RuntimeCleanup.cleanup_expired(now) do
+      {:ok, Map.merge(cleanup_summary, recovered_summary)}
+    end
+  end
+
+  defp recover_expired_owner_runtime_state(%DateTime{} = now) do
+    now = DateTime.truncate(now, :microsecond)
+
+    sessions = expired_owner_sessions_with_active_turns(now)
+
+    sessions
+    |> Enum.reduce_while({:ok, 0}, &recover_expired_owner_session/2)
+    |> case do
+      {:ok, recovered_count} -> {:ok, %{expired_owner_sessions_recovered: recovered_count}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp recover_expired_owner_session(session_id, {:ok, recovered_count}) do
+    case Interruption.recover_owner_lifecycle_leftovers(
+           session_id,
+           :owner_unavailable,
+           RequestOptions.for_websocket(%{})
+         ) do
+      {:ok, _result} -> {:cont, {:ok, recovered_count + 1}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp expired_owner_sessions_with_active_turns(%DateTime{} = now) do
+    import Ecto.Query
+
+    Repo.all(
+      from session in CodexSession,
+        join: lease in BridgeOwnerLease,
+        on:
+          lease.codex_session_id == session.id and
+            lease.status == ^BridgeOwnerLease.active_status() and
+            lease.expires_at <= ^now,
+        join: turn in CodexTurn,
+        on: turn.codex_session_id == session.id and turn.status == "in_progress",
+        distinct: session.id,
+        select: session.id
+    )
   end
 
   @spec list_codex_sessions(pool_ref(), keyword()) :: %{

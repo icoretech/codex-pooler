@@ -272,6 +272,48 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert %DateTime{} = released_lease.released_at
   end
 
+  test "unavailable owner takeover is refused when owner snapshot changed" do
+    %{session: stale_session} = owner_session_fixture()
+    before_lease = active_lease!(stale_session.id)
+    current_token = Ecto.UUID.generate()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    expires_at = DateTime.add(now, 90, :second)
+
+    stale_session
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      owner_lease_token: current_token,
+      owner_lease_expires_at: expires_at,
+      last_heartbeat_at: now,
+      updated_at: now
+    })
+    |> Repo.update!()
+
+    before_lease
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "node-b",
+      lease_token: current_token,
+      renewed_at: now,
+      expires_at: expires_at,
+      updated_at: now
+    })
+    |> Repo.update!()
+
+    assert {:error, :stale_owner} =
+             SessionContinuity.replace_unavailable_owner_lease(
+               stale_session,
+               owner_request_options(owner_instance_id: "node-c")
+             )
+
+    assert %CodexSession{owner_instance_id: "node-b", owner_lease_token: ^current_token} =
+             Repo.get!(CodexSession, stale_session.id)
+
+    assert %BridgeOwnerLease{id: active_lease_id, owner_instance_id: "node-b"} =
+             active_lease!(stale_session.id)
+
+    assert active_lease_id == before_lease.id
+  end
+
   defp auth_fixture do
     %{user: owner} = bootstrap_owner_fixture()
     pool = pool_fixture(%{created_by_user_id: owner.id})

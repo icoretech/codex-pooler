@@ -153,6 +153,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   def release_owner_lease(_session_ref, _owner_lease_token, _reason),
     do: {:error, :owner_unavailable}
 
+  @spec replace_unavailable_owner_lease(session_ref(), opts()) :: session_result()
+  def replace_unavailable_owner_lease(session_ref, %RequestOptions{} = opts) do
+    now = now()
+    owner = owner_instance_id(opts)
+    expected_owner = expected_owner_snapshot(session_ref)
+
+    Repo.transaction(fn ->
+      with {:ok, session_id} <- session_id(session_ref),
+           %CodexSession{} = session <- Repo.get(CodexSession, session_id, lock: "FOR UPDATE"),
+           :ok <- validate_expected_owner_snapshot(session, expected_owner) do
+        replace_unavailable_owner_lease!(session, owner, opts, now)
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        nil -> Repo.rollback(:owner_unavailable)
+      end
+    end)
+    |> unwrap_transaction()
+  end
+
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do
     existing_session = existing_session_for_start!(auth, opts, session_key, now)
 
@@ -392,6 +411,66 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> Repo.update!()
 
     :ok
+  end
+
+  defp replace_unavailable_owner_lease!(%CodexSession{status: status} = session, owner, opts, now)
+       when status in @session_reconnectable_statuses do
+    release_active_owner_lease_for_takeover!(session.id, now)
+
+    session
+    |> insert_takeover_owner_lease!(owner, opts, now)
+    |> then(&persist_session_lease!(session, &1, now))
+  end
+
+  defp replace_unavailable_owner_lease!(%CodexSession{}, _owner, _opts, _now) do
+    Repo.rollback(:owner_unavailable)
+  end
+
+  defp release_active_owner_lease_for_takeover!(session_id, now) do
+    case active_bridge_owner_lease_for_update(session_id) do
+      %BridgeOwnerLease{} = lease ->
+        release_owner_lease!(lease, "owner_unavailable_takeover", now)
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp insert_takeover_owner_lease!(%CodexSession{} = session, owner, opts, now) do
+    expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)
+
+    %BridgeOwnerLease{}
+    |> BridgeOwnerLease.changeset(%{
+      codex_session_id: session.id,
+      pool_id: session.pool_id,
+      api_key_id: session.api_key_id,
+      pool_upstream_assignment_id: session.pool_upstream_assignment_id,
+      owner_instance_id: owner,
+      lease_token: Ecto.UUID.generate(),
+      status: "active",
+      acquired_at: now,
+      renewed_at: now,
+      expires_at: expires_at,
+      metadata: %{"source" => "owner_unavailable_takeover"},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+  end
+
+  defp expected_owner_snapshot(%CodexSession{} = session) do
+    %{owner_instance_id: session.owner_instance_id, owner_lease_token: session.owner_lease_token}
+  end
+
+  defp expected_owner_snapshot(_session_ref), do: nil
+
+  defp validate_expected_owner_snapshot(_session, nil), do: :ok
+
+  defp validate_expected_owner_snapshot(%CodexSession{} = session, expected) do
+    if session.owner_instance_id == expected.owner_instance_id and
+         session.owner_lease_token == expected.owner_lease_token,
+       do: :ok,
+       else: {:error, :stale_owner}
   end
 
   defp owner_release_missing_reason(session_ref) do

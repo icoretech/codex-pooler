@@ -3494,8 +3494,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           %{response_status_code: 200}
         )
 
+        send(parent, {:task_drain_finalized, self()})
         send(parent, {:codex_response_done, self(), :ok})
       end)
+
+    assert_receive {:task_drain_finalized, ^pid}, 1_000
 
     assert :ok =
              CodexResponsesSocket.terminate(:closed, %{

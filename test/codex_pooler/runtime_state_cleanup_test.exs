@@ -3,6 +3,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway
@@ -11,6 +12,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
+    CodexTurn,
     IdempotencyKey
   }
 
@@ -59,13 +61,95 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
 
     assert {:ok, summary} = Gateway.cleanup_expired_runtime_state(now)
 
-    assert summary == %{expired_aliases: 1, expired_idempotency_keys: 1, expired_owner_leases: 1}
+    assert summary == %{
+             expired_aliases: 1,
+             expired_idempotency_keys: 1,
+             expired_owner_leases: 1,
+             expired_owner_sessions_recovered: 0
+           }
+
     assert Repo.get!(BridgeSessionAlias, expired_alias.id).status == "expired"
     assert Repo.get!(BridgeSessionAlias, active_alias.id).status == "active"
     assert Repo.get!(BridgeOwnerLease, expired_lease.id).status == "expired"
     assert Repo.get!(BridgeOwnerLease, active_lease.id).status == "active"
     assert Repo.get!(IdempotencyKey, expired_key.id).status == "expired"
     assert Repo.get!(IdempotencyKey, active_key.id).status == "in_progress"
+  end
+
+  test "cleanup interrupts in-progress turns before expiring owner leases" do
+    now = ~U[2026-05-03 03:15:00Z]
+    expired_at = DateTime.add(now, -1, :second)
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    model = model_fixture(pool, %{exposed_model_id: "gpt-cleanup"})
+    session = session_fixture(pool, api_key, assignment, expired_at)
+    expired_lease = lease_fixture(session, pool, api_key, assignment, expired_at, now)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        model_id: model.id,
+        requested_model: model.exposed_model_id,
+        transport: "websocket",
+        status: "in_progress",
+        usage_status: "usage_pending",
+        completed_at: nil,
+        response_status_code: nil,
+        request_metadata: %{"codex_session_id" => session.id}
+      })
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "in_progress",
+        completed_at: nil,
+        usage_status: "usage_pending",
+        response_metadata: %{}
+      })
+
+    turn = turn_fixture(session, request, attempt, now)
+
+    request
+    |> ledger_entry_fixture(%{
+      attempt_id: attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      entry_kind: "reservation",
+      amount_status: "recorded",
+      usage_status: "usage_pending",
+      transport: "websocket",
+      output_tokens: 8,
+      total_tokens: 12,
+      details: %{"source" => "test_reservation"}
+    })
+    |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
+    |> Repo.update!()
+
+    assert {:ok, summary} = Gateway.cleanup_expired_runtime_state(now)
+    assert summary.expired_owner_sessions_recovered == 1
+    assert summary.expired_owner_leases == 1
+
+    assert %Request{
+             status: "failed",
+             usage_status: "usage_unknown",
+             response_status_code: 499,
+             last_error_code: "owner_unavailable"
+           } = Repo.reload!(request)
+
+    assert %Attempt{
+             status: "failed",
+             usage_status: "usage_unknown",
+             network_error_code: "owner_unavailable"
+           } = Repo.reload!(attempt)
+
+    assert %CodexTurn{status: "interrupted", error_code: "owner_unavailable"} =
+             Repo.reload!(turn)
+
+    assert Repo.reload!(expired_lease).status == "expired"
+
+    assert Enum.map(ledger_entries_for_request(request.id), & &1.entry_kind) |> Enum.sort() == [
+             "release",
+             "reservation",
+             "settlement"
+           ]
   end
 
   test "jobs cleanup entrypoint combines file and gateway cleanup summaries" do
@@ -185,6 +269,29 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
       updated_at: now
     })
     |> Repo.insert!()
+  end
+
+  defp turn_fixture(session, request, attempt, now) do
+    timestamp = now |> DateTime.add(-30, :second) |> usec()
+
+    %CodexTurn{
+      codex_session_id: session.id,
+      request_id: request.id,
+      turn_sequence: 1,
+      transport_kind: request.transport,
+      final_attempt_id: attempt.id,
+      status: "in_progress",
+      started_at: timestamp,
+      created_at: timestamp,
+      updated_at: timestamp
+    }
+    |> Repo.insert!()
+  end
+
+  defp ledger_entries_for_request(request_id) do
+    import Ecto.Query
+
+    Repo.all(from entry in LedgerEntry, where: entry.request_id == ^request_id)
   end
 
   defp usec(%DateTime{} = timestamp) do
