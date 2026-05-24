@@ -82,14 +82,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       "input" => Enum.map(messages, &message_to_input_item/1)
     }
 
-    payload =
+    with {:ok, base} <- maybe_put_tools(base, payload) do
       base
-      |> maybe_put(payload, "tools")
-      |> maybe_put(payload, "tool_choice")
+      |> maybe_put_tool_choice(payload)
+      |> maybe_put(payload, "parallel_tool_calls")
       |> maybe_put(payload, "stream")
       |> put_text_format(payload)
-
-    {:ok, payload}
+    end
   end
 
   defp message_to_input_item(%{"role" => role, "content" => content} = message) do
@@ -120,6 +119,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        when is_binary(image_url),
        do: %{"type" => "input_image", "image_url" => image_url}
 
+  defp normalize_content_part(%{"type" => "input_audio"} = part), do: part
+
   defp normalize_content_part(%{} = part), do: part
 
   defp valid_content?(content) when is_binary(content), do: true
@@ -146,25 +147,104 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
        when is_binary(image_url),
        do: true
 
+  defp valid_content_part?(%{
+         "type" => "input_audio",
+         "input_audio" => %{"data" => data, "format" => format}
+       })
+       when is_binary(data) and is_binary(format),
+       do: true
+
   defp valid_content_part?(_part), do: false
+
+  defp maybe_put_tools(acc, %{"tools" => tools}) when is_list(tools) do
+    with {:ok, tools} <- translate_tools(tools) do
+      {:ok, Map.put(acc, "tools", tools)}
+    end
+  end
+
+  defp maybe_put_tools(_acc, %{"tools" => _tools}),
+    do: {:error, Error.invalid_request("tools must be an array", "tools")}
+
+  defp maybe_put_tools(acc, _payload), do: {:ok, acc}
+
+  defp translate_tools(tools) do
+    tools
+    |> Enum.reduce_while({:ok, []}, fn tool, {:ok, acc} ->
+      case translate_tool(tool) do
+        {:ok, translated} -> {:cont, {:ok, [translated | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, tools} -> {:ok, Enum.reverse(tools)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp translate_tool(%{
+         "type" => "function",
+         "function" => %{"name" => name, "parameters" => parameters} = function
+       })
+       when is_binary(name) and is_map(parameters) do
+    if String.trim(name) == "" do
+      {:error, Error.invalid_request("function tool requires a non-empty name", "tools")}
+    else
+      tool =
+        function
+        |> Map.take(["name", "description", "parameters", "strict"])
+        |> Map.put("type", "function")
+
+      {:ok, tool}
+    end
+  end
+
+  defp translate_tool(%{"type" => "function"}),
+    do:
+      {:error,
+       Error.invalid_request(
+         "function tool requires nested function name and parameters",
+         "tools"
+       )}
+
+  defp translate_tool(%{"type" => type} = tool)
+       when type in ["web_search_preview", "image_generation"],
+       do: {:ok, tool}
+
+  defp translate_tool(_tool),
+    do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+  defp maybe_put_tool_choice(acc, %{
+         "tool_choice" => %{"type" => "function", "function" => %{"name" => name}}
+       })
+       when is_binary(name),
+       do: Map.put(acc, "tool_choice", %{"type" => "function", "name" => name})
+
+  defp maybe_put_tool_choice(acc, %{"tool_choice" => tool_choice}),
+    do: Map.put(acc, "tool_choice", tool_choice)
+
+  defp maybe_put_tool_choice(acc, _payload), do: acc
 
   defp put_text_format(acc, %{"response_format" => response_format}) do
     case response_format do
       %{"type" => "json_object"} ->
-        Map.put(acc, "text", %{"format" => %{"type" => "json_object"}})
+        {:ok, Map.put(acc, "text", %{"format" => %{"type" => "json_object"}})}
 
-      %{"type" => "json_schema", "json_schema" => schema} ->
-        Map.put(acc, "text", %{"format" => Map.put(schema, "type", "json_schema")})
+      %{"type" => "json_schema", "json_schema" => schema} when is_map(schema) ->
+        {:ok, Map.put(acc, "text", %{"format" => Map.put(schema, "type", "json_schema")})}
+
+      %{"type" => "json_schema"} ->
+        {:error,
+         Error.invalid_request("response_format json_schema must be an object", "response_format")}
 
       %{"type" => "text"} ->
-        Map.put(acc, "text", %{"format" => %{"type" => "text"}})
+        {:ok, Map.put(acc, "text", %{"format" => %{"type" => "text"}})}
 
       _format ->
-        Map.put(acc, "response_format", response_format)
+        {:ok, Map.put(acc, "response_format", response_format)}
     end
   end
 
-  defp put_text_format(acc, _payload), do: acc
+  defp put_text_format(acc, _payload), do: {:ok, acc}
 
   defp maybe_put(acc, source, key) do
     case Map.fetch(source, key) do

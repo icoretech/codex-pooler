@@ -153,6 +153,13 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert tool_call["type"] == "function"
     assert get_in(tool_call, ["function", "name"]) == "lookup_fixture"
     assert get_in(tool_call, ["function", "arguments"]) == "{\"query\":\"fixture\"}"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert [translated_tool] = captured.json["tools"]
+    assert translated_tool["type"] == "function"
+    assert translated_tool["name"] == "lookup_fixture"
+    assert translated_tool["parameters"] == get_in(function_tool(), ["function", "parameters"])
+    refute Map.has_key?(translated_tool, "function")
   end
 
   @tag :streaming_chat
@@ -259,6 +266,108 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "POST /v1/chat/completions translates SDK image and audio content parts", %{conn: conn} do
+    audio_bytes = "synthetic wav bytes"
+    audio_data = Base.encode64(audio_bytes)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_chat_multimodal",
+          "status" => "completed",
+          "output" => [
+            %{
+              "type" => "message",
+              "content" => [%{"type" => "output_text", "text" => "synthetic multimodal answer"}]
+            }
+          ],
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 6, "total_tokens" => 10}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "text", "text" => "synthetic multimodal chat"},
+            %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/sample.png"}},
+            %{
+              "type" => "input_audio",
+              "input_audio" => %{"data" => audio_data, "format" => "wav"}
+            }
+          ]
+        }
+      ]
+    }
+
+    conn = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{"id" => "resp_chat_multimodal"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert [%{"content" => content}] = captured.json["input"]
+    assert Enum.map(content, & &1["type"]) == ["input_text", "input_image", "input_audio"]
+    assert Enum.at(content, 1)["image_url"] == "https://example.com/sample.png"
+    assert get_in(Enum.at(content, 2), ["input_audio", "format"]) == "wav"
+
+    [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    metadata = inspect(request.request_metadata)
+    refute metadata =~ "synthetic multimodal chat"
+    refute metadata =~ audio_bytes
+    refute metadata =~ audio_data
+    refute metadata =~ "https://example.com/sample.png"
+  end
+
+  test "POST /v1/chat/completions rejects unsupported multimodal content before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_payloads = [
+      %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "image_url", "image_url" => "http://example.com/private.png"}
+            ]
+          }
+        ]
+      },
+      %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_audio",
+                "input_audio" => %{"data" => Base.encode64("unsupported"), "format" => "flac"}
+              }
+            ]
+          }
+        ]
+      }
+    ]
+
+    Enum.each(invalid_payloads, fn payload ->
+      response = conn |> recycle() |> auth(setup) |> post("/v1/chat/completions", payload)
+
+      assert %{"error" => %{"code" => code}} = json_response(response, 400)
+      assert code in ["invalid_request", "unsupported_input_image_format"]
+    end)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
   test "POST /v1/chat/completions rejects invalid strict nested function tools before dispatch",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
@@ -275,8 +384,86 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     assert %{"error" => error} = json_response(conn, 400)
     assert error["code"] == "invalid_function_parameters"
-    assert error["param"] == "tools.0.function.parameters.required"
+    assert error["param"] == "tools.0.parameters.required"
     refute conn.resp_body =~ sentinel
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  test "POST /v1/chat/completions translates named tool_choice and parallel tool call flags", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_chat_tool_choice",
+          "status" => "completed",
+          "output" => [
+            %{
+              "type" => "message",
+              "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+            }
+          ],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    payload =
+      chat_payload(setup)
+      |> Map.put("tools", [function_tool()])
+      |> Map.put("tool_choice", %{
+        "type" => "function",
+        "function" => %{"name" => "lookup_fixture"}
+      })
+      |> Map.put("parallel_tool_calls", false)
+
+    conn = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{"id" => "resp_chat_tool_choice"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["tool_choice"] == %{"type" => "function", "name" => "lookup_fixture"}
+    assert captured.json["parallel_tool_calls"] == false
+  end
+
+  test "POST /v1/chat/completions rejects malformed tools and tool_choice before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_payloads = [
+      Map.put(chat_payload(setup), "tools", [
+        %{"type" => "function", "function" => %{"name" => "lookup_fixture"}}
+      ]),
+      Map.put(chat_payload(setup), "tools", [
+        %{"type" => "function", "function" => %{"name" => "lookup_fixture", "parameters" => []}}
+      ]),
+      Map.put(chat_payload(setup), "tools", [
+        %{"type" => "unknown", "function" => %{"name" => "lookup_fixture", "parameters" => %{}}}
+      ]),
+      chat_payload(setup)
+      |> Map.put("tools", [function_tool()])
+      |> Map.put("tool_choice", %{"type" => "function", "name" => "missing_fixture"}),
+      chat_payload(setup)
+      |> Map.put("tools", [function_tool()])
+      |> Map.put("tool_choice", %{"type" => "function", "function" => %{}})
+    ]
+
+    Enum.each(invalid_payloads, fn payload ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/chat/completions", payload)
+
+      assert %{"error" => error} = json_response(response, 400)
+      assert error["code"] == "invalid_request"
+      assert error["param"] in ["tools", "tool_choice"]
+    end)
+
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
