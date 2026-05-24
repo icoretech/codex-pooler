@@ -39,6 +39,9 @@ RUNBOOK.md
 /.elixir_ls/
 /.impeccable/
 /.omo/
+/references/*
+!/references/.gitkeep
+!/references/README.md
 
 # Local app-private runtime file payloads.
 /var/codex_pooler/files/
