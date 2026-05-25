@@ -139,15 +139,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           :ok | {:error, WebsocketOwnerContract.owner_error() | term()}
   def submit_request(owner, downstream, %UpstreamWebSocketSession.Request{} = request)
       when is_map(downstream) do
-    case reserve_frame(owner, downstream) do
-      {:ok, reservation} ->
-        result = send_upstream(reservation, request)
-        finish_reserved_frame(owner, reservation.ref, result)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    submit_upstream(owner, downstream, request)
   end
 
   defp submit_upstream(owner, downstream, upstream_payload)

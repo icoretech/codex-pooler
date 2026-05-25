@@ -322,8 +322,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp after_owner_detach(result, state) do
     recovery_result = recover_owner_lifecycle_leftovers(result, state)
+    _interrupt_result = interrupt_owner_downstream_session(result, state)
     log_owner_detach_failure(result, state, recovery_result)
   end
+
+  defp interrupt_owner_downstream_session(:ok, state) do
+    state
+    |> Map.get(:codex_session)
+    |> Gateway.interrupt_codex_session(owner_downstream_interrupt_opts(state))
+    |> log_interrupt_failure(state)
+  end
+
+  defp interrupt_owner_downstream_session(_result, _state), do: :ok
 
   defp recover_owner_lifecycle_leftovers({:error, reason}, state)
        when reason in [:owner_unavailable, :owner_forward_timeout, :owner_crashed] do
@@ -346,6 +356,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.get(:opts, %{})
     |> RequestOptions.for_websocket()
     |> RequestOptions.put_runtime_context(interrupt_reason: "owner_unavailable")
+    |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
+  end
+
+  defp owner_downstream_interrupt_opts(%{opts: %RequestOptions{} = opts}) do
+    opts
+    |> RequestOptions.put_runtime_context(interrupt_reason: "client_disconnected")
+    |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
+  end
+
+  defp owner_downstream_interrupt_opts(state) do
+    state
+    |> Map.get(:opts, %{})
+    |> RequestOptions.for_websocket()
+    |> RequestOptions.put_runtime_context(interrupt_reason: "client_disconnected")
     |> RequestOptions.put_continuity(reconnect_window_seconds: 300)
   end
 

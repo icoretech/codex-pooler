@@ -1785,6 +1785,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_no_leak_in_persistence!(setup.pool.id)
   end
 
+  test "owner request reservation is finalized when socket closes during upstream work" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-close-during-request", "close-during-request",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    payload = websocket_payload(setup, "close while owner request is active")
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    assert_receive {:blocking_owner_upstream_received, _owner_worker_pid, ^release_ref}
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+
+    session = Repo.get_by!(CodexSession, session_key: "close-during-request")
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    request = Repo.get!(Request, turn.request_id)
+    attempt = Repo.one!(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert request.status == "failed"
+    assert request.response_status_code == 499
+    assert request.last_error_code == "client_disconnected"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "client_disconnected"
+    assert turn.status == "interrupted"
+    assert turn.error_code == "client_disconnected"
+  end
+
   @tag :leakage
   test "owner remote wrapper and process crash paths sanitize sentinel-bearing frames" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
