@@ -14,7 +14,11 @@ config :codex_pooler, CodexPooler.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
-config :codex_pooler, Oban, testing: :manual, queues: false, plugins: false
+config :codex_pooler, Oban,
+  testing: :manual,
+  queues: false,
+  shutdown_grace_period: :timer.seconds(55),
+  plugins: false
 
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],

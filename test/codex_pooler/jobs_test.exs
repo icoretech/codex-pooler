@@ -37,6 +37,9 @@ defmodule CodexPooler.JobsTest do
 
   describe "worker execution policy" do
     test "uses the shared schedule catalog for Oban cron entries" do
+      assert Application.get_env(:codex_pooler, Oban)[:shutdown_grace_period] ==
+               :timer.seconds(55)
+
       assert Schedule.oban_crontab() == [
                {"*/30 * * * *", CatalogSyncEnqueueWorker},
                {"0 * * * *", PricingImportWorker},

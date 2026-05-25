@@ -99,6 +99,7 @@ jobs_crontab =
 config :codex_pooler, Oban,
   repo: CodexPooler.Repo,
   queues: [jobs: 8],
+  shutdown_grace_period: :timer.seconds(55),
   plugins: [
     {Oban.Plugins.Cron, crontab: jobs_crontab},
     Oban.Plugins.Lifeline,
