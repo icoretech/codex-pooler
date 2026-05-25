@@ -240,6 +240,28 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert updated.mcp.enabled == false
   end
 
+  test "legacy singleton settings rows backfill development helper flags without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!(
+      "UPDATE instance_settings SET development = '{\"impeccable_live_enabled\": false}'::jsonb"
+    )
+
+    InstanceSettings.reset_cache_for_test()
+
+    assert InstanceSettings.current().development.impeccable_live_enabled == false
+    assert InstanceSettings.current().development.account_reconciliation_paused == false
+
+    assert {:ok, updated} =
+             InstanceSettings.update(Repo.reload!(legacy), %{
+               "catalog" => %{"openai_pricing_url" => "https://pricing.example.com/catalog.json"}
+             })
+
+    assert updated.catalog.openai_pricing_url == "https://pricing.example.com/catalog.json"
+    assert updated.development.impeccable_live_enabled == false
+    assert updated.development.account_reconciliation_paused == false
+  end
+
   test "update/2 refreshes the cache and broadcasts deterministic invalidation" do
     settings = InstanceSettings.current()
     :ok = Cache.subscribe()

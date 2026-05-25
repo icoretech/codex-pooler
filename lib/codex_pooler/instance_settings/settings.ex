@@ -14,6 +14,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
   @tls_values ~w(always if_available never)
   @decompression_algorithms ~w(gzip deflate zstd)
   @default_openai_pricing_url Defaults.catalog()["openai_pricing_url"]
+  @default_development Defaults.development()
 
   @type t :: %__MODULE__{}
 
@@ -158,6 +159,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
         db_available?: db_available?,
         secrets_available?: db_available?,
         catalog: default_catalog(settings.catalog),
+        development: default_development(settings.development),
         metrics: mark_metrics_status(settings.metrics, source),
         smtp: mark_smtp_status(settings.smtp, source)
     }
@@ -368,7 +370,18 @@ defmodule CodexPooler.InstanceSettings.Settings do
   defp development_changeset(development, attrs) do
     development
     |> cast(attrs, [:impeccable_live_enabled, :account_reconciliation_paused])
+    |> default_development_flags()
     |> validate_required([:impeccable_live_enabled, :account_reconciliation_paused])
+  end
+
+  defp default_development_flags(changeset) do
+    Enum.reduce(@default_development, changeset, fn {field, value}, changeset ->
+      field = String.to_existing_atom(field)
+
+      if is_nil(get_field(changeset, field)),
+        do: put_change(changeset, field, value),
+        else: changeset
+    end)
   end
 
   defp mcp_changeset(mcp, attrs) do
@@ -609,6 +622,18 @@ defmodule CodexPooler.InstanceSettings.Settings do
   end
 
   defp default_catalog(catalog), do: catalog
+
+  defp default_development(nil), do: default().development
+
+  defp default_development(%{} = development) do
+    Enum.reduce(@default_development, development, fn {field, value}, development ->
+      field = String.to_existing_atom(field)
+
+      if is_nil(Map.get(development, field)),
+        do: Map.put(development, field, value),
+        else: development
+    end)
+  end
 
   defp mark_metrics_status(nil, _source), do: nil
 
