@@ -116,7 +116,7 @@ defmodule CodexPooler.HelmRuntimeContractTest do
     assert migration =~ ~S|/app/bin/codex_pooler eval "CodexPooler.Release.migrate()"|
 
     assert migration =~
-             ~S|/app/bin/codex_pooler eval "CodexPooler.Catalog.import_openai_pricing_from_priv()"|
+             ~S|/app/bin/codex_pooler eval "CodexPooler.Release.import_openai_pricing_from_priv()"|
 
     Enum.each([app, worker, scheduler, migration], fn doc ->
       Enum.each(@required_secret_env, fn {env_name, secret_key} ->

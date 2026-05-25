@@ -32,7 +32,7 @@ spec:
             - |
               set -e
               /app/bin/codex_pooler eval "CodexPooler.Release.migrate()"
-              /app/bin/codex_pooler eval "CodexPooler.Catalog.import_openai_pricing_from_priv()"
+              /app/bin/codex_pooler eval "CodexPooler.Release.import_openai_pricing_from_priv()"
           env:
             - name: OBAN_MODE
               value: web
