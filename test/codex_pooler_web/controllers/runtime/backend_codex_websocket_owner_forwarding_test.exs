@@ -820,6 +820,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     )
   end
 
+  test "intentional stale owner replacement does not close monitored socket as crashed" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_stale_down"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-owner-stale-down",
+          accepted_turn_state: "stable-ws-owner-stale-down",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    %{request: request, attempt: attempt, turn: turn} =
+      active_turn_fixture(setup, auth, state.codex_session)
+
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+    owner_ref = Process.monitor(owner_pid)
+    owner_monitor = state.websocket_owner_monitor
+
+    :ok = GenServer.stop(owner_pid, {:shutdown, :stale_owner})
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, {:shutdown, :stale_owner}}
+
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, {:shutdown, :stale_owner}} =
+                     owner_down
+
+    assert {:ok, kept_state} = CodexResponsesSocket.handle_info(owner_down, state)
+    refute Map.has_key?(kept_state, :websocket_owner_monitor)
+    refute Map.has_key?(kept_state, :websocket_owner_pid)
+
+    assert Repo.get!(Request, request.id).status == "in_progress"
+    assert Repo.get!(Attempt, attempt.id).status == "in_progress"
+    assert Repo.get!(CodexTurn, turn.id).status == "in_progress"
+
+    refute released_owner_lease_optional(
+             state.codex_session.id,
+             state.codex_session.owner_lease_token
+           )
+
+    CodexResponsesSocket.terminate(
+      :closed,
+      Map.delete(kept_state, :websocket_owner_downstream)
+    )
+  end
+
   test "stale owner token rejects before upstream send" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -2309,6 +2356,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp released_owner_lease(session_id, lease_token) do
     Repo.one!(
+      from lease in BridgeOwnerLease,
+        where:
+          lease.codex_session_id == ^session_id and lease.lease_token == ^lease_token and
+            lease.status == "released",
+        limit: 1
+    )
+  end
+
+  defp released_owner_lease_optional(session_id, lease_token) do
+    Repo.one(
       from lease in BridgeOwnerLease,
         where:
           lease.codex_session_id == ^session_id and lease.lease_token == ^lease_token and

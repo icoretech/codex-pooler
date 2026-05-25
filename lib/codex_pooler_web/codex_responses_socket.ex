@@ -88,15 +88,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
     state = clear_websocket_owner_monitor(state, pid)
 
-    {:error, :owner_crashed}
-    |> recover_owner_lifecycle_leftovers(state)
-    |> log_owner_monitor_recovery(state, reason)
+    case owner_monitor_down_reason(reason) do
+      :stale_owner ->
+        {:ok, state}
 
-    state
-    |> release_owner_lease("owner_crashed")
-    |> log_owner_monitor_lease_release(state, reason)
+      :owner_crashed ->
+        {:error, :owner_crashed}
+        |> recover_owner_lifecycle_leftovers(state)
+        |> log_owner_monitor_recovery(state, reason)
 
-    {:stop, :owner_crashed, {1011, "websocket owner crashed"}, state}
+        state
+        |> release_owner_lease("owner_crashed")
+        |> log_owner_monitor_lease_release(state, reason)
+
+        {:stop, :owner_crashed, {1011, "websocket owner crashed"}, state}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -177,6 +183,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
     end
   end
+
+  defp owner_monitor_down_reason(:stale_owner), do: :stale_owner
+  defp owner_monitor_down_reason({:shutdown, :stale_owner}), do: :stale_owner
+  defp owner_monitor_down_reason(_reason), do: :owner_crashed
 
   defp log_owner_monitor_recovery({:ok, _result}, _state, _reason), do: :ok
   defp log_owner_monitor_recovery(:ok, _state, _reason), do: :ok
