@@ -20,7 +20,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     {"bg-info", "var(--color-info)"},
     {"bg-secondary", "var(--color-secondary)"}
   ]
-  @quota_used_color {"bg-base-300", "var(--color-base-300)"}
 
   attr :deleting_pool, :any, default: nil
   attr :delete_form, Phoenix.HTML.Form, required: true
@@ -415,7 +414,10 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :pool_row, :map, required: true
 
   defp pool_quota_remaining_panel(assigns) do
-    assigns = assign(assigns, :quota_cards, quota_remaining_cards(assigns.pool_row))
+    assigns =
+      assigns
+      |> assign(:traffic_histogram_card, pool_traffic_histogram_card(assigns.pool_row))
+      |> assign(:quota_cards, quota_remaining_cards(assigns.pool_row))
 
     ~H"""
     <div
@@ -423,6 +425,45 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       data-role="pool-quota-remaining-panel"
       class="pool-quota-panel"
     >
+      <article
+        id={"pool-row-#{@pool_row.pool.id}-traffic-histogram"}
+        data-role="pool-traffic-histogram-card"
+        class="pool-token-histogram-card"
+      >
+        <div class="pool-token-histogram-header">
+          <div class="grid gap-1">
+            <h3>{@traffic_histogram_card.title}</h3>
+            <p>{@traffic_histogram_card.description}</p>
+          </div>
+          <span id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-total"}>
+            {@traffic_histogram_card.total_label}
+          </span>
+        </div>
+        <div
+          :if={!@traffic_histogram_card.empty?}
+          id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-plot"}
+          class="pool-token-histogram-plot admin-apex-bar-chart"
+          phx-hook="ApexTimeSeriesChart"
+          role="img"
+          aria-label={@traffic_histogram_card.aria_label}
+          data-chart-categories={@traffic_histogram_card.categories}
+          data-chart-series={@traffic_histogram_card.series}
+          data-chart-units={@traffic_histogram_card.units}
+          data-chart-yaxis={@traffic_histogram_card.yaxis}
+          data-chart-height="84"
+          data-chart-colors={@traffic_histogram_card.colors}
+          data-chart-compact="true"
+        >
+        </div>
+        <p :if={@traffic_histogram_card.empty?} class="pool-quota-empty-copy">
+          No traffic in the last 24h
+        </p>
+        <ul class="sr-only">
+          <li :for={point <- @traffic_histogram_card.points}>
+            {point.label}: {point.tokens} tokens, {point.requests} requests
+          </li>
+        </ul>
+      </article>
       <div class="pool-quota-cards">
         <article
           :for={card <- @quota_cards}
@@ -436,20 +477,33 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           </div>
 
           <div class="pool-quota-card-body">
-            <div
-              data-role="pool-quota-donut"
-              class="pool-quota-donut"
-              style={"background: #{card.gradient}"}
-              role="img"
-              aria-label={card.aria_label}
-            >
+            <div class="pool-quota-chart-shell">
+              <div
+                id={"pool-row-#{@pool_row.pool.id}-quota-#{card.id_suffix}-chart"}
+                data-role="pool-quota-donut"
+                class="pool-quota-donut"
+                phx-hook="QuotaPressureChart"
+                data-value={card.chart_value}
+                data-label={card.chart_label}
+                data-color={card.chart_color}
+                data-track-color="var(--color-base-300)"
+                role="img"
+                aria-label={card.aria_label}
+              >
+              </div>
               <div class="pool-quota-donut-center">
                 <span data-role="pool-quota-center-label">{card.center_label}</span>
-                <strong data-role="pool-quota-center-value">{card.remaining_label}</strong>
+                <strong data-role="pool-quota-center-value">{card.center_value}</strong>
               </div>
             </div>
 
             <div class="pool-quota-legend">
+              <dl :if={card.stat_rows != []} class="pool-quota-stats">
+                <div :for={row <- card.stat_rows}>
+                  <dt>{row.label}</dt>
+                  <dd>{row.value}</dd>
+                </div>
+              </dl>
               <p :if={card.empty_copy} class="pool-quota-empty-copy">
                 {card.empty_copy}
               </p>
@@ -523,6 +577,56 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     "#{AdminBadges.metadata_chip_class(:neutral)} whitespace-nowrap"
   end
 
+  defp pool_traffic_histogram_card(pool_row) do
+    token_points =
+      Map.get(pool_row, :token_histogram_24h, [])
+
+    request_points =
+      pool_row
+      |> Map.get(:request_histogram_24h, [])
+      |> Map.new(fn point -> {Map.get(point, :bucket), max(Map.get(point, :requests, 0), 0)} end)
+
+    points =
+      Enum.map(token_points, fn point ->
+        bucket = Map.get(point, :bucket)
+
+        %{
+          label: format_chart_bucket(bucket),
+          tokens: max(Map.get(point, :total_tokens, 0), 0),
+          requests: Map.get(request_points, bucket, 0)
+        }
+      end)
+
+    token_values = Enum.map(points, & &1.tokens)
+    request_values = Enum.map(points, & &1.requests)
+    token_total = Enum.sum(token_values)
+    request_total = Enum.sum(request_values)
+
+    %{
+      title: "Traffic 24h",
+      description: "Tokens and requests by hour",
+      total_label:
+        "#{format_token_count(token_total)} tokens / #{format_request_count(request_total)}",
+      categories: Jason.encode!(Enum.map(points, & &1.label)),
+      series:
+        Jason.encode!([
+          %{name: "Tokens", type: "column", data: token_values},
+          %{name: "Requests", type: "line", data: request_values}
+        ]),
+      units: Jason.encode!(["tokens", "requests"]),
+      yaxis:
+        Jason.encode!([
+          %{seriesName: "Tokens", title: "tokens"},
+          %{seriesName: "Requests", title: "requests", opposite: true}
+        ]),
+      colors: Jason.encode!(["var(--color-primary)", "var(--color-info)"]),
+      points: points,
+      empty?: token_total == 0 and request_total == 0,
+      aria_label:
+        "Traffic in the last 24 hours: #{format_token_count(token_total)} tokens and #{format_request_count(request_total)}"
+    }
+  end
+
   defp quota_remaining_cards(pool_row) do
     charts = Map.get(pool_row, :quota_remaining_charts, %{})
 
@@ -534,51 +638,57 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   end
 
   defp empty_quota_remaining_chart(:primary_5h) do
-    empty_quota_remaining_chart(:primary_5h, "5h Remaining")
+    empty_quota_remaining_chart(:primary_5h, "5h quota")
   end
 
   defp empty_quota_remaining_chart(:weekly) do
-    empty_quota_remaining_chart(:weekly, "Weekly Remaining")
+    empty_quota_remaining_chart(:weekly, "Weekly quota")
   end
 
   defp empty_quota_remaining_chart(key, title) do
     %{
       key: key,
       title: title,
+      account_count: 0,
+      evidence_count: 0,
+      usable_count: 0,
+      blocked_count: 0,
+      missing_count: 0,
       remaining_total: Decimal.new(0),
       capacity_total: nil,
       used_total: nil,
       used_percent: nil,
+      lowest_remaining_percent: nil,
+      next_reset_at: nil,
       items: [],
       state: "empty"
     }
   end
 
   defp quota_remaining_card(chart) do
-    capacity_total = decimal_value(Map.get(chart, :capacity_total))
-    used_total = decimal_value(Map.get(chart, :used_total))
-    used_percent = decimal_value(Map.get(chart, :used_percent))
     items = Map.get(chart, :items, [])
-    remaining_total = quota_remaining_total(chart, items)
+    lowest_remaining_percent = decimal_value(Map.get(chart, :lowest_remaining_percent))
     exhausted? = quota_exhausted?(chart)
-    display_remaining = if exhausted?, do: Decimal.new(0), else: remaining_total
+    chart_percent = quota_chart_percent(lowest_remaining_percent, exhausted?)
 
-    item_segments = Enum.map(items, &quota_item_segment(&1, capacity_total, display_remaining))
-    used_segment = quota_used_segment(used_total, used_percent, capacity_total)
-    legend_segments = item_segments ++ Enum.reject([used_segment], &is_nil/1)
+    legend_segments = Enum.map(items, &quota_item_segment/1)
     empty_copy = quota_empty_copy(chart, legend_segments, exhausted?)
-    title = Map.get(chart, :title, "Quota Remaining")
+    title = Map.get(chart, :title, "Quota pressure")
+    chart_color = quota_pressure_color(chart_percent, chart, exhausted?)
 
     %{
       id_suffix: quota_chart_id_suffix(Map.get(chart, :key)),
       title: title,
-      summary_label: quota_summary_label(display_remaining, capacity_total, used_percent),
-      center_label: quota_center_label(display_remaining, items, exhausted?, empty_copy),
-      remaining_label: quota_remaining_label(display_remaining, items, exhausted?, empty_copy),
-      gradient: quota_gradient(legend_segments, capacity_total, display_remaining),
+      summary_label: quota_summary_label(chart),
+      center_label: quota_center_label(lowest_remaining_percent, exhausted?, empty_copy),
+      center_value: quota_center_value(lowest_remaining_percent, exhausted?, empty_copy),
+      chart_value: chart_percent |> Float.round(1) |> compact_float(),
+      chart_label: "lowest remaining",
+      chart_color: chart_color,
+      stat_rows: quota_stat_rows(chart),
       legend_segments: legend_segments,
       empty_copy: empty_copy,
-      aria_label: quota_aria_label(title, display_remaining, items, exhausted?, empty_copy)
+      aria_label: quota_aria_label(title, lowest_remaining_percent, exhausted?, empty_copy)
     }
   end
 
@@ -586,7 +696,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp quota_chart_id_suffix(:weekly), do: "weekly"
   defp quota_chart_id_suffix(key), do: key |> to_string() |> String.replace("_", "-")
 
-  defp quota_item_segment(item, capacity_total, remaining_total) do
+  defp quota_item_segment(item) do
     {dot_class, color} = quota_color(Map.get(item, :color_index, 0))
     remaining = decimal_value(Map.get(item, :remaining))
 
@@ -594,36 +704,10 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       label: Map.get(item, :label) || "Upstream account",
       value: remaining,
       value_label: quota_item_value_label(item, remaining),
-      percent: quota_item_percent(item, remaining, capacity_total, remaining_total),
       dot_class: dot_class,
       color: color
     }
   end
-
-  defp quota_used_segment(nil, _used_percent, _capacity_total), do: nil
-
-  defp quota_used_segment(used_total, used_percent, capacity_total) do
-    if decimal_positive?(used_total) do
-      {dot_class, color} = @quota_used_color
-
-      %{
-        label: "Used",
-        value: used_total,
-        value_label: format_quota_value(used_total),
-        percent: quota_used_percent(used_total, used_percent, capacity_total),
-        dot_class: dot_class,
-        color: color
-      }
-    end
-  end
-
-  defp quota_remaining_total(chart, []) do
-    if Map.get(chart, :state) == "empty",
-      do: nil,
-      else: decimal_value(Map.get(chart, :remaining_total))
-  end
-
-  defp quota_remaining_total(chart, _items), do: decimal_value(Map.get(chart, :remaining_total))
 
   defp quota_exhausted?(chart) do
     Map.get(chart, :state) == "blocked" and
@@ -635,115 +719,87 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   defp quota_empty_copy(_chart, [_segment | _segments], _exhausted?), do: nil
   defp quota_empty_copy(_chart, [], true), do: "Quota exhausted"
-  defp quota_empty_copy(%{state: "empty"}, [], false), do: "No current quota evidence"
+
+  defp quota_empty_copy(%{state: state}, [], false) when state in ["empty", "missing"],
+    do: "No current quota evidence"
+
   defp quota_empty_copy(_chart, [], false), do: "No usable quota evidence"
 
-  defp quota_summary_label(nil, _capacity_total, _used_percent), do: "Quota evidence only"
-  defp quota_summary_label(_remaining_total, nil, _used_percent), do: "Quota evidence only"
+  defp quota_summary_label(%{account_count: count}) when count in [nil, 0],
+    do: "No quota evidence"
 
-  defp quota_summary_label(_remaining_total, capacity_total, used_percent) do
-    "Total #{format_quota_value(capacity_total)} · #{format_quota_percent(used_percent)} used"
+  defp quota_summary_label(chart) do
+    "#{Map.get(chart, :evidence_count, 0)}/#{Map.get(chart, :account_count, 0)} reporting"
   end
 
-  defp quota_center_label(%Decimal{}, _items, _exhausted?, _empty_copy), do: "Remaining"
-  defp quota_center_label(nil, [_item | _items], false, _empty_copy), do: "Partial"
-  defp quota_center_label(nil, _items, _exhausted?, _empty_copy), do: "Evidence"
+  defp quota_center_label(%Decimal{}, _exhausted?, _empty_copy), do: "Lowest"
+  defp quota_center_label(nil, true, _empty_copy), do: "Lowest"
+  defp quota_center_label(nil, _exhausted?, _empty_copy), do: "No data"
 
-  defp quota_remaining_label(%Decimal{} = remaining_total, _items, _exhausted?, _empty_copy) do
-    format_quota_value(remaining_total)
+  defp quota_center_value(%Decimal{} = remaining_percent, _exhausted?, _empty_copy),
+    do: format_quota_percent(remaining_percent)
+
+  defp quota_center_value(nil, true, _empty_copy), do: "0%"
+  defp quota_center_value(nil, _exhausted?, _empty_copy), do: "No data"
+
+  defp quota_aria_label(title, %Decimal{} = remaining_percent, _exhausted?, _empty_copy) do
+    "#{title}: lowest remaining #{format_quota_percent(remaining_percent)}"
   end
 
-  defp quota_remaining_label(nil, [_item | _items], false, _empty_copy), do: "Evidence only"
-  defp quota_remaining_label(nil, _items, _exhausted?, "No current quota evidence"), do: "No data"
-  defp quota_remaining_label(nil, _items, _exhausted?, _empty_copy), do: "Evidence only"
+  defp quota_aria_label(title, nil, true, _empty_copy), do: "#{title}: quota exhausted"
 
-  defp quota_aria_label(title, %Decimal{} = remaining_total, _items, _exhausted?, _empty_copy) do
-    "#{title}: #{format_quota_value(remaining_total)} remaining"
-  end
+  defp quota_aria_label(title, nil, _exhausted?, "No current quota evidence"),
+    do: "#{title}: no current quota evidence"
 
-  defp quota_aria_label(title, nil, [_item | _items], false, _empty_copy) do
-    "#{title}: partial quota evidence only"
-  end
+  defp quota_aria_label(title, nil, _exhausted?, _empty_copy),
+    do: "#{title}: quota pressure unknown"
 
-  defp quota_aria_label(title, nil, _items, _exhausted?, "No current quota evidence") do
-    "#{title}: no current quota evidence"
-  end
+  defp quota_item_value_label(item, remaining) do
+    used_percent = decimal_value(Map.get(item, :used_percent))
+    remaining_percent = decimal_value(Map.get(item, :remaining_percent))
 
-  defp quota_aria_label(title, nil, _items, _exhausted?, _empty_copy) do
-    "#{title}: quota evidence only"
-  end
-
-  defp quota_item_value_label(_item, %Decimal{} = remaining), do: format_quota_value(remaining)
-
-  defp quota_item_value_label(item, nil) do
     cond do
-      remaining_percent = decimal_value(Map.get(item, :remaining_percent)) ->
+      is_nil(remaining) && is_nil(Map.get(item, :capacity)) && used_percent ->
+        "#{format_quota_percent(used_percent)} used"
+
+      remaining_percent ->
         "#{format_quota_percent(remaining_percent)} remaining"
 
-      used_percent = decimal_value(Map.get(item, :used_percent)) ->
+      match?(%Decimal{}, remaining) ->
+        format_quota_value(remaining)
+
+      used_percent ->
         "#{format_quota_percent(used_percent)} used"
 
       true ->
-        "Evidence only"
+        "pressure unknown"
     end
   end
 
-  defp quota_item_percent(_item, %Decimal{} = remaining, capacity_total, remaining_total) do
-    quota_segment_percent(remaining, capacity_total, remaining_total)
+  defp quota_stat_rows(chart) do
+    [
+      quota_lowest_row(decimal_value(Map.get(chart, :lowest_remaining_percent))),
+      %{label: "Usable", value: "#{Map.get(chart, :usable_count, 0)} usable"},
+      quota_count_row("Missing", Map.get(chart, :missing_count, 0), "missing"),
+      quota_count_row("Blocked", Map.get(chart, :blocked_count, 0), "blocked"),
+      quota_reset_row(Map.get(chart, :next_reset_at))
+    ]
+    |> Enum.reject(&is_nil/1)
   end
 
-  defp quota_item_percent(item, nil, _capacity_total, _remaining_total) do
-    cond do
-      remaining_percent = decimal_value(Map.get(item, :remaining_percent)) ->
-        decimal_to_float(remaining_percent)
+  defp quota_lowest_row(nil), do: nil
 
-      used_percent = decimal_value(Map.get(item, :used_percent)) ->
-        max(100.0 - decimal_to_float(used_percent), 0.0)
-
-      true ->
-        100.0
-    end
+  defp quota_lowest_row(%Decimal{} = remaining_percent) do
+    %{label: "Pressure", value: "#{format_quota_percent(remaining_percent)} remaining"}
   end
 
-  defp quota_segment_percent(value, capacity_total, remaining_total) do
-    cond do
-      decimal_positive?(capacity_total) -> decimal_percent(value, capacity_total)
-      decimal_positive?(remaining_total) -> decimal_percent(value, remaining_total)
-      true -> 0.0
-    end
-  end
+  defp quota_count_row(_label, count, _suffix) when count in [nil, 0], do: nil
+  defp quota_count_row(label, count, suffix), do: %{label: label, value: "#{count} #{suffix}"}
 
-  defp quota_used_percent(_used_total, %Decimal{} = used_percent, _capacity_total),
-    do: decimal_to_float(used_percent)
+  defp quota_reset_row(nil), do: nil
 
-  defp quota_used_percent(used_total, _used_percent, capacity_total) do
-    if decimal_positive?(capacity_total),
-      do: decimal_percent(used_total, capacity_total),
-      else: 0.0
-  end
-
-  defp quota_gradient([], _capacity_total, _remaining_total), do: "var(--color-base-300)"
-
-  defp quota_gradient(segments, _capacity_total, _remaining_total) do
-    {stops, cursor} =
-      Enum.reduce(segments, {[], 0.0}, fn segment, {stops, cursor} ->
-        next_cursor = min(cursor + segment.percent, 100.0)
-
-        {
-          stops ++
-            [
-              "#{segment.color} #{Float.round(cursor, 2)}% #{Float.round(next_cursor, 2)}%"
-            ],
-          next_cursor
-        }
-      end)
-
-    stops =
-      if cursor < 100.0,
-        do: stops ++ ["var(--color-base-300) #{Float.round(cursor, 2)}% 100%"],
-        else: stops
-
-    "conic-gradient(#{Enum.join(stops, ", ")})"
+  defp quota_reset_row(%DateTime{} = reset_at) do
+    %{label: "Next reset", value: format_reset_at(reset_at)}
   end
 
   defp quota_color(index) when is_integer(index) do
@@ -752,15 +808,42 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   defp quota_color(_index), do: List.first(@quota_chart_colors)
 
-  defp decimal_percent(value, total) do
-    value
-    |> Decimal.div(total)
-    |> Decimal.mult(Decimal.new(100))
-    |> decimal_to_float()
+  defp quota_chart_percent(%Decimal{} = remaining_percent, _exhausted?),
+    do: decimal_to_float(remaining_percent)
+
+  defp quota_chart_percent(nil, true), do: 0.0
+  defp quota_chart_percent(nil, _exhausted?), do: 0.0
+
+  defp quota_pressure_color(percent, _chart, true) when percent <= 0.0, do: "var(--color-error)"
+
+  defp quota_pressure_color(_percent, %{lowest_remaining_percent: nil}, false),
+    do: "var(--color-base-300)"
+
+  defp quota_pressure_color(percent, _chart, _exhausted?) when percent <= 15.0,
+    do: "var(--color-error)"
+
+  defp quota_pressure_color(percent, _chart, _exhausted?) when percent <= 35.0,
+    do: "var(--color-warning)"
+
+  defp quota_pressure_color(_percent, _chart, _exhausted?), do: "var(--color-success)"
+
+  defp format_reset_at(%DateTime{} = reset_at) do
+    Calendar.strftime(reset_at, "%b %-d, %H:%M UTC")
   end
 
-  defp decimal_positive?(%Decimal{} = value), do: Decimal.compare(value, Decimal.new(0)) == :gt
-  defp decimal_positive?(_value), do: false
+  defp format_chart_bucket(<<_date::binary-size(10), "T", hour::binary-size(2), ":00:00Z">>),
+    do: hour <> ":00"
+
+  defp format_chart_bucket(bucket), do: to_string(bucket)
+
+  defp format_token_count(value) when is_integer(value), do: format_integer(value)
+  defp format_token_count(value) when is_float(value), do: value |> round() |> format_integer()
+
+  defp format_request_count(1), do: "1 request"
+  defp format_request_count(value) when is_integer(value), do: "#{format_integer(value)} requests"
+
+  defp format_request_count(value) when is_float(value),
+    do: value |> round() |> format_request_count()
 
   defp decimal_value(%Decimal{} = value), do: value
   defp decimal_value(value) when is_integer(value), do: Decimal.new(value)
@@ -782,13 +865,21 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp format_quota_value(%Decimal{} = value) do
     number = value |> decimal_to_float() |> max(0.0)
 
-    cond do
-      number >= 1_000_000_000 -> "#{compact_float(number / 1_000_000_000)}B"
-      number >= 1_000_000 -> "#{compact_float(number / 1_000_000)}M"
-      number >= 1_000 -> "#{compact_float(number / 1_000)}K"
-      number >= 100 -> Integer.to_string(round(number))
-      true -> compact_float(number)
-    end
+    formatted =
+      if number >= 100, do: number |> round() |> format_integer(), else: compact_float(number)
+
+    "#{formatted} remaining"
+  end
+
+  defp format_integer(number) when is_integer(number) do
+    number
+    |> Integer.to_string()
+    |> String.graphemes()
+    |> Enum.reverse()
+    |> Enum.chunk_every(3)
+    |> Enum.map(&Enum.reverse/1)
+    |> Enum.reverse()
+    |> Enum.map_join(",", &Enum.join/1)
   end
 
   defp compact_float(value) do

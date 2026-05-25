@@ -1627,8 +1627,8 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert primary.key == :primary_5h
       assert weekly.key == :weekly
-      assert primary.title == "5h Remaining"
-      assert weekly.title == "Weekly Remaining"
+      assert primary.title == "5h quota"
+      assert weekly.title == "Weekly quota"
 
       assert Enum.map(primary.items, & &1.label) == [
                "Example Pro Account",
@@ -1980,11 +1980,69 @@ defmodule CodexPooler.UpstreamsTest do
       assert item.capacity == nil
       assert item.used == nil
       assert_decimal_equal(item.used_percent, "42")
-      assert item.remaining_percent == nil
+      assert_decimal_equal(item.remaining_percent, "58")
       assert chart.remaining_total == nil
       assert chart.capacity_total == nil
       assert chart.used_total == nil
       assert chart.used_percent == nil
+    end
+
+    test "quota remaining charts do not infer capacity from known plan for percent-only evidence" do
+      now = ~U[2026-05-06 12:00:00Z]
+      reset_at = DateTime.add(now, 900, :second)
+      weekly_reset_at = DateTime.add(now, 604_800, :second)
+      pool = pool_fixture(%{name: "Example Plan Capacity Pool"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          plan_family: "pro",
+          account_label: "Example Pro Percent Account",
+          assignment_label: "Example Pro Percent Account"
+        })
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("16"),
+                   reset_at: reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 },
+                 %{
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("61"),
+                   reset_at: weekly_reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      charts = Quota.Charts.quota_remaining_charts_by_pool_ids([pool.id], at: now)[pool.id]
+
+      assert [primary_item] = charts.primary_5h.items
+      assert primary_item.remaining == nil
+      assert primary_item.capacity == nil
+      assert primary_item.used == nil
+      assert_decimal_equal(primary_item.remaining_percent, "84")
+      assert_decimal_equal(charts.primary_5h.lowest_remaining_percent, "84")
+      assert charts.primary_5h.remaining_total == nil
+      assert charts.primary_5h.capacity_total == nil
+
+      assert [weekly_item] = charts.weekly.items
+      assert weekly_item.remaining == nil
+      assert weekly_item.capacity == nil
+      assert weekly_item.used == nil
+      assert_decimal_equal(weekly_item.remaining_percent, "39")
+      assert_decimal_equal(charts.weekly.lowest_remaining_percent, "39")
+      assert charts.weekly.remaining_total == nil
+      assert charts.weekly.capacity_total == nil
     end
 
     test "quota remaining primary chart ignores unusable weekly caps" do

@@ -102,8 +102,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              request_count_5h: 0,
              tokens_per_second: nil,
              quota_remaining_charts: %{
-               primary_5h: %{title: "5h Remaining"},
-               weekly: %{title: "Weekly Remaining"}
+               primary_5h: %{title: "5h quota"},
+               weekly: %{title: "Weekly quota"}
              },
              routing_strategy: "deterministic_rotation"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == pool_id))
@@ -115,8 +115,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              request_count_5h: 0,
              tokens_per_second: nil,
              quota_remaining_charts: %{
-               primary_5h: %{title: "5h Remaining"},
-               weekly: %{title: "Weekly Remaining"}
+               primary_5h: %{title: "5h quota"},
+               weekly: %{title: "Weekly quota"}
              },
              routing_strategy: "bridge_ring"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == other_pool_id))
@@ -147,13 +147,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-row-#{pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h Remaining"
+             "5h quota"
            )
 
     assert has_element?(
              view,
              "#pool-row-#{pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "Weekly Remaining"
+             "Weekly quota"
            )
 
     assert has_element?(
@@ -177,7 +177,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-row-#{other_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h Remaining"
+             "5h quota"
            )
 
     assert has_element?(
@@ -217,13 +217,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-row-#{no_assignment_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h Remaining"
+             "5h quota"
            )
 
     assert has_element?(
              view,
              "#pool-row-#{no_assignment_pool.id}-quota-remaining",
-             "Weekly Remaining"
+             "Weekly quota"
            )
 
     assert has_element?(
@@ -245,10 +245,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-row-#{no_usage_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h Remaining"
+             "5h quota"
            )
 
-    assert has_element?(view, "#pool-row-#{no_usage_pool.id}-quota-remaining", "Weekly Remaining")
+    assert has_element?(view, "#pool-row-#{no_usage_pool.id}-quota-remaining", "Weekly quota")
 
     assert has_element?(
              view,
@@ -263,7 +263,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
            )
   end
 
-  test "renders pool quota remaining cards from upstream quota evidence", %{
+  test "renders pool quota pressure cards from upstream quota evidence", %{
     conn: conn,
     scope: scope
   } do
@@ -296,32 +296,39 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
 
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "5h Remaining")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "5h quota")
     assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Sample Team Account")
     assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Sample Pro Account")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "750")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "50")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Used")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "700")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Total 1.5K")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "2/2 reporting")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "2 usable")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Next reset")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "75% remaining")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "10% remaining")
 
     assert has_element?(
              view,
              "#pool-row-#{pool.id}-quota-primary-5h [data-role='pool-quota-center-value']",
-             "800"
+             "10%"
            )
 
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Weekly Remaining")
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-quota-primary-5h [phx-hook='QuotaPressureChart']"
+           )
+
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Total 1.5K")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "800")
+
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Weekly quota")
     assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Sample Team Account")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "1.8K")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Used")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "200")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Total 2K")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "1/2 reporting")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "1 missing")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "90% remaining")
 
     assert has_element?(
              view,
              "#pool-row-#{pool.id}-quota-weekly [data-role='pool-quota-center-value']",
-             "1.8K"
+             "90%"
            )
   end
 
@@ -360,14 +367,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
 
-    assert has_element?(view, card_selector, "5h Remaining")
-    assert has_element?(view, card_selector, "Quota evidence only")
-    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-label']", "Partial")
+    assert has_element?(view, card_selector, "5h quota")
+    assert has_element?(view, card_selector, "2/2 reporting")
+    assert has_element?(view, card_selector, "2 usable")
+    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-label']", "Lowest")
 
     assert has_element?(
              view,
              "#{card_selector} [data-role='pool-quota-center-value']",
-             "Evidence only"
+             "58%"
            )
 
     assert has_element?(
@@ -378,7 +386,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "42% used")
     assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "Partial Limit Account")
-    assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "Evidence only")
+    assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "pressure unknown")
 
     refute has_element?(
              view,
@@ -387,6 +395,50 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0")
     refute has_element?(view, "#{card_selector} [data-role='pool-quota-legend-value']", "0")
+  end
+
+  test "does not infer absolute credits for percent-only account quota", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "quota-plan-inferred-pool",
+        name: "Quota Plan Inferred Pool"
+      })
+
+    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        plan_family: "pro",
+        account_label: "Plan Percent Account",
+        assignment_label: "Plan Percent Account"
+      })
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               percent_only_quota_window_attrs("primary", 300, "16", reset_at)
+             ])
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
+
+    assert has_element?(view, card_selector, "5h quota")
+    assert has_element?(view, card_selector, "Plan Percent Account")
+    assert has_element?(view, card_selector, "1/1 reporting")
+    assert has_element?(view, card_selector, "84% remaining")
+
+    assert has_element?(
+             view,
+             "#{card_selector} [data-role='pool-quota-center-value']",
+             "84%"
+           )
+
+    refute has_element?(view, card_selector, "1.26K")
+    refute has_element?(view, card_selector, "1,260")
+    refute has_element?(view, card_selector, "Total 1.5K")
   end
 
   test "renders known exhausted quota as true zero remaining", %{
@@ -413,20 +465,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
 
-    assert has_element?(view, card_selector, "5h Remaining")
+    assert has_element?(view, card_selector, "5h quota")
 
     assert has_element?(
              view,
              "#{card_selector} [data-role='pool-quota-center-label']",
-             "Remaining"
+             "Lowest"
            )
 
-    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0")
-
-    assert has_element?(
-             view,
-             "#{card_selector} .pool-quota-donut[aria-label='5h Remaining: 0 remaining']"
-           )
+    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0%")
 
     assert has_element?(view, card_selector, "Quota exhausted")
   end
@@ -472,8 +519,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50.0")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "5h Remaining")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Weekly Remaining")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "Traffic 24h")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "1 request")
+
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram-plot[phx-hook='ApexTimeSeriesChart']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram-plot[data-chart-units='[\"tokens\",\"requests\"]']"
+           )
+
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "5h quota")
+    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Weekly quota")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Pool quota")
   end
 
@@ -1311,6 +1372,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50.0")
     assert has_element?(view, "#pool-metric-requests", "1")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "50.0")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "1 request")
     assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "No current quota evidence")
   end
 

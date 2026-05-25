@@ -14,7 +14,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
       capacity: capacity,
       used: used,
       used_percent: used_percent(remaining, capacity, window.used_percent),
-      remaining_percent: remaining_percent(remaining, capacity)
+      remaining_percent: remaining_percent(remaining, capacity, window.used_percent)
     }
   end
 
@@ -151,7 +151,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
 
   defp used_percent(_remaining, _capacity, _used_percent), do: nil
 
-  defp remaining_percent(remaining, capacity)
+  defp remaining_percent(remaining, capacity, _used_percent)
        when not is_nil(remaining) and not is_nil(capacity) do
     if Decimal.compare(capacity, Decimal.new(0)) == :gt do
       remaining
@@ -163,11 +163,17 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
     end
   end
 
-  defp remaining_percent(_remaining, _capacity), do: nil
+  defp remaining_percent(_remaining, _capacity, %Decimal{} = used_percent) do
+    Decimal.new(100)
+    |> Decimal.sub(used_percent)
+    |> decimal_clamp_percent()
+  end
+
+  defp remaining_percent(_remaining, _capacity, _used_percent), do: nil
 
   defp percentages(remaining, capacity) do
     %{
-      remaining_percent: remaining_percent(remaining, capacity),
+      remaining_percent: remaining_percent(remaining, capacity, nil),
       used_percent: used_percent(remaining, capacity, nil)
     }
   end

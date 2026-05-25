@@ -71,11 +71,15 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
     charts_by_pool_id =
       rows
-      |> Enum.reject(fn {_assignment, _identity, window} -> is_nil(window) end)
-      |> Enum.map(&quota_remaining_chart_row(&1, timestamp))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.group_by(& &1.pool_id)
-      |> Map.new(fn {pool_id, rows} -> {pool_id, quota_remaining_pool_charts(rows)} end)
+      |> Enum.group_by(fn {assignment, _identity, _window} -> assignment.pool_id end)
+      |> Map.new(fn {pool_id, pool_rows} ->
+        chart_rows =
+          pool_rows
+          |> Enum.map(&quota_remaining_chart_row(&1, timestamp))
+          |> Enum.reject(&is_nil/1)
+
+        {pool_id, quota_remaining_pool_charts(chart_rows, quota_assignment_count(pool_rows))}
+      end)
 
     Enum.into(pool_ids, %{}, fn pool_id ->
       {pool_id, Map.get(charts_by_pool_id, pool_id, quota_remaining_empty_pool_charts(pool_id))}
@@ -112,6 +116,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
     if chart_key do
       usable? = QuotaWindows.usable_window?(window, timestamp)
+
       measurements = Measurements.for_window(window)
 
       %{
@@ -169,14 +174,23 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
   defp quota_remaining_plan_label(%UpstreamIdentity{}), do: nil
 
-  defp quota_remaining_pool_charts(rows) do
+  defp quota_remaining_pool_charts(rows, assignment_count) do
     weekly_rows = Enum.filter(rows, &(&1.chart_key == :weekly))
     weekly_winners = quota_remaining_winners(weekly_rows)
-    weekly = quota_remaining_chart(:weekly, "Weekly Remaining", weekly_rows, weekly_winners)
+
+    weekly =
+      quota_remaining_chart(
+        :weekly,
+        "Weekly quota",
+        weekly_rows,
+        weekly_winners,
+        assignment_count
+      )
+
+    primary_chart_rows = Enum.filter(rows, &(&1.chart_key == :primary_5h))
 
     primary_rows =
-      rows
-      |> Enum.filter(&(&1.chart_key == :primary_5h))
+      primary_chart_rows
       |> quota_remaining_winners()
       |> Enum.map(
         &Measurements.apply_weekly_cap(
@@ -189,9 +203,10 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
       primary_5h:
         quota_remaining_chart(
           :primary_5h,
-          "5h Remaining",
-          rows,
-          primary_rows
+          "5h quota",
+          primary_chart_rows,
+          primary_rows,
+          assignment_count
         ),
       weekly: weekly
     }
@@ -199,12 +214,19 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
   defp quota_remaining_empty_pool_charts(_pool_id) do
     %{
-      primary_5h: quota_remaining_chart(:primary_5h, "5h Remaining", [], []),
-      weekly: quota_remaining_chart(:weekly, "Weekly Remaining", [], [])
+      primary_5h: quota_remaining_chart(:primary_5h, "5h quota", [], [], 0),
+      weekly: quota_remaining_chart(:weekly, "Weekly quota", [], [], 0)
     }
   end
 
-  defp quota_remaining_chart(chart_key, title, _rows, winners) do
+  defp quota_assignment_count(rows) do
+    rows
+    |> Enum.map(fn {assignment, _identity, _window} -> assignment.id end)
+    |> Enum.uniq()
+    |> length()
+  end
+
+  defp quota_remaining_chart(chart_key, title, rows, winners, assignment_count) do
     items =
       winners
       |> Enum.filter(& &1.routing_usable?)
@@ -231,18 +253,29 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
       end)
 
     excluded = Enum.reject(winners, & &1.routing_usable?)
+    evidence_count = length(winners)
+    usable_count = length(items)
+    blocked_count = length(excluded)
+    missing_count = max(assignment_count - evidence_count, 0)
 
     %{
       key: chart_key,
       title: title,
+      account_count: assignment_count,
+      evidence_count: evidence_count,
+      usable_count: usable_count,
+      blocked_count: blocked_count,
+      missing_count: missing_count,
       remaining_total: Measurements.sum(items, :remaining),
       capacity_total: Measurements.sum_known(items, :capacity),
       used_total: Measurements.sum_known(items, :used),
       used_percent: Measurements.items_used_percent(items),
+      lowest_remaining_percent: quota_lowest_remaining_percent(items, excluded),
+      next_reset_at: quota_next_reset_at(items),
       items: items,
-      excluded_count: length(excluded),
+      excluded_count: blocked_count,
       excluded_reasons: quota_excluded_reasons(excluded),
-      state: quota_chart_state(items, excluded)
+      state: quota_chart_state(items, excluded, rows, assignment_count)
     }
   end
 
@@ -297,9 +330,36 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
     |> Enum.frequencies()
   end
 
-  defp quota_chart_state([_ | _], _excluded), do: "usable"
-  defp quota_chart_state([], [_ | _]), do: "blocked"
-  defp quota_chart_state([], []), do: "empty"
+  defp quota_lowest_remaining_percent(items, excluded) do
+    remaining_percents =
+      items
+      |> Enum.map(& &1.remaining_percent)
+      |> Enum.reject(&is_nil/1)
+
+    cond do
+      remaining_percents != [] ->
+        Enum.min_by(remaining_percents, &Decimal.to_float/1)
+
+      quota_excluded_reasons(excluded)["exhausted"] &&
+          quota_excluded_reasons(excluded)["exhausted"] > 0 ->
+        Decimal.new(0)
+
+      true ->
+        nil
+    end
+  end
+
+  defp quota_next_reset_at(items) do
+    items
+    |> Enum.map(& &1.reset_at)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
+  end
+
+  defp quota_chart_state([_ | _], _excluded, _rows, _assignment_count), do: "usable"
+  defp quota_chart_state([], [_ | _], _rows, _assignment_count), do: "blocked"
+  defp quota_chart_state([], [], [], 0), do: "empty"
+  defp quota_chart_state([], [], _rows, _assignment_count), do: "missing"
 
   defp quota_remaining_label(assignment, identity, window) do
     assignment.assignment_label || identity.account_label || window.display_label ||
