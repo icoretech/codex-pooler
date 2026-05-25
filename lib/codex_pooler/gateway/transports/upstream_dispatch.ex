@@ -238,7 +238,29 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp record_upstream_websocket_body(result, identity, request)
 
+  defp record_upstream_websocket_body(
+         {:ok, %{body: body, websocket_frame_headers: frame_headers}} = result,
+         identity,
+         request
+       ) do
+    RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
+    RateLimitObserver.record_complete_events(identity, body)
+    mark_visible_output(request, body)
+    result
+  end
+
   defp record_upstream_websocket_body({:ok, %{body: body}} = result, identity, request) do
+    RateLimitObserver.record_complete_events(identity, body)
+    mark_visible_output(request, body)
+    result
+  end
+
+  defp record_upstream_websocket_body(
+         {:error, %{body: body, websocket_frame_headers: frame_headers}} = result,
+         identity,
+         request
+       ) do
+    RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
     RateLimitObserver.record_complete_events(identity, body)
     mark_visible_output(request, body)
     result

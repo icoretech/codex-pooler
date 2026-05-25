@@ -1,7 +1,10 @@
 defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
-  use ExUnit.Case, async: true
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "record_complete_events/2" do
@@ -13,6 +16,24 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
                  identity,
                  "event: codex.rate_limits\n"
                )
+    end
+
+    test "persists reset-bearing codex.rate_limits events through quota windows" do
+      identity = active_upstream_assignment_fixture().identity
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+      assert :ok =
+               RateLimitObserver.record_complete_events(
+                 identity,
+                 "event: codex.rate_limits\n" <>
+                   "data: #{Jason.encode!(codex_rate_limits_payload(42, reset_at))}\n\n"
+               )
+
+      assert window = wait_for_rate_limit_event_window(identity, "primary")
+      assert window.source == "codex_rate_limit_event"
+      assert Decimal.equal?(window.used_percent, Decimal.new("42.0"))
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+      wait_for_rate_limit_event_tasks()
     end
   end
 
@@ -39,6 +60,60 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
                  String.duplicate("x", 16_385),
                  RateLimitObserver.event_state()
                )
+    end
+  end
+
+  defp codex_rate_limits_payload(used_percent, reset_at) do
+    %{
+      "type" => "codex.rate_limits",
+      "rate_limits" => %{
+        "primary" => %{
+          "used_percent" => used_percent,
+          "window_minutes" => 300,
+          "reset_at" => DateTime.to_unix(reset_at)
+        }
+      }
+    }
+  end
+
+  defp wait_for_rate_limit_event_window(identity, window_kind, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+
+    identity
+    |> QuotaWindows.list_quota_windows()
+    |> Enum.find(&(&1.source == "codex_rate_limit_event" and &1.window_kind == window_kind))
+    |> case do
+      nil ->
+        if System.monotonic_time(:millisecond) < deadline do
+          receive do
+          after
+            10 -> wait_for_rate_limit_event_window(identity, window_kind, deadline)
+          end
+        else
+          flunk("expected codex.rate_limits quota window for #{window_kind}")
+        end
+
+      window ->
+        window
+    end
+  end
+
+  defp wait_for_rate_limit_event_tasks(deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+
+    case Task.Supervisor.children(CodexPooler.RateLimitEventSupervisor) do
+      [] ->
+        :ok
+
+      _children ->
+        if System.monotonic_time(:millisecond) < deadline do
+          receive do
+          after
+            10 -> wait_for_rate_limit_event_tasks(deadline)
+          end
+        else
+          flunk("expected codex.rate_limits persistence tasks to finish")
+        end
     end
   end
 end

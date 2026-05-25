@@ -29,6 +29,21 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     end
   end
 
+  @spec record_websocket_frame_headers(UpstreamIdentity.t() | term(), map() | term()) ::
+          observer_result()
+  def record_websocket_frame_headers(%UpstreamIdentity{} = identity, headers)
+      when is_map(headers) and map_size(headers) > 0 do
+    case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
+      {:ok, _windows} ->
+        :ok
+
+      {:error, reason} ->
+        log_failure("rate_limit_websocket_frame_headers", identity_metadata(identity), reason)
+    end
+  end
+
+  def record_websocket_frame_headers(_identity, _headers), do: :ok
+
   @spec event_state() :: event_state()
   def event_state, do: %{buffer: ""}
 
