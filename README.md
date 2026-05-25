@@ -127,8 +127,10 @@ rotated.
 
 ## Harness Configuration
 
-Keep Pool API keys and MCP tokens in environment variables, not in harness
-config files. For a local instance, the runtime URLs are:
+Keep Pool API keys and MCP tokens in environment variables when the harness
+supports secret expansion. For desktop harnesses that persist remote MCP headers
+in their own private settings, use a dedicated operator-scoped MCP token. For a
+local instance, the runtime URLs are:
 
 ```text
 Codex backend base URL: http://localhost:4000/backend-api/codex
@@ -460,6 +462,187 @@ mcp_servers:
 
 For deployed instances, change the model URLs to `https://pooler.example.com/v1`
 and the MCP `url` to `https://pooler.example.com/mcp`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
+
+Aider uses the OpenAI-compatible route with the `openai/` model prefix. Keep the
+Pool API key in the environment and point Aider's OpenAI API base at Codex
+Pooler's `/v1` surface.
+
+```yaml
+model: openai/gpt-5.5
+openai-api-base: http://localhost:4000/v1
+```
+
+Smoke-test from a repository:
+
+```bash
+export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+aider --model openai/gpt-5.5 --message 'Reply with exactly: aider ok'
+```
+
+For deployed instances, change `openai-api-base` to
+`https://pooler.example.com/v1`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/continue-favicon.png" alt="Continue logo" width="16" height="16"> Continue <code>~/.continue/config.yaml</code></summary>
+
+Continue can use Codex Pooler as an OpenAI-compatible provider by setting
+`provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
+secret. For `gpt-5*` models, Continue uses the Responses API by default.
+
+```yaml
+name: Codex Pooler
+version: 1.0.0
+schema: v1
+
+models:
+  - name: GPT-5.5 via Codex Pooler
+    provider: openai
+    model: gpt-5.5
+    apiBase: http://localhost:4000/v1
+    apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
+    roles:
+      - chat
+      - edit
+      - apply
+      - summarize
+    capabilities:
+      - tool_use
+      - image_input
+
+mcpServers:
+  - name: codex_pooler
+    type: streamable-http
+    url: http://localhost:4000/mcp
+    requestOptions:
+      timeout: 30000
+      headers:
+        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+```
+
+For deployed instances, change `apiBase` to `https://pooler.example.com/v1` and
+the MCP `url` to `https://pooler.example.com/mcp`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/cline-favicon.png" alt="Cline logo" width="16" height="16"> Cline <code>~/.cline</code> + <code>~/.cline/mcp.json</code></summary>
+
+Cline's OpenAI-compatible provider id is `openai`. Configure it with the Pool
+API key, the Codex Pooler `/v1` base URL, and the model id that your assigned
+Pool can serve.
+
+```bash
+cline auth \
+  --provider openai \
+  --apikey "$CODEX_POOLER_API_KEY" \
+  --baseurl http://localhost:4000/v1 \
+  --modelid gpt-5.5
+```
+
+For MCP in Cline CLI, add the remote server to `~/.cline/mcp.json`. The VS Code
+extension opens its own MCP settings JSON from the Cline MCP Servers panel; use
+the same `mcpServers` shape there.
+
+```json
+{
+  "mcpServers": {
+    "codex_pooler": {
+      "url": "http://localhost:4000/mcp",
+      "headers": {
+        "Authorization": "Bearer <operator-mcp-token>"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+For deployed instances, change `--baseurl` to `https://pooler.example.com/v1`
+and the MCP `url` to `https://pooler.example.com/mcp`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/roo-code-favicon.png" alt="Roo Code logo" width="16" height="16"> Roo Code VS Code settings + <code>.roo/mcp.json</code></summary>
+
+Roo Code is configured from its VS Code settings panel. Select the
+OpenAI-compatible provider and use the Codex Pooler `/v1` URL.
+
+```text
+API Provider: OpenAI Compatible
+Base URL:     http://localhost:4000/v1
+API Key:      ${CODEX_POOLER_API_KEY}
+Model ID:     gpt-5.5
+```
+
+Roo Code supports project-level MCP configuration in `.roo/mcp.json`. This file
+can be committed when it contains only the endpoint shape; keep the MCP token in
+a private copy or configure it through the Roo MCP settings UI.
+
+```json
+{
+  "mcpServers": {
+    "codex_pooler": {
+      "type": "streamable-http",
+      "url": "http://localhost:4000/mcp",
+      "headers": {
+        "Authorization": "Bearer <operator-mcp-token>"
+      },
+      "disabled": false,
+      "timeout": 300
+    }
+  }
+}
+```
+
+For deployed instances, change the provider base URL to
+`https://pooler.example.com/v1` and the MCP `url` to
+`https://pooler.example.com/mcp`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
+
+Goose's OpenAI provider supports OpenAI-compatible endpoints through
+`OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the
+Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret
+storage.
+
+```yaml
+GOOSE_PROVIDER: openai
+GOOSE_MODEL: gpt-5.5
+OPENAI_HOST: http://localhost:4000
+OPENAI_BASE_PATH: v1/chat/completions
+```
+
+For Codex Pooler MCP, add a remote Streamable HTTP extension. Goose stores
+remote extension headers in its config, so use a dedicated MCP token.
+
+```yaml
+extensions:
+  codex_pooler:
+    enabled: true
+    type: streamable_http
+    name: codex_pooler
+    uri: http://localhost:4000/mcp
+    headers:
+      Authorization: "Bearer <operator-mcp-token>"
+    timeout: 300
+    bundled: null
+    available_tools: []
+```
+
+For deployed instances, change `OPENAI_HOST` to `https://pooler.example.com` and
+the extension `uri` to `https://pooler.example.com/mcp`.
 
 </details>
 
