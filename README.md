@@ -233,6 +233,90 @@ and the MCP `url` to `https://pooler.example.com/mcp`.
 
 </details>
 
+<details>
+<summary><img src=".github/assets/python-favicon.png" alt="Python logo" width="16" height="16"> OpenAI Python SDK</summary>
+
+OpenAI Python SDK clients can use the OpenAI-compatible `/v1` surface by setting
+`base_url` to the Codex Pooler `/v1` URL and using the Pool API key as the API
+key.
+
+```python
+import os
+
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["CODEX_POOLER_API_KEY"],
+    base_url="http://localhost:4000/v1",
+)
+
+response = client.responses.create(
+    model="gpt-5.5",
+    input="Write a one-sentence status update.",
+)
+
+print(response.output_text)
+```
+
+For deployed instances, change `base_url` to `https://pooler.example.com/v1`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/nodejs-favicon.png" alt="Node.js logo" width="16" height="16"> OpenAI Node SDK</summary>
+
+OpenAI Node SDK clients use the same OpenAI-compatible `/v1` surface. Configure
+`baseURL` with the Codex Pooler `/v1` URL and pass the Pool API key as the API
+key.
+
+```js
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.CODEX_POOLER_API_KEY,
+  baseURL: "http://localhost:4000/v1",
+});
+
+const response = await client.responses.create({
+  model: "gpt-5.5",
+  input: "Write a one-sentence status update.",
+});
+
+console.log(response.output_text);
+```
+
+For deployed instances, change `baseURL` to `https://pooler.example.com/v1`.
+
+</details>
+
+<details>
+<summary><img src=".github/assets/vercel-favicon.png" alt="Vercel logo" width="16" height="16"> Vercel AI SDK</summary>
+
+Vercel AI SDK can point its OpenAI provider at Codex Pooler by creating a custom
+provider with `createOpenAI`. The provider calls the OpenAI-compatible `/v1`
+surface with the Pool API key.
+
+```ts
+import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
+
+const pooler = createOpenAI({
+  apiKey: process.env.CODEX_POOLER_API_KEY,
+  baseURL: "http://localhost:4000/v1",
+});
+
+const { text } = await generateText({
+  model: pooler.responses("gpt-5.5"),
+  prompt: "Write a one-sentence status update.",
+});
+
+console.log(text);
+```
+
+For deployed instances, change `baseURL` to `https://pooler.example.com/v1`.
+
+</details>
+
 ## Runtime Compatibility
 
 Codex Pooler supports two client-facing shapes:
