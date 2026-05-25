@@ -47,6 +47,184 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert state == %{classified?: true, buffer: ""}
     end
 
+    test "classifies exact top-level websocket_connection_limit_reached wrapped errors as retryable before visible output" do
+      state = StreamAttempt.first_event_state()
+
+      data =
+        Jason.encode!(%{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached",
+          "message" => "open a replacement websocket connection"
+        })
+
+      assert {{:retry,
+               %{
+                 code: "websocket_connection_limit_reached",
+                 event_type: "error",
+                 upstream_code: "websocket_connection_limit_reached"
+               }}, state} = StreamAttempt.classify_first_event(data, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "classifies exact nested websocket_connection_limit_reached wrapped errors as retryable before visible output" do
+      state = StreamAttempt.first_event_state()
+
+      data =
+        sse_event("error", %{
+          "type" => "error",
+          "status_code" => 400,
+          "error" => %{
+            "code" => "websocket_connection_limit_reached",
+            "message" => "open a replacement websocket connection"
+          }
+        })
+
+      assert {{:retry,
+               %{
+                 code: "websocket_connection_limit_reached",
+                 event_type: "error",
+                 upstream_code: "websocket_connection_limit_reached"
+               }}, state} = StreamAttempt.classify_first_event(data, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "keeps unrelated_invalid_request wrapped 400 errors non-retryable" do
+      state = StreamAttempt.first_event_state()
+
+      data =
+        Jason.encode!(%{
+          "type" => "error",
+          "status" => 400,
+          "code" => "unrelated_invalid_request",
+          "message" => "synthetic invalid request"
+        })
+
+      assert {{:write_terminal_failure, ^data,
+               %{
+                 code: "unrelated_invalid_request",
+                 event_type: "error",
+                 upstream_code: "unrelated_invalid_request"
+               }}, state} = StreamAttempt.classify_first_event(data, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "allows websocket_connection_limit_reached retry after internal codex.rate_limits observation" do
+      state = StreamAttempt.first_event_state()
+
+      rate_limits =
+        sse_event("codex.rate_limits", %{
+          "type" => "codex.rate_limits",
+          "rate_limits" => [
+            %{
+              "name" => "primary",
+              "used_percent" => 42,
+              "window_minutes" => 300,
+              "resets_at" => "2026-05-25T12:00:00Z"
+            }
+          ]
+        })
+
+      {{:write, ^rate_limits}, state} = StreamAttempt.classify_first_event(rate_limits, state)
+
+      limit_error =
+        sse_event("error", %{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached"
+        })
+
+      assert {{:retry,
+               %{
+                 code: "websocket_connection_limit_reached",
+                 event_type: "error",
+                 upstream_code: "websocket_connection_limit_reached"
+               }}, state} = StreamAttempt.classify_first_event(limit_error, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "does not retry websocket_connection_limit_reached after downstream-visible response.created" do
+      state = StreamAttempt.first_event_state()
+
+      assert {{:write, _created}, state} =
+               StreamAttempt.classify_first_event(
+                 sse_event("response.created", %{
+                   "type" => "response.created",
+                   "response" => %{"id" => "resp_visible_created"}
+                 }),
+                 state
+               )
+
+      terminal =
+        sse_event("error", %{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached"
+        })
+
+      assert {{:write_terminal_failure, ^terminal,
+               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+               StreamAttempt.classify_first_event(terminal, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "does not retry websocket_connection_limit_reached after downstream-visible text delta" do
+      state = StreamAttempt.first_event_state()
+
+      assert {{:write, _delta}, state} =
+               StreamAttempt.classify_first_event(
+                 sse_event("response.output_text.delta", %{
+                   "type" => "response.output_text.delta",
+                   "delta" => "visible synthetic text"
+                 }),
+                 state
+               )
+
+      terminal =
+        sse_event("error", %{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached"
+        })
+
+      assert {{:write_terminal_failure, ^terminal,
+               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+               StreamAttempt.classify_first_event(terminal, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
+    test "does not retry websocket_connection_limit_reached after downstream-visible output item" do
+      state = StreamAttempt.first_event_state()
+
+      assert {{:write, _output}, state} =
+               StreamAttempt.classify_first_event(
+                 sse_event("response.output_item.added", %{
+                   "type" => "response.output_item.added",
+                   "item" => %{"type" => "message", "id" => "msg_visible_output"}
+                 }),
+                 state
+               )
+
+      terminal =
+        sse_event("error", %{
+          "type" => "error",
+          "status" => 400,
+          "code" => "websocket_connection_limit_reached"
+        })
+
+      assert {{:write_terminal_failure, ^terminal,
+               %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
+               StreamAttempt.classify_first_event(terminal, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
     test "detects terminal failures after the first event is classified" do
       state = StreamAttempt.first_event_state()
 
@@ -73,5 +251,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
         StreamAttempt.classify_first_event(:not_a_stream_chunk, state)
       end
     end
+  end
+
+  defp sse_event(event, payload) do
+    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
   end
 end

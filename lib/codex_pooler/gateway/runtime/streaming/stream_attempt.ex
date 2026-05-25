@@ -58,13 +58,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttempt do
         :error -> classify_non_retryable_first_event(buffer, event)
       end
 
-    {classification, %{classified?: true, buffer: ""}}
+    {classification, classify_complete_first_event_state(event)}
   end
 
   defp classify_non_retryable_first_event(buffer, event) do
-    case StreamProtocol.terminal_failure_event(event) do
-      {:ok, failure} -> {:write_terminal_failure, buffer, failure}
-      nil -> {:write, buffer}
+    if StreamProtocol.internal_rate_limit_event?(event) do
+      {:write, buffer}
+    else
+      case StreamProtocol.terminal_failure_event(event) do
+        {:ok, failure} -> {:write_terminal_failure, buffer, failure}
+        nil -> {:write, buffer}
+      end
+    end
+  end
+
+  defp classify_complete_first_event_state(event) do
+    if StreamProtocol.internal_rate_limit_event?(event) do
+      %{classified?: false, buffer: ""}
+    else
+      %{classified?: true, buffer: ""}
     end
   end
 end
