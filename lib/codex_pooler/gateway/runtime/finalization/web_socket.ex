@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
     case AttemptSettlement.finalize_success(
            reserved.request,
            attempt,
-           ResponseUsage.from_sse(body),
+           ResponseUsage.from_websocket_body(body),
            SettlementAttrs.success(
              context,
              status,
@@ -82,7 +82,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
       case AttemptSettlement.finalize_partial_stream_failure(
              reserved.request,
              attempt,
-             ResponseUsage.from_sse(body),
+             ResponseUsage.from_websocket_body(body),
              SettlementAttrs.partial_stream_failure(
                context,
                status,
@@ -126,7 +126,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
            attempt,
-           ResponseUsage.from_sse(body),
+           ResponseUsage.from_websocket_body(body),
            SettlementAttrs.partial_stream_failure(
              context,
              owner_payload.status,
@@ -195,7 +195,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
            attempt,
-           ResponseUsage.from_sse(body),
+           ResponseUsage.from_websocket_body(body),
            SettlementAttrs.partial_stream_failure(
              context,
              502,

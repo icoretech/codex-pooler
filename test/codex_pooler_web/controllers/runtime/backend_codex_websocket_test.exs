@@ -418,6 +418,176 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.usage_status == "usage_known"
   end
 
+  test "websocket terminal usage settles priced gpt-5.5 request logs" do
+    terminal_usage = %{
+      "input_tokens" => 123,
+      "input_tokens_details" => %{"cached_tokens" => 17},
+      "output_tokens" => 45,
+      "reasoning_tokens" => 6,
+      "total_tokens" => 168
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_priced_gpt55",
+          "object" => "response",
+          "usage" => terminal_usage
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        exposed_model_id: "gpt-5.5",
+        upstream_model_id: "gpt-5.5",
+        pricing_ref: "gpt-5.5"
+      })
+      |> Repo.update!()
+
+    pricing_snapshot!(model, %{
+      input_token_micros: Decimal.new(10),
+      cached_input_token_micros: Decimal.new(1),
+      output_token_micros: Decimal.new(20),
+      reasoning_token_micros: Decimal.new(30)
+    })
+
+    setup = %{setup | model: model}
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-priced-gpt55"})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-priced-gpt55", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert %{"id" => "resp_ws_priced_gpt55"} = Jason.decode!(frame)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "websocket"
+    assert request.status == "succeeded"
+    assert request.usage_status == "usage_known"
+    assert request.requested_model == "gpt-5.5"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "websocket"
+    assert attempt.status == "succeeded"
+    assert attempt.usage_status == "usage_known"
+
+    assert [settlement] =
+             Repo.all(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               )
+             )
+
+    assert settlement.usage_status == "usage_known"
+    assert settlement.input_tokens == 123
+    assert settlement.cached_input_tokens == 17
+    assert settlement.output_tokens == 45
+    assert settlement.reasoning_tokens == 6
+    assert settlement.total_tokens == 168
+    assert settlement.pricing_snapshot_id
+    assert Decimal.positive?(settlement.settled_cost_micros)
+    assert settlement.details["pricing_status"] == "priced"
+    assert is_binary(settlement.details["settled_cost_micros"])
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(setup.pool, filters: %{request_id: request.id})
+
+    assert log.transport == "websocket"
+    assert log.status == "succeeded"
+    assert log.usage_status == "usage_known"
+    assert log.token_counts.input_tokens == 123
+    assert log.token_counts.cached_input_tokens == 17
+    assert log.token_counts.output_tokens == 45
+    assert log.token_counts.reasoning_tokens == 6
+    assert log.token_counts.total_tokens == 168
+    assert log.cost.status == "priced"
+    assert %Decimal{} = log.cost.usd
+    assert Decimal.positive?(log.cost.usd)
+  end
+
+  test "websocket terminal response without usage stays unpriced" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_missing_usage",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-missing-usage"})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-missing-usage", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert %{"id" => "resp_ws_missing_usage"} = Jason.decode!(frame)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "websocket"
+    assert request.status == "succeeded"
+    assert request.usage_status == "usage_unknown"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "websocket"
+    assert attempt.status == "succeeded"
+    assert attempt.usage_status == "usage_unknown"
+
+    assert [settlement] =
+             Repo.all(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               )
+             )
+
+    assert settlement.usage_status == "usage_unknown"
+    assert settlement.pricing_snapshot_id
+    refute settlement.details["settled_cost_micros"]
+    assert settlement.details["pricing_status"] == "priced"
+    assert settlement.details["settled_cost_micros"] == nil
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(setup.pool, filters: %{request_id: request.id})
+
+    assert log.transport == "websocket"
+    assert log.status == "succeeded"
+    assert log.usage_status == "usage_unknown"
+    assert log.cost.status == "unpriced"
+    assert log.cost.usd == nil
+  end
+
   @tag :websocket_response_create_image_payload
   test "websocket response.create preserves input_image payloads end to end" do
     upstream =
