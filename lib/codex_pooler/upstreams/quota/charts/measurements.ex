@@ -36,12 +36,9 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
     end
   end
 
-  @spec sum([map()], atom()) :: Decimal.t()
+  @spec sum([map()], atom()) :: Decimal.t() | nil
   def sum(items, field) do
-    items
-    |> Enum.map(&Map.get(&1, field))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+    sum_known(items, field)
   end
 
   @spec sum_known([map()], atom()) :: Decimal.t() | nil

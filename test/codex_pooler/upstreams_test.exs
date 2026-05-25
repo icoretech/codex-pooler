@@ -17,6 +17,7 @@ defmodule CodexPooler.UpstreamsTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.Charts.Measurements
 
   alias CodexPooler.Upstreams.Schemas.{
     EncryptedSecret,
@@ -1872,8 +1873,116 @@ defmodule CodexPooler.UpstreamsTest do
       assert_decimal_equal(item.capacity, "100")
       assert item.used == nil
       assert item.remaining_percent == nil
-      assert_decimal_equal(chart.remaining_total, "0")
+      assert chart.remaining_total == nil
       assert_decimal_equal(chart.capacity_total, "100")
+      assert chart.used_total == nil
+      assert chart.used_percent == nil
+    end
+
+    test "quota remaining charts expose token-backed remaining and preserve exhausted zero" do
+      now = ~U[2026-05-06 12:00:00Z]
+      reset_at = DateTime.add(now, 900, :second)
+      pool = pool_fixture(%{name: "Example Token Backed Pool"})
+
+      %{identity: known_identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-token-known",
+          account_label: "Example Token Known Account",
+          assignment_label: "Example Token Known Account"
+        })
+
+      %{identity: exhausted_identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-token-exhausted",
+          account_label: "Example Token Exhausted Account",
+          assignment_label: "Example Token Exhausted Account"
+        })
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(known_identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   active_limit: 1000,
+                   credits: 250,
+                   reset_at: reset_at,
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(exhausted_identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   active_limit: 1000,
+                   credits: 0,
+                   reset_at: reset_at,
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      chart =
+        Quota.Charts.quota_remaining_charts_by_pool_ids([pool.id], at: now)[pool.id].primary_5h
+
+      known_item = Enum.find(chart.items, &(&1.label == "Example Token Known Account"))
+      [exhausted_window] = QuotaWindows.list_quota_windows(exhausted_identity)
+      exhausted_measurements = Measurements.for_window(exhausted_window)
+
+      assert_decimal_equal(known_item.remaining, "250")
+      assert_decimal_equal(known_item.capacity, "1000")
+      assert_decimal_equal(exhausted_measurements.remaining, "0")
+      assert_decimal_equal(exhausted_measurements.capacity, "1000")
+      assert_decimal_equal(chart.remaining_total, "250")
+      assert_decimal_equal(chart.capacity_total, "1000")
+      assert chart.excluded_count == 1
+    end
+
+    test "quota remaining charts keep percent-only partial evidence out of absolute totals" do
+      now = ~U[2026-05-06 12:00:00Z]
+      reset_at = DateTime.add(now, 900, :second)
+      pool = pool_fixture(%{name: "Example Percent Only Pool"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-percent-only",
+          account_label: "Example Percent Only Account",
+          assignment_label: "Example Percent Only Account"
+        })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("42"),
+                   reset_at: reset_at,
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      chart =
+        Quota.Charts.quota_remaining_charts_by_pool_ids([pool.id], at: now)[pool.id].primary_5h
+
+      assert chart.state == "usable"
+      assert [item] = chart.items
+      assert item.label == "Example Percent Only Account"
+      assert item.remaining == nil
+      assert item.capacity == nil
+      assert item.used == nil
+      assert_decimal_equal(item.used_percent, "42")
+      assert item.remaining_percent == nil
+      assert chart.remaining_total == nil
+      assert chart.capacity_total == nil
       assert chart.used_total == nil
       assert chart.used_percent == nil
     end
