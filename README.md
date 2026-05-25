@@ -195,9 +195,9 @@ change `baseURL` to `https://pooler.example.com/v1` and the MCP `url` to
 </details>
 
 <details>
-<summary><img src=".github/assets/codex-cli-favicon.png" alt="OpenAI logo" width="16" height="16"> Codex CLI <code>~/.codex/config.toml</code></summary>
+<summary><img src=".github/assets/codex-cli-favicon.png" alt="OpenAI logo" width="16" height="16"> Codex <code>~/.codex/config.toml</code></summary>
 
-Codex CLI should use the backend compatibility route, not the `/v1` SDK route.
+Codex should use the backend compatibility route, not the `/v1` SDK route.
 Keep the provider `name` as `OpenAI`; Codex uses that value for provider-family
 behavior even when the request is routed through Codex Pooler.
 
@@ -234,7 +234,7 @@ and the MCP `url` to `https://pooler.example.com/mcp`.
 </details>
 
 <details>
-<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw API provider <code>~/.openclaw/openclaw.json</code></summary>
+<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>~/.openclaw/openclaw.json</code></summary>
 
 OpenClaw uses `openai/*` as the canonical OpenAI route. To keep that model name
 while sending agent turns to Codex Pooler's OpenAI-compatible `/v1` surface, pin
@@ -270,11 +270,23 @@ the OpenAI provider to the PI runtime and point `baseUrl` at Codex Pooler.
       },
     },
   },
+  mcp: {
+    servers: {
+      codex_pooler: {
+        url: "http://localhost:4000/mcp",
+        transport: "streamable-http",
+        headers: {
+          Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}",
+        },
+      },
+    },
+  },
 }
 ```
 
 Define only models that your assigned Pool can serve. For deployed instances,
-change `baseUrl` to `https://pooler.example.com/v1`.
+change `baseUrl` to `https://pooler.example.com/v1` and the MCP `url` to
+`https://pooler.example.com/mcp`.
 
 If you prefer to keep Codex Pooler separate from OpenClaw's built-in OpenAI
 provider behavior, use a custom provider id such as `codex-pooler/gpt-5.5`
@@ -288,12 +300,14 @@ OpenAI.
 <summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>~/.hermes/config.yaml</code> + <code>auth.json</code></summary>
 
 Hermes works best through its `openai-api` provider with the Responses transport
-forced explicitly. Keep the Pool API key in `~/.hermes/.env` and point both the
-provider URL and model config at Codex Pooler's `/v1` surface.
+forced explicitly. Keep the Pool API key and MCP token in `~/.hermes/.env`,
+point the provider config at Codex Pooler's `/v1` surface, and point
+`mcp_servers` at `/mcp`.
 
 ```bash
 OPENAI_API_KEY=<pool-api-key>
 OPENAI_BASE_URL=http://localhost:4000/v1
+CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
 
 ```yaml
@@ -302,6 +316,15 @@ model:
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
+
+mcp_servers:
+  codex_pooler:
+    url: http://localhost:4000/mcp
+    headers:
+      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
+    enabled: true
+    timeout: 120
+    connect_timeout: 60
 ```
 
 Smoke-test with a one-shot prompt:
@@ -318,6 +341,7 @@ stores the key in `auth.json` because Hermes credential pools live there.
 
 ```bash
 HERMES_CODEX_BASE_URL=http://localhost:4000/v1
+CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
 
 ```yaml
@@ -325,6 +349,15 @@ model:
   default: gpt-5.5
   provider: openai-codex
   base_url: http://localhost:4000/v1
+
+mcp_servers:
+  codex_pooler:
+    url: http://localhost:4000/mcp
+    headers:
+      Authorization: "Bearer ${CODEX_POOLER_MCP_KEY}"
+    enabled: true
+    timeout: 120
+    connect_timeout: 60
 ```
 
 ```json
@@ -345,7 +378,8 @@ model:
 }
 ```
 
-For deployed instances, change each URL to `https://pooler.example.com/v1`.
+For deployed instances, change the model URLs to `https://pooler.example.com/v1`
+and the MCP `url` to `https://pooler.example.com/mcp`.
 
 </details>
 
