@@ -1,5 +1,7 @@
 # Codex Pooler
 
+![Codex Pooler gateway overview](.github/assets/codex-pooler-readme-banner.png)
+
 Codex Pooler lets you create managed pools of Codex accounts.
 
 Add your Codex accounts, group them into Pools, and give each client a Pool API
