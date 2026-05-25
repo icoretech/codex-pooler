@@ -231,6 +231,75 @@ provider when you need to force SSE-only coverage. For deployed instances,
 change both `base_url` values to `https://pooler.example.com/backend-api/codex`
 and the MCP `url` to `https://pooler.example.com/mcp`.
 
+Codex filters resumable conversations by `model_provider`. If you already have
+sessions created with the built-in `openai` provider and want them to appear
+under `codex-pooler-ws`, re-tag both the JSONL transcripts and the newer SQLite
+state database. Run these with Codex closed; they edit local state in place. The
+transcript rewrite scans the whole sessions directory and can take a while on
+large installs. Set `TO_PROVIDER=codex-pooler-http` if you made the HTTP
+provider your default.
+
+```bash
+set -eu
+
+FROM_PROVIDER="openai"
+TO_PROVIDER="codex-pooler-ws"
+
+find ~/.codex/sessions -type f -name '*.jsonl' \
+  -exec perl -pi -e \
+    "s/\"model_provider\":\"${FROM_PROVIDER}\"/\"model_provider\":\"${TO_PROVIDER}\"/g" \
+    {} +
+
+for db in ~/.codex/state_*.sqlite; do
+  [ -e "$db" ] || continue
+  sqlite3 "$db" \
+    "UPDATE threads SET model_provider = '${TO_PROVIDER}' WHERE model_provider = '${FROM_PROVIDER}';"
+done
+```
+
+On Windows, run the same migration from PowerShell. This expects `sqlite3` to be
+available on `PATH`.
+
+```powershell
+$ErrorActionPreference = "Stop"
+
+$FromProvider = "openai"
+$ToProvider = "codex-pooler-ws"
+$CodexHome = Join-Path $HOME ".codex"
+
+$FromJson = '"model_provider":"' + $FromProvider + '"'
+$ToJson = '"model_provider":"' + $ToProvider + '"'
+
+Get-ChildItem -Path (Join-Path $CodexHome "sessions") -Recurse -Filter "*.jsonl" |
+  ForEach-Object {
+    $Path = $_.FullName
+    $TempPath = "$Path.tmp"
+    $Reader = [System.IO.StreamReader]::new($Path)
+    $Writer = [System.IO.StreamWriter]::new(
+      $TempPath,
+      $false,
+      [System.Text.UTF8Encoding]::new($false)
+    )
+
+    try {
+      while (($Line = $Reader.ReadLine()) -ne $null) {
+        $Writer.WriteLine($Line.Replace($FromJson, $ToJson))
+      }
+    } finally {
+      $Reader.Dispose()
+      $Writer.Dispose()
+    }
+
+    Move-Item -Force $TempPath $Path
+  }
+
+Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
+  ForEach-Object {
+    sqlite3 $_.FullName `
+      "UPDATE threads SET model_provider = '$ToProvider' WHERE model_provider = '$FromProvider';"
+  }
+```
+
 </details>
 
 <details>
