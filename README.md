@@ -9,11 +9,11 @@
 <p align="center">
   <a href="#quick-start-with-docker-compose">Quick start</a>
   ·
-  <a href="#harness-configuration">Harness Configuration</a>
+  <a href="#harness-configuration">Harness</a>
   ·
   <a href="#configuration">Configuration</a>
   ·
-  <a href="#deployment-options">Deployment</a>
+  <a href="#deployment">Deployment</a>
 </p>
 
 <p align="center">
@@ -616,7 +616,7 @@ stored only as a keyed HMAC digest, fingerprint, and key version. The SMTP
 password is stored encrypted with key version metadata and is recovered only for
 mail send or credential-test paths.
 
-## Deployment Options
+## Deployment
 
 Docker Compose is the easiest way to try the software. For Kubernetes, this
 repository also ships a Helm chart in `charts/codex-pooler` with separate app,
