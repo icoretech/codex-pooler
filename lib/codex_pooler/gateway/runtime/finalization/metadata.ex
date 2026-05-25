@@ -26,9 +26,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(metadata)
   end
 
-  @spec websocket_response_metadata(list(), String.t() | nil, RequestOptions.t() | map()) ::
+  @spec websocket_response_metadata(list(), String.t() | nil, RequestOptions.t() | map(), map()) ::
           map()
-  def websocket_response_metadata(headers, error_kind, opts) do
+  def websocket_response_metadata(headers, error_kind, opts, websocket_frame_headers \\ %{}) do
     metadata =
       %{
         "content_type" => "application/json",
@@ -46,6 +46,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> route_attempt_metadata()
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(metadata)
+    |> maybe_put_websocket_frame_headers(websocket_frame_headers)
   end
 
   @spec first_event_stream_metadata(Req.Response.t(), map(), String.t(), RequestOptions.t()) ::
@@ -139,6 +140,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end
+
+  defp maybe_put_websocket_frame_headers(metadata, headers) when map_size(headers) > 0 do
+    Map.put(metadata, "websocket_frame_headers", headers)
+  end
+
+  defp maybe_put_websocket_frame_headers(metadata, _headers), do: metadata
 
   defp header(%Req.Response{headers: headers}, key) do
     headers

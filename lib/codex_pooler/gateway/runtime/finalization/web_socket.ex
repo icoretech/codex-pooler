@@ -40,7 +40,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
            SettlementAttrs.success(
              context,
              status,
-             Metadata.websocket_response_metadata(headers, nil, request_options),
+             Metadata.websocket_response_metadata(
+               headers,
+               nil,
+               request_options,
+               Map.get(finalization, :websocket_frame_headers, %{})
+             ),
              started: started
            )
          ) do
@@ -84,7 +89,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
                code,
                code,
                headers
-               |> Metadata.websocket_response_metadata(code, request_options)
+               |> Metadata.websocket_response_metadata(
+                 code,
+                 request_options,
+                 Map.get(finalization, :websocket_frame_headers, %{})
+               )
                |> Metadata.maybe_put_masked_error_metadata(upstream_code, code),
                started: started
              )
@@ -123,7 +132,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
              owner_payload.status,
              owner_payload.code,
              owner_payload.metadata.reason,
-             Metadata.websocket_response_metadata(headers, owner_payload.code, request_options),
+             Metadata.websocket_response_metadata(
+               headers,
+               owner_payload.code,
+               request_options,
+               Map.get(finalization, :websocket_frame_headers, %{})
+             ),
              started: started
            )
          ) do
@@ -143,7 +157,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
     %{request_options: request_options} = context
 
     code = Streaming.error_code(reason)
-    metadata = Metadata.websocket_response_metadata(headers, code, request_options)
+
+    metadata =
+      Metadata.websocket_response_metadata(
+        headers,
+        code,
+        request_options,
+        Map.get(finalization, :websocket_frame_headers, %{})
+      )
 
     with :ok <- Streaming.record_health_failure(code, code, context) do
       finalize_failed_after_health(context, finalization, code, metadata)

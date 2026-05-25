@@ -38,6 +38,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     assert metadata["upstream_transport"] == "websocket"
   end
 
+  test "websocket metadata stores sanitized frame-carried headers only under frame header summary" do
+    metadata =
+      Metadata.websocket_response_metadata(
+        [{"openai-request-id", "upgrade-req"}],
+        "rate_limit_exceeded",
+        %{},
+        %{
+          "openai-request-id" => "frame-req",
+          "x-codex-primary-reset-at" => "2026-05-25T13:00:00Z"
+        }
+      )
+
+    assert metadata["upstream_request_id"] == "upgrade-req"
+
+    assert metadata["websocket_frame_headers"] == %{
+             "openai-request-id" => "frame-req",
+             "x-codex-primary-reset-at" => "2026-05-25T13:00:00Z"
+           }
+  end
+
   test "safe_reason classifies prompt token and idempotency-bearing terms without inspecting them" do
     secret_reason = %{
       idempotency_key: "raw-idempotency-key-secret",
