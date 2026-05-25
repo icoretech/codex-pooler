@@ -129,7 +129,7 @@ For a deployed instance, replace `http://localhost:4000` with your HTTPS host,
 for example `https://pooler.example.com`.
 
 <details>
-<summary>opencode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> opencode <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 opencode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
 provider uses the Pool API key, and the optional remote MCP entry uses an
@@ -195,7 +195,7 @@ change `baseURL` to `https://pooler.example.com/v1` and the MCP `url` to
 </details>
 
 <details>
-<summary>Codex CLI <code>~/.codex/config.toml</code></summary>
+<summary><img src=".github/assets/codex-cli-favicon.png" alt="OpenAI logo" width="16" height="16"> Codex CLI <code>~/.codex/config.toml</code></summary>
 
 Codex CLI should use the backend compatibility route, not the `/v1` SDK route.
 Keep the provider `name` as `OpenAI`; Codex uses that value for provider-family
