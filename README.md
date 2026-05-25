@@ -234,6 +234,57 @@ and the MCP `url` to `https://pooler.example.com/mcp`.
 </details>
 
 <details>
+<summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw API provider <code>~/.openclaw/openclaw.json</code></summary>
+
+OpenClaw uses `openai/*` as the canonical OpenAI route. To keep that model name
+while sending agent turns to Codex Pooler's OpenAI-compatible `/v1` surface, pin
+the OpenAI provider to the PI runtime and point `baseUrl` at Codex Pooler.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.5" },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      openai: {
+        baseUrl: "http://localhost:4000/v1",
+        apiKey: "${CODEX_POOLER_API_KEY}",
+        api: "openai-responses",
+        agentRuntime: { id: "pi" },
+        timeoutSeconds: 300,
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5 via Codex Pooler",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 400000,
+            contextTokens: 256000,
+            maxTokens: 128000,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Define only models that your assigned Pool can serve. For deployed instances,
+change `baseUrl` to `https://pooler.example.com/v1`.
+
+If you prefer to keep Codex Pooler separate from OpenClaw's built-in OpenAI
+provider behavior, use a custom provider id such as `codex-pooler/gpt-5.5`
+instead. That follows OpenClaw's generic custom-provider shape, but tools that
+look specifically for `openai/gpt-*` model refs will not see it as canonical
+OpenAI.
+
+</details>
+
+<details>
 <summary><img src=".github/assets/python-favicon.png" alt="Python logo" width="16" height="16"> OpenAI Python SDK</summary>
 
 OpenAI Python SDK clients can use the OpenAI-compatible `/v1` surface by setting
