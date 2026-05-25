@@ -4348,6 +4348,123 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "SSE wrapped status_code previous response miss is masked while preserving metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"error",
+             %{
+               "type" => "error",
+               "status_code" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "previous_response_not_found",
+                 "message" => "Previous response with id 'resp_status_code_missing' not found."
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{stream: stream}} =
+             execute_gateway_service(
+               auth,
+               "/backend-api/codex/responses",
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "continue",
+                 "stream" => true,
+                 "previous_response_id" => "resp_status_code_missing"
+               },
+               %{
+                 request_id: "sse-status-code-previous-response-not-found",
+                 upstream_endpoint: "/backend-api/codex/responses"
+               }
+             )
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+    assert stream_conn.resp_body =~ "event: response.failed\n"
+    assert stream_conn.resp_body =~ ~s("code":"stream_incomplete")
+    refute stream_conn.resp_body =~ "previous_response_not_found"
+    refute stream_conn.resp_body =~ "resp_status_code_missing"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.transport == "http_sse"
+    assert request.last_error_code == "stream_incomplete"
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "stream_incomplete"
+    assert attempt.response_metadata["upstream_error_code"] == "previous_response_not_found"
+    assert attempt.response_metadata["masked_error_code"] == "stream_incomplete"
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+  end
+
+  test "SSE wrapped status_code rate limit preserves nested code without broadening retry" do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          {"error",
+           %{
+             "type" => "error",
+             "status_code" => 429,
+             "error" => %{
+               "type" => "requests",
+               "code" => "rate_limit_exceeded",
+               "message" => "rate limited"
+             }
+           }}
+        ],
+        done: false
+      )
+
+    {setup, failing_upstream, fallback_upstream} = stream_retry_setup(first_mode)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{stream: stream}} =
+             execute_gateway_service(
+               auth,
+               "/backend-api/codex/responses",
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "rate limit wrapped error fixture",
+                 "stream" => true
+               },
+               %{
+                 request_id: deterministic_rotation_seed(2, 0),
+                 upstream_endpoint: "/backend-api/codex/responses"
+               }
+             )
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+    assert stream_conn.resp_body =~ "event: response.failed\n"
+    assert stream_conn.resp_body =~ ~s("code":"rate_limit_exceeded")
+    refute stream_conn.resp_body =~ ~s("code":"error")
+    refute stream_conn.resp_body =~ "stream_incomplete"
+
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert_stream_terminal_failure!(setup, "rate_limit_exceeded")
+  end
+
   test "SSE previous response miss after partial output is masked without retrying" do
     upstream =
       start_upstream(

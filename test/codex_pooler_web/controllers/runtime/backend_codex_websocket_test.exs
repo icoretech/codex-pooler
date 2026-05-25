@@ -2834,6 +2834,254 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "websocket wrapped status_code previous response error is masked without replaying or circuiting" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"error",
+             %{
+               "type" => "error",
+               "status_code" => 400,
+               "error" => %{
+                 "code" => "previous_response_not_found",
+                 "message" => "Previous response with id 'resp_status_code_missing' not found.",
+                 "param" => "previous_response_id"
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_status_code_previous_fallback_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-status-code-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "status-code-missing-previous"})
+
+    session =
+      session
+      |> Ecto.Changeset.change(%{pool_upstream_assignment_id: setup.assignment.id})
+      |> Repo.update!()
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [
+                   %{"type" => "message", "role" => "user", "content" => "continue"}
+                 ],
+                 "stream" => true,
+                 "generate" => true,
+                 "previous_response_id" => "resp_status_code_missing"
+               }),
+               %{
+                 request_id: "ws-status-code-previous-response-not-found",
+                 codex_session: session
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{
+             "type" => "response.failed",
+             "response" => %{
+               "error" => %{
+                 "code" => "stream_incomplete",
+                 "message" => "upstream stream incomplete"
+               }
+             }
+           } = Jason.decode!(frame)
+
+    refute frame =~ "previous_response_not_found"
+    refute frame =~ "resp_status_code_missing"
+
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert [_request] = FakeUpstream.requests(upstream)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 200
+    assert request.last_error_code == "stream_incomplete"
+    refute get_in(request.request_metadata, ["routing", "demotion_reason"])
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.network_error_code == "stream_incomplete"
+    assert attempt.response_metadata["upstream_error_code"] == "previous_response_not_found"
+    assert attempt.response_metadata["masked_error_code"] == "stream_incomplete"
+    refute attempt.response_metadata["upstream_error_code"] == "error"
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.status == "failed"
+    assert turn.error_code == "stream_incomplete"
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+  end
+
+  test "websocket wrapped status_code rate limit error records useful upstream metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"error",
+             %{
+               "type" => "error",
+               "status_code" => 429,
+               "error" => %{
+                 "code" => "rate_limit_exceeded",
+                 "message" => "rate limited"
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "rate-limit"})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "hit a websocket rate limit",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-status-code-rate-limit", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{
+             "type" => "response.failed",
+             "response" => %{"error" => %{"code" => "rate_limit_exceeded"}}
+           } = Jason.decode!(frame)
+
+    refute frame =~ ~s("code":"error")
+    refute frame =~ "stream_incomplete"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 200
+    assert request.last_error_code == "rate_limit_exceeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.network_error_code == "rate_limit_exceeded"
+    assert attempt.response_metadata["error_kind"] == "rate_limit_exceeded"
+    assert attempt.response_metadata["status_code"] == 200
+    refute attempt.response_metadata["upstream_error_code"] == "error"
+    refute Map.has_key?(attempt.response_metadata, "masked_error_code")
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.status == "failed"
+    assert turn.error_code == "rate_limit_exceeded"
+  end
+
+  test "websocket wrapped status_code message-only server error fails safely without raw body metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"error",
+             %{
+               "type" => "error",
+               "status_code" => 500,
+               "message" => "upstream failed"
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "server-error"})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "trigger websocket server error",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-status-code-message-only-server-error", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{
+             "type" => "response.failed",
+             "response" => %{
+               "error" => %{"code" => "server_error", "message" => "upstream failed"}
+             }
+           } = Jason.decode!(frame)
+
+    refute frame =~ ~s("code":"error")
+    refute frame =~ "stream_incomplete"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 200
+    assert request.last_error_code == "server_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.network_error_code == "server_error"
+    assert attempt.response_metadata["error_kind"] == "server_error"
+    assert attempt.response_metadata["status_code"] == 200
+    refute attempt.response_metadata["upstream_error_code"] == "error"
+    refute Map.has_key?(attempt.response_metadata, "masked_error_code")
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ ~s("type":"error")
+    refute metadata_text =~ ~s("status_code":500)
+    refute metadata_text =~ "upstream failed"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ "upstream-token"
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.status == "failed"
+    assert turn.error_code == "server_error"
+  end
+
   test "websocket previous response terminal failure is masked without replaying or circuiting" do
     upstream =
       start_upstream(
