@@ -29,7 +29,7 @@ defmodule CodexPooler.Upstreams do
   @deleted UpstreamIdentity.deleted_status()
   @assignment_deleted PoolUpstreamAssignment.deleted_status()
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
-  @type lifecycle_result :: {:ok, map()} | {:error, lifecycle_error()}
+  @type lifecycle_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
   @type assignment_ref :: PoolUpstreamAssignment.t() | Ecto.UUID.t()
   @type identity_result ::
@@ -106,6 +106,9 @@ defmodule CodexPooler.Upstreams do
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   defdelegate import_codex_auth_json(scope, pool, content), to: Import
+
+  @spec rename_account_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  defdelegate rename_account_for_scope(scope, identity_or_id, attrs), to: AccountLifecycle
 
   @spec pause_account_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
   defdelegate pause_account_for_scope(scope, identity_or_id, attrs), to: AccountLifecycle

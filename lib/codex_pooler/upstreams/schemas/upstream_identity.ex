@@ -59,10 +59,10 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
       :updated_at,
       :metadata
     ])
-    |> update_change(:chatgpt_account_id, &String.trim/1)
-    |> update_change(:account_label, &String.trim/1)
+    |> update_change(:chatgpt_account_id, &trim_string/1)
+    |> update_change(:account_label, &trim_string/1)
     |> update_change(:plan_family, &normalize_optional_token/1)
-    |> update_change(:plan_label, &String.trim/1)
+    |> update_change(:plan_label, &trim_string/1)
     |> validate_required([
       :account_label,
       :onboarding_method,
@@ -131,4 +131,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
   end
 
   defp normalize_optional_token(value), do: value
+
+  defp trim_string(value) when is_binary(value), do: String.trim(value)
+  defp trim_string(value), do: value
 end

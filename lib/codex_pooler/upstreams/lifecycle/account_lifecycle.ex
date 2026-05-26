@@ -38,8 +38,45 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   ]
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
-  @type lifecycle_result :: {:ok, map()} | {:error, lifecycle_error()}
+  @type lifecycle_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
+
+  @spec rename_account(identity_ref(), map()) :: lifecycle_result()
+  defp rename_account(identity_or_id, attrs) do
+    case normalize_identity(identity_or_id) do
+      %UpstreamIdentity{} = identity ->
+        timestamp = Map.get(attrs, :renamed_at, now())
+
+        identity
+        |> UpstreamIdentity.changeset(%{
+          account_label: rename_label_attr(attrs, identity.account_label),
+          updated_at: timestamp
+        })
+        |> Repo.update()
+        |> case do
+          {:ok, renamed_identity} -> {:ok, lifecycle_result(:renamed, renamed_identity)}
+          {:error, changeset} -> {:error, changeset}
+        end
+        |> tap_upstream_change("upstream_account_renamed")
+
+      nil ->
+        {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+    end
+  end
+
+  @spec rename_account_for_scope(Scope.t(), identity_ref(), map()) :: lifecycle_result()
+  def rename_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
+    with {:ok, identity} <- authorize(scope, identity_or_id) do
+      rename_account(identity, attrs)
+      |> AccountAudit.record_change(scope, "upstream_account.rename",
+        previous_label: identity.account_label,
+        previous_status: identity.status
+      )
+    end
+  end
+
+  def rename_account_for_scope(_scope, _identity_or_id, _attrs),
+    do: {:error, lifecycle_error(:invalid_request, "user scope is required")}
 
   @spec pause_account(identity_ref(), map()) :: lifecycle_result()
   defp pause_account(identity_or_id, attrs) do
@@ -387,6 +424,22 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
       {key, value} when is_binary(key) -> {String.to_existing_atom(key), value}
       {key, value} -> {key, value}
     end)
+  end
+
+  defp rename_label_attr(attrs, fallback) do
+    case Map.fetch(attrs, :account_label) do
+      {:ok, nil} -> ""
+      {:ok, value} -> value
+      :error -> string_rename_label_attr(attrs, fallback)
+    end
+  end
+
+  defp string_rename_label_attr(attrs, fallback) do
+    case Map.fetch(attrs, "account_label") do
+      {:ok, nil} -> ""
+      {:ok, value} -> value
+      :error -> fallback
+    end
   end
 
   defp lifecycle_error(code, message), do: %{code: code, message: message}

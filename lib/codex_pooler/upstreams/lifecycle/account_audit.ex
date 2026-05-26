@@ -94,6 +94,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountAudit do
       account_label: identity.account_label,
       onboarding_method: identity.onboarding_method,
       status: identity.status,
+      previous_label: Keyword.get(opts, :previous_label),
       previous_status: Keyword.get(opts, :previous_status),
       result_status: result.status && to_string(result.status),
       assignment_count: length(assignments(result)),
