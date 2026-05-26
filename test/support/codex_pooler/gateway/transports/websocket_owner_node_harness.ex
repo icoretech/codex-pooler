@@ -4,17 +4,35 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def fake_upstream_boundary(test_pid, opts \\ []) when is_pid(test_pid) do
     block_ref = Keyword.get(opts, :block_ref)
     messages = Keyword.get(opts, :messages, [])
+    return_request_result? = Keyword.get(opts, :return_request_result?, false)
 
     %{
       start: fn -> start_fake_upstream(test_pid) end,
       send: fn upstream_pid, payload, writer ->
         record_frame(upstream_pid, payload, test_pid)
         emit_messages(messages, writer, block_ref, test_pid)
-        :ok
+        maybe_request_result(payload, messages, return_request_result?)
       end,
       close: fn upstream_pid -> stop_fake_upstream(upstream_pid, test_pid) end
     }
   end
+
+  defp maybe_request_result(
+         %CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession.Request{},
+         messages,
+         true
+       ) do
+    {:ok,
+     %{
+       body: Enum.join(messages, "\n"),
+       terminal: "response.completed",
+       status: 200,
+       headers: [],
+       websocket_frame_headers: %{}
+     }}
+  end
+
+  defp maybe_request_result(_payload, _messages, _return_request_result?), do: :ok
 
   def fake_upstream_frames(upstream_pid) when is_pid(upstream_pid) do
     Agent.get(upstream_pid, fn state -> Enum.reverse(state.frames) end)

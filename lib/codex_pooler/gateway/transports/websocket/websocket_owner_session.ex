@@ -139,7 +139,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @spec submit_request(GenServer.server(), downstream(), UpstreamWebSocketSession.Request.t()) ::
-          :ok | {:error, WebsocketOwnerContract.owner_error() | term()}
+          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error() | term()}
   def submit_request(owner, downstream, %UpstreamWebSocketSession.Request{} = request)
       when is_map(downstream) do
     submit_upstream(owner, downstream, request)
@@ -489,6 +489,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     case result do
       :ok -> _result = send_downstream(downstream, :complete)
+      {:ok, _result} -> _result = send_downstream(downstream, :complete)
       {:error, reason} -> _result = send_owner_error(downstream, reason)
       _other -> _result = send_owner_error(downstream, :owner_crashed)
     end
@@ -615,7 +616,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     request = %{request | writer: writer}
 
     case UpstreamWebSocketSession.request(upstream_pid, request) do
-      {:ok, _result} -> :ok
+      {:ok, result} -> {:ok, result}
       {:error, %{reason: reason}} -> {:error, reason}
     end
   end

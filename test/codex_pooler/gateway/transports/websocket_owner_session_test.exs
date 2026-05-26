@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -218,6 +219,45 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert :ok = WebsocketOwnerSession.submit_frame(owner, downstream, "frame-b")
 
     assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == ["frame-a", "frame-b"]
+  end
+
+  test "returns upstream request result while completing the active downstream", context do
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_owner_result",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        }
+      })
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("request-result"))
+
+    request = %UpstreamWebSocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "request-frame",
+      timeouts: %{},
+      writer: fn _frame -> :ok end
+    }
+
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+             WebsocketOwnerSession.submit_request(owner, downstream, request)
+
+    assert body =~ "resp_owner_result"
+
+    assert_receive {:websocket_owner_frame, "request-result", 1, {:data, ^terminal_frame}}
+    assert_receive {:websocket_owner_frame, "request-result", 1, :complete}
   end
 
   test "latest reconnect increments downstream epoch and fences old downstream sends", context do
