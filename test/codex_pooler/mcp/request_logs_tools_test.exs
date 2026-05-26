@@ -4,6 +4,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings, Redaction, ToolDispatch}
@@ -142,6 +143,200 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert_no_unsafe_request_log_text(result)
   end
 
+  test "lists request-log debug metadata as compact sanitized incident fields", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-request-log-debug", name: "MCP Request Log Debug"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP debug key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Debug upstream",
+        assignment_label: "Debug assignment"
+      })
+
+    %{request: terminal_request, attempt: terminal_attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-terminal",
+        codex_session_id: "session-example-1",
+        codex_session_key: "session-key-example-1",
+        request_error: "client_disconnected",
+        attempt_error: "owner_drained"
+      })
+
+    terminal_turn =
+      debug_turn_fixture(terminal_request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-1"),
+        status: "failed",
+        error_code: "turn_owner_drained",
+        final_attempt_id: terminal_attempt.id,
+        turn_sequence: 1
+      })
+
+    %{request: mismatch_request, attempt: _mismatch_attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-open-turn",
+        codex_session_id: "session-example-2",
+        codex_session_key: "session-key-example-2",
+        request_error: "owner_unavailable",
+        attempt_error: "upstream_timeout"
+      })
+
+    mismatch_turn =
+      debug_turn_fixture(mismatch_request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-2"),
+        status: "in_progress",
+        error_code: nil,
+        completed_at: nil,
+        turn_sequence: 1
+      })
+
+    rejected_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-contract",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_json",
+        status: "rejected",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-rejected",
+        response_status_code: 403,
+        request_metadata: %{}
+      })
+      |> Ecto.Changeset.change(last_error_code: "model_not_allowed")
+      |> Repo.update!()
+
+    legacy_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-contract",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-legacy",
+        response_status_code: 499,
+        request_metadata: %{"codex_session_id" => %{"legacy" => "bad-shape"}}
+      })
+      |> Ecto.Changeset.change(last_error_code: "legacy_failure")
+      |> Repo.update!()
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{
+                 "pool_id" => pool.id,
+                 "model" => "gpt-log-debug-contract",
+                 "limit" => 10
+               },
+               %{auth: auth}
+             )
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    refute text =~ Jason.encode!(result["structuredContent"])
+
+    items_by_id = Map.new(result["structuredContent"]["items"], &{&1["id"], &1})
+
+    terminal_item = Map.fetch!(items_by_id, terminal_request.id)
+
+    assert Map.has_key?(terminal_item, "debug"),
+           "expected request log item to include debug metadata"
+
+    terminal_debug = terminal_item["debug"]
+
+    terminal_continuity = terminal_debug["continuity"]
+    assert_ref_prefix(terminal_continuity["session_ref"], "session_")
+    assert_ref_prefix(terminal_continuity["turn_ref"], "turn_")
+
+    assert anonymize_refs(terminal_continuity) == %{
+             "status" => "available",
+             "session_ref" => :session_ref,
+             "session_source" => "continuity",
+             "turn_ref" => :turn_ref,
+             "turn_status" => "failed",
+             "turn_status_source" => "turn_state",
+             "has_open_turn" => false,
+             "terminal_state" => "terminal",
+             "terminal_state_source" => "turn_state"
+           }
+
+    assert terminal_debug["failure"] == %{
+             "error_code" => "turn_owner_drained",
+             "error_source" => "turn_error"
+           }
+
+    assert terminal_debug["attempt"] == %{
+             "latest_attempt_number" => 1,
+             "latest_attempt_status" => "failed",
+             "latest_attempt_retryable" => true,
+             "latest_upstream_status_code" => 499,
+             "attempt_count" => 1
+           }
+
+    mismatch_item = Map.fetch!(items_by_id, mismatch_request.id)
+
+    assert Map.has_key?(mismatch_item, "debug"),
+           "expected request log item to include debug metadata"
+
+    mismatch_debug = mismatch_item["debug"]
+
+    mismatch_continuity = mismatch_debug["continuity"]
+    assert_ref_prefix(mismatch_continuity["session_ref"], "session_")
+    assert_ref_prefix(mismatch_continuity["turn_ref"], "turn_")
+
+    assert anonymize_refs(mismatch_continuity) == %{
+             "status" => "mismatch",
+             "session_ref" => :session_ref,
+             "session_source" => "continuity",
+             "turn_ref" => :turn_ref,
+             "turn_status" => "in_progress",
+             "turn_status_source" => "turn_state",
+             "has_open_turn" => true,
+             "terminal_state" => "mismatch",
+             "terminal_state_source" => "turn_state"
+           }
+
+    assert mismatch_debug["failure"] == %{
+             "error_code" => "owner_unavailable",
+             "error_source" => "request_error"
+           }
+
+    rejected_item = Map.fetch!(items_by_id, rejected_request.id)
+
+    assert Map.has_key?(rejected_item, "debug"),
+           "expected request log item to include debug metadata"
+
+    rejected_debug = rejected_item["debug"]
+
+    assert rejected_debug["continuity"] == %{
+             "status" => "not_applicable",
+             "session_ref" => nil,
+             "session_source" => nil,
+             "turn_ref" => nil,
+             "turn_status" => nil,
+             "turn_status_source" => nil,
+             "has_open_turn" => nil,
+             "terminal_state" => "not_applicable",
+             "terminal_state_source" => nil
+           }
+
+    assert rejected_debug["failure"] == %{
+             "error_code" => "model_not_allowed",
+             "error_source" => "request_error"
+           }
+
+    legacy_item = Map.fetch!(items_by_id, legacy_request.id)
+
+    assert Map.has_key?(legacy_item, "debug"),
+           "expected request log item to include debug metadata"
+
+    legacy_debug = legacy_item["debug"]
+    assert legacy_debug["continuity"]["status"] == "unknown"
+    assert legacy_debug["continuity"]["session_ref"] == nil
+
+    assert_terminal_text_contract(text, terminal_request, terminal_turn)
+    assert_terminal_text_contract(text, mismatch_request, mismatch_turn)
+    assert_no_debug_raw_session_values(result)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
   test "request-log list output schema accepts absent next page marker" do
     request_logs_tool =
       Enum.find(LogMetadata.tools(), &(&1.name == "codex_pooler_list_request_logs"))
@@ -150,6 +345,15 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
              "integer",
              "null"
            ]
+
+    assert get_in(request_logs_tool.output_schema, [
+             "properties",
+             "items",
+             "items",
+             "properties",
+             "debug",
+             "required"
+           ]) == ["continuity", "failure", "attempt"]
   end
 
   test "request-log list text handles empty results without echoing caller filters", %{auth: auth} do
@@ -210,6 +414,144 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text == "0 request logs returned; total 0; offset 0; statuses none"
     assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "request-log filters and pagination preserve debug fields", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-request-log-filters", name: "MCP Request Log Filters"})
+    other_pool = pool_fixture(%{slug: "mcp-request-log-other", name: "MCP Request Log Other"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP filter key"})
+    %{api_key: other_api_key} = active_api_key_fixture(other_pool)
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Filter upstream",
+        assignment_label: "Filter assignment"
+      })
+
+    target_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-filter-debug-alpha",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "filter-debug-target",
+        request_metadata: %{"codex_session_id" => "session-filter-target"}
+      })
+      |> Ecto.Changeset.change(admitted_at: ~U[2026-05-23 02:25:00.000000Z])
+      |> Repo.update!()
+
+    attempt_with_latency(target_request, assignment, 222)
+
+    older_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-filter-debug-alpha",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_sse",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "filter-debug-older",
+        request_metadata: %{"codex_session_id" => "session-filter-older"}
+      })
+      |> Ecto.Changeset.change(admitted_at: ~U[2026-05-23 02:24:00.000000Z])
+      |> Repo.update!()
+
+    attempt_with_latency(older_request, assignment, 111)
+
+    _wrong_status =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-filter-debug-alpha",
+        status: "failed",
+        correlation_id: "filter-debug-wrong-status"
+      })
+      |> Ecto.Changeset.change(admitted_at: ~U[2026-05-23 02:25:30.000000Z])
+      |> Repo.update!()
+
+    _wrong_pool =
+      request_fixture(%{pool: other_pool, api_key: other_api_key}, %{
+        requested_model: "gpt-filter-debug-alpha",
+        status: "succeeded",
+        correlation_id: "filter-debug-other-pool"
+      })
+      |> Ecto.Changeset.change(admitted_at: ~U[2026-05-23 02:25:40.000000Z])
+      |> Repo.update!()
+
+    assert {:ok, filtered_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{
+                 "pool_id" => pool.id,
+                 "status" => "succeeded",
+                 "model" => "filter-debug-alpha",
+                 "request_id" => "filter-debug-target",
+                 "upstream_identity_id" => identity.id,
+                 "date_from" => "2026-05-23T02:24:30Z",
+                 "date_to" => "2026-05-23T02:26:00Z",
+                 "limit" => 10,
+                 "offset" => 0
+               },
+               %{auth: auth}
+             )
+
+    assert filtered_result["isError"] == false
+    assert filtered_result["structuredContent"]["total"] == 1
+    assert [filtered_item] = filtered_result["structuredContent"]["items"]
+    assert filtered_item["id"] == target_request.id
+    assert filtered_item["upstream_identity_id"] == identity.id
+    assert filtered_item["debug"]["attempt"]["attempt_count"] == 1
+    assert filtered_item["debug"]["continuity"]["status"] == "available"
+    assert_ref_prefix(filtered_item["debug"]["continuity"]["session_ref"], "session_")
+    assert :ok = Redaction.assert_mcp_output_safe!(filtered_result)
+
+    assert {:ok, first_page} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{
+                 "pool_id" => pool.id,
+                 "status" => "succeeded",
+                 "model" => "filter-debug-alpha",
+                 "date_from" => "2026-05-23T02:23:30Z",
+                 "date_to" => "2026-05-23T02:26:00Z",
+                 "limit" => 1,
+                 "offset" => 0
+               },
+               %{auth: auth}
+             )
+
+    assert first_page["structuredContent"]["total"] == 2
+    assert first_page["structuredContent"]["nextOffset"] == 1
+
+    assert [%{"id" => first_page_id, "debug" => first_debug}] =
+             first_page["structuredContent"]["items"]
+
+    assert first_page_id == target_request.id
+    assert first_debug["attempt"]["attempt_count"] == 1
+
+    assert {:ok, second_page} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{
+                 "pool_id" => pool.id,
+                 "status" => "succeeded",
+                 "model" => "filter-debug-alpha",
+                 "date_from" => "2026-05-23T02:23:30Z",
+                 "date_to" => "2026-05-23T02:26:00Z",
+                 "limit" => 1,
+                 "offset" => 1
+               },
+               %{auth: auth}
+             )
+
+    assert second_page["structuredContent"]["total"] == 2
+    assert second_page["structuredContent"]["nextOffset"] == nil
+
+    assert [%{"id" => second_page_id, "debug" => second_debug}] =
+             second_page["structuredContent"]["items"]
+
+    assert second_page_id == older_request.id
+    assert second_debug["attempt"]["attempt_count"] == 1
+    assert :ok = Redaction.assert_mcp_output_safe!(first_page)
+    assert :ok = Redaction.assert_mcp_output_safe!(second_page)
   end
 
   test "request-log list text is capped when structured content contains more than ten rows", %{
@@ -362,6 +704,458 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert_no_unsafe_request_log_text(result)
   end
 
+  test "gets request-log by exact id when a newer correlation id contains that id", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-request-log-exact-id", name: "MCP Exact Request Log"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP exact key"})
+    older_time = ~U[2026-05-26 00:00:00.000000Z]
+    newer_time = DateTime.add(older_time, 60, :second)
+
+    target_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-exact-target",
+        status: "succeeded",
+        correlation_id: "target-correlation"
+      })
+      |> Ecto.Changeset.change(admitted_at: older_time)
+      |> Repo.update!()
+
+    distractor_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-exact-distractor",
+        status: "failed",
+        correlation_id: "newer-correlation-containing-#{target_request.id}"
+      })
+      |> Ecto.Changeset.change(admitted_at: newer_time)
+      |> Repo.update!()
+
+    assert {:ok, fuzzy_list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"request_id" => target_request.id, "limit" => 1},
+               %{auth: auth}
+             )
+
+    assert fuzzy_list_result["isError"] == false
+    assert [fuzzy_item] = fuzzy_list_result["structuredContent"]["items"]
+    assert fuzzy_item["id"] == distractor_request.id
+
+    assert {:ok, exact_get_result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => target_request.id}, %{
+               auth: auth
+             })
+
+    assert exact_get_result["isError"] == false
+    assert %{"status" => "ok", "item" => item} = exact_get_result["structuredContent"]
+    assert item["id"] == target_request.id
+    assert item["requested_model"] == "gpt-log-exact-target"
+    assert :ok = Redaction.assert_mcp_output_safe!(exact_get_result)
+  end
+
+  test "gets exact request-log debug metadata with bounded terminal state and attempts", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-request-log-debug-detail", name: "MCP Debug Detail"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP debug detail key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Debug detail upstream",
+        assignment_label: "Debug detail assignment"
+      })
+
+    %{request: request, attempt: attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-detail-terminal",
+        codex_session_id: "session-example-1",
+        codex_session_key: "session-key-example-1",
+        request_error: "client_disconnected",
+        attempt_error: "owner_drained"
+      })
+
+    turn =
+      debug_turn_fixture(request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-1"),
+        status: "failed",
+        error_code: "turn_owner_drained",
+        final_attempt_id: attempt.id,
+        turn_sequence: 1
+      })
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    refute text =~ Jason.encode!(result["structuredContent"])
+
+    assert %{"status" => "ok", "kind" => "request_log", "item" => item} =
+             result["structuredContent"]
+
+    assert Map.has_key?(item, "debug"),
+           "expected request log detail item to include debug metadata"
+
+    debug = item["debug"]
+
+    continuity = debug["continuity"]
+    assert_ref_prefix(continuity["session_ref"], "session_")
+    assert_ref_prefix(continuity["turn_ref"], "turn_")
+
+    assert anonymize_refs(continuity) == %{
+             "status" => "available",
+             "session_ref" => :session_ref,
+             "session_source" => "continuity",
+             "turn_ref" => :turn_ref,
+             "turn_status" => "failed",
+             "turn_status_source" => "turn_state",
+             "has_open_turn" => false,
+             "terminal_state" => "terminal",
+             "terminal_state_source" => "turn_state"
+           }
+
+    assert debug["terminal_state"] == %{
+             "state" => "terminal",
+             "mismatch" => false,
+             "sources" => [
+               %{
+                 "source" => "request_state",
+                 "status" => "failed",
+                 "error_code" => "client_disconnected"
+               },
+               %{
+                 "source" => "turn_state",
+                 "status" => "failed",
+                 "error_code" => "turn_owner_drained"
+               },
+               %{
+                 "source" => "attempt_state",
+                 "status" => "failed",
+                 "error_code" => "owner_drained"
+               }
+             ]
+           }
+
+    turn_debug = debug["turn"]
+    assert_ref_prefix(turn_debug["turn_ref"], "turn_")
+    assert_ref_prefix(turn_debug["final_attempt_ref"], "attempt_")
+
+    assert anonymize_refs(turn_debug) == %{
+             "turn_ref" => :turn_ref,
+             "status" => "failed",
+             "error_code" => "turn_owner_drained",
+             "final_attempt_ref" => :attempt_ref,
+             "inserted_at" => DateTime.to_iso8601(turn.created_at),
+             "updated_at" => DateTime.to_iso8601(turn.updated_at),
+             "completed_at" => DateTime.to_iso8601(turn.completed_at)
+           }
+
+    assert [attempt_debug] = debug["attempts"]
+    assert_ref_prefix(attempt_debug["attempt_ref"], "attempt_")
+
+    assert anonymize_refs(attempt_debug) == %{
+             "attempt_ref" => :attempt_ref,
+             "attempt_number" => 1,
+             "status" => "failed",
+             "retryable" => true,
+             "upstream_status_code" => 499,
+             "network_error_code" => "owner_drained",
+             "latency_ms" => 321,
+             "final" => true
+           }
+
+    assert text =~ "1 request log returned"
+    assert text =~ "session=session_"
+    assert text =~ "turn=turn_"
+    assert text =~ "terminal=terminal"
+    assert text =~ "attempts=1"
+    assert_no_debug_raw_session_values(result)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "request-log debug outputs omit adversarial metadata from list and get results", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-request-log-debug-privacy", name: "MCP Debug Privacy"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP privacy key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Privacy upstream",
+        assignment_label: "Privacy assignment"
+      })
+
+    %{request: request, attempt: attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-privacy",
+        codex_session_id: "session-example-privacy",
+        codex_session_key: "session-key-example-privacy",
+        request_error: "client_disconnected",
+        attempt_error: "owner_drained",
+        request_metadata: adversarial_debug_metadata(),
+        response_metadata: adversarial_debug_metadata(),
+        error_message: "raw prompt: explain private data"
+      })
+
+    _turn =
+      debug_turn_fixture(request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-privacy"),
+        status: "failed",
+        error_code: "turn_owner_drained",
+        final_attempt_id: attempt.id,
+        turn_sequence: 1
+      })
+
+    assert {:ok, list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "model" => "gpt-log-debug-contract", "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert list_result["isError"] == false
+    assert [list_item] = list_result["structuredContent"]["items"]
+    assert list_item["id"] == request.id
+    assert_debug_fields_present(list_item["debug"], :list)
+    assert_output_omits_adversarial_debug_values(list_result)
+    assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+    assert {:ok, get_result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert get_result["isError"] == false
+    assert %{"status" => "ok", "item" => get_item} = get_result["structuredContent"]
+    assert get_item["id"] == request.id
+    assert_debug_fields_present(get_item["debug"], :get)
+    assert_output_omits_adversarial_debug_values(get_result)
+    assert :ok = Redaction.assert_mcp_output_safe!(get_result)
+  end
+
+  test "gets exact request-log debug attempts capped to latest ten in ascending order", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-request-log-attempt-bound", name: "MCP Attempt Bound"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP bound key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Bound upstream",
+        assignment_label: "Bound assignment"
+      })
+
+    %{request: request, attempt: first_attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-detail-attempt-bound",
+        codex_session_id: "session-example-1",
+        codex_session_key: "session-key-example-1",
+        request_error: "client_disconnected",
+        attempt_error: "first_attempt_failed"
+      })
+
+    attempts =
+      [first_attempt] ++
+        for attempt_number <- 2..12 do
+          request
+          |> attempt_fixture(assignment, %{
+            attempt_number: attempt_number,
+            status: "failed",
+            retryable: true,
+            upstream_status_code: 499,
+            usage_status: "usage_unknown"
+          })
+          |> Ecto.Changeset.change(%{
+            latency_ms: attempt_number * 10,
+            network_error_code: "attempt_#{attempt_number}_failed",
+            error_message: "raw bounded attempt error must stay out of MCP output",
+            response_metadata: %{"websocket_frame" => "raw bounded websocket frame"}
+          })
+          |> Repo.update!()
+        end
+
+    final_attempt = List.last(attempts)
+
+    _turn =
+      debug_turn_fixture(request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-1"),
+        status: "failed",
+        error_code: "turn_owner_drained",
+        final_attempt_id: final_attempt.id,
+        turn_sequence: 1
+      })
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+
+    assert %{"status" => "ok", "kind" => "request_log", "item" => item} =
+             result["structuredContent"]
+
+    debug_attempts = item["debug"]["attempts"]
+    assert length(debug_attempts) == 10
+    assert Enum.map(debug_attempts, & &1["attempt_number"]) == Enum.to_list(3..12)
+    assert Enum.map(debug_attempts, & &1["final"]) == List.duplicate(false, 9) ++ [true]
+
+    for attempt_debug <- debug_attempts do
+      assert_ref_prefix(attempt_debug["attempt_ref"], "attempt_")
+    end
+
+    assert text =~ "attempts=10"
+    refute inspect(result) =~ "raw bounded attempt error must stay out of MCP output"
+    refute inspect(result) =~ "raw bounded websocket frame"
+    assert_no_debug_raw_session_values(result)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "request-log debug edge rows stay schema-valid in exact details", %{auth: auth} do
+    pool = pool_fixture(%{slug: "mcp-request-log-debug-edges", name: "MCP Debug Edges"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP edge key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Edge upstream",
+        assignment_label: "Edge assignment"
+      })
+
+    rejected_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-edge",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_json",
+        status: "rejected",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-edge-rejected",
+        response_status_code: 403,
+        request_metadata: %{}
+      })
+      |> Ecto.Changeset.change(last_error_code: "model_not_allowed")
+      |> Repo.update!()
+
+    attempts_without_turn =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-edge",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-edge-attempts",
+        response_status_code: 502,
+        request_metadata: %{"codex_session_id" => "session-edge-attempts"}
+      })
+      |> Ecto.Changeset.change(last_error_code: "request_failed")
+      |> Repo.update!()
+
+    attempts_without_turn
+    |> attempt_fixture(assignment, %{
+      status: "failed",
+      retryable: false,
+      upstream_status_code: 502,
+      usage_status: "usage_unknown"
+    })
+    |> Ecto.Changeset.change(%{
+      latency_ms: 456,
+      network_error_code: "upstream_status",
+      error_message: "raw edge attempt error must stay out of MCP output"
+    })
+    |> Repo.update!()
+
+    turn_without_attempt =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-edge",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-edge-turn",
+        request_metadata: %{"codex_session_id" => "session-edge-turn"}
+      })
+      |> Ecto.Changeset.change(last_error_code: "turn_failed")
+      |> Repo.update!()
+
+    turn =
+      debug_turn_fixture(turn_without_attempt, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-edge-turn"),
+        status: "failed",
+        error_code: "turn_failed",
+        final_attempt_id: nil,
+        turn_sequence: 1
+      })
+
+    legacy_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-edge",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: "mcp-debug-edge-legacy",
+        request_metadata: %{"codex_session_id" => %{"legacy" => "bad-shape"}}
+      })
+      |> Ecto.Changeset.change(last_error_code: "legacy_failure")
+      |> Repo.update!()
+
+    assert {:ok, list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "model" => "gpt-log-debug-edge", "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert list_result["isError"] == false
+    items_by_id = Map.new(list_result["structuredContent"]["items"], &{&1["id"], &1})
+
+    assert Map.fetch!(items_by_id, rejected_request.id)["debug"]["continuity"]["status"] ==
+             "not_applicable"
+
+    assert Map.fetch!(items_by_id, attempts_without_turn.id)["debug"]["attempt"]["attempt_count"] ==
+             1
+
+    assert Map.fetch!(items_by_id, turn_without_attempt.id)["debug"]["continuity"]["turn_status"] ==
+             "failed"
+
+    assert Map.fetch!(items_by_id, legacy_request.id)["debug"]["continuity"]["status"] ==
+             "unknown"
+
+    assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+    rejected_debug = debug_for_request(auth, rejected_request)
+    assert rejected_debug["continuity"]["status"] == "not_applicable"
+    assert rejected_debug["attempts"] == []
+
+    attempts_debug = debug_for_request(auth, attempts_without_turn)
+    assert attempts_debug["continuity"]["status"] == "available"
+    assert_ref_prefix(attempts_debug["continuity"]["session_ref"], "session_")
+    assert attempts_debug["continuity"]["turn_ref"] == nil
+    assert [attempt_debug] = attempts_debug["attempts"]
+    assert attempt_debug["status"] == "failed"
+    assert attempt_debug["network_error_code"] == "upstream_status"
+
+    turn_debug = debug_for_request(auth, turn_without_attempt)
+    assert turn_debug["continuity"]["status"] == "available"
+    assert_ref_prefix(turn_debug["continuity"]["turn_ref"], "turn_")
+    assert turn_debug["turn"]["turn_ref"] == turn_debug["continuity"]["turn_ref"]
+    assert turn_debug["turn"]["status"] == "failed"
+    assert turn_debug["turn"]["final_attempt_ref"] == nil
+    assert turn_debug["turn"]["inserted_at"] == DateTime.to_iso8601(turn.created_at)
+    assert turn_debug["attempts"] == []
+
+    legacy_debug = debug_for_request(auth, legacy_request)
+    assert legacy_debug["continuity"]["status"] == "unknown"
+    assert legacy_debug["continuity"]["session_ref"] == nil
+    assert legacy_debug["terminal_state"]["state"] == "unknown"
+    assert legacy_debug["attempts"] == []
+
+    inspected = inspect([list_result, rejected_debug, attempts_debug, turn_debug, legacy_debug])
+    refute inspected =~ "session-edge-attempts"
+    refute inspected =~ "session-edge-turn"
+    refute inspected =~ "raw edge attempt error"
+  end
+
   test "request-log get text handles nil optional fields and missing selectors", %{auth: auth} do
     pool = pool_fixture(%{slug: "mcp-request-log-nil", name: "MCP Request Log Nil"})
     %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP nil key"})
@@ -429,10 +1223,214 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(missing)
   end
 
+  defp failed_debug_request_fixture(pool, api_key, assignment, attrs) do
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-contract",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: Map.fetch!(attrs, :correlation_id),
+        response_status_code: 499,
+        retry_count: 1,
+        request_metadata:
+          Map.merge(
+            %{
+              "codex_session_id" => Map.fetch!(attrs, :codex_session_id),
+              "codex_session_key" => Map.fetch!(attrs, :codex_session_key),
+              "body" => %{"input" => "raw debug prompt"}
+            },
+            Map.get(attrs, :request_metadata, %{})
+          )
+      })
+      |> Ecto.Changeset.change(last_error_code: Map.fetch!(attrs, :request_error))
+      |> Repo.update!()
+
+    attempt =
+      request
+      |> attempt_fixture(assignment, %{
+        status: "failed",
+        retryable: true,
+        upstream_status_code: 499,
+        usage_status: "usage_unknown"
+      })
+      |> Ecto.Changeset.change(%{
+        latency_ms: 321,
+        network_error_code: Map.fetch!(attrs, :attempt_error),
+        error_message:
+          Map.get(attrs, :error_message, "raw attempt error message must stay out of MCP output"),
+        response_metadata:
+          Map.merge(
+            %{"websocket_frame" => "raw debug websocket frame"},
+            Map.get(attrs, :response_metadata, %{})
+          )
+      })
+      |> Repo.update!()
+
+    %{request: request, attempt: attempt}
+  end
+
+  defp debug_session_fixture(pool, api_key, assignment, session_key) do
+    now = debug_timestamp()
+
+    %CodexSession{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      session_key: session_key,
+      conversation_key: "conversation-#{session_key}",
+      pool_upstream_assignment_id: assignment.id,
+      status: "active",
+      owner_instance_id: "test-instance",
+      owner_lease_token: Ecto.UUID.generate(),
+      owner_lease_expires_at: DateTime.add(now, 60, :second),
+      last_heartbeat_at: now,
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp debug_turn_fixture(request, attrs) do
+    now = debug_timestamp()
+    completed_at = Map.get(attrs, :completed_at, now)
+
+    %CodexTurn{
+      codex_session_id: Map.fetch!(attrs, :session).id,
+      request_id: request.id,
+      turn_sequence: Map.fetch!(attrs, :turn_sequence),
+      transport_kind: request.transport,
+      status: Map.fetch!(attrs, :status),
+      error_code: Map.get(attrs, :error_code),
+      first_visible_output_at: now,
+      final_attempt_id: Map.get(attrs, :final_attempt_id),
+      started_at: now,
+      completed_at: completed_at,
+      created_at: now,
+      updated_at: DateTime.add(now, 1, :second)
+    }
+    |> Repo.insert!()
+  end
+
+  defp debug_timestamp, do: ~U[2026-05-26 00:00:00.000000Z]
+
+  defp assert_ref_prefix(value, prefix) do
+    assert is_binary(value)
+    assert Regex.match?(~r/^#{Regex.escape(prefix)}[a-f0-9]{12}$/, value)
+  end
+
+  defp anonymize_refs(map) do
+    map
+    |> maybe_anonymize_ref("session_ref", :session_ref)
+    |> maybe_anonymize_ref("turn_ref", :turn_ref)
+    |> maybe_anonymize_ref("final_attempt_ref", :attempt_ref)
+    |> maybe_anonymize_ref("attempt_ref", :attempt_ref)
+  end
+
+  defp maybe_anonymize_ref(map, key, marker) do
+    if is_binary(Map.get(map, key)), do: Map.put(map, key, marker), else: map
+  end
+
+  defp assert_terminal_text_contract(text, request, turn) do
+    assert text =~ "id=#{request.id}"
+    assert text =~ "session=session_"
+    assert text =~ "turn=turn_"
+    assert text =~ "turn_status=#{turn.status}"
+    assert text =~ "terminal="
+  end
+
+  defp adversarial_debug_metadata do
+    %{
+      "raw_headers" => %{
+        "authorization" => "Authorization: Bearer sk-example-secret",
+        "cookie" => "Cookie: session=secret-cookie"
+      },
+      "request_body" => "raw prompt: explain private data",
+      "raw_idempotency_key" => "idempotency_key=idem-secret-123",
+      "websocket_frame" => ~s({"type":"response.output_text.delta","delta":"secret frame"}),
+      "safe_debug_marker" => "debug metadata present"
+    }
+  end
+
+  defp assert_debug_fields_present(debug, :list) do
+    assert is_map(debug)
+    assert is_map(debug["continuity"])
+    assert is_map(debug["failure"])
+    assert is_map(debug["attempt"])
+    assert debug["failure"]["error_code"] == "turn_owner_drained"
+    assert debug["attempt"]["attempt_count"] == 1
+  end
+
+  defp assert_debug_fields_present(debug, :get) do
+    assert is_map(debug)
+    assert is_map(debug["continuity"])
+    assert is_map(debug["terminal_state"])
+    assert is_map(debug["turn"])
+    assert [_attempt] = debug["attempts"]
+    assert debug["terminal_state"]["state"] == "terminal"
+  end
+
+  defp assert_output_omits_adversarial_debug_values(result) do
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    structured = result["structuredContent"]
+    encoded = Jason.encode!(result)
+    inspected = inspect(result)
+
+    refute text =~ Jason.encode!(structured)
+
+    for forbidden <- adversarial_forbidden_strings() do
+      refute text =~ forbidden
+      refute Jason.encode!(structured) =~ forbidden
+      refute encoded =~ forbidden
+      refute inspected =~ forbidden
+    end
+  end
+
+  defp adversarial_forbidden_strings do
+    [
+      "Authorization: Bearer sk-example-secret",
+      "Cookie: session=secret-cookie",
+      "raw prompt: explain private data",
+      "idempotency_key=idem-secret-123",
+      ~s({"type":"response.output_text.delta","delta":"secret frame"})
+    ]
+  end
+
+  defp assert_no_debug_raw_session_values(result) do
+    inspected = inspect(result)
+
+    refute inspected =~ "session-example-1"
+    refute inspected =~ "session-example-2"
+    refute inspected =~ "session-key-example-1"
+    refute inspected =~ "session-key-example-2"
+    refute inspected =~ "session-example-privacy"
+    refute inspected =~ "session-key-example-privacy"
+    refute inspected =~ "conversation-example-1"
+    refute inspected =~ "raw debug prompt"
+    refute inspected =~ "raw debug websocket frame"
+    refute inspected =~ "raw attempt error message"
+  end
+
+  defp debug_for_request(auth, request) do
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert %{"status" => "ok", "item" => item} = result["structuredContent"]
+    assert item["id"] == request.id
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+    item["debug"]
+  end
+
   defp attempt_with_latency(request, assignment, latency_ms) do
     request
     |> attempt_fixture(assignment)
-    |> Ecto.Changeset.change(latency_ms: latency_ms)
+    |> Ecto.Changeset.change(%{
+      latency_ms: latency_ms,
+      upstream_identity_id: assignment.upstream_identity_id
+    })
     |> Repo.update!()
   end
 
