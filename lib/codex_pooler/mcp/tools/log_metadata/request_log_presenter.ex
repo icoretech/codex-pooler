@@ -4,6 +4,19 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   alias CodexPooler.MCP.{MetadataSanitizer, PrivacyMatrix}
   alias CodexPooler.MCP.Tools.ReadableText
 
+  @public_debug_sources MapSet.new([
+                          "continuity",
+                          "turn_state",
+                          "request_state",
+                          "attempt_state",
+                          "request_error",
+                          "turn_error",
+                          "attempt_error"
+                        ])
+
+  @list_debug_keys ~w(continuity failure attempt)
+  @detail_debug_keys ~w(continuity terminal_state turn attempts)
+
   @spec item(map()) :: map()
   def item(log) do
     projected =
@@ -26,7 +39,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         latency_ms: log.latency_ms,
         token_counts: MetadataSanitizer.safe_value(log.token_counts),
         cost: MetadataSanitizer.safe_value(log.cost),
-        errors: MetadataSanitizer.safe_value(log.errors),
+        errors: safe_errors(log.errors),
         admitted_at: iso8601(log.admitted_at),
         completed_at: iso8601(log.completed_at),
         upstream_account_label: log.upstream_account_label,
@@ -43,10 +56,19 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         actual_service_tier: log.actual_service_tier,
         endpoint: log.endpoint,
         user_agent: log.user_agent,
-        metadata: MetadataSanitizer.safe_metadata(log.metadata || %{})
+        metadata: safe_request_metadata(log.metadata || %{})
       })
 
-    stringify_keys(projected)
+    projected
+    |> stringify_keys()
+    |> Map.put("debug", detail_debug(log))
+  end
+
+  @spec list_item(map()) :: map()
+  def list_item(log) do
+    log
+    |> item()
+    |> Map.put("debug", list_debug(log))
   end
 
   @spec list_text(map()) :: String.t()
@@ -83,6 +105,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> Map.take([
       "admitted_at",
       "completed_at",
+      "id",
+      "correlation_id",
       "endpoint",
       "status",
       "requested_model",
@@ -92,6 +116,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     ])
     |> Map.put("pool", pool_text(item))
     |> Map.put("retries", Map.get(item, "retry_count") || 0)
+    |> maybe_put_debug_text(Map.get(item, "debug"))
   end
 
   defp detail_text_row(item) do
@@ -106,6 +131,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     [
       {"admitted_at", "admitted_at"},
       {"completed_at", "completed_at"},
+      {"id", "id"},
+      {"correlation_id", "correlation"},
       {"pool", "pool", required: true},
       {"endpoint", "route"},
       {"status", "status"},
@@ -113,7 +140,13 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       {"transport", "transport"},
       {"usage_status", "usage"},
       {"latency_ms", "latency_ms"},
-      {"retries", "retries", required: true}
+      {"retries", "retries", required: true},
+      {"session_ref", "session"},
+      {"turn_ref", "turn"},
+      {"turn_status", "turn_status"},
+      {"terminal_state", "terminal"},
+      {"failure_code", "failure"},
+      {"attempt_count", "attempts"}
     ]
   end
 
@@ -138,6 +171,38 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   defp maybe_put_value(row, _key, nil), do: row
   defp maybe_put_value(row, key, value), do: Map.put(row, key, value)
+
+  defp maybe_put_debug_text(row, %{
+         "continuity" => continuity,
+         "failure" => failure,
+         "attempt" => attempt
+       }) do
+    row
+    |> maybe_put_continuity_text(continuity)
+    |> maybe_put_value("failure_code", Map.get(failure, "error_code"))
+    |> maybe_put_value("attempt_count", Map.get(attempt, "attempt_count"))
+  end
+
+  defp maybe_put_debug_text(row, %{
+         "continuity" => continuity,
+         "terminal_state" => terminal_state,
+         "attempts" => attempts
+       }) do
+    row
+    |> maybe_put_continuity_text(continuity)
+    |> maybe_put_value("terminal_state", Map.get(terminal_state, "state"))
+    |> maybe_put_value("attempt_count", length(attempts))
+  end
+
+  defp maybe_put_debug_text(row, _debug), do: row
+
+  defp maybe_put_continuity_text(row, continuity) do
+    row
+    |> maybe_put_value("session_ref", Map.get(continuity, "session_ref"))
+    |> maybe_put_value("turn_ref", Map.get(continuity, "turn_ref"))
+    |> maybe_put_value("turn_status", Map.get(continuity, "turn_status"))
+    |> maybe_put_value("terminal_state", Map.get(continuity, "terminal_state"))
+  end
 
   defp maybe_put_metadata_summary(row, metadata)
        when is_map(metadata) and map_size(metadata) > 0 do
@@ -194,9 +259,84 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     end
   end
 
+  defp safe_errors(errors) do
+    errors
+    |> MetadataSanitizer.safe_value()
+    |> drop_error_messages()
+  end
+
+  defp drop_error_messages(errors) when is_list(errors),
+    do: Enum.map(errors, &drop_error_messages/1)
+
+  defp drop_error_messages(error) when is_map(error), do: Map.drop(error, ["message"])
+
+  defp drop_error_messages(errors), do: errors
+
+  defp safe_request_metadata(metadata) do
+    metadata
+    |> MetadataSanitizer.safe_metadata()
+    |> Map.drop(["codex_session_id", "codex_session_key", "conversation_key"])
+  end
+
   defp stringify_keys(map) do
     Map.new(map, fn {key, value} -> {Atom.to_string(key), MetadataSanitizer.safe_value(value)} end)
   end
+
+  defp list_debug(log) do
+    log
+    |> raw_debug()
+    |> Map.take(@list_debug_keys)
+    |> sanitize_debug_sources()
+  end
+
+  defp detail_debug(log) do
+    log
+    |> raw_debug()
+    |> Map.take(@detail_debug_keys)
+    |> sanitize_debug_sources()
+  end
+
+  defp raw_debug(log) do
+    log
+    |> Map.get(:debug, %{})
+    |> MetadataSanitizer.safe_value()
+  end
+
+  defp sanitize_debug_sources(debug) when is_map(debug) do
+    Map.new(debug, fn {key, value} -> {key, sanitize_debug_value(value)} end)
+  end
+
+  defp sanitize_debug_value(value) when is_map(value) do
+    Map.new(value, fn
+      {key, source}
+      when key in [
+             "source",
+             "session_source",
+             "turn_status_source",
+             "terminal_state_source",
+             "error_source"
+           ] ->
+        {key, safe_source(source)}
+
+      {key, value} ->
+        {key, sanitize_debug_value(value)}
+    end)
+  end
+
+  defp sanitize_debug_value(value) when is_list(value),
+    do: Enum.map(value, &sanitize_debug_value/1)
+
+  defp sanitize_debug_value(value) when is_binary(value) do
+    get_in(MetadataSanitizer.safe_metadata(%{"value" => value}), ["value"])
+  end
+
+  defp sanitize_debug_value(value), do: value
+
+  defp safe_source(source) when is_binary(source) do
+    if MapSet.member?(@public_debug_sources, source), do: source, else: nil
+  end
+
+  defp safe_source(_source), do: nil
 
   defp iso8601(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp iso8601(nil), do: nil

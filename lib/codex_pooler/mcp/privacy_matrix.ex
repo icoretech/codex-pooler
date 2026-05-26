@@ -109,6 +109,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :token_counts,
         :cost,
         :errors,
+        :debug,
         :admitted_at,
         :completed_at,
         :upstream_account_label,

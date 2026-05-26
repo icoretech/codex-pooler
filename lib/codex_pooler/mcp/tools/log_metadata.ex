@@ -38,7 +38,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
 
     with {:ok, filters} <- request_log_filters(arguments),
          {:ok, page} <- request_log_page(scope, arguments, limit, offset, filters) do
-      structured = page_output(page, &RequestLogPresenter.item/1)
+      structured = page_output(page, &RequestLogPresenter.list_item/1)
       {:ok, structured, RequestLogPresenter.list_text(structured)}
     end
   end
@@ -103,7 +103,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
       Filters/limits: accepts optional pool_id, status, model, request_id, upstream_identity_id, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first.
       """,
       input_schema: request_logs_input_schema(),
-      output_schema: page_output_schema(),
+      output_schema: request_logs_page_output_schema(),
       annotations: @read_only_annotations,
       handler: {__MODULE__, :list_request_logs}
     }
@@ -214,6 +214,82 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     }
   end
 
+  defp request_logs_page_output_schema do
+    %{
+      "type" => "object",
+      "required" => ["items", "total", "limit", "offset", "nextOffset"],
+      "additionalProperties" => false,
+      "properties" => %{
+        "items" => %{"type" => "array", "items" => request_log_item_output_schema()},
+        "total" => %{"type" => "integer"},
+        "limit" => %{"type" => "integer"},
+        "offset" => %{"type" => "integer"},
+        "nextOffset" => %{"type" => ["integer", "null"]}
+      }
+    }
+  end
+
+  defp request_log_item_output_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "debug" => %{
+          "type" => "object",
+          "required" => ["continuity", "failure", "attempt"],
+          "additionalProperties" => false,
+          "properties" => %{
+            "continuity" => request_log_continuity_output_schema(),
+            "failure" => request_log_failure_output_schema(),
+            "attempt" => request_log_attempt_output_schema()
+          }
+        }
+      }
+    }
+  end
+
+  defp request_log_continuity_output_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "status" => nullable_string_property(),
+        "session_ref" => nullable_string_property(),
+        "session_source" => nullable_string_property(),
+        "turn_ref" => nullable_string_property(),
+        "turn_status" => nullable_string_property(),
+        "turn_status_source" => nullable_string_property(),
+        "has_open_turn" => %{"type" => ["boolean", "null"]},
+        "terminal_state" => nullable_string_property(),
+        "terminal_state_source" => nullable_string_property()
+      }
+    }
+  end
+
+  defp request_log_failure_output_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "error_code" => nullable_string_property(),
+        "error_source" => nullable_string_property()
+      }
+    }
+  end
+
+  defp request_log_attempt_output_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "latest_attempt_number" => %{"type" => ["integer", "null"]},
+        "latest_attempt_status" => nullable_string_property(),
+        "latest_attempt_retryable" => %{"type" => ["boolean", "null"]},
+        "latest_upstream_status_code" => %{"type" => ["integer", "null"]},
+        "attempt_count" => %{"type" => "integer"}
+      }
+    }
+  end
+
   defp detail_output_schema do
     DetailEnvelope.output_schema()
   end
@@ -228,6 +304,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   end
 
   defp string_property, do: %{"type" => "string"}
+  defp nullable_string_property, do: %{"type" => ["string", "null"]}
   defp integer_property, do: %{"type" => "integer"}
 
   defp request_log_page(scope, arguments, limit, offset, filters) do
@@ -269,10 +346,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   defp request_log_detail(scope, id) do
     case Ecto.UUID.cast(id) do
       {:ok, uuid} ->
-        page =
-          Accounting.list_request_logs_for_scope(scope, limit: 1, filters: [request_id: uuid])
-
-        Enum.find(page.items, &(&1.id == uuid))
+        Accounting.get_request_log_for_scope(scope, uuid)
 
       :error ->
         nil
