@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   require Logger
 
   @pre_cleanup_response_task_drain_ms 250
+  @post_cleanup_owner_response_task_drain_ms 1_000
   @post_cleanup_response_task_drain_ms 5_000
 
   @impl WebSock
@@ -139,7 +140,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp remaining_response_tasks_after_cleanup(state, remaining_tasks) do
     if owner_forwarded_socket?(state) do
-      remaining_tasks
+      await_response_tasks(remaining_tasks, @post_cleanup_owner_response_task_drain_ms)
     else
       await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
     end
