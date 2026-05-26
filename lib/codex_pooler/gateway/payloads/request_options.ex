@@ -87,6 +87,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :interrupt_reason,
     :media_upload,
     :now,
+    :openai_source_endpoint,
+    :openai_translated_endpoint,
     :openai_chat_payload,
     :owner_instance_id,
     :pool_timeout,
@@ -278,6 +280,37 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     %{options | openai_compatibility: struct!(options.openai_compatibility, updates)}
   end
 
+  @spec mark_openai_compatibility_origin(t(), String.t(), String.t()) :: t()
+  def mark_openai_compatibility_origin(
+        %__MODULE__{} = options,
+        source_endpoint,
+        translated_endpoint
+      )
+      when is_binary(source_endpoint) and is_binary(translated_endpoint) do
+    put_openai_compatibility(options,
+      source_endpoint: safe_endpoint(source_endpoint),
+      translated_endpoint: safe_endpoint(translated_endpoint)
+    )
+  end
+
+  @spec openai_compatibility_metadata(t()) :: map()
+  def openai_compatibility_metadata(%__MODULE__{openai_compatibility: compatibility}) do
+    metadata =
+      %{
+        "surface" => openai_surface(compatibility),
+        "source_endpoint" => compatibility.source_endpoint,
+        "translated_endpoint" => compatibility.translated_endpoint
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    if map_size(metadata) == 0 do
+      %{}
+    else
+      %{"openai_compatibility" => metadata}
+    end
+  end
+
   @spec route_class(t()) :: String.t() | nil
   def route_class(%__MODULE__{transport: %{route_class: route_class}})
       when is_binary(route_class),
@@ -445,7 +478,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       public_openai_chat_stream: Map.get(opts, :public_openai_chat_stream, false),
       collect_openai_response_stream: Map.get(opts, :collect_openai_response_stream, false),
       collect_openai_image_stream: Map.get(opts, :collect_openai_image_stream, false),
-      openai_chat_payload: Map.get(opts, :openai_chat_payload)
+      openai_chat_payload: Map.get(opts, :openai_chat_payload),
+      source_endpoint: safe_endpoint(Map.get(opts, :openai_source_endpoint)),
+      translated_endpoint: safe_endpoint(Map.get(opts, :openai_translated_endpoint))
     }
   end
 
@@ -535,6 +570,23 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   defp safe_client_request_id(_value), do: nil
+
+  defp safe_endpoint(value) when is_binary(value) do
+    value = value |> String.trim() |> String.slice(0, 160)
+
+    if String.starts_with?(value, "/") and value != "/" do
+      value
+    else
+      nil
+    end
+  end
+
+  defp safe_endpoint(_value), do: nil
+
+  defp openai_surface(%OpenAICompatibility{source_endpoint: endpoint}) when is_binary(endpoint),
+    do: "openai_v1"
+
+  defp openai_surface(_compatibility), do: nil
 
   defp websocket_owner_forwarder_opts(opts) do
     case Map.get(opts, :websocket_owner_forwarder_opts) do

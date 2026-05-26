@@ -49,6 +49,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       "quota_decision" => routing.quota_decision
     }
     |> Map.merge(RequestOptions.client_request_metadata(request_options))
+    |> Map.merge(RequestOptions.openai_compatibility_metadata(request_options))
     |> Map.merge(owner_forwarding_metadata(request_options))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()

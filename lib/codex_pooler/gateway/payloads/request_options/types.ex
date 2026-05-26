@@ -155,14 +155,18 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
             public_openai_chat_stream: false,
             collect_openai_response_stream: false,
             collect_openai_image_stream: false,
-            openai_chat_payload: nil
+            openai_chat_payload: nil,
+            source_endpoint: nil,
+            translated_endpoint: nil
 
   @type t :: %__MODULE__{
           public_openai_responses_stream: boolean(),
           public_openai_chat_stream: boolean(),
           collect_openai_response_stream: boolean(),
           collect_openai_image_stream: boolean(),
-          openai_chat_payload: map() | nil
+          openai_chat_payload: map() | nil,
+          source_endpoint: String.t() | nil,
+          translated_endpoint: String.t() | nil
         }
 end
 
