@@ -130,12 +130,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#mobile-request-log-row-#{request.id}", "Admin key")
     assert has_element?(view, "#mobile-request-log-row-#{request.id}", "gpt-live-mini")
     assert has_element?(view, "#request-log-row-#{request.id} [data-role='pool-name']", pool.name)
+    assert has_element?(view, "#request-log-row-#{request.id} [data-role='pool-icon']")
+    assert has_element?(view, "#request-log-row-#{request.id} [data-role='api-key-icon']")
 
     assert has_element?(
              view,
              "#mobile-request-log-row-#{request.id} [data-role='pool-name']",
              pool.name
            )
+
+    assert has_element?(view, "#mobile-request-log-row-#{request.id} [data-role='pool-icon']")
+    assert has_element?(view, "#mobile-request-log-row-#{request.id} [data-role='api-key-icon']")
 
     assert has_element?(
              view,
@@ -1225,6 +1230,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "Normalized Row"
            )
 
+    assert has_element?(view, "#{row_selector} [data-role='pool-icon']")
+
     # 3. Plan badge
     assert has_element?(view, "#{row_selector} [data-role='plan-badge']", "Pro")
 
@@ -1240,6 +1247,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#{row_selector} [data-role='api-key']",
              "Normalized key"
            )
+
+    assert has_element?(view, "#{row_selector} [data-role='api-key-icon']")
 
     # 5. Model details
     assert has_element?(

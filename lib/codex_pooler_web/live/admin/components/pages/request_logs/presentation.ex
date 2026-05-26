@@ -266,12 +266,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       <span
         data-role="pool-name"
         class={[
-          "text-base-content/45",
+          "inline-flex max-w-full items-center gap-1.5 text-base-content/45",
           @compact && "truncate"
         ]}
         title={@compact && @request_log.pool_name}
       >
-        {@request_log.pool_name}
+        <span
+          data-role="pool-icon"
+          class="grid size-3 shrink-0 place-items-center text-base-content/35"
+        >
+          <.icon name="hero-server-stack" class="size-3" />
+        </span>
+        <span class="truncate">{@request_log.pool_name}</span>
       </span>
       <AdminBadges.plan_badge
         :if={@show_plan}
@@ -364,10 +370,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       </span>
       <span
         data-role="api-key"
-        class="block truncate text-base-content/60"
+        class="inline-flex max-w-full items-center gap-1.5 truncate text-base-content/60"
         title={format_api_key(@request_log)}
       >
-        {format_api_key(@request_log)}
+        <span
+          data-role="api-key-icon"
+          class="grid size-3 shrink-0 place-items-center text-base-content/40"
+        >
+          <.icon name="hero-key" class="size-3" />
+        </span>
+        <span class="truncate">{format_api_key(@request_log)}</span>
       </span>
     </div>
     """
