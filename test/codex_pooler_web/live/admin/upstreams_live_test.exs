@@ -267,6 +267,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     assert has_element?(view, "#pause-upstream-account-#{identity.id}")
+    assert has_element?(view, "#rename-upstream-account-#{identity.id}")
     assert has_element?(view, "#reactivate-upstream-account-#{identity.id}")
     refute has_element?(view, "#disconnect-upstream-account-#{identity.id}")
     assert has_element?(view, "#delete-upstream-account-#{identity.id}")
@@ -354,6 +355,70 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{browser_identity.id}-limit-weekly-progress[value='75']"
            )
+  end
+
+  test "renames upstream account labels from the account actions menu", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "rename-upstream", name: "Rename Upstream"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Original Codex",
+        account_identifier: "rename@example.com"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Original Codex")
+    assert has_element?(view, "#rename-upstream-account-#{identity.id}", "Rename")
+
+    view
+    |> element("#rename-upstream-account-#{identity.id}")
+    |> render_click()
+
+    assert has_element?(view, "#rename-upstream-account-dialog[open]", "Rename upstream account")
+    assert has_element?(view, "#rename-upstream-account-form")
+    assert has_element?(view, "#rename_account_label[value='Original Codex']")
+
+    view
+    |> element("#rename-upstream-account-form")
+    |> render_submit(%{"rename" => %{"account_label" => " Renamed Codex "}})
+
+    refute has_element?(view, "#rename-upstream-account-dialog")
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Renamed Codex")
+    refute has_element?(view, "#upstream-account-#{identity.id}", "Original Codex")
+
+    assert Repo.get!(UpstreamIdentity, identity.id).account_label == "Renamed Codex"
+  end
+
+  test "keeps rename dialog open when the label is blank", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "rename-validation", name: "Rename Validation"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Validation Codex",
+        account_identifier: "validation@example.com"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    view
+    |> element("#rename-upstream-account-#{identity.id}")
+    |> render_click()
+
+    view
+    |> element("#rename-upstream-account-form")
+    |> render_submit(%{"rename" => %{"account_label" => " "}})
+
+    assert has_element?(view, "#rename-upstream-account-dialog[open]")
+    assert has_element?(view, "#rename-upstream-account-form", "can't be blank")
+    assert Repo.get!(UpstreamIdentity, identity.id).account_label == "Validation Codex"
   end
 
   test "renders explicit quota priming readiness states instead of blank routing candidates", %{

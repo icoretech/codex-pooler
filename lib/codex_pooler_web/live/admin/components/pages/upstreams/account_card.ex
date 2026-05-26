@@ -96,6 +96,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       >
         <li>
           <AdminComponents.dropdown_action_item
+            id={"rename-upstream-account-#{@account.identity.id}"}
+            icon="hero-pencil-square"
+            label="Rename"
+            phx-click="open_rename_account"
+            phx-value-id={@account.identity.id}
+            disabled={@account.identity.status == "deleted"}
+          />
+        </li>
+        <li>
+          <AdminComponents.dropdown_action_item
             id={"pause-upstream-account-#{@account.identity.id}"}
             icon="hero-pause"
             label="Pause"

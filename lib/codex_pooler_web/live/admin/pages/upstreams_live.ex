@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -23,6 +24,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         auth_json_form: UpstreamAuthJsonImport.empty_form(),
         auth_json_upload_limit_label: UpstreamAuthJsonImport.upload_limit_label(),
         importing_auth_json: false,
+        renaming_account: nil,
+        rename_account_form: nil,
         subscribed_pool_ids: MapSet.new()
       )
       |> allow_upload(:auth_json,
@@ -39,7 +42,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    {:noreply, socket |> close_auth_json_dialog() |> load_upstreams()}
+    {:noreply,
+     socket |> close_auth_json_dialog() |> close_rename_account_dialog() |> load_upstreams()}
   end
 
   @impl true
@@ -102,6 +106,43 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply, cancel_upload(socket, :auth_json, ref)}
   end
 
+  def handle_event("open_rename_account", %{"id" => identity_id}, socket) do
+    case find_account(socket.assigns.upstream_accounts, identity_id) do
+      %{identity: %UpstreamIdentity{} = identity} = account ->
+        {:noreply,
+         assign(socket,
+           renaming_account: account,
+           rename_account_form: rename_account_form(identity)
+         )}
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+    end
+  end
+
+  def handle_event("cancel_rename_account", _params, socket) do
+    {:noreply, close_rename_account_dialog(socket)}
+  end
+
+  def handle_event("validate_rename_account", %{"rename" => rename_params}, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :rename_account_form,
+       rename_account_form(socket.assigns.renaming_account, rename_params, :validate)
+     )}
+  end
+
+  def handle_event("rename_account", %{"rename" => rename_params}, socket) do
+    case socket.assigns.renaming_account do
+      %{identity: %UpstreamIdentity{} = identity} ->
+        do_rename_account(socket, identity, rename_params)
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+    end
+  end
+
   def handle_event("pause_account", %{"id" => identity_id}, socket) do
     lifecycle_action(
       socket,
@@ -141,6 +182,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          socket
          |> put_flash(:info, message)
          |> load_upstreams()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, error_message(reason))}
+    end
+  end
+
+  defp do_rename_account(socket, %UpstreamIdentity{} = identity, rename_params) do
+    case Upstreams.rename_account_for_scope(
+           socket.assigns.current_scope,
+           identity.id,
+           rename_params
+         ) do
+      {:ok, _result} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Upstream account renamed")
+         |> close_rename_account_dialog()
+         |> load_upstreams()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         assign(socket,
+           rename_account_form: Phoenix.Component.to_form(changeset, as: :rename),
+           renaming_account: socket.assigns.renaming_account
+         )}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, error_message(reason))}
@@ -195,6 +261,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         auth_json_form={@auth_json_form}
         auth_json_upload_limit_label={@auth_json_upload_limit_label}
         importing_auth_json={@importing_auth_json}
+        renaming_account={@renaming_account}
+        rename_account_form={@rename_account_form}
         upstream_accounts={@upstream_accounts}
         uploads={@uploads}
       />
@@ -245,6 +313,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   defp selected_pool(_pools, _pool_id), do: nil
 
+  defp find_account(accounts, identity_id) do
+    Enum.find(accounts, &(&1.identity.id == identity_id))
+  end
+
   defp pool_options(pools) do
     pools
     |> Enum.map(&{pool_label(&1), &1.id})
@@ -277,6 +349,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       auth_json_form: UpstreamAuthJsonImport.empty_form()
     )
   end
+
+  defp close_rename_account_dialog(socket) do
+    assign(socket,
+      renaming_account: nil,
+      rename_account_form: nil
+    )
+  end
+
+  defp rename_account_form(account_or_identity, attrs \\ %{}, action \\ nil)
+
+  defp rename_account_form(%{identity: %UpstreamIdentity{} = identity}, attrs, action),
+    do: rename_account_form(identity, attrs, action)
+
+  defp rename_account_form(%UpstreamIdentity{} = identity, attrs, action) do
+    identity
+    |> UpstreamIdentity.changeset(attrs)
+    |> Map.put(:action, action)
+    |> Phoenix.Component.to_form(as: :rename)
+  end
+
+  defp rename_account_form(nil, _attrs, _action), do: nil
 
   defp import_auth_json_content(socket, auth_json_params) do
     {completed_upload_entries, in_progress_upload_entries} = uploaded_entries(socket, :auth_json)

@@ -13,6 +13,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :auth_json_form, :any, required: true
   attr :auth_json_upload_limit_label, :string, required: true
   attr :importing_auth_json, :boolean, required: true
+  attr :renaming_account, :map, default: nil
+  attr :rename_account_form, :any, default: nil
   attr :upstream_accounts, :list, required: true
   attr :uploads, :map, required: true
 
@@ -54,6 +56,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         upload_limit_label={@auth_json_upload_limit_label}
       />
 
+      <.rename_account_dialog account={@renaming_account} form={@rename_account_form} />
+
       <section id="upstream-account-surface" class="grid min-w-0 gap-4">
         <AdminComponents.empty_state
           :if={@upstream_accounts == []}
@@ -80,6 +84,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         <.upstream_account_grid accounts={@upstream_accounts} />
       </section>
     </section>
+    """
+  end
+
+  attr :account, :map, default: nil
+  attr :form, :any, default: nil
+
+  defp rename_account_dialog(assigns) do
+    ~H"""
+    <dialog :if={@account && @form} id="rename-upstream-account-dialog" class="modal" open>
+      <div class="modal-box max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <div class="border-b border-base-300 px-6 py-5">
+          <p class="text-sm font-semibold uppercase tracking-wide text-primary">
+            Upstream account
+          </p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
+          <p class="mt-2 text-sm leading-6 text-base-content/70">
+            Update the operator label shown for this upstream account.
+          </p>
+        </div>
+
+        <.form
+          id="rename-upstream-account-form"
+          for={@form}
+          phx-change="validate_rename_account"
+          phx-submit="rename_account"
+          autocomplete="off"
+          class="grid gap-5 p-6"
+        >
+          <.input
+            field={@form[:account_label]}
+            type="text"
+            label="Label"
+            placeholder="Account label"
+            required
+          />
+
+          <div class="modal-action mt-0">
+            <AdminComponents.action_button
+              id="rename-upstream-account-cancel"
+              icon="hero-x-mark"
+              label="Cancel"
+              phx-click="cancel_rename_account"
+            />
+            <AdminComponents.action_button
+              id="rename-upstream-account-submit"
+              icon="hero-pencil-square"
+              label="Rename"
+              type="submit"
+              variant={:primary}
+            />
+          </div>
+        </.form>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="button" phx-click="cancel_rename_account">close</button>
+      </form>
+    </dialog>
     """
   end
 
