@@ -41,42 +41,31 @@ tokens, or raw Codex secrets.
 
 ## Highlights
 
-- **Account pools:** group several Codex accounts and expose them through one
-  or more Pool API keys
-- **Shared quota usage:** send work to accounts with available limits, so
-  clients do not need to know which account still has capacity
-- **Routing strategies:** choose how eligible accounts are ordered, including
-  bridge-ring routing, deterministic rotation, least-recent-success preference,
-  and quota-first ordering
-- **Advanced control surface:** tune gateway-wide defaults and per-pool options
-  for routing, admission, diagnostics, model metadata, and operational behavior
-- **Session continuity:** keep Codex response sessions and websocket reconnects
-  attached to the right Codex account when the client provides stable session
-  state
+- **One key for many accounts:** group Codex accounts into Pools and give
+  clients stable Pool API keys instead of binding each tool to one account
+- **Smarter capacity sharing:** route each request to an eligible account with
+  available limits, matching model support, health, session state, and Pool
+  policy
 - **Codex backend compatibility:** point Codex-compatible clients at Codex
-  Pooler and keep familiar responses, compacting, usage, files, audio, images,
-  and websocket flows working through pooled accounts
-- **OpenAI SDK compatibility:** serve selected `/v1/*` endpoints so
-  OpenAI-compatible apps can use multiple Codex subscriptions behind one
-  gateway, with supported requests translated and routed through Codex capacity
-  to help contain API spend
-- **Operator UI:** manage pools, Codex accounts, API keys, request logs, audit
-  logs, jobs, stats, operators, and settings from authenticated `/admin/*`
-  pages
-- **Metadata-only MCP service:** expose read-only administrative metadata to
-  operator-owned MCP clients through `/mcp` without mutation tools
-- **Metadata-only observability:** record request and routing metadata without
-  storing prompts, file bodies, audio, images, bearer tokens, cookies, raw
-  Codex account tokens, or raw API keys
-- **Built for the BEAM:** run on Elixir/Erlang's fault-tolerant runtime, a
-  natural fit for long-lived agent sessions, streaming responses, background
-  jobs, and high-concurrency routing
-- **Cloud-native by design:** deploy cleanly on Kubernetes with separate web,
-  worker, scheduler, and migration roles, while keeping the architecture ready
-  for clustered, multinode operation as traffic grows
-- **Native realtime transport:** keep websocket clients on real clustered
-  websocket sessions instead of translating realtime traffic through an HTTP
-  compatibility layer
+  Pooler and keep responses, compacting, usage, files, audio, images, and
+  realtime flows working through pooled accounts
+- **OpenAI-compatible SDK surface:** let `/v1`-only apps and agent tools use
+  multiple Codex subscriptions behind one gateway, with supported requests
+  translated and routed through Codex capacity to help contain API spend
+- **Session-aware realtime:** keep resumable Codex sessions and websocket
+  reconnects attached to the right upstream account without translating
+  realtime traffic through an HTTP compatibility layer
+- **Operator dashboard:** manage Pools, Codex accounts, API keys, invites,
+  request logs, audit logs, jobs, operators, MCP access, and global settings
+- **Privacy-minded observability:** store request, routing, and audit metadata
+  without storing prompts, file bodies, audio, images, bearer tokens, cookies,
+  raw Codex account tokens, or raw API keys
+- **Configurable without code changes:** tune Pool policy, gateway defaults,
+  diagnostics, model support, limits, and operational settings from the admin UI
+- **Built for self-hosting:** run on Elixir/Erlang's fault-tolerant runtime,
+  start locally with Docker Compose, or deploy the Helm chart with separate web,
+  worker, scheduler, and migration roles for Kubernetes-friendly, multinode
+  growth
 
 ## Quick Start With Docker Compose
 
