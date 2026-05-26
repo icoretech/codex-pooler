@@ -996,7 +996,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-#{ws_request.id}-user-agent",
+             "#request-log-#{ws_request.id}-user-agent[data-client-kind='codex']"
+           )
+
+    assert has_element?(view, "#request-log-#{ws_request.id}-user-agent .hero-command-line")
+
+    assert has_element?(
+             view,
+             "#request-log-#{ws_request.id}-user-agent [data-role='user-agent-text']",
              "Codex CLI 1.2.3"
            )
 
@@ -1004,6 +1011,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              view,
              "#request-log-#{desktop_request.id}-user-agent",
              "Codex Desktop 0.128.0-alpha.1"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{desktop_request.id}-user-agent[data-client-kind='codex_desktop']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{desktop_request.id}-user-agent .hero-computer-desktop"
            )
 
     assert has_element?(
@@ -1016,6 +1033,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              view,
              "#mobile-request-log-#{desktop_request.id}-user-agent",
              "Codex Desktop 0.128.0-alpha.1"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{desktop_request.id}-user-agent[data-client-kind='codex_desktop']"
            )
 
     refute has_element?(view, "#request-log-#{desktop_request.id}-user-agent", "unknown")

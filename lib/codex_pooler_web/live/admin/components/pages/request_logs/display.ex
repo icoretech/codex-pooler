@@ -2,7 +2,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   @moduledoc false
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
-  alias CodexPoolerWeb.Admin.RequestLogsDisplay.{Errors, Status}
+  alias CodexPoolerWeb.Admin.RequestLogsDisplay.{Errors, Status, UserAgents}
 
   defdelegate selected_status_filter_option(status), to: Status
   defdelegate status_filter_options(), to: Status
@@ -260,11 +260,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_cached_input_cost_summary(log),
     do: compact_cached_input_cost(log.token_counts.cached_input_cost_usd)
 
-  def format_user_agent(%{user_agent: user_agent})
-      when is_binary(user_agent) and user_agent != "",
-      do: compact_user_agent(user_agent)
-
-  def format_user_agent(_request_log), do: nil
+  defdelegate format_user_agent(log), to: UserAgents, as: :format
+  defdelegate user_agent_display(log), to: UserAgents, as: :display
 
   def format_transport_route(log) do
     log.endpoint || "unknown endpoint"
@@ -445,34 +442,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
       [whole, fraction] ->
         whole <> "." <> (fraction |> String.pad_trailing(places, "0") |> String.slice(0, places))
-    end
-  end
-
-  defp compact_user_agent(user_agent) do
-    user_agent = String.trim(user_agent)
-
-    case Regex.run(~r/^([^\/\(]+)\/([^\s\(]+)(?:\s+\(([^)]*)\))?/, user_agent) do
-      [_match, product, version | _ignored] ->
-        product
-        |> compact_user_agent_product(version)
-        |> truncate_user_agent()
-
-      _no_match ->
-        truncate_user_agent(user_agent)
-    end
-  end
-
-  defp compact_user_agent_product(product, version) do
-    [String.trim(product), String.trim(version)]
-    |> Enum.reject(&blank?/1)
-    |> Enum.join(" ")
-  end
-
-  defp truncate_user_agent(user_agent) do
-    if String.length(user_agent) > 72 do
-      String.slice(user_agent, 0, 69) <> "..."
-    else
-      user_agent
     end
   end
 

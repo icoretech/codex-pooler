@@ -24,13 +24,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       format_total: 1,
       format_transport_route: 1,
       format_upstream_account_label: 1,
-      format_user_agent: 1,
       protocol_badge_class: 1,
       protocol_label: 1,
       protocol_title: 1,
       request_status_icon: 1,
       request_status_icon_class: 1,
-      status_label: 1
+      status_label: 1,
+      user_agent_display: 1
     ]
 
   attr :request_logs, :map, required: true
@@ -419,12 +419,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         {route_metadata}
       </span>
       <span
-        :if={user_agent = format_user_agent(@request_log)}
+        :if={user_agent = user_agent_display(@request_log)}
         id={"#{@prefix}-#{@request_log.id}-user-agent"}
         data-role="user-agent"
-        class="whitespace-nowrap text-base-content/45"
+        data-client-kind={user_agent.kind}
+        class="inline-flex max-w-full items-center gap-1 whitespace-nowrap text-base-content/45"
+        title={user_agent.title}
       >
-        {user_agent}
+        <.icon
+          name={user_agent.icon}
+          class={user_agent.icon_class}
+        />
+        <span data-role="user-agent-text" class="truncate">{user_agent.text}</span>
       </span>
     </div>
     """
