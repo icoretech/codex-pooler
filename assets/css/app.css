@@ -511,24 +511,27 @@ body {
 .pool-quota-card-body {
   display: grid;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
   gap: 0.85rem;
   align-items: center;
 }
 
 .pool-quota-chart-shell {
+  --pool-quota-chart-size: 6rem;
+  --pool-quota-center-size: 3.35rem;
+
   position: relative;
   display: grid;
-  width: 5.35rem;
+  width: var(--pool-quota-chart-size);
   aspect-ratio: 1;
   flex-shrink: 0;
   place-items: center;
 }
 
 .pool-quota-donut {
-  width: 5.35rem;
-  min-width: 5.35rem;
-  height: 5.35rem;
+  width: var(--pool-quota-chart-size);
+  min-width: var(--pool-quota-chart-size);
+  height: var(--pool-quota-chart-size);
 }
 
 .pool-quota-donut .apexcharts-canvas,
@@ -538,11 +541,14 @@ body {
 
 .pool-quota-donut-center {
   position: absolute;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  margin: auto;
   display: grid;
-  width: 3.35rem;
+  width: var(--pool-quota-center-size);
   aspect-ratio: 1;
+  grid-template-rows: auto auto;
+  gap: 0.12rem;
+  align-content: center;
   place-items: center;
   border-radius: 9999px;
   background: var(--color-base-100);
@@ -551,15 +557,19 @@ body {
 }
 
 .pool-quota-donut-center span {
+  max-width: calc(var(--pool-quota-center-size) - 0.45rem);
+  overflow: hidden;
   color: color-mix(in oklab, var(--color-base-content) 58%, transparent);
-  font-size: 0.5rem;
+  font-size: 0.48rem;
   font-weight: 700;
   line-height: 1;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .pool-quota-donut-center strong {
-  max-width: 2.85rem;
+  max-width: calc(var(--pool-quota-center-size) - 0.5rem);
   overflow: hidden;
   font-size: 0.86rem;
   font-weight: 800;

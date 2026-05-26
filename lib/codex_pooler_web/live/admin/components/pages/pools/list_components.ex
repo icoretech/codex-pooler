@@ -683,7 +683,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       center_label: quota_center_label(lowest_remaining_percent, exhausted?, empty_copy),
       center_value: quota_center_value(lowest_remaining_percent, exhausted?, empty_copy),
       chart_value: chart_percent |> Float.round(1) |> compact_float(),
-      chart_label: "lowest remaining",
+      chart_label: "quota available",
       chart_color: chart_color,
       stat_rows: quota_stat_rows(chart),
       legend_segments: legend_segments,
@@ -732,8 +732,8 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     "#{Map.get(chart, :evidence_count, 0)}/#{Map.get(chart, :account_count, 0)} reporting"
   end
 
-  defp quota_center_label(%Decimal{}, _exhausted?, _empty_copy), do: "Lowest"
-  defp quota_center_label(nil, true, _empty_copy), do: "Lowest"
+  defp quota_center_label(%Decimal{}, _exhausted?, _empty_copy), do: "Available"
+  defp quota_center_label(nil, true, _empty_copy), do: "Available"
   defp quota_center_label(nil, _exhausted?, _empty_copy), do: "No data"
 
   defp quota_center_value(%Decimal{} = remaining_percent, _exhausted?, _empty_copy),
@@ -743,7 +743,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp quota_center_value(nil, _exhausted?, _empty_copy), do: "No data"
 
   defp quota_aria_label(title, %Decimal{} = remaining_percent, _exhausted?, _empty_copy) do
-    "#{title}: lowest remaining #{format_quota_percent(remaining_percent)}"
+    "#{title}: #{format_quota_percent(remaining_percent)} available on the most constrained account"
   end
 
   defp quota_aria_label(title, nil, true, _empty_copy), do: "#{title}: quota exhausted"

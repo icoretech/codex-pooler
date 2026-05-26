@@ -370,7 +370,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, card_selector, "5h quota")
     assert has_element?(view, card_selector, "2/2 reporting")
     assert has_element?(view, card_selector, "2 usable")
-    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-label']", "Lowest")
+
+    assert has_element?(
+             view,
+             "#{card_selector} [data-role='pool-quota-center-label']",
+             "Available"
+           )
 
     assert has_element?(
              view,
@@ -470,7 +475,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#{card_selector} [data-role='pool-quota-center-label']",
-             "Lowest"
+             "Available"
            )
 
     assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0%")
