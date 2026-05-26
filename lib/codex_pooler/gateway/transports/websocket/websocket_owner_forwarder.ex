@@ -142,7 +142,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           UpstreamWebSocketSession.Request.t(),
           submit_opts()
         ) ::
-          :ok | {:error, WebsocketOwnerContract.owner_error()}
+          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error()}
   def remote_submit_request(codex_session_id, downstream, request, opts \\ [])
       when is_binary(codex_session_id) and is_map(downstream) and
              is_struct(request, UpstreamWebSocketSession.Request) do

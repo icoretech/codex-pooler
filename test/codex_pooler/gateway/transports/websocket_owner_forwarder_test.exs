@@ -70,8 +70,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     remote_node_string = Atom.to_string(remote_node)
     %{session: session, token: token} = owner_session_fixture(auth, remote_node_string)
 
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_recovered_owner",
+          "usage" => %{"input_tokens" => 7, "output_tokens" => 5, "total_tokens" => 12}
+        }
+      })
+
     upstream =
-      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), messages: ["recovered-delta"])
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
 
     opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
@@ -87,7 +99,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       timeouts: %{}
     }
 
-    assert :ok =
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
              WebsocketOwnerForwarder.submit_request(
                session,
                token,
@@ -95,6 +107,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                request,
                opts
              )
+
+    assert body =~ "resp_recovered_owner"
 
     assert_receive {:websocket_owner_harness_node_call,
                     %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
@@ -104,7 +118,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert [%UpstreamWebSocketSession.Request{payload: "request-frame"}] =
              WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
 
-    assert_receive {:websocket_owner_frame, "corr-recovered-owner", 1, {:data, "recovered-delta"}}
+    assert_receive {:websocket_owner_frame, "corr-recovered-owner", 1, {:data, ^terminal_frame}}
 
     assert_receive {:websocket_owner_frame, "corr-recovered-owner", 1, :complete}
   end
