@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
     only: [primary_quota_window_attrs: 1]
 
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings, Redaction, ToolRegistry}
@@ -441,6 +442,102 @@ defmodule CodexPoolerWeb.McpControllerTest do
       assert :ok = Redaction.assert_mcp_output_safe!(result)
     end
 
+    test "tools call omits adversarial request-log debug metadata over json-rpc", %{
+      conn: conn,
+      user: user
+    } do
+      raw_token = enabled_mcp_token!(user)
+      pool = pool_fixture(%{slug: "wire-request-log-debug-privacy", name: "Wire Debug Privacy"})
+      %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "Wire privacy key"})
+
+      %{assignment: assignment} =
+        upstream_assignment_fixture(pool, %{
+          account_label: "Wire privacy upstream",
+          assignment_label: "Wire privacy assignment"
+        })
+
+      %{request: request, attempt: attempt} =
+        failed_debug_request_fixture(pool, api_key, assignment, %{
+          correlation_id: "wire-debug-privacy",
+          codex_session_id: "wire-session-example-privacy",
+          codex_session_key: "wire-session-key-example-privacy",
+          request_error: "client_disconnected",
+          attempt_error: "owner_drained",
+          request_metadata: adversarial_debug_metadata(),
+          response_metadata: adversarial_debug_metadata(),
+          error_message: "raw prompt: explain private data"
+        })
+
+      _turn =
+        debug_turn_fixture(request, %{
+          session:
+            debug_session_fixture(pool, api_key, assignment, "wire-session-key-example-privacy"),
+          status: "failed",
+          error_code: "turn_owner_drained",
+          final_attempt_id: attempt.id,
+          turn_sequence: 1
+        })
+
+      list_body =
+        conn
+        |> authenticated_json_rpc_conn(raw_token)
+        |> post(
+          "/mcp",
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => "wire-list-request-log-debug-privacy",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "codex_pooler_list_request_logs",
+              "arguments" => %{
+                "pool_id" => pool.id,
+                "model" => "gpt-log-debug-contract",
+                "limit" => 10
+              }
+            }
+          })
+        )
+        |> response(200)
+
+      {list_result, _list_text, list_structured} =
+        assert_successful_tool_body_response(list_body, "wire-list-request-log-debug-privacy")
+
+      assert [list_item] = list_structured["items"]
+      assert list_item["id"] == request.id
+      assert_debug_fields_present(list_item["debug"], :list)
+      assert_response_body_omits_adversarial_debug_values(list_body)
+      assert_no_wire_leaks(Jason.decode!(list_body), raw_token, adversarial_forbidden_strings())
+      assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+      get_body =
+        conn
+        |> recycle()
+        |> authenticated_json_rpc_conn(raw_token)
+        |> post(
+          "/mcp",
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => "wire-get-request-log-debug-privacy",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "codex_pooler_get_request_log",
+              "arguments" => %{"id" => request.id}
+            }
+          })
+        )
+        |> response(200)
+
+      {get_result, _get_text, get_structured} =
+        assert_successful_tool_body_response(get_body, "wire-get-request-log-debug-privacy")
+
+      assert get_structured["status"] == "ok"
+      assert get_structured["item"]["id"] == request.id
+      assert_debug_fields_present(get_structured["item"]["debug"], :get)
+      assert_response_body_omits_adversarial_debug_values(get_body)
+      assert_no_wire_leaks(Jason.decode!(get_body), raw_token, adversarial_forbidden_strings())
+      assert :ok = Redaction.assert_mcp_output_safe!(get_result)
+    end
+
     test "tools call lists audit logs with pool and system wire rows", %{
       conn: conn,
       user: user
@@ -746,6 +843,159 @@ defmodule CodexPoolerWeb.McpControllerTest do
         refute inspect(response) =~ raw_token_prefix(raw_token)
       end
     end
+  end
+
+  defp assert_successful_tool_body_response(body, id) do
+    response = Jason.decode!(body)
+    {result, text, structured} = assert_successful_tool_response(response, id)
+    assert String.contains?(body, "structuredContent")
+    {result, text, structured}
+  end
+
+  defp failed_debug_request_fixture(pool, api_key, assignment, attrs) do
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-log-debug-contract",
+        endpoint: "/backend-api/codex/responses",
+        transport: "websocket",
+        status: "failed",
+        usage_status: "usage_unknown",
+        correlation_id: Map.fetch!(attrs, :correlation_id),
+        response_status_code: 499,
+        retry_count: 1,
+        request_metadata:
+          Map.merge(
+            %{
+              "codex_session_id" => Map.fetch!(attrs, :codex_session_id),
+              "codex_session_key" => Map.fetch!(attrs, :codex_session_key),
+              "body" => %{"input" => "raw debug prompt"}
+            },
+            Map.get(attrs, :request_metadata, %{})
+          )
+      })
+      |> Ecto.Changeset.change(last_error_code: Map.fetch!(attrs, :request_error))
+      |> Repo.update!()
+
+    attempt =
+      request
+      |> attempt_fixture(assignment, %{
+        status: "failed",
+        retryable: true,
+        upstream_status_code: 499,
+        usage_status: "usage_unknown"
+      })
+      |> Ecto.Changeset.change(%{
+        latency_ms: 321,
+        network_error_code: Map.fetch!(attrs, :attempt_error),
+        error_message: Map.fetch!(attrs, :error_message),
+        response_metadata:
+          Map.merge(
+            %{"websocket_frame" => "raw debug websocket frame"},
+            Map.get(attrs, :response_metadata, %{})
+          )
+      })
+      |> Repo.update!()
+
+    %{request: request, attempt: attempt}
+  end
+
+  defp debug_session_fixture(pool, api_key, assignment, session_key) do
+    now = debug_timestamp()
+
+    %CodexSession{
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      session_key: session_key,
+      conversation_key: "conversation-#{session_key}",
+      pool_upstream_assignment_id: assignment.id,
+      status: "active",
+      owner_instance_id: "test-instance",
+      owner_lease_token: Ecto.UUID.generate(),
+      owner_lease_expires_at: DateTime.add(now, 60, :second),
+      last_heartbeat_at: now,
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp debug_turn_fixture(request, attrs) do
+    now = debug_timestamp()
+
+    %CodexTurn{
+      codex_session_id: Map.fetch!(attrs, :session).id,
+      request_id: request.id,
+      turn_sequence: Map.fetch!(attrs, :turn_sequence),
+      transport_kind: request.transport,
+      status: Map.fetch!(attrs, :status),
+      error_code: Map.get(attrs, :error_code),
+      first_visible_output_at: now,
+      final_attempt_id: Map.get(attrs, :final_attempt_id),
+      started_at: now,
+      completed_at: now,
+      created_at: now,
+      updated_at: DateTime.add(now, 1, :second)
+    }
+    |> Repo.insert!()
+  end
+
+  defp debug_timestamp, do: ~U[2026-05-26 00:00:00.000000Z]
+
+  defp adversarial_debug_metadata do
+    %{
+      "raw_headers" => %{
+        "authorization" => "Authorization: Bearer sk-example-secret",
+        "cookie" => "Cookie: session=secret-cookie"
+      },
+      "request_body" => "raw prompt: explain private data",
+      "raw_idempotency_key" => "idempotency_key=idem-secret-123",
+      "websocket_frame" => ~s({"type":"response.output_text.delta","delta":"secret frame"}),
+      "safe_debug_marker" => "debug metadata present"
+    }
+  end
+
+  defp assert_debug_fields_present(debug, :list) do
+    assert is_map(debug)
+    assert is_map(debug["continuity"])
+    assert is_map(debug["failure"])
+    assert is_map(debug["attempt"])
+    assert debug["failure"]["error_code"] == "turn_owner_drained"
+    assert debug["attempt"]["attempt_count"] == 1
+  end
+
+  defp assert_debug_fields_present(debug, :get) do
+    assert is_map(debug)
+    assert is_map(debug["continuity"])
+    assert is_map(debug["terminal_state"])
+    assert is_map(debug["turn"])
+    assert [_attempt] = debug["attempts"]
+    assert debug["terminal_state"]["state"] == "terminal"
+  end
+
+  defp assert_response_body_omits_adversarial_debug_values(body) do
+    response = Jason.decode!(body)
+    result = response["result"]
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    structured = result["structuredContent"]
+
+    refute text =~ Jason.encode!(structured)
+
+    for forbidden <- adversarial_forbidden_strings() do
+      refute text =~ forbidden
+      refute Jason.encode!(structured) =~ forbidden
+      refute body =~ forbidden
+      refute inspect(response) =~ forbidden
+    end
+  end
+
+  defp adversarial_forbidden_strings do
+    [
+      "Authorization: Bearer sk-example-secret",
+      "Cookie: session=secret-cookie",
+      "raw prompt: explain private data",
+      "idempotency_key=idem-secret-123",
+      ~s({"type":"response.output_text.delta","delta":"secret frame"})
+    ]
   end
 
   defp call_tool(conn, raw_token, id, name, arguments) do
