@@ -17,6 +17,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  def format_upstream_account_label(%{
+        upstream_account_label: label,
+        upstream_identity_label: identity_label
+      })
+      when is_binary(label) and label != "" and is_binary(identity_label) and identity_label != "",
+      do: identity_label
+
   def format_upstream_account_label(%{upstream_account_label: label})
       when is_binary(label) and label != "",
       do: label

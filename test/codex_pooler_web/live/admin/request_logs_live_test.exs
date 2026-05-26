@@ -1156,6 +1156,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     %{request: request, identity: _identity} =
       request_log_fixture(pool, %{
+        account_label: "operator@example.com",
         api_key_display_name: "Normalized key",
         correlation_id: "req-normalized",
         requested_model: "gpt-5.1",
@@ -1380,6 +1381,32 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     # 10. Errors
     assert has_element?(view, "#{row_selector} [data-role='errors']", "sanitized_denial")
+  end
+
+  test "upstream account column reflects the current account label after a rename",
+       %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "renamed-row", name: "Renamed Row"})
+
+    %{request: request, identity: identity} =
+      request_log_fixture(pool, %{
+        account_label: "Original upstream account",
+        assignment_label: "Original assignment label",
+        upstream_account_label: "Original upstream account"
+      })
+
+    identity
+    |> Ecto.Changeset.change(account_label: "Renamed upstream account")
+    |> Repo.update!()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    row_selector = "#request-log-row-#{request.id}"
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='upstream-account']",
+             "Renamed upstream account"
+           )
   end
 
   @tag :feature_control_plane_request_logs
