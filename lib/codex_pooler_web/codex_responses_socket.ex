@@ -34,7 +34,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          |> Map.put(:upstream_websocket_session, upstream_websocket_session)}
 
       {:error, reason} ->
-        {:stop, reason, state}
+        init_error(reason, state)
     end
   end
 
@@ -116,7 +116,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> release_owner_lease("owner_crashed")
         |> log_owner_monitor_lease_release(state, reason)
 
-        {:stop, :owner_crashed, {1011, "websocket owner crashed"}, state}
+        {:stop, :normal, owner_close_detail(:owner_crashed), state}
     end
   end
 
@@ -213,6 +213,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp owner_monitor_down_reason(:shutdown), do: :owner_drained
   defp owner_monitor_down_reason({:shutdown, _details}), do: :owner_drained
   defp owner_monitor_down_reason(_reason), do: :owner_crashed
+
+  defp init_error(reason, state) do
+    if WebsocketOwnerContract.owner_error?(reason) do
+      {:stop, :normal, owner_close_detail(reason), state}
+    else
+      {:stop, reason, state}
+    end
+  end
+
+  defp owner_close_detail(:owner_crashed), do: {1011, "websocket owner crashed"}
+
+  defp owner_close_detail(:owner_forward_timeout),
+    do: {1011, "websocket owner forwarding timed out"}
+
+  defp owner_close_detail(:owner_unavailable), do: {1011, "websocket owner is unavailable"}
+  defp owner_close_detail(:owner_drained), do: {1001, "websocket owner is draining"}
+  defp owner_close_detail(:stale_owner), do: {1011, "websocket owner lease is stale"}
+  defp owner_close_detail(_reason), do: {1011, "websocket owner unavailable"}
 
   defp log_owner_monitor_recovery({:ok, _result}, _state, _reason), do: :ok
   defp log_owner_monitor_recovery(:ok, _state, _reason), do: :ok

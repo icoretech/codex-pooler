@@ -917,7 +917,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {handle_result, logs} =
       with_log(fn -> CodexResponsesSocket.handle_info(owner_down, state) end)
 
-    assert {:stop, :owner_crashed, {1011, "websocket owner crashed"}, stopped_state} =
+    assert {:stop, :normal, {1011, "websocket owner crashed"}, stopped_state} =
              handle_result
 
     refute Map.has_key?(stopped_state, :websocket_owner_monitor)
@@ -1604,6 +1604,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                client_ip: "127.0.0.1",
                websocket_owner_forwarder_opts: Keyword.put(opts, :timeout, 25)
              })
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{function: :remote_attach_downstream, timeout: 25}}
+
+    assert active_owner_lease(session.id).owner_instance_id == remote_node_string
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  @tag :task_5_timeout
+  test "owner socket init timeout closes normally while preserving owner error detail" do
+    remote_node = :"codex_pooler@init-timeout-owner.example"
+    remote_node_string = Atom.to_string(remote_node)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{
+        accepted_turn_state: "stable-ws-owner-init-timeout",
+        owner_instance_id: remote_node_string
+      })
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :timeout}
+      )
+
+    state = %{
+      auth: auth,
+      opts: %{
+        request_id: "ws-owner-init-timeout",
+        accepted_turn_state: "stable-ws-owner-init-timeout",
+        client_ip: "127.0.0.1",
+        websocket_owner_forwarder_opts: Keyword.put(opts, :timeout, 25)
+      }
+    }
+
+    assert {:stop, :normal, {1011, "websocket owner forwarding timed out"}, ^state} =
+             CodexResponsesSocket.init(state)
 
     assert_receive {:websocket_owner_harness_node_call,
                     %{function: :remote_attach_downstream, timeout: 25}}
@@ -2662,7 +2701,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {handle_result, logs} =
       with_log(fn -> CodexResponsesSocket.handle_info(owner_down, monitored_state) end)
 
-    assert {:stop, :owner_crashed, {1011, "websocket owner crashed"}, stopped_state} =
+    assert {:stop, :normal, {1011, "websocket owner crashed"}, stopped_state} =
              handle_result
 
     refute Map.has_key?(stopped_state, :websocket_owner_monitor)
