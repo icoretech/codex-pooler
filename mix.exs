@@ -78,7 +78,7 @@ defmodule CodexPooler.MixProject do
       {:jason, "== 1.4.5"},
       {:dns_cluster, "== 0.2.0"},
       {:websock, "== 0.5.3"},
-      {:websock_adapter, "== 0.5.9"},
+      {:websock_adapter, "== 0.6.0"},
       {:bandit, "== 1.11.1"}
     ]
   end
