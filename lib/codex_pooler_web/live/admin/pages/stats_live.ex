@@ -198,20 +198,6 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
         </div>
 
         <%= if @dashboard do %>
-          <StatsPresentation.dashboard_context dashboard={@dashboard} />
-
-          <section
-            :if={@dashboard.empty_states != []}
-            id="stats-empty-states"
-            class="alert alert-info items-start"
-          >
-            <.icon name="hero-information-circle" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">No usage in this range</p>
-              <p :for={state <- @dashboard.empty_states} class="text-sm">{state.message}</p>
-            </div>
-          </section>
-
           <StatsPresentation.kpi_strip id="stats-kpis" dashboard={@dashboard} />
 
           <StatsCharts.traffic_charts
@@ -222,10 +208,6 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           <section class="grid min-w-0 gap-4 xl:grid-cols-2">
             <StatsPresentation.top_api_keys_table rows={@dashboard.tables.top_api_keys} />
             <StatsPresentation.upstreams_table rows={@dashboard.tables.upstreams} />
-          </section>
-
-          <section class="grid min-w-0 gap-4">
-            <StatsPresentation.quota_table accounts={@dashboard.quota.accounts} />
           </section>
         <% else %>
           <AdminComponents.empty_state

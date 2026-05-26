@@ -109,7 +109,9 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-time-filter-control [aria-label='Range']")
       refute has_element?(view, "#stats-filter-submit")
       refute has_element?(view, "#stats-filter-reset")
-      assert has_element?(view, "#stats-selected-scope", "Stats Live (stats-live)")
+      refute has_element?(view, "#stats-selected-scope")
+      refute has_element?(view, "#stats-selected-window")
+      refute has_element?(view, "#stats-usage-source")
       assert has_element?(view, "#stats-time-filter[type='hidden'][value='24h']")
       assert has_element?(view, "#stats-time-filter-control")
 
@@ -133,6 +135,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert has_element?(view, "#stats-kpis")
       assert has_element?(view, "#stats-kpis article[data-density='compact']")
+      assert has_element?(view, "#stats-kpi-requests [data-role='metric-card-value'].text-lg")
       assert has_element?(view, "#stats-kpi-requests", "2")
       assert has_element?(view, "#stats-kpi-requests", "1 succeeded")
       assert has_element?(view, "#stats-kpi-requests", "1 failed")
@@ -163,8 +166,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-upstream-table", "Stats assignment")
       assert has_element?(view, "#stats-upstream-table", "Available")
       refute has_element?(view, "#stats-recent-activity")
-      assert has_element?(view, "#stats-quota-table", "10.0% used")
-      assert has_element?(view, "#stats-quota-table", "routing usable")
+      refute has_element?(view, "#stats-quota-table")
 
       refute has_element?(view, "#stats-api-key-table", other_setup.api_key.display_name)
       refute has_element?(view, "#stats-traffic-chart", "33 tokens")
@@ -199,7 +201,12 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
 
-      assert has_element?(view, "#stats-selected-scope", "Stats Filter First")
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Filter First"
+             )
+
       assert has_element?(view, "#stats-kpi-tokens", "11")
       refute has_element?(view, "#stats-traffic-chart", "27 tokens")
 
@@ -234,7 +241,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "window" => "1h"}})
 
       assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}&window=1h")
-      assert has_element?(view, "#stats-selected-scope", "Stats Filter Second")
+
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Filter Second"
+             )
+
       assert has_element?(view, "#stats-time-filter[value='1h']")
       assert has_element?(view, "#stats-kpi-tokens", "27")
       assert has_element?(view, "#stats-traffic-chart", "27 tokens")
@@ -255,7 +268,12 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
 
-      assert has_element?(view, "#stats-selected-scope", "Stats Realtime Selected")
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Realtime Selected"
+             )
+
       assert has_element?(view, "#stats-kpi-tokens", "0")
 
       stats_usage_fixture(pool, %{total_tokens: 42, correlation_id: "stats-selected-realtime"})
@@ -291,7 +309,12 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{selected_pool.id}&window=24h")
 
-      assert has_element?(view, "#stats-selected-scope", "Stats Ignore Selected")
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Ignore Selected"
+             )
+
       assert has_element?(view, "#stats-kpi-tokens", "11")
 
       other =
@@ -348,7 +371,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-sub-second"})
 
       {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
-      assert has_element?(view, "#stats-selected-scope", "Stats Sub First")
+
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Sub First"
+             )
+
       assert has_element?(view, "#stats-kpi-tokens", "12")
 
       view
@@ -356,7 +385,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "window" => "24h"}})
 
       assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}&window=24h")
-      assert has_element?(view, "#stats-selected-scope", "Stats Sub Second")
+
+      assert has_element?(
+               view,
+               "#stats-pool-filter-control [data-role='pool-filter-trigger']",
+               "Stats Sub Second"
+             )
+
       assert has_element?(view, "#stats-kpi-tokens", "21")
 
       stats_usage_fixture(first_pool, %{total_tokens: 88, correlation_id: "stats-sub-first-late"})
@@ -387,15 +422,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=1h")
 
-      assert has_element?(view, "#stats-empty-states", "No usage in this range")
-      assert has_element?(view, "#stats-empty-states", "No requests in this range")
-
-      assert has_element?(
-               view,
-               "#stats-empty-states",
-               "No settled usage in this range"
-             )
-
+      refute has_element?(view, "#stats-empty-states")
       assert has_element?(view, "#stats-kpi-requests", "0")
       assert has_element?(view, "#stats-kpi-success-rate", "not available")
       assert has_element?(view, "#stats-kpi-cost", "unavailable")
@@ -431,14 +458,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert has_element?(view, "#stats-kpi-quota-health", "Weekly evidence only")
       assert has_element?(view, "#stats-kpi-quota-health", "1 account with weekly evidence only")
-      assert has_element?(view, "#stats-quota-table", "Free")
-      assert has_element?(view, "#stats-quota-table", "Weekly evidence only")
-      assert has_element?(view, "#stats-quota-table", "5h quota not reported")
-      assert has_element?(view, "#stats-quota-table", "25.0% used")
-      refute has_element?(view, "#stats-quota-table", "0/5h")
-      refute has_element?(view, "#stats-quota-table", "Not available on this plan")
-      quota_html = view |> element("#stats-quota-table") |> render()
-      refute quota_html =~ ~r/(^|[^0-9.])0%([^0-9]|$)/
+      refute has_element?(view, "#stats-quota-table")
       refute has_element?(view, "#stats-quota-table", "Exhausted")
       refute has_element?(view, "#stats-kpi-quota-health", "0")
     end
@@ -459,7 +479,6 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       #stats-kpi-active-sessions
       #stats-kpi-quota-health
       #stats-traffic-chart
-      #stats-quota-table
     )
   end
 

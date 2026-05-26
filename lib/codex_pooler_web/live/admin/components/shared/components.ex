@@ -99,11 +99,14 @@ defmodule CodexPoolerWeb.Admin.Components do
         ]}>
           {@label}
         </p>
-        <p class={[
-          "min-w-0 max-w-full overflow-hidden break-words font-mono font-semibold tabular-nums text-base-content",
-          @compact_mobile && "text-xl leading-tight lg:text-2xl",
-          !@compact_mobile && "text-2xl leading-none"
-        ]}>
+        <p
+          class={[
+            "min-w-0 max-w-full overflow-hidden break-words font-mono font-semibold tabular-nums text-base-content",
+            @compact_mobile && "text-lg leading-tight lg:text-xl",
+            !@compact_mobile && "text-xl leading-none"
+          ]}
+          data-role="metric-card-value"
+        >
           {@value}
         </p>
         <p
