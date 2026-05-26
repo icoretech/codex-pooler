@@ -151,14 +151,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-quota-health", "Available")
       assert has_element?(view, "#stats-traffic-chart-plot[phx-hook='ApexTimeSeriesChart']")
       assert has_element?(view, "#stats-traffic-chart-plot[phx-update='ignore']")
-      assert has_element?(view, "#stats-traffic-chart-plot[data-chart-unit='requests']")
-      assert has_element?(view, "#stats-traffic-chart", "2 requests")
+      assert has_element?(view, "#stats-traffic-chart-plot[data-chart-unit='tokens']")
+      assert has_element?(view, "#stats-traffic-chart-plot[data-chart-units]")
+      assert has_element?(view, "#stats-traffic-chart-plot[data-chart-yaxis]")
+      assert has_element?(view, "#stats-traffic-chart", "Traffic over time")
+      assert has_element?(view, "#stats-traffic-chart", "100 tokens / 2 requests")
       refute has_element?(view, "#stats-traffic-chart-plot svg")
-      assert has_element?(view, "#stats-token-chart-plot[phx-hook='ApexTimeSeriesChart']")
-      assert has_element?(view, "#stats-token-chart-plot[phx-update='ignore']")
-      assert has_element?(view, "#stats-token-chart-plot[data-chart-unit='tokens']")
-      assert has_element?(view, "#stats-token-chart", "100 tokens")
-      refute has_element?(view, "#stats-token-chart-plot svg")
+      refute has_element?(view, "#stats-token-chart")
       assert has_element?(view, "#stats-api-key-table", "Stats UI key")
       assert has_element?(view, "#stats-api-key-table", "$1.500000")
       assert has_element?(view, "#stats-upstream-table", "Stats assignment")
@@ -168,13 +167,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-quota-table", "routing usable")
 
       refute has_element?(view, "#stats-api-key-table", other_setup.api_key.display_name)
-      refute has_element?(view, "#stats-token-chart", "33 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "33 tokens")
 
       traffic_chart_html = view |> element("#stats-traffic-chart-plot") |> render()
-      token_chart_html = view |> element("#stats-token-chart-plot") |> render()
 
       assert traffic_chart_html =~ "ApexTimeSeriesChart"
-      assert token_chart_html =~ "ApexTimeSeriesChart"
+      assert traffic_chart_html =~ "Tokens"
+      assert traffic_chart_html =~ "Requests"
 
       html = render(view)
       refute html =~ sensitive_marker
@@ -202,7 +201,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert has_element?(view, "#stats-selected-scope", "Stats Filter First")
       assert has_element?(view, "#stats-kpi-tokens", "11")
-      refute has_element?(view, "#stats-token-chart", "27 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "27 tokens")
 
       view
       |> element("#stats-pool-filter-control button[data-pool-id='#{second_pool.id}']")
@@ -238,8 +237,8 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-selected-scope", "Stats Filter Second")
       assert has_element?(view, "#stats-time-filter[value='1h']")
       assert has_element?(view, "#stats-kpi-tokens", "27")
-      assert has_element?(view, "#stats-token-chart", "27 tokens")
-      refute has_element?(view, "#stats-token-chart", "11 tokens")
+      assert has_element?(view, "#stats-traffic-chart", "27 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "11 tokens")
       refute render(view) =~ first.raw_key
       refute render(view) =~ second.raw_key
     end
@@ -265,12 +264,12 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert_receive {:admin_stats_live, :scheduled, _pid}
       _ = :sys.get_state(view.pid)
       assert has_element?(view, "#stats-kpi-tokens", "0")
-      refute has_element?(view, "#stats-token-chart", "42 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "42 tokens")
 
       send(view.pid, :reload_stats_dashboard)
       assert_receive {:admin_stats_live, :reloaded, _pid}
       assert has_element?(view, "#stats-kpi-tokens", "42")
-      assert has_element?(view, "#stats-token-chart", "42 tokens")
+      assert has_element?(view, "#stats-traffic-chart", "42 tokens")
       assert has_element?(view, "#stats-api-key-table", "Stats usage key")
     end
 
@@ -306,7 +305,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       _ = :sys.get_state(view.pid)
       refute_received {:admin_stats_live, :scheduled, _pid}
       assert has_element?(view, "#stats-kpi-tokens", "11")
-      refute has_element?(view, "#stats-token-chart", "77 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "77 tokens")
       refute has_element?(view, "#stats-api-key-table", other.api_key.display_name)
       refute render(view) =~ selected.raw_key
       refute render(view) =~ other.raw_key
@@ -335,7 +334,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       _ = :sys.get_state(view.pid)
       refute_received {:admin_stats_live, :reloaded, _pid}
       assert has_element?(view, "#stats-kpi-tokens", "64")
-      assert has_element?(view, "#stats-token-chart", "64 tokens")
+      assert has_element?(view, "#stats-traffic-chart", "64 tokens")
     end
 
     test "filter changes replace the selected Pool subscription", %{conn: conn, scope: scope} do
@@ -364,7 +363,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert {:ok, _event} = Events.broadcast_usage(first_pool.id, "usage_updated", %{rows: 1})
       _ = :sys.get_state(view.pid)
       refute_received {:admin_stats_live, :scheduled, _pid}
-      refute has_element?(view, "#stats-token-chart", "100 tokens")
+      refute has_element?(view, "#stats-traffic-chart", "100 tokens")
 
       stats_usage_fixture(second_pool, %{total_tokens: 9, correlation_id: "stats-sub-second-late"})
 
@@ -374,7 +373,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       send(view.pid, :reload_stats_dashboard)
       assert_receive {:admin_stats_live, :reloaded, _pid}
       assert has_element?(view, "#stats-kpi-tokens", "30")
-      assert has_element?(view, "#stats-token-chart", "30 tokens")
+      assert has_element?(view, "#stats-traffic-chart", "30 tokens")
     end
 
     test "empty selected period shows operational no-data copy without fake trends", %{
@@ -401,7 +400,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-success-rate", "not available")
       assert has_element?(view, "#stats-kpi-cost", "unavailable")
       assert has_element?(view, "#stats-traffic-chart", "0 requests")
-      assert has_element?(view, "#stats-token-chart", "0 tokens")
+      assert has_element?(view, "#stats-traffic-chart", "0 tokens")
     end
 
     test "free plan weekly-only quota is not rendered as consumed or exhausted", %{
@@ -460,7 +459,6 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       #stats-kpi-active-sessions
       #stats-kpi-quota-health
       #stats-traffic-chart
-      #stats-token-chart
       #stats-quota-table
     )
   end
