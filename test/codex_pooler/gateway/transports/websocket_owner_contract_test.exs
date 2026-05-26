@@ -13,7 +13,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
     :duplicate_downstream,
     :stale_downstream,
     :owner_forwarding_disabled,
-    :owner_busy
+    :owner_busy,
+    :client_disconnected
   ]
 
   describe "owner error taxonomy" do
@@ -50,6 +51,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       assert payload.attempt_status == "failed"
       assert payload.metadata.reason == "owner_forward_timeout"
       assert payload.metadata.owner_error == "owner_forward_timeout"
+      refute inspect(payload) =~ @sentinel
+    end
+
+    test "maps client_disconnected to the exact downstream close contract" do
+      assert {:ok, payload} =
+               WebsocketOwnerContract.safe_error_payload(:client_disconnected, @sentinel)
+
+      assert payload.status == 499
+      assert payload.code == "client_disconnected"
+      assert payload.request_status == "failed"
+      assert payload.attempt_status == "failed"
+      assert payload.metadata.reason == "client_disconnected"
+      assert payload.metadata.owner_error == "client_disconnected"
       refute inspect(payload) =~ @sentinel
     end
 

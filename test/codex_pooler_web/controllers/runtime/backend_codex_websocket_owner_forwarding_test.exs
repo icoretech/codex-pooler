@@ -2260,7 +2260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
-    assert_receive {:fake_upstream_chunk_barrier, 1, upstream_pid, ^release_ref}
+    assert_receive {:fake_upstream_chunk_barrier, 1, upstream_pid, ^release_ref}, 1_000
 
     assert [interrupted_upstream_request] = await_upstream_requests(upstream, 1)
 
