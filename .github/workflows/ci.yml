@@ -56,14 +56,14 @@ jobs:
           cache-dependency-path: assets/package-lock.json
 
       - name: Cache Mix deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: deps
           key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-
 
       - name: Cache Mix build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: _build
           key: ${{ runner.os }}-build-${{ env.MIX_ENV }}-${{ hashFiles('mix.lock') }}
