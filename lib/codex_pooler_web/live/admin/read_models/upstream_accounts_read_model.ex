@@ -46,7 +46,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @type account_snapshot :: %{
           required(:identity) => UpstreamIdentity.t(),
           required(:label) => String.t(),
-          required(:identifier_label) => String.t(),
           required(:plan_label) => String.t(),
           required(:plan_reported?) => boolean(),
           required(:refresh_status) => String.t(),
@@ -119,7 +118,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     %{
       identity: identity,
       label: identity.account_label || identity.chatgpt_account_id || "Upstream account",
-      identifier_label: identifier_label(identity),
       plan_label: account_plan_label(identity),
       plan_reported?: account_plan_reported?(identity),
       refresh_status: refresh_status_label(identity),
@@ -337,7 +335,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})
        when is_integer(credits) and is_integer(active_limit) and active_limit > 0 do
-    "#{format_integer(credits)} / #{format_integer(active_limit)} quota credits remaining"
+    "#{format_integer(credits)} / #{format_integer(active_limit)} credits"
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{
@@ -354,7 +352,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       |> Decimal.round(0)
       |> Decimal.to_integer()
 
-    "#{format_integer(remaining)} / #{format_integer(active_limit)} quota credits remaining"
+    "#{format_integer(remaining)} / #{format_integer(active_limit)} credits"
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{used_percent: %Decimal{}}), do: nil
@@ -547,11 +545,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       nil -> "not run"
     end
   end
-
-  defp identifier_label(%{chatgpt_account_id: account_id}) when is_binary(account_id),
-    do: account_id
-
-  defp identifier_label(_identity), do: "account id unavailable"
 
   defp pool_label(nil), do: "Unknown Pool"
   defp pool_label(pool), do: "#{pool.name} (#{pool.slug})"

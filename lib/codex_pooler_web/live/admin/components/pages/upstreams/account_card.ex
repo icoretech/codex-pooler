@@ -38,8 +38,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             </span>
             <.upstream_plan_indicator account={@account} account_index={@account_index} />
           </div>
-          <p class="mt-1 truncate text-xs text-base-content/55">
-            {@account.identifier_label}
+          <p
+            id={"upstream-account-#{@account.identity.id}-routing-readiness"}
+            class="mt-1 text-xs leading-5 text-base-content/55"
+          >
+            {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
           </p>
         </div>
         <.upstream_account_actions account={@account} />
@@ -51,10 +54,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             <div>
               <p class="text-xs font-semibold uppercase text-primary">Limits</p>
               <p
-                id={"upstream-account-#{@account.identity.id}-routing-readiness"}
+                id={"upstream-account-#{@account.identity.id}-limits-summary"}
                 class="text-sm text-base-content/60"
               >
-                {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
+                {remaining_limits_summary(@account)}
               </p>
             </div>
             <span class={AdminBadges.status_chip_class(@account.refresh_status)}>
@@ -279,12 +282,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
     ~H"""
     <div id={@id} data-role="upstream-limit-chart" class="grid gap-1.5">
       <div class="flex items-center justify-between gap-3 text-xs">
-        <span class="font-medium text-base-content">{@limit.label} remaining</span>
+        <span data-role="upstream-limit-title" class="font-medium text-base-content">
+          {@limit.label}
+        </span>
         <span class={quota_limit_percent_class(@limit)}>{@limit.percent_label}</span>
       </div>
       <progress
         id={"#{@id}-progress"}
         data-role="upstream-limit-progress"
+        aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
         class={quota_limit_progress_class(@limit)}
         value={@limit.percent_value}
         max="100"
@@ -343,6 +349,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
   defp quota_limit_progress_class(_limit),
     do: "progress admin-live-progress progress-neutral h-1.5 w-full"
+
+  defp remaining_limits_summary(%{quota_limits: quota_limits}) when is_list(quota_limits) do
+    quota_limits
+    |> Enum.filter(&match?(%{percent: %Decimal{}}, &1))
+    |> case do
+      [] ->
+        "Remaining quota · no reported evidence"
+
+      reported_limits ->
+        tightest_limit = tightest_remaining_limit(reported_limits)
+        "Remaining quota · tightest #{tightest_limit.label} #{tightest_limit.percent_label}"
+    end
+  end
+
+  defp remaining_limits_summary(_account), do: "Remaining quota · no reported evidence"
+
+  defp tightest_remaining_limit([limit | limits]) do
+    Enum.reduce(limits, limit, fn candidate, current ->
+      if Decimal.compare(candidate.percent, current.percent) == :lt do
+        candidate
+      else
+        current
+      end
+    end)
+  end
 
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"

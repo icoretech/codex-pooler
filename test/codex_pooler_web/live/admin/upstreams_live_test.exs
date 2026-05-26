@@ -96,7 +96,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       upstream_assignment_fixture(pool, %{
         account_label: "Primary Codex",
         assignment_label: "Primary assignment",
-        plan_label: "Team"
+        plan_label: "Team",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "test"
+          }
+        }
       })
 
     %{identity: browser_identity} =
@@ -252,6 +258,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#upstream-account-#{identity.id}", "Primary Codex")
     assert has_element?(view, "#upstream-account-#{identity.id}-mail", "Primary Codex")
     assert has_element?(view, "#upstream-account-#{identity.id}-state", "active")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id} header #upstream-account-#{identity.id}-routing-readiness",
+             "Routing candidate · 1 Pool"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-limits-summary",
+             "Remaining quota · tightest GPT-5.3-Codex-Spark 5h 45%"
+           )
+
     refute has_element?(view, "#upstream-account-#{identity.id}", "Upstream account")
     refute has_element?(view, "#upstream-account-#{identity.id} .font-mono", identity.id)
     refute has_element?(view, "#upstream-account-#{identity.id}-secret")
@@ -280,23 +299,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limit-primary_5h[data-role='upstream-limit-chart']",
-             "5h remaining"
+             "#upstream-account-#{identity.id}-limit-primary_5h [data-role='upstream-limit-title']",
+             "5h"
            )
+
+    refute has_element?(view, "#upstream-account-#{identity.id}-limit-primary_5h", "5h remaining")
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limit-primary_5h", "64%")
 
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limit-primary_5h",
-             "64 / 100 quota credits remaining"
+             "64 / 100 credits"
            )
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limit-weekly[data-role='upstream-limit-chart']",
-             "Weekly remaining"
+             "#upstream-account-#{identity.id}-limit-weekly [data-role='upstream-limit-title']",
+             "Weekly"
            )
+
+    refute has_element?(view, "#upstream-account-#{identity.id}-limit-weekly", "Weekly remaining")
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limit-weekly", "90%")
 
@@ -313,8 +336,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limit-model-codex_spark-primary-300[data-role='upstream-limit-chart']",
-             "GPT-5.3-Codex-Spark 5h remaining"
+             "#upstream-account-#{identity.id}-limit-model-codex_spark-primary-300 [data-role='upstream-limit-title']",
+             "GPT-5.3-Codex-Spark 5h"
            )
 
     assert has_element?(
@@ -330,8 +353,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limit-model-codex_spark-secondary-10080[data-role='upstream-limit-chart']",
-             "GPT-5.3-Codex-Spark Weekly remaining"
+             "#upstream-account-#{identity.id}-limit-model-codex_spark-secondary-10080 [data-role='upstream-limit-title']",
+             "GPT-5.3-Codex-Spark Weekly"
            )
 
     refute has_element?(
@@ -518,7 +541,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#upstream-account-#{identity.id}", "realtime@example.com")
-    assert has_element?(view, "#upstream-account-#{identity.id}", "acct_realtime")
+    refute has_element?(view, "#upstream-account-#{identity.id}", "acct_realtime")
   end
 
   test "refreshes quota limits when upstream quota windows change outside the LiveView", %{
@@ -1021,7 +1044,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert assignment.pool_id == pool.id
     assert assignment.status == "active"
     assert has_element?(view, "#upstream-account-#{identity.id}", "fixture-user@example.com")
-    assert has_element?(view, "#upstream-account-#{identity.id}", "acct_fixture_auth_json")
+    refute has_element?(view, "#upstream-account-#{identity.id}", "acct_fixture_auth_json")
     refute has_element?(view, "#upstream-account-#{identity.id}", "auth.json import")
     refute has_element?(view, "#upstream-account-#{identity.id}", "stored account id")
     refute has_element?(view, "#upstream-account-#{identity.id}-source")
