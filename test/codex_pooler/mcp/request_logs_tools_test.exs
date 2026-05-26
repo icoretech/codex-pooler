@@ -436,7 +436,10 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         status: "succeeded",
         usage_status: "usage_known",
         correlation_id: "filter-debug-target",
-        request_metadata: %{"codex_session_id" => "session-filter-target"}
+        request_metadata: %{
+          "codex_session_id" => "session-filter-target",
+          "request_id" => "phoenix-filter-target"
+        }
       })
       |> Ecto.Changeset.change(admitted_at: ~U[2026-05-23 02:25:00.000000Z])
       |> Repo.update!()
@@ -502,6 +505,19 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert filtered_item["debug"]["continuity"]["status"] == "available"
     assert_ref_prefix(filtered_item["debug"]["continuity"]["session_ref"], "session_")
     assert :ok = Redaction.assert_mcp_output_safe!(filtered_result)
+
+    assert {:ok, metadata_request_id_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "request_id" => "phoenix-filter-target"},
+               %{auth: auth}
+             )
+
+    assert metadata_request_id_result["isError"] == false
+    assert metadata_request_id_result["structuredContent"]["total"] == 1
+    assert [metadata_request_id_item] = metadata_request_id_result["structuredContent"]["items"]
+    assert metadata_request_id_item["id"] == target_request.id
+    assert :ok = Redaction.assert_mcp_output_safe!(metadata_request_id_result)
 
     assert {:ok, first_page} =
              ToolDispatch.call(

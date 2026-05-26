@@ -138,7 +138,11 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
       request_fixture(%{pool: second_pool, api_key: second_key}, %{
         requested_model: "gpt-beta",
         status: "failed",
-        correlation_id: "req-beta"
+        correlation_id: "req-beta",
+        request_metadata: %{
+          "client_request_id" => "client-beta-request",
+          "request_id" => "phoenix-beta-request"
+        }
       })
       |> Ecto.Changeset.change(%{last_error_code: "quota_account_primary_unknown"})
       |> Repo.update!()
@@ -181,6 +185,16 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert beta.denial_reason == "quota_account_primary_unknown"
     assert beta.latency_ms == 456
     assert beta.token_counts.input_tokens == 9
+
+    assert %{items: [metadata_match], total: 1} =
+             Accounting.list_request_logs(second_pool, filters: [request_id: "phoenix-beta"])
+
+    assert metadata_match.id == second_request.id
+
+    assert %{items: [client_metadata_match], total: 1} =
+             Accounting.list_request_logs(second_pool, filters: [request_id: "client-beta"])
+
+    assert client_metadata_match.id == second_request.id
 
     assert %{items: [], total: 0} =
              Accounting.list_request_logs(first_pool, filters: [status: "failed"])

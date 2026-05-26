@@ -580,7 +580,9 @@ defmodule CodexPooler.Accounting.RequestLogs do
     from([request, ...] in query,
       where:
         fragment("?::text ILIKE ?", request.id, ^pattern) or
-          ilike(request.correlation_id, ^pattern)
+          ilike(request.correlation_id, ^pattern) or
+          fragment("?->>? ILIKE ?", request.request_metadata, "request_id", ^pattern) or
+          fragment("?->>? ILIKE ?", request.request_metadata, "client_request_id", ^pattern)
     )
   end
 
