@@ -100,7 +100,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         <AdminComponents.page_header
           id="request-log-page-header"
           title="Request logs"
-          description="Review recent requests, quota routing, status, token usage, and pricing state without exposing request or response content."
+          description="Audit recent gateway traffic, routing decisions, upstream outcomes, quota evidence, token usage, and cost settlement."
         />
 
         <AdminComponents.filter_form

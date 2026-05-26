@@ -112,8 +112,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#filters_request_id[aria-label='Request ID']")
     refute has_element?(view, "#request-log-summary")
     refute has_element?(view, "#request-log-page-size")
-    assert has_element?(view, "#request-log-page-header", "quota routing")
-    assert has_element?(view, "#request-log-page-header", "pricing state")
+
+    assert has_element?(
+             view,
+             "#request-log-page-header",
+             "Audit recent gateway traffic, routing decisions, upstream outcomes, quota evidence, token usage, and cost settlement."
+           )
+
+    refute has_element?(view, "#request-log-page-header", "Review recent requests")
     assert has_element?(view, "#admin-request-logs")
     assert has_element?(view, "#request-logs-table")
     assert has_element?(view, "#mobile-request-logs-table")
