@@ -142,7 +142,7 @@ For a deployed instance, replace `http://localhost:4000` with your HTTPS host,
 for example `https://pooler.example.com`.
 
 <details>
-<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> opencode <code>~/.config/opencode/opencode.jsonc</code></summary>
+<summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
 
 opencode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
 provider uses the Pool API key, and the optional remote MCP entry uses an
