@@ -13,9 +13,7 @@ defmodule CodexPoolerWeb.Router do
     plug :put_root_layout, html: {CodexPoolerWeb.Layouts, :root}
     plug :protect_from_forgery
 
-    plug :put_secure_browser_headers, %{
-      "content-security-policy" => "base-uri 'self'; frame-ancestors 'self';"
-    }
+    plug :put_secure_browser_headers, %{}
 
     plug :fetch_current_scope_for_user
     plug CodexPoolerWeb.Plugs.AdminBrowserAdmission
@@ -165,10 +163,10 @@ defmodule CodexPoolerWeb.Router do
   # Enable LiveDashboard and Swoosh mailbox preview in development.
   CodexPoolerWeb.DevRoutes.live_dashboard_routes()
 
-  defp put_secure_browser_headers(conn, baseline_headers) do
+  defp put_secure_browser_headers(conn, _baseline_headers) do
     Phoenix.Controller.put_secure_browser_headers(
       conn,
-      Map.merge(baseline_headers, CodexPoolerWeb.BrowserSecurity.secure_headers())
+      CodexPoolerWeb.BrowserSecurity.secure_headers()
     )
   end
 end

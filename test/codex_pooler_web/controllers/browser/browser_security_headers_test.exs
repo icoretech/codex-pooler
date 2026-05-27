@@ -21,21 +21,33 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
     :ok
   end
 
-  test "browser CSP includes configured extra sources without enabling local dev helpers", %{
-    conn: conn
-  } do
+  test "browser CSP includes configured extra sources without allowing structural directives to expand",
+       %{
+         conn: conn
+       } do
     Application.put_env(:codex_pooler, :browser_csp_extra_sources,
-      script_src: ["https://assets.example.com"],
       connect_src: ["https://events.example.com"],
-      img_src: ["blob:"]
+      img_src: ["blob:"],
+      script_src: ["https://assets.example.com"],
+      style_src: ["https://styles.example.com"],
+      base_uri: ["https://bad.example.com"],
+      frame_ancestors: ["*"],
+      default_src: ["https://bad.example.com"]
     )
 
     conn = get(conn, ~p"/login")
 
     assert [csp] = get_resp_header(conn, "content-security-policy")
-    assert csp =~ "script-src 'self' 'unsafe-inline' https://assets.example.com"
-    assert csp =~ "connect-src 'self' ws: wss: https://events.example.com"
-    assert csp =~ "img-src 'self' data: https://www.gravatar.com blob:"
+    directives = csp_directives(csp)
+
+    assert directives["connect-src"] =~ "https://events.example.com"
+    assert directives["img-src"] =~ "blob:"
+    assert directives["script-src"] =~ "https://assets.example.com"
+    assert directives["style-src"] =~ "https://styles.example.com"
+    assert directives["base-uri"] == "'self'"
+    assert directives["frame-ancestors"] == "'self'"
+    refute csp =~ "https://bad.example.com"
+    refute csp =~ "frame-ancestors *"
     refute csp =~ "http://localhost:8400"
   end
 
@@ -134,6 +146,19 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
         assert response(asset_conn, 200) == "User-agent: *\nDisallow: /\n"
       end
     end
+  end
+
+  defp csp_directives(csp) do
+    csp
+    |> String.split(";")
+    |> Enum.reduce(%{}, fn directive, acc ->
+      directive = String.trim(directive)
+
+      case String.split(directive, ~r/\s+/, parts: 2) do
+        [name, value] -> Map.put(acc, name, value)
+        [name] -> Map.put(acc, name, "")
+      end
+    end)
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:codex_pooler, key)

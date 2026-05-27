@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.BrowserSecurity do
 
   @base_directives [
     default_src: ["'self'"],
+    base_uri: ["'self'"],
+    frame_ancestors: ["'self'"],
     connect_src: ["'self'", "ws:", "wss:"],
     img_src: ["'self'", "data:", "https://www.gravatar.com"],
     script_src: ["'self'", "'unsafe-inline'"],
