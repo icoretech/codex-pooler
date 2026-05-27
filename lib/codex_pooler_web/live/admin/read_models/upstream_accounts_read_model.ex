@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @moduledoc false
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Jobs
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefresh
@@ -20,6 +21,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     "resetless_unprimed" => "Quota reset missing",
     "unprimed" => "Quota unprimed"
   }
+
+  @token_burn_recent_seconds 5 * 60
+  @token_burn_baseline_seconds 60 * 60
 
   @type assignment_snapshot :: %{
           required(:id) => Ecto.UUID.t(),
@@ -44,6 +48,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
+  @type token_burn :: %{
+          required(:level) => non_neg_integer(),
+          required(:label) => String.t(),
+          required(:title) => String.t(),
+          required(:recent_tokens) => non_neg_integer(),
+          required(:baseline_tokens) => non_neg_integer()
+        }
   @type account_snapshot :: %{
           required(:identity) => UpstreamIdentity.t(),
           required(:label) => String.t(),
@@ -59,6 +70,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
+          required(:token_burn) => token_burn(),
           required(:assignments) => [assignment_snapshot()],
           required(:quota_limits) => [quota_limit_row()]
         }
@@ -68,10 +80,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
 
-    scope
-    |> Upstreams.list_visible_upstream_identities()
-    |> Enum.filter(&Map.has_key?(assignments, &1.id))
-    |> Enum.map(&account_snapshot(&1, assignments))
+    identities =
+      scope
+      |> Upstreams.list_visible_upstream_identities()
+      |> Enum.filter(&Map.has_key?(assignments, &1.id))
+
+    token_burns = token_burn_summaries(identities)
+
+    Enum.map(identities, &account_snapshot(&1, assignments, token_burns))
   end
 
   defp active_assignment_snapshots(pools, pool_lookup) do
@@ -114,7 +130,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     Map.get(@quota_priming_labels, status, String.replace(status, "_", " "))
   end
 
-  defp account_snapshot(identity, assignments) do
+  defp account_snapshot(identity, assignments, token_burns) do
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
     %{
@@ -132,9 +148,70 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       reauth_required?: reauth_required?(identity),
       reauth_reason_code: reauth_reason_code(identity),
       reauth_reason_message: reauth_reason_message(identity),
+      token_burn: Map.fetch!(token_burns, identity.id),
       assignments: Map.get(assignments, identity.id, []),
       quota_limits: quota_limit_rows(identity)
     }
+  end
+
+  defp token_burn_summaries([]), do: %{}
+
+  defp token_burn_summaries(identities) do
+    upstream_identity_ids = Enum.map(identities, & &1.id)
+    ended_at = DateTime.utc_now()
+    recent_started_at = DateTime.add(ended_at, -@token_burn_recent_seconds, :second)
+    baseline_started_at = DateTime.add(recent_started_at, -@token_burn_baseline_seconds, :second)
+
+    recent_totals =
+      Accounting.token_totals_by_upstream_identity_ids(
+        upstream_identity_ids,
+        recent_started_at,
+        ended_at
+      )
+
+    baseline_totals =
+      Accounting.token_totals_by_upstream_identity_ids(
+        upstream_identity_ids,
+        baseline_started_at,
+        recent_started_at
+      )
+
+    Map.new(upstream_identity_ids, fn upstream_identity_id ->
+      recent_tokens = Map.get(recent_totals, upstream_identity_id, 0)
+      baseline_tokens = Map.get(baseline_totals, upstream_identity_id, 0)
+
+      {upstream_identity_id, token_burn_summary(recent_tokens, baseline_tokens)}
+    end)
+  end
+
+  defp token_burn_summary(recent_tokens, baseline_tokens) do
+    level = token_burn_level(recent_tokens, baseline_tokens)
+
+    %{
+      level: level,
+      label: "x#{level}",
+      title:
+        "last 5m: #{format_integer(recent_tokens)} tokens; previous 1h: #{format_integer(baseline_tokens)} tokens",
+      recent_tokens: recent_tokens,
+      baseline_tokens: baseline_tokens
+    }
+  end
+
+  defp token_burn_level(recent_tokens, _baseline_tokens) when recent_tokens <= 0, do: 0
+  defp token_burn_level(_recent_tokens, baseline_tokens) when baseline_tokens <= 0, do: 1
+
+  defp token_burn_level(recent_tokens, baseline_tokens) do
+    recent_rate = recent_tokens / (@token_burn_recent_seconds / 60)
+    baseline_rate = baseline_tokens / (@token_burn_baseline_seconds / 60)
+    ratio = recent_rate / baseline_rate
+
+    cond do
+      ratio < 0.5 -> 1
+      ratio < 1.5 -> 2
+      ratio < 3 -> 3
+      ratio <= 6 -> 4
+      true -> 5
+    end
   end
 
   defp quota_limit_rows(identity) do

@@ -20,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   def upstreams_page(assigns) do
     ~H"""
-    <section id="admin-upstreams-live" class="grid gap-6">
+    <section id="admin-upstreams-live" class="grid min-w-0 gap-6">
       <AdminComponents.page_header
         id="upstream-account-page-header"
         title="Upstreams"
@@ -151,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     <div
       :if={@accounts != []}
       id="upstream-account-grid"
-      class="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3"
+      class="grid min-w-0 gap-3 lg:grid-cols-2 2xl:grid-cols-3"
     >
       <UpstreamAccountCard.account_card
         :for={{account, account_index} <- Enum.with_index(@accounts)}

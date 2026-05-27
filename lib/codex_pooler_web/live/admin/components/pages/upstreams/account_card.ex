@@ -20,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       id={"upstream-account-#{@account.identity.id}"}
       data-role="upstream-account-card"
       class={[
-        "rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors",
+        "min-w-0 rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors",
         status_border_class(@account)
       ]}
     >
@@ -45,7 +45,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             >
               {@account.identity.status}
             </span>
-            <.upstream_plan_indicator account={@account} account_index={@account_index} />
           </div>
           <p
             id={"upstream-account-#{@account.identity.id}-routing-readiness"}
@@ -54,17 +53,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
           </p>
         </div>
-        <.upstream_account_actions account={@account} />
+        <div
+          id={"upstream-account-#{@account.identity.id}-header-actions"}
+          class="flex shrink-0 items-center gap-2 self-start"
+        >
+          <.upstream_plan_indicator account={@account} account_index={@account_index} />
+          <.upstream_account_actions account={@account} />
+        </div>
       </header>
 
       <div class="grid gap-4 p-4">
         <section class="grid gap-3">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
+          <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+            <div class="min-w-0">
               <p class="text-xs font-semibold uppercase text-primary">Limits</p>
               <p
                 id={"upstream-account-#{@account.identity.id}-limits-summary"}
-                class="text-xs text-base-content/60"
+                class="truncate text-xs text-base-content/60"
               >
                 {remaining_limits_summary(@account)}
               </p>
@@ -80,12 +85,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
               >
                 TOKEN BURN
               </p>
-              <p
+              <.token_burn_popover
                 id={"upstream-account-#{@account.identity.id}-token-burn-value"}
-                class="text-xs text-base-content/60"
-              >
-                0
-              </p>
+                content_id={"upstream-account-#{@account.identity.id}-token-burn-content"}
+                token_burn={token_burn(@account)}
+              />
             </div>
           </div>
           <div
@@ -120,7 +124,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
     ~H"""
     <div
-      class="dropdown dropdown-end inline-block shrink-0 self-start"
+      class="dropdown dropdown-end inline-block shrink-0 self-center"
       data-role="upstream-account-actions"
     >
       <button
@@ -230,6 +234,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       id={account_plan_label_id(@account, @account_index)}
       label={@account.plan_label}
       variant={:metadata}
+      class="self-center"
       aria-label={"Account plan: #{@account.plan_label}"}
     />
     <AdminComponents.diagnostic_popover
@@ -238,6 +243,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       label="Account did not report plan or quota details"
       title="Plan and quota not reported"
       description="This account did not report plan or quota details. Routing still depends on separate quota evidence before dispatch."
+      placement={:end}
     />
     """
   end
@@ -280,7 +286,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
   defp upstream_refresh_status(assigns) do
     ~H"""
-    <div class="sr-only">
+    <div class="hidden">
       <div id={"upstream-account-#{@account.identity.id}-refresh-status"}>
         Refresh: {@account.refresh_status}
         <span :if={@account.refresh_job_state}>
@@ -295,7 +301,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
   defp upstream_selector_contracts(assigns) do
     ~H"""
-    <div class="sr-only" data-role="upstream-account-selector-contracts">
+    <div class="hidden" data-role="upstream-account-selector-contracts">
       <section id={"upstream-account-#{@account.identity.id}-auth-health"}>
         Auth health
         <span id={"upstream-account-#{@account.identity.id}-auth-fresh"}>
@@ -336,16 +342,47 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   end
 
   attr :id, :string, required: true
+  attr :content_id, :string, required: true
+  attr :token_burn, :map, required: true
+
+  defp token_burn_popover(assigns) do
+    ~H"""
+    <span class="dropdown dropdown-hover dropdown-end inline-flex justify-end">
+      <button
+        id={@id}
+        type="button"
+        class="inline-flex items-center justify-end gap-1 rounded px-1 text-xs font-medium text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        tabindex="0"
+        aria-label="Token burn calculation"
+        aria-describedby={@content_id}
+        title={@token_burn.title}
+      >
+        <.icon name="hero-fire" class={token_burn_icon_class(@token_burn)} />
+        <span>{@token_burn.label}</span>
+      </button>
+      <span
+        id={@content_id}
+        role="tooltip"
+        tabindex="0"
+        class="dropdown-content z-20 mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl sm:w-72"
+      >
+        Compares settled tokens from the last 5 minutes with the previous 1 hour baseline.
+      </span>
+    </span>
+    """
+  end
+
+  attr :id, :string, required: true
   attr :limit, :map, required: true
 
   defp quota_limit_row(assigns) do
     ~H"""
-    <div id={@id} data-role="upstream-limit-chart" class="grid gap-1.5">
-      <div class="flex items-center justify-between gap-3 text-xs">
-        <span data-role="upstream-limit-title" class="font-medium text-base-content">
+    <div id={@id} data-role="upstream-limit-chart" class="grid min-w-0 gap-1.5">
+      <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
+        <span data-role="upstream-limit-title" class="min-w-0 truncate font-medium text-base-content">
           {@limit.label}
         </span>
-        <span class={quota_limit_percent_class(@limit)}>{@limit.percent_label}</span>
+        <span class={[quota_limit_percent_class(@limit), "shrink-0"]}>{@limit.percent_label}</span>
       </div>
       <progress
         id={"#{@id}-progress"}
@@ -410,20 +447,38 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp quota_limit_progress_class(_limit),
     do: "progress admin-live-progress progress-neutral h-1.5 w-full"
 
+  defp token_burn(%{token_burn: token_burn}) when is_map(token_burn), do: token_burn
+
+  defp token_burn(_account) do
+    %{
+      level: 0,
+      label: "x0",
+      title: "last 5m: 0 tokens; previous 1h: 0 tokens",
+      recent_tokens: 0,
+      baseline_tokens: 0
+    }
+  end
+
+  defp token_burn_icon_class(%{level: 0}), do: "size-3.5 text-base-content/35"
+  defp token_burn_icon_class(%{level: level}) when level in 1..2, do: "size-3.5 text-warning/70"
+  defp token_burn_icon_class(%{level: level}) when level in 3..4, do: "size-3.5 text-warning"
+  defp token_burn_icon_class(%{level: 5}), do: "size-3.5 text-error"
+  defp token_burn_icon_class(_token_burn), do: "size-3.5 text-base-content/35"
+
   defp remaining_limits_summary(%{quota_limits: quota_limits}) when is_list(quota_limits) do
     quota_limits
     |> Enum.filter(&match?(%{percent: %Decimal{}}, &1))
     |> case do
       [] ->
-        "No quota evidence"
+        "No evidence"
 
       reported_limits ->
         tightest_limit = tightest_remaining_limit(reported_limits)
-        "Lowest remaining: #{tightest_limit.label} #{tightest_limit.percent_label}"
+        "#{tightest_limit.label} #{tightest_limit.percent_label}"
     end
   end
 
-  defp remaining_limits_summary(_account), do: "No quota evidence"
+  defp remaining_limits_summary(_account), do: "No evidence"
 
   defp reported_quota_limits(quota_limits) when is_list(quota_limits) do
     Enum.filter(quota_limits, &match?(%{percent: %Decimal{}}, &1))

@@ -239,8 +239,8 @@ defmodule CodexPooler.PoolerFixtures do
       request_count: Map.get(attrs, :request_count, 1),
       estimated_cost_micros: Decimal.new(Map.get(attrs, :estimated_cost_micros, 0)),
       settled_cost_micros: Decimal.new(Map.get(attrs, :settled_cost_micros, 0)),
-      occurred_at: now(),
-      created_at: now(),
+      occurred_at: Map.get(attrs, :occurred_at, now()),
+      created_at: Map.get(attrs, :created_at, now()),
       details: Map.get(attrs, :details, %{})
     }
     |> Repo.insert!()

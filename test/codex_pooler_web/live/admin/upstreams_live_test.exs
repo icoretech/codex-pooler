@@ -151,6 +151,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       })
 
     now = DateTime.utc_now()
+    api_key_auth = active_api_key_fixture(pool, %{scope: scope})
+
+    recent_request =
+      request_fixture(api_key_auth, %{correlation_id: "upstream-token-burn-recent"})
+
+    recent_attempt = attempt_fixture(recent_request, assignment)
+
+    ledger_entry_fixture(recent_request, %{
+      attempt_id: recent_attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: identity.id,
+      total_tokens: 700,
+      occurred_at: DateTime.add(now, -2, :minute)
+    })
+
+    baseline_request =
+      request_fixture(api_key_auth, %{correlation_id: "upstream-token-burn-baseline"})
+
+    baseline_attempt = attempt_fixture(baseline_request, assignment)
+
+    ledger_entry_fixture(baseline_request, %{
+      attempt_id: baseline_attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: identity.id,
+      total_tokens: 300,
+      occurred_at: DateTime.add(now, -30, :minute)
+    })
 
     assert {:ok, [_primary, _weekly, _spark_primary, _spark_weekly]} =
              QuotaWindows.upsert_quota_windows(identity, [
@@ -250,6 +277,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#pool-invite-submit")
     refute has_element?(view, "#upstream-account-table")
     assert has_element?(view, "#upstream-account-grid")
+    assert has_element?(view, "#admin-upstreams-live.min-w-0")
+    assert has_element?(view, "#upstream-account-grid.min-w-0")
+    assert has_element?(view, "#upstream-account-#{identity.id}.min-w-0")
     assert has_element?(view, "[data-role='upstream-account-card']")
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label", "Team")
 
@@ -306,7 +336,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id} [data-role='upstream-account-actions'].shrink-0.self-start #upstream-account-actions-menu-#{identity.id}"
+             "#upstream-account-#{identity.id} [data-role='upstream-account-actions'].shrink-0.self-center #upstream-account-actions-menu-#{identity.id}"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-header-actions.items-center #upstream-account-#{identity.id}-plan-label.self-center",
+             "Team"
            )
 
     assert has_element?(
@@ -318,7 +354,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limits-summary.text-xs",
-             "Lowest remaining: GPT-5.3-Codex-Spark 5h 45%"
+             "GPT-5.3-Codex-Spark 5h 45%"
            )
 
     assert has_element?(
@@ -329,8 +365,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-token-burn-value",
-             "0"
+             "#upstream-account-#{identity.id}-token-burn-value[aria-describedby='upstream-account-#{identity.id}-token-burn-content']",
+             "x5"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-burn-content",
+             "last 5 minutes"
            )
 
     refute has_element?(view, "#upstream-account-#{identity.id}", "refresh succeeded")
@@ -417,7 +459,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limit-model-codex_spark-secondary-10080 [data-role='upstream-limit-title']",
+             "#upstream-account-#{identity.id}-limit-model-codex_spark-secondary-10080 [data-role='upstream-limit-title'].truncate",
              "GPT-5.3-Codex-Spark Weekly"
            )
 
@@ -924,6 +966,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute render(view) =~ "Not reported by account"
 
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label")
+    assert has_element?(view, "#upstream-account-#{identity.id}-plan-label.dropdown-end")
 
     assert has_element?(
              view,

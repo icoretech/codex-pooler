@@ -11,6 +11,7 @@ defmodule CodexPooler.Accounting do
     Attempt,
     LedgerReads,
     Metadata,
+    Reporting,
     Request,
     RequestLifecycle,
     RequestLogs,
@@ -129,6 +130,12 @@ defmodule CodexPooler.Accounting do
 
   @spec list_api_key_usage_summaries([term()]) :: map()
   defdelegate list_api_key_usage_summaries(api_key_ids), to: UsageReadModel
+
+  @spec token_totals_by_upstream_identity_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
+          optional(Ecto.UUID.t()) => non_neg_integer()
+        }
+  defdelegate token_totals_by_upstream_identity_ids(upstream_identity_ids, started_at, ended_at),
+    to: Reporting
 
   @spec build_api_key_self_usage(term(), term(), keyword()) ::
           {:ok, map()} | {:error, accounting_error()}

@@ -56,6 +56,26 @@ defmodule CodexPooler.Accounting.Reporting do
     |> Map.new(fn {pool_id, total} -> {pool_id, non_negative_integer(total)} end)
   end
 
+  @spec token_totals_by_upstream_identity_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
+          optional(Ecto.UUID.t()) => non_neg_integer()
+        }
+  def token_totals_by_upstream_identity_ids([], _started_at, _ended_at), do: %{}
+
+  def token_totals_by_upstream_identity_ids(upstream_identity_ids, started_at, ended_at) do
+    Repo.all(
+      from entry in LedgerEntry,
+        where:
+          entry.upstream_identity_id in ^upstream_identity_ids and
+            entry.entry_kind == ^@settlement and entry.amount_status == ^@recorded and
+            entry.occurred_at >= ^started_at and entry.occurred_at <= ^ended_at,
+        group_by: entry.upstream_identity_id,
+        select: {entry.upstream_identity_id, sum(entry.total_tokens)}
+    )
+    |> Map.new(fn {upstream_identity_id, total} ->
+      {upstream_identity_id, non_negative_integer(total)}
+    end)
+  end
+
   @spec token_usage_by_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
           optional(Ecto.UUID.t()) => map()
         }

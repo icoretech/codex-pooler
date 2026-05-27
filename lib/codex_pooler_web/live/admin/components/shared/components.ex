@@ -343,10 +343,16 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :label, :string, required: true
   attr :title, :string, required: true
   attr :description, :string, required: true
+  attr :placement, :atom, default: :right, values: [:right, :end]
 
   def diagnostic_popover(assigns) do
+    assigns =
+      assigns
+      |> assign(:root_class, diagnostic_popover_root_class(assigns.placement))
+      |> assign(:content_class, diagnostic_popover_content_class(assigns.placement))
+
     ~H"""
-    <span id={@id} class="dropdown dropdown-hover dropdown-right inline-flex">
+    <span id={@id} class={@root_class}>
       <button
         id={"#{@id}-button"}
         type="button"
@@ -362,7 +368,7 @@ defmodule CodexPoolerWeb.Admin.Components do
         id={"#{@id}-content"}
         role="tooltip"
         tabindex="0"
-        class="dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
+        class={@content_class}
       >
         <span class="font-semibold text-base-content">{@title}</span>
         <span>{@description}</span>
@@ -370,6 +376,20 @@ defmodule CodexPoolerWeb.Admin.Components do
     </span>
     """
   end
+
+  defp diagnostic_popover_root_class(:end),
+    do: "dropdown dropdown-hover dropdown-end inline-flex"
+
+  defp diagnostic_popover_root_class(_placement),
+    do: "dropdown dropdown-hover dropdown-right inline-flex"
+
+  defp diagnostic_popover_content_class(:end),
+    do:
+      "dropdown-content z-20 mt-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
+
+  defp diagnostic_popover_content_class(_placement),
+    do:
+      "dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   attr :id, :string, required: true
   attr :icon, :string, default: "hero-information-circle"
