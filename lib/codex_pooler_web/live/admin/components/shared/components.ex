@@ -547,11 +547,11 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   defp advanced_filter_fields_class(true) do
-    "grid grid-cols-1 gap-2 pt-2 sm:grid-cols-2 lg:grid-cols-5 [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
+    "grid grid-cols-1 gap-2 pt-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
   end
 
   defp advanced_filter_fields_class(false) do
-    "grid grid-cols-2 gap-2 pt-2 lg:grid-cols-5 [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
+    "grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2 pt-2 [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
   end
 
   defp filter_form_layout_class(true), do: "flex flex-wrap items-center gap-2"

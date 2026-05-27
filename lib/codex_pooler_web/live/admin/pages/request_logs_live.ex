@@ -173,8 +173,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           />
           <:advanced>
             <.request_id_filter field={@filter_form[:request_id]} />
-            <.cally_date_filter field={@filter_form[:date_from]} label="Date from" />
-            <.cally_date_filter field={@filter_form[:date_to]} label="Date to" />
+            <.cally_date_filter field={@filter_form[:date_from]} label="Date from" inline_label />
+            <.cally_date_filter field={@filter_form[:date_to]} label="Date to" inline_label />
           </:advanced>
         </AdminComponents.filter_form>
 
@@ -205,15 +205,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
     ~H"""
     <div id="request-log-request-id-filter" class="fieldset mb-2">
-      <label for={@field.id} class="label mb-1">Correlation or row id</label>
       <div class="input input-sm flex w-full items-center gap-2">
         <input
           id={@field.id}
           name={@field.name}
           type="text"
           value={@value}
+          placeholder="Correlation or row id"
           aria-label="Request ID"
-          class="grow text-sm font-normal"
+          class="min-w-0 grow text-sm font-normal"
         />
         <button
           id="request-log-request-id-clear"
@@ -234,6 +234,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   attr :field, Phoenix.HTML.FormField, required: true
   attr :label, :string, required: true
+  attr :inline_label, :boolean, default: false
 
   defp cally_date_filter(assigns) do
     assigns =
@@ -251,7 +252,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       data-placeholder="dd/mm/yyyy"
     >
       <input type="hidden" id={@id} name={@name} value={@value} />
-      <label class="label mb-1" for={"#{@id}-button"}>{@label}</label>
+      <label :if={!@inline_label} class="label mb-1" for={"#{@id}-button"}>{@label}</label>
       <button
         id={"#{@id}-button"}
         type="button"
@@ -260,7 +261,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         popovertarget={"#{@id}-popover"}
         style={"anchor-name: #{@anchor_name};"}
       >
-        <span class="min-w-0 truncate" data-role="cally-date-label">
+        <span :if={@inline_label} class="label min-w-0 shrink truncate text-base-content/60">
+          {@label}
+        </span>
+        <span class="min-w-0 flex-1 truncate" data-role="cally-date-label">
           {if @value == "", do: "dd/mm/yyyy", else: @value}
         </span>
         <.icon name="hero-calendar-days" class="size-4 shrink-0 opacity-65" />

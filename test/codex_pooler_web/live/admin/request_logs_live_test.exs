@@ -118,11 +118,31 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "input#filters_date_to[type='date']")
     assert has_element?(view, "#filters_date_from-picker[phx-hook='CallyDatePicker']")
     assert has_element?(view, "#filters_date_to-picker[phx-hook='CallyDatePicker']")
+    refute has_element?(view, "#filters_date_from-picker > label[for='filters_date_from-button']")
+    refute has_element?(view, "#filters_date_to-picker > label[for='filters_date_to-button']")
 
     assert has_element?(
              view,
              "#request-log-filter-form-advanced #filters_date_from-picker button[popovertarget='filters_date_from-popover'][aria-label='Date from']",
              "dd/mm/yyyy"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-filter-form-advanced #filters_date_from-picker button .label",
+             "Date from"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-filter-form-advanced #filters_date_to-picker button[popovertarget='filters_date_to-popover'][aria-label='Date to']",
+             "dd/mm/yyyy"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-filter-form-advanced #filters_date_to-picker button .label",
+             "Date to"
            )
 
     assert has_element?(
@@ -141,13 +161,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#request-log-filter-form-advanced #request-log-request-id-filter #filters_request_id"
            )
 
-    assert has_element?(
+    refute has_element?(
              view,
-             "#request-log-filter-form-advanced #request-log-request-id-filter label[for='filters_request_id']",
-             "Correlation or row id"
+             "#request-log-filter-form-advanced #request-log-request-id-filter label[for='filters_request_id']"
            )
 
-    refute has_element?(view, "#filters_request_id[placeholder]")
+    assert has_element?(view, "#filters_request_id[placeholder='Correlation or row id']")
 
     assert has_element?(
              view,
@@ -172,7 +191,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             ~s(#request-log-filter-form-advanced > div[class*="grid-cols-1"][class*="sm:grid-cols-2"])
+             ~s|#request-log-filter-form-advanced > div[class*="auto-fit"][class*="minmax(13rem,1fr)"]|
            )
 
     refute has_element?(view, "#request-log-summary")
