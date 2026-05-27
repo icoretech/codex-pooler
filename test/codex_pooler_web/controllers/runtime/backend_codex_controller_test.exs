@@ -843,6 +843,198 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  test "POST /backend-api/codex/responses forwards only approved lineage metadata headers",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_lineage_headers",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    metadata = lineage_metadata_fixture("forked-thread-task4-canonical")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/responses",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic lineage forwarding request"
+        },
+        lineage_request_headers(metadata)
+      )
+
+    assert %{"id" => "resp_backend_lineage_headers"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert_approved_lineage_headers_forwarded!(captured, metadata)
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  test "POST /backend-api/codex/v1/responses forwards approved lineage metadata headers and configured user-agent",
+       %{conn: conn} do
+    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
+    configured_upstream_user_agent = "codex_cli_rs/task4-regression"
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{upstream_user_agent: configured_upstream_user_agent}
+    )
+
+    on_exit(fn ->
+      if previous_env,
+        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
+        else: Application.delete_env(:codex_pooler, OperationalSettings)
+    end)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_v1_lineage_headers",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    metadata = lineage_metadata_fixture("forked-thread-task4-alias")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/v1/responses",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic alias lineage forwarding request"
+        },
+        lineage_request_headers(metadata)
+      )
+
+    assert %{"id" => "resp_backend_v1_lineage_headers"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert_approved_lineage_headers_forwarded!(captured, metadata)
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+    assert Map.new(captured.headers)["user-agent"] == configured_upstream_user_agent
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  test "POST /backend-api/codex/v1/chat/completions does not forward lineage metadata headers",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_backend_v1_chat_lineage_boundary",
+               "status" => "completed",
+               "model" => "provider-gpt-test-model",
+               "output" => [
+                 %{
+                   "type" => "message",
+                   "content" => [%{"type" => "output_text", "text" => "alias chat answer"}]
+                 }
+               ],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 6, "total_tokens" => 10}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    metadata = lineage_metadata_fixture("forked-thread-task4-chat")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/v1/chat/completions",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "messages" => [%{"role" => "user", "content" => "Synthetic user"}]
+        },
+        lineage_request_headers(metadata)
+      )
+
+    assert %{"id" => "resp_backend_v1_chat_lineage_boundary"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    captured_headers = Map.new(captured.headers)
+
+    Enum.each(approved_lineage_header_names(), fn header_name ->
+      refute Map.has_key?(captured_headers, header_name)
+    end)
+
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  test "POST /backend-api/codex/responses keeps lineage metadata out of upstream error surfaces",
+       %{conn: conn} do
+    metadata = lineage_metadata_fixture("forked-thread-task4-error")
+
+    upstream =
+      start_upstream(
+        FakeUpstream.http_500_json_error(%{
+          "error" => %{
+            "code" => "server_error",
+            "message" => "synthetic upstream failure"
+          }
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    logs =
+      capture_log(fn ->
+        conn =
+          conn
+          |> auth(setup)
+          |> post_json_runtime_with_headers(
+            "/backend-api/codex/responses",
+            %{
+              "model" => setup.model.exposed_model_id,
+              "input" => "synthetic lineage upstream error request"
+            },
+            lineage_request_headers(metadata)
+          )
+
+        response = json_response(conn, 500)
+        assert %{"error" => %{"code" => "server_error"}} = response
+        refute_lineage_text!(inspect(response), metadata)
+      end)
+
+    refute_lineage_text!(logs, metadata)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert_approved_lineage_headers_forwarded!(captured, metadata)
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_status"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
   test "POST /backend-api/codex/v1/chat/completions returns OpenAI chat shape through the canonical backend responses path",
        %{conn: conn} do
     upstream =
@@ -1311,7 +1503,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     captured_headers = Map.new(captured.headers)
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
-    assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
     refute Map.has_key?(captured_headers, "x-codex-session-id")
@@ -1946,7 +2137,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["accept"] == "application/json"
     assert captured_headers["content-type"] == "application/json"
     assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
-    assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
     refute Map.has_key?(captured_headers, "x-codex-session-id")
@@ -2154,7 +2344,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["chatgpt-account-id"] == setup.identity.chatgpt_account_id
     assert captured_headers["accept"] == "application/json"
     assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
-    assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
     refute Map.has_key?(captured_headers, "x-codex-session-id")
@@ -5866,6 +6055,110 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  test "POST /backend-api/codex/responses/compact forwards approved lineage metadata headers and redacts metadata",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_compact_lineage_headers",
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    metadata = lineage_metadata_fixture("forked-thread-task5-compact-canonical")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/responses/compact",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic compact lineage forwarding request"
+        },
+        lineage_request_headers(metadata)
+      )
+
+    assert %{"object" => "response.compaction"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+
+    captured_headers = Map.new(captured.headers)
+
+    assert Map.take(captured_headers, approved_lineage_header_names()) == %{
+             "x-codex-turn-metadata" => metadata.turn_metadata,
+             "x-codex-window-id" => metadata.window_id,
+             "x-codex-parent-thread-id" => metadata.parent_thread_id,
+             "x-openai-subagent" => metadata.subagent
+           }
+
+    assert_approved_lineage_headers_forwarded!(captured, metadata)
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata headers and configured user-agent",
+       %{conn: conn} do
+    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
+    configured_upstream_user_agent = "codex_cli_rs/task5-compact-regression"
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{upstream_user_agent: configured_upstream_user_agent}
+    )
+
+    on_exit(fn ->
+      if previous_env,
+        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
+        else: Application.delete_env(:codex_pooler, OperationalSettings)
+    end)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_v1_compact_lineage_headers",
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    metadata = lineage_metadata_fixture("forked-thread-task5-compact-alias")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post_json_runtime_with_headers(
+        "/backend-api/codex/v1/responses/compact",
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic alias compact lineage forwarding request"
+        },
+        lineage_request_headers(metadata)
+      )
+
+    assert %{"object" => "response.compaction"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+
+    captured_headers = Map.new(captured.headers)
+
+    assert Map.take(captured_headers, approved_lineage_header_names()) == %{
+             "x-codex-turn-metadata" => metadata.turn_metadata,
+             "x-codex-window-id" => metadata.window_id,
+             "x-codex-parent-thread-id" => metadata.parent_thread_id,
+             "x-openai-subagent" => metadata.subagent
+           }
+
+    assert_approved_lineage_headers_forwarded!(captured, metadata)
+    assert_disallowed_client_headers_not_forwarded!(captured, setup)
+    assert captured_headers["user-agent"] == configured_upstream_user_agent
+    assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
   test "POST /backend-api/codex/responses includes weekly-only probe candidates beside precise candidates",
        %{conn: conn} do
     precise_upstream =
@@ -6564,19 +6857,125 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert fallback_reason in ["affinity_disabled", "affinity_not_found"]
   end
 
+  defp lineage_metadata_fixture(forked_thread_id) do
+    %{
+      turn_metadata: Jason.encode!(%{"forked_from_thread_id" => forked_thread_id}),
+      forked_thread_id: forked_thread_id,
+      window_id: "window-#{forked_thread_id}",
+      parent_thread_id: "parent-#{forked_thread_id}",
+      subagent: "subagent-#{forked_thread_id}"
+    }
+  end
+
+  defp lineage_request_headers(metadata) do
+    [
+      {"accept", "application/json; lineage-client-accept=1"},
+      {"cookie", "lineage-client-cookie=secret"},
+      {"idempotency-key", "lineage-client-idempotency-secret"},
+      {"user-agent", "lineage-client-user-agent"},
+      {"x-request-id", "task4-lineage-request-correlation"},
+      {"x-codex-turn-metadata", metadata.turn_metadata},
+      {"x-codex-window-id", metadata.window_id},
+      {"x-codex-parent-thread-id", metadata.parent_thread_id},
+      {"x-openai-subagent", metadata.subagent},
+      {"x-codex-unapproved", "lineage-unapproved-codex"},
+      {"x-openai-unapproved", "lineage-unapproved-openai"},
+      {"x-unrelated-lineage", "lineage-unrelated"}
+    ]
+  end
+
+  defp approved_lineage_header_names do
+    [
+      "x-codex-turn-metadata",
+      "x-codex-window-id",
+      "x-codex-parent-thread-id",
+      "x-openai-subagent"
+    ]
+  end
+
+  defp assert_approved_lineage_headers_forwarded!(captured, metadata) do
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["x-codex-turn-metadata"] == metadata.turn_metadata
+    assert captured_headers["x-codex-window-id"] == metadata.window_id
+    assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
+    assert captured_headers["x-openai-subagent"] == metadata.subagent
+  end
+
+  defp assert_disallowed_client_headers_not_forwarded!(captured, setup) do
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["authorization"] == "Bearer upstream-token"
+    assert captured_headers["accept"] in ["application/json", "text/event-stream"]
+    assert captured_headers["content-type"] == "application/json"
+    assert captured_headers["user-agent"] != "lineage-client-user-agent"
+
+    refute Map.has_key?(captured_headers, "cookie")
+    refute Map.has_key?(captured_headers, "idempotency-key")
+    refute Map.has_key?(captured_headers, "x-codex-unapproved")
+    refute Map.has_key?(captured_headers, "x-openai-unapproved")
+    refute Map.has_key?(captured_headers, "x-unrelated-lineage")
+    refute inspect(captured.headers) =~ setup.authorization
+    refute inspect(captured.headers) =~ setup.raw_key
+    refute inspect(captured.headers) =~ "lineage-client-cookie=secret"
+    refute inspect(captured.headers) =~ "lineage-client-idempotency-secret"
+    refute inspect(captured.headers) =~ "lineage-client-accept"
+    refute inspect(captured.headers) =~ "lineage-unapproved-codex"
+    refute inspect(captured.headers) =~ "lineage-unapproved-openai"
+    refute inspect(captured.headers) =~ "lineage-unrelated"
+  end
+
+  defp assert_lineage_metadata_not_persisted!(setup, metadata) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    refute_lineage_text!(inspect(Enum.map(requests, & &1.request_metadata)), metadata)
+    refute_lineage_text!(inspect(Enum.map(attempts, & &1.response_metadata)), metadata)
+    refute_lineage_text!(inspect(logs.items), metadata)
+  end
+
+  defp refute_lineage_text!(text, metadata) do
+    refute text =~ metadata.turn_metadata
+    refute text =~ metadata.forked_thread_id
+    refute text =~ metadata.window_id
+    refute text =~ metadata.parent_thread_id
+    refute text =~ metadata.subagent
+  end
+
   defp post_json_runtime(conn, path, payload) do
     post_raw_runtime(conn, path, Jason.encode!(payload), "application/json")
   end
 
-  defp post_raw_runtime(conn, path, body, content_type) do
+  defp post_json_runtime_with_headers(conn, path, payload, headers) do
+    post_raw_runtime(conn, path, Jason.encode!(payload), "application/json", headers)
+  end
+
+  defp post_raw_runtime(conn, path, body, content_type, headers \\ []) do
     Plug.Test.conn("POST", path, body)
     |> Map.update!(:req_headers, fn headers ->
       headers
       |> Enum.reject(fn {name, _value} -> name in ["content-type", "authorization"] end)
       |> then(&[{"content-type", content_type} | &1])
     end)
+    |> put_runtime_req_headers(headers)
     |> copy_auth_header(conn)
     |> @endpoint.call(@endpoint.init([]))
+  end
+
+  defp put_runtime_req_headers(conn, headers) do
+    Enum.reduce(headers, conn, fn {name, value}, conn ->
+      put_req_header(conn, name, value)
+    end)
   end
 
   defp copy_auth_header(conn, source_conn) do

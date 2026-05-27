@@ -10,6 +10,18 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
 
+  defp with_public_metadata_headers(conn) do
+    conn
+    |> put_req_header("x-codex-turn-metadata", "turn-metadata-redacted")
+    |> put_req_header("x-codex-window-id", "window-redacted")
+    |> put_req_header("x-codex-parent-thread-id", "thread-redacted")
+    |> put_req_header("x-openai-subagent", "subagent-redacted")
+    |> put_req_header("x-codex-extra", "extra-redacted")
+    |> put_req_header("x-openai-extra", "extra-redacted")
+    |> put_req_header("cookie", "public-client-cookie")
+    |> put_req_header("idempotency-key", "public-client-idempotency")
+  end
+
   test "POST /v1/responses non-streaming dispatches through the gateway", %{conn: conn} do
     upstream =
       start_upstream(
@@ -63,6 +75,59 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  test "POST /v1/responses does not forward public metadata headers upstream", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_public_headers",
+               "status" => "completed",
+               "output" => [
+                 %{
+                   "type" => "message",
+                   "content" => [%{"type" => "output_text", "text" => "public response"}]
+                 }
+               ],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> with_public_metadata_headers()
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic v1 response with public metadata headers"
+      })
+
+    assert %{"id" => "resp_v1_public_headers", "object" => "response"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    captured_headers = Map.new(captured.headers)
+
+    assert captured.path == "/backend-api/codex/responses"
+    refute Map.has_key?(captured_headers, "x-codex-turn-metadata")
+    refute Map.has_key?(captured_headers, "x-codex-window-id")
+    refute Map.has_key?(captured_headers, "x-codex-parent-thread-id")
+    refute Map.has_key?(captured_headers, "x-openai-subagent")
+    refute Map.has_key?(captured_headers, "x-codex-extra")
+    refute Map.has_key?(captured_headers, "x-openai-extra")
+    refute Map.has_key?(captured_headers, "cookie")
+    refute Map.has_key?(captured_headers, "idempotency-key")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.endpoint == "/backend-api/codex/responses"
   end
 
   test "POST /v1/responses normalizes upstream JSON errors", %{conn: conn} do
@@ -363,6 +428,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     conn =
       conn
       |> auth(setup)
+      |> with_public_metadata_headers()
       |> post("/v1/responses/compact", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic compact request"
