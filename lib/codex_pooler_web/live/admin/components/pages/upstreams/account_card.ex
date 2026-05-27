@@ -39,12 +39,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
                 {@account.label}
               </.link>
             </h3>
-            <span
-              id={"upstream-account-#{@account.identity.id}-state"}
-              class={lifecycle_badge_class(@account.identity.status)}
-            >
-              {@account.identity.status}
-            </span>
           </div>
           <p
             id={"upstream-account-#{@account.identity.id}-routing-readiness"}
@@ -66,12 +60,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
         <section class="grid gap-3">
           <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
             <div class="min-w-0">
-              <p class="text-xs font-semibold uppercase text-primary">Limits</p>
+              <p class="text-xs font-semibold uppercase text-primary">Status</p>
               <p
                 id={"upstream-account-#{@account.identity.id}-limits-summary"}
                 class="truncate text-xs text-base-content/60"
               >
-                {remaining_limits_summary(@account)}
+                {account_status_label(@account)}
               </p>
             </div>
             <div
@@ -465,36 +459,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp token_burn_icon_class(%{level: 5}), do: "size-3.5 text-error"
   defp token_burn_icon_class(_token_burn), do: "size-3.5 text-base-content/35"
 
-  defp remaining_limits_summary(%{quota_limits: quota_limits}) when is_list(quota_limits) do
-    quota_limits
-    |> Enum.filter(&match?(%{percent: %Decimal{}}, &1))
-    |> case do
-      [] ->
-        "No evidence"
-
-      reported_limits ->
-        tightest_limit = tightest_remaining_limit(reported_limits)
-        "#{tightest_limit.label} #{tightest_limit.percent_label}"
-    end
+  defp account_status_label(%{identity: %{status: status}}) when is_binary(status) do
+    status
+    |> String.replace("_", " ")
+    |> String.capitalize()
   end
 
-  defp remaining_limits_summary(_account), do: "No evidence"
+  defp account_status_label(_account), do: "Unknown"
 
   defp reported_quota_limits(quota_limits) when is_list(quota_limits) do
     Enum.filter(quota_limits, &match?(%{percent: %Decimal{}}, &1))
   end
 
   defp reported_quota_limits(_quota_limits), do: []
-
-  defp tightest_remaining_limit([limit | limits]) do
-    Enum.reduce(limits, limit, fn candidate, current ->
-      if Decimal.compare(candidate.percent, current.percent) == :lt do
-        candidate
-      else
-        current
-      end
-    end)
-  end
 
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"
@@ -613,6 +590,4 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp reactivatable?(status), do: status in @reactivatable_statuses
 
   defp refreshable?(status), do: status in ["active", "refresh_due", "refresh_failed"]
-
-  defp lifecycle_badge_class(status), do: AdminBadges.lifecycle_chip_class(status)
 end

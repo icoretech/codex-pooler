@@ -442,9 +442,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     seconds_until_reset = DateTime.diff(reset_at, DateTime.utc_now(), :second)
 
     if seconds_until_reset > 0 do
-      "reset in #{format_reset_duration(seconds_until_reset)}"
+      "in #{format_reset_duration(seconds_until_reset)}"
     else
-      "reset due"
+      "due"
     end
   end
 

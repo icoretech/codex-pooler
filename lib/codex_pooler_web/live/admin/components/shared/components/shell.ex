@@ -11,80 +11,70 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       id: "admin-nav-pools",
       label: "Pools",
       path: "/admin/pools",
-      icon: "hero-server-stack",
-      description: "pool lifecycle"
+      icon: "hero-server-stack"
     },
     %{
       key: :upstreams,
       id: "admin-nav-upstreams",
       label: "Upstreams",
       path: "/admin/upstreams",
-      icon: "hero-cloud-arrow-up",
-      description: "account capacity"
+      icon: "hero-cloud-arrow-up"
     },
     %{
       key: :api_keys,
       id: "admin-nav-api-keys",
       label: "API keys",
       path: "/admin/api-keys",
-      icon: "hero-key",
-      description: "pool access"
+      icon: "hero-key"
     },
     %{
       key: :stats,
       id: "admin-nav-stats",
       label: "Stats",
       path: "/admin/stats",
-      icon: "hero-chart-pie",
-      description: "usage signals"
+      icon: "hero-chart-pie"
     },
     %{
       key: :operators,
       id: "admin-nav-operators",
       label: "Operators",
       path: "/admin/operators",
-      icon: "hero-users",
-      description: "local admins"
+      icon: "hero-users"
     },
     %{
       key: :invites,
       id: "admin-nav-invites",
       label: "Invites",
       path: "/admin/invites",
-      icon: "hero-envelope",
-      description: "pool onboarding"
+      icon: "hero-envelope"
     },
     %{
       key: :request_logs,
       id: "admin-nav-request-logs",
       label: "Request logs",
       path: "/admin/request-logs",
-      icon: "hero-chat-bubble-bottom-center-text",
-      description: "gateway request trail"
+      icon: "hero-chat-bubble-bottom-center-text"
     },
     %{
       key: :audit_logs,
       id: "admin-nav-audit-logs",
       label: "Audit logs",
       path: "/admin/audit-logs",
-      icon: "hero-finger-print",
-      description: "security events"
+      icon: "hero-finger-print"
     },
     %{
       key: :jobs,
       id: "admin-nav-jobs",
       label: "System Jobs",
       path: "/admin/jobs",
-      icon: "hero-clock",
-      description: "system job state"
+      icon: "hero-clock"
     },
     %{
       key: :system,
       id: "admin-nav-system",
       label: "System Settings",
       path: "/admin/system",
-      icon: "hero-adjustments-horizontal",
-      description: "system settings"
+      icon: "hero-adjustments-horizontal"
     }
   ]
 
@@ -94,8 +84,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       id: "admin-nav-settings",
       label: "Settings",
       path: "/admin/settings",
-      icon: "hero-cog-6-tooth",
-      description: "account settings"
+      icon: "hero-cog-6-tooth"
     }
   ]
 
@@ -224,8 +213,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               id={item.id}
               navigate={item.path}
               aria-current={item.key == @active_nav && "page"}
+              aria-label={item.label}
               class={admin_nav_item_class(item.key == @active_nav)}
-              title={item.description}
+              title={item.label}
             >
               <.icon
                 name={item.icon}
@@ -244,8 +234,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               id={item.id}
               navigate={item.path}
               aria-current={item.key == @active_nav && "page"}
+              aria-label={item.label}
               class={admin_nav_item_class(item.key == @active_nav)}
-              title={item.description}
+              title={item.label}
             >
               <.icon
                 name={item.icon}
@@ -261,8 +252,9 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               id="admin-sidebar-logout"
               href={~p"/logout"}
               method="delete"
+              aria-label="Log out"
               class={admin_nav_item_class(false)}
-              title="sign out"
+              title="Log out"
             >
               <.icon
                 name="hero-arrow-left-on-rectangle"

@@ -66,6 +66,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert link_html =~ ~s(data-phx-link="redirect")
   end
 
+  test "renders current admin nav icon labels", %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    for {id, label} <- [
+          {"admin-nav-pools", "Pools"},
+          {"admin-nav-upstreams", "Upstreams"},
+          {"admin-nav-api-keys", "API keys"},
+          {"admin-nav-stats", "Stats"},
+          {"admin-nav-operators", "Operators"},
+          {"admin-nav-invites", "Invites"},
+          {"admin-nav-request-logs", "Request logs"},
+          {"admin-nav-audit-logs", "Audit logs"},
+          {"admin-nav-jobs", "System Jobs"},
+          {"admin-nav-system", "System Settings"},
+          {"admin-nav-settings", "Settings"},
+          {"admin-sidebar-logout", "Log out"}
+        ] do
+      assert has_element?(view, "##{id}[aria-label='#{label}'][title='#{label}']")
+    end
+
+    refute html =~ "account capacity"
+    refute html =~ "pool lifecycle"
+    refute html =~ "gateway request trail"
+    refute html =~ "system job state"
+  end
+
   test "guides operators to create a Pool before upstream accounts", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
@@ -327,7 +353,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(view, "#upstream-account-#{identity.id}", "Primary Codex")
     assert has_element?(view, "#upstream-account-#{identity.id}-mail", "Primary Codex")
-    assert has_element?(view, "#upstream-account-#{identity.id}-state", "active")
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id} header #upstream-account-#{identity.id}-state"
+           )
 
     assert has_element?(
              view,
@@ -351,10 +381,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "Routing candidate · 1 Pool"
            )
 
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Status")
+
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limits-summary.text-xs",
-             "GPT-5.3-Codex-Spark 5h 45%"
+             "Active"
            )
 
     assert has_element?(
@@ -432,7 +464,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limit-weekly-reset",
-             "reset in 5d 23h"
+             "in 5d 23h"
            )
 
     assert has_element?(
