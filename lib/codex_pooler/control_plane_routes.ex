@@ -55,6 +55,13 @@ defmodule CodexPooler.ControlPlaneRoutes do
     },
     %{
       method: :post,
+      local_path: "/backend-api/codex/alpha/search",
+      upstream_path: "/alpha/search",
+      action: :alpha_search,
+      body_mode: {:json, :alpha_search}
+    },
+    %{
+      method: :post,
       local_path: "/backend-api/codex/realtime/calls",
       upstream_path: "/codex/realtime/calls",
       action: :realtime_calls,

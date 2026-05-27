@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.ControlPlaneJson do
     :thread_goal_set,
     :thread_goal_clear,
     :memories_trace_summarize,
+    :alpha_search,
     :safety_arc
   ]
 

@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
@@ -269,6 +270,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
             "/backend-api/codex/v1/chat/completions",
             "/backend-api/codex/images/generations",
             "/backend-api/codex/images/edits",
+            "/backend-api/codex/alpha/search",
             "/backend-api/files",
             "/backend-api/files/file_123/uploaded"
           ] do
@@ -280,6 +282,47 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
         assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
       end
+    end
+
+    @tag :feature_control_plane_alpha_search
+    test "authenticates alpha search before malformed, compressed, or large bodies", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{max_compressed_body_bytes: 1})
+      upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+      _setup = gateway_setup(upstream)
+
+      malformed_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/alpha/search", ~s({"id":))
+
+      assert json_response(malformed_conn, 401)["error"]["code"] == "api_key_missing"
+
+      compressed_conn =
+        conn
+        |> recycle()
+        |> compressed_post(
+          "/backend-api/codex/alpha/search",
+          "gzip",
+          :zlib.gzip(~s({"id":"search_alpha_fixture"}))
+        )
+
+      assert json_response(compressed_conn, 401)["error"]["code"] == "api_key_missing"
+
+      large_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          "/backend-api/codex/alpha/search",
+          ~s({"id":"search_alpha_fixture","input":") <>
+            String.duplicate("a", 10_000) <> ~s("})
+        )
+
+      assert json_response(large_conn, 401)["error"]["code"] == "api_key_missing"
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count, :id) == 0
+      assert Repo.aggregate(Attempt, :count, :id) == 0
     end
 
     test "authenticates realtime SDP before controller raw body handling", %{conn: conn} do

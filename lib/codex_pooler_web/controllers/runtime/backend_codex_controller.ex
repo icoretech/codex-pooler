@@ -79,6 +79,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   def memories_trace_summarize(conn, params),
     do: control_plane_proxy(conn, params, :memories_trace_summarize)
 
+  def alpha_search(conn, params), do: control_plane_proxy(conn, params, :alpha_search)
+
   def realtime_calls(conn, params), do: control_plane_proxy(conn, params, :realtime_calls)
 
   def safety_arc(conn, params), do: control_plane_proxy(conn, params, :safety_arc)

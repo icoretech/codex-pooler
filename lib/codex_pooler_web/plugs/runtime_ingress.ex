@@ -384,6 +384,12 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   def protected_backend_json_request?(%Plug.Conn{
         method: "POST",
+        path_info: ["backend-api", "codex", "alpha", "search"]
+      }),
+      do: true
+
+  def protected_backend_json_request?(%Plug.Conn{
+        method: "POST",
         path_info: ["backend-api", "codex", "safety", "arc"]
       }),
       do: true
