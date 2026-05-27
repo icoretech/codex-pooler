@@ -5,8 +5,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.PoolInviteForm
 
   @reactivatable_statuses ~w(paused refresh_due refresh_failed)
+  @recovery_statuses ~w(paused refresh_due refresh_failed reauth_required)
+  @usable_refresh_statuses ~w(succeeded imported refreshing)
 
   attr :account, :map, required: true
   attr :account_index, :integer, required: true
@@ -90,6 +93,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   attr :account, :map, required: true
 
   defp upstream_account_actions(assigns) do
+    assigns =
+      assign(assigns,
+        recovery_eligible?: recovery_eligible?(assigns.account),
+        recovery_default_pool_id: recovery_default_pool_id(assigns.account),
+        recovery_reinvite_path: recovery_reinvite_path(assigns.account)
+      )
+
     ~H"""
     <div
       class="dropdown dropdown-end inline-block shrink-0 self-start"
@@ -138,6 +148,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             phx-click="reactivate_account"
             phx-value-id={@account.identity.id}
             disabled={!reactivatable?(@account.identity.status)}
+          />
+        </li>
+        <li :if={@recovery_eligible?}>
+          <AdminComponents.dropdown_action_item
+            id={"replace-auth-json-upstream-account-#{@account.identity.id}"}
+            icon="hero-document-arrow-up"
+            label="Replace auth.json"
+            phx-click="open_import_auth_json"
+            phx-value-pool-id={@recovery_default_pool_id}
+          />
+        </li>
+        <li :if={@recovery_eligible?}>
+          <AdminComponents.dropdown_action_item
+            :if={@recovery_reinvite_path}
+            id={"reinvite-upstream-account-#{@account.identity.id}"}
+            icon="hero-user-plus"
+            label="Reinvite account"
+            navigate={@recovery_reinvite_path}
+          />
+          <AdminComponents.dropdown_action_item
+            :if={!@recovery_reinvite_path}
+            id={"reinvite-upstream-account-#{@account.identity.id}"}
+            icon="hero-user-plus"
+            label="Reinvite account"
+            disabled
+            title="Assign this account to a visible Pool before creating a reinvite."
           />
         </li>
         <li>
@@ -214,7 +250,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             Reason: {@account.reauth_reason_code}
           </p>
           <p class="text-xs font-medium text-base-content/75">
-            Remediation: Reauthenticate / replace credentials with a fresh token or auth.json import.
+            Recovery: use Replace auth.json to load fresh credentials, or Reinvite account when the operator needs to complete hosted sign-in again.
           </p>
         </div>
       </div>
@@ -424,6 +460,77 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp status_border_class(%{identity: %{status: "active"}}), do: "border-l-success"
 
   defp status_border_class(_account), do: "border-l-warning"
+
+  @spec recovery_eligible?(map()) :: boolean()
+  defp recovery_eligible?(%{identity: %{status: status}} = account) do
+    status in @recovery_statuses and status != "deleted" and not auth_clearly_usable?(account)
+  end
+
+  defp recovery_eligible?(_account), do: false
+
+  @spec auth_clearly_usable?(map()) :: boolean()
+  defp auth_clearly_usable?(%{
+         reauth_required?: false,
+         refresh_status: refresh_status,
+         access_token_label: access_token_label
+       }) do
+    refresh_status in @usable_refresh_statuses and
+      not expired_access_token_label?(access_token_label)
+  end
+
+  defp auth_clearly_usable?(_account), do: false
+
+  @spec expired_access_token_label?(term()) :: boolean()
+  defp expired_access_token_label?(label) when is_binary(label),
+    do: String.starts_with?(label, "access token expired")
+
+  defp expired_access_token_label?(_label), do: false
+
+  @spec recovery_default_pool_id(map()) :: String.t() | nil
+  defp recovery_default_pool_id(%{assignments: [assignment | _assignments]}),
+    do: assignment.pool_id
+
+  defp recovery_default_pool_id(_account), do: nil
+
+  @spec recovery_reinvite_path(map()) :: String.t() | nil
+  defp recovery_reinvite_path(%{assignments: [assignment | _assignments]} = account) do
+    params = recovery_invite_params(account, assignment.pool_id)
+    ~p"/admin/invites?#{params}"
+  end
+
+  defp recovery_reinvite_path(_account), do: nil
+
+  @spec recovery_invite_params(map(), String.t()) :: map()
+  defp recovery_invite_params(account, pool_id) do
+    params = %{"create" => "1", "pool_id" => pool_id}
+
+    case recovery_invite_email(account, pool_id) do
+      nil -> params
+      invited_email -> Map.put(params, "invited_email", invited_email)
+    end
+  end
+
+  @spec recovery_invite_email(map(), String.t()) :: String.t() | nil
+  defp recovery_invite_email(account, pool_id) do
+    [account.identity.chatgpt_account_id, account.label]
+    |> Enum.map(&present_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.find(&valid_invite_email?(&1, pool_id))
+  end
+
+  @spec valid_invite_email?(String.t(), String.t()) :: boolean()
+  defp valid_invite_email?(candidate, pool_id) do
+    %{"pool_id" => pool_id, "invited_email" => candidate, "send_email" => "false"}
+    |> PoolInviteForm.changeset(%{id: pool_id})
+    |> Map.fetch!(:valid?)
+  end
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(_value), do: nil
 
   defp pausable?("active"), do: true
   defp pausable?("refresh_due"), do: true

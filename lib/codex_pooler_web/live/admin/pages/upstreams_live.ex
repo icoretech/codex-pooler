@@ -75,13 +75,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     end
   end
 
-  def handle_event("open_import_auth_json", _params, socket) do
+  def handle_event("open_import_auth_json", params, socket) do
     {:noreply,
      socket
      |> cancel_auth_json_upload_entries()
      |> assign(
        importing_auth_json: true,
-       auth_json_form: UpstreamAuthJsonImport.empty_form()
+       auth_json_form: auth_json_form_for_open(socket.assigns.pools, params)
      )}
   end
 
@@ -313,6 +313,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   defp selected_pool(_pools, _pool_id), do: nil
 
+  defp auth_json_form_for_open(pools, %{"pool-id" => pool_id}) do
+    case selected_pool(pools, pool_id) do
+      nil -> UpstreamAuthJsonImport.empty_form()
+      _pool -> UpstreamAuthJsonImport.form_for_pool(pool_id)
+    end
+  end
+
+  defp auth_json_form_for_open(_pools, _params), do: UpstreamAuthJsonImport.empty_form()
+
   defp find_account(accounts, identity_id) do
     Enum.find(accounts, &(&1.identity.id == identity_id))
   end
@@ -331,15 +340,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   defp dialog_pool_options(pools) do
     pools
-    |> Enum.map(&{dialog_pool_label(&1), &1.id})
+    |> Enum.map(&{pool_label(&1), &1.id})
     |> case do
       [] -> [{"No active Pools available", ""}]
       options -> options
     end
   end
-
-  defp dialog_pool_label(nil), do: "Unknown Pool"
-  defp dialog_pool_label(pool), do: pool.name
 
   defp close_auth_json_dialog(socket) do
     socket

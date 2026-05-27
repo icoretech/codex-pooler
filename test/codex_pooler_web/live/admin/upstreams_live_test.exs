@@ -1394,6 +1394,180 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute render(view) =~ too_large_content
   end
 
+  @tag :recovery_actions_render
+  test "blocked upstream accounts render recovery actions and safe default links", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "recovery-actions", name: "Recovery Actions"})
+
+    recovery_statuses = ["paused", "refresh_due", "refresh_failed", "reauth_required"]
+
+    identities =
+      for status <- recovery_statuses do
+        email = "#{status}-#{System.unique_integer([:positive])}@example.com"
+
+        %{identity: identity} =
+          upstream_assignment_fixture(pool, %{
+            chatgpt_account_id: email,
+            account_label: "Recover #{status}",
+            identity_status: status,
+            identity_metadata: blocked_auth_metadata(status)
+          })
+
+        {identity, email}
+      end
+
+    fallback_email = "fallback-#{System.unique_integer([:positive])}@example.com"
+
+    %{identity: fallback_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "acct-not-an-email",
+        account_label: fallback_email,
+        identity_status: "paused",
+        identity_metadata: blocked_auth_metadata("failed")
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    for {identity, email} <- identities do
+      encoded_email = URI.encode_www_form(email)
+
+      assert has_element?(
+               view,
+               "#replace-auth-json-upstream-account-#{identity.id}",
+               "Replace auth.json"
+             )
+
+      assert has_element?(
+               view,
+               "#replace-auth-json-upstream-account-#{identity.id} .hero-document-arrow-up"
+             )
+
+      assert has_element?(
+               view,
+               "#reinvite-upstream-account-#{identity.id}[href*='create=1'][href*='pool_id=#{pool.id}'][href*='invited_email=#{encoded_email}']",
+               "Reinvite account"
+             )
+
+      assert has_element?(view, "#reinvite-upstream-account-#{identity.id} .hero-user-plus")
+    end
+
+    encoded_fallback_email = URI.encode_www_form(fallback_email)
+
+    assert has_element?(
+             view,
+             "#reinvite-upstream-account-#{fallback_identity.id}[href*='invited_email=#{encoded_fallback_email}']",
+             "Reinvite account"
+           )
+
+    refute render(view) =~ "invited_email=&"
+
+    {first_identity, _email} = hd(identities)
+
+    view
+    |> element("#replace-auth-json-upstream-account-#{first_identity.id}")
+    |> render_click()
+
+    assert has_element?(view, "#auth-json-import-dialog[open]")
+
+    assert has_element?(
+             view,
+             "#auth_json_pool_id option[value='#{pool.id}'][selected]",
+             "Recovery Actions (recovery-actions)"
+           )
+
+    reauth_identity =
+      identities
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.find(&(&1.status == "reauth_required"))
+
+    warning_selector = "#upstream-account-#{reauth_identity.id}-reauth-warning"
+    assert has_element?(view, warning_selector, "Replace auth.json")
+    assert has_element?(view, warning_selector, "Reinvite account")
+  end
+
+  @tag :recovery_actions_edge_cases
+  test "recovery actions stay safe for no-assignment, deleted, usable auth, and invalid pool cases",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "recovery-edge", name: "Recovery Edge"})
+
+    no_assignment_id = Ecto.UUID.generate()
+
+    no_assignment_html =
+      render_component(&CodexPoolerWeb.Admin.UpstreamAccountCard.account_card/1,
+        account: recovery_component_account(no_assignment_id, "paused", []),
+        account_index: 0
+      )
+
+    assert no_assignment_html =~ ~s(id="replace-auth-json-upstream-account-#{no_assignment_id}")
+    assert no_assignment_html =~ ~s(id="reinvite-upstream-account-#{no_assignment_id}")
+
+    assert no_assignment_html =~
+             ~r/<button[^>]+id="reinvite-upstream-account-#{no_assignment_id}"[^>]+disabled/
+
+    refute no_assignment_html =~ ~r/<a[^>]+id="reinvite-upstream-account-#{no_assignment_id}"/
+
+    deleted_id = Ecto.UUID.generate()
+
+    deleted_html =
+      render_component(&CodexPoolerWeb.Admin.UpstreamAccountCard.account_card/1,
+        account: recovery_component_account(deleted_id, "deleted", []),
+        account_index: 0
+      )
+
+    refute deleted_html =~ "replace-auth-json-upstream-account-#{deleted_id}"
+    refute deleted_html =~ "reinvite-upstream-account-#{deleted_id}"
+
+    usable_id = Ecto.UUID.generate()
+
+    usable_html =
+      render_component(&CodexPoolerWeb.Admin.UpstreamAccountCard.account_card/1,
+        account:
+          recovery_component_account(
+            usable_id,
+            "paused",
+            [
+              recovery_component_assignment(pool.id, "Recovery Edge")
+            ],
+            refresh_status: "succeeded",
+            access_token_label: "access token expires 2026-05-04 12:00 UTC"
+          ),
+        account_index: 0
+      )
+
+    refute usable_html =~ "replace-auth-json-upstream-account-#{usable_id}"
+    refute usable_html =~ "reinvite-upstream-account-#{usable_id}"
+
+    %{identity: invalid_email_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "acct-not-email",
+        account_label: "Not an email label",
+        identity_status: "paused",
+        identity_metadata: blocked_auth_metadata("failed")
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#reinvite-upstream-account-#{invalid_email_identity.id}[href*='create=1'][href*='pool_id=#{pool.id}']",
+             "Reinvite account"
+           )
+
+    refute render(view) =~ "invited_email="
+
+    invalid_pool_id = Ecto.UUID.generate()
+    render_click(view, "open_import_auth_json", %{"pool-id" => invalid_pool_id})
+
+    assert has_element?(view, "#auth-json-import-dialog[open]")
+    refute has_element?(view, "#auth_json_pool_id option[value='#{invalid_pool_id}'][selected]")
+    refute has_element?(view, "#auth_json_pool_id option[selected]")
+  end
+
   test "reauthentication warning renders redacted lifecycle details", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "secret-labels", name: "Secret Labels"})
 
@@ -1437,7 +1611,62 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, warning_selector, "excluded from routing")
     assert has_element?(view, warning_selector, "Refresh token was revoked or expired")
     assert has_element?(view, warning_selector, "refresh_token_revoked")
-    assert has_element?(view, warning_selector, "Reauthenticate / replace credentials")
+    assert has_element?(view, warning_selector, "Replace auth.json")
+    assert has_element?(view, warning_selector, "Reinvite account")
+  end
+
+  defp blocked_auth_metadata(status) do
+    %{
+      "access_token_expires_at" =>
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
+      "token_refresh" => %{
+        "status" => status,
+        "reason" => %{
+          "code" => "blocked_recovery_fixture",
+          "message" => "Synthetic blocked recovery state"
+        }
+      }
+    }
+  end
+
+  defp recovery_component_assignment(pool_id, pool_label) do
+    %{
+      id: Ecto.UUID.generate(),
+      pool_id: pool_id,
+      pool_label: pool_label,
+      assignment_label: "Recovery assignment",
+      status: "active",
+      eligibility_status: "eligible",
+      quota_priming_status: "unknown",
+      quota_priming_label: "Priming pending"
+    }
+  end
+
+  defp recovery_component_account(identity_id, status, assignments, opts \\ []) do
+    %{
+      identity: %UpstreamIdentity{
+        id: identity_id,
+        account_label: "Recovery component #{identity_id}",
+        chatgpt_account_id: nil,
+        status: status
+      },
+      label: "Recovery component #{identity_id}",
+      plan_label: nil,
+      plan_reported?: false,
+      refresh_status: Keyword.get(opts, :refresh_status, "failed"),
+      token_refresh_label: "token refresh failed",
+      refresh_job_state: nil,
+      quota_refresh_status: "not run",
+      auth_fresh_label: "auth imported not reported",
+      auth_verified_label: "auth verified not reported",
+      access_token_label:
+        Keyword.get(opts, :access_token_label, "access token expired 2026-05-04 12:00 UTC"),
+      reauth_required?: status == "reauth_required",
+      reauth_reason_code: nil,
+      reauth_reason_message: nil,
+      assignments: assignments,
+      quota_limits: []
+    }
   end
 
   defp maybe_insert_quota_window(identity, "known") do
