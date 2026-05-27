@@ -40,7 +40,9 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   @impl true
   def handle_call(:current, _from, %{cached: %Settings{} = settings} = state) do
-    {:reply, settings, state}
+    settings = Settings.mark_loaded(settings, :database)
+
+    {:reply, settings, %{state | cached: settings}}
   end
 
   def handle_call(:current, _from, %{cached: nil} = state) do

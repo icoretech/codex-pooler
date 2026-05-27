@@ -16,6 +16,24 @@ defmodule CodexPooler.InstanceSettings.Settings do
   @default_openai_pricing_url Defaults.catalog()["openai_pricing_url"]
   @default_development Defaults.development()
 
+  @gateway_embed_fields [
+    :gateway_debug,
+    :sse_keepalive_interval_ms,
+    :upstream_connect_timeout_ms,
+    :upstream_pool_timeout_ms,
+    :upstream_receive_timeout_ms,
+    :upstream_user_agent,
+    :expired_alias_ttl_seconds,
+    :bridge_owner_lease_ttl_seconds,
+    :bridge_owner_lease_renewal_seconds,
+    :circuit_failure_threshold,
+    :circuit_open_seconds,
+    :circuit_half_open_probe_limit,
+    :circuit_success_threshold,
+    :bulkheads,
+    :model_context_window_overrides
+  ]
+
   @type t :: %__MODULE__{}
 
   schema "instance_settings" do
@@ -625,13 +643,30 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   defp map_get(map, key), do: Map.get(map, key, Map.get(map, String.to_atom(key)))
 
-  defp default_gateway(nil), do: default().gateway
+  defp default_gateway(nil), do: default_gateway(%{})
 
-  defp default_gateway(%{upstream_user_agent: nil} = gateway) do
-    %{gateway | upstream_user_agent: Defaults.gateway()["upstream_user_agent"]}
+  defp default_gateway(gateway) when is_map(gateway) do
+    defaults = gateway_embed_attrs(Defaults.gateway())
+
+    attrs =
+      if Map.has_key?(gateway, :__struct__) do
+        Map.from_struct(gateway)
+      else
+        gateway
+      end
+      |> gateway_embed_attrs()
+
+    attrs = Map.merge(defaults, attrs)
+
+    struct(__MODULE__.Gateway, attrs)
   end
 
-  defp default_gateway(gateway), do: gateway
+  defp gateway_embed_attrs(attrs) when is_map(attrs) do
+    @gateway_embed_fields
+    |> Map.new(fn field -> {field, map_get(attrs, Atom.to_string(field))} end)
+    |> Enum.reject(fn {_field, value} -> is_nil(value) end)
+    |> Map.new()
+  end
 
   defp default_catalog(nil), do: default().catalog
 

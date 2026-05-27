@@ -148,6 +148,18 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.model_context_window_overrides == %{"gpt-test-model" => 131_072}
   end
 
+  test "current/0 self-heals cached settings structs created before new gateway fields existed" do
+    stale_settings = %{
+      Settings.default()
+      | gateway: Map.delete(Settings.default().gateway, :upstream_user_agent)
+    }
+
+    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+
+    assert OperationalSettings.current().upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert InstanceSettings.current().gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+  end
+
   test "from_instance_settings/1 accepts atom-keyed bulkhead config maps" do
     instance_settings = Settings.default()
 
