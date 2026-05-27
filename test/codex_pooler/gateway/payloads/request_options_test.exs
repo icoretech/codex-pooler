@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.request_metadata.request_id == "req_conn"
       assert options.request_metadata.client_ip == {127, 0, 0, 1}
       assert options.transport.route_class == "proxy_stream"
+      assert options.transport.forwarded_metadata_headers == [{"x-codex-client", "fixture"}]
       assert options.file_bridge.forwarded_headers == [{"x-codex-client", "fixture"}]
       assert options.extra == %{}
     end
@@ -71,6 +72,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       assert options.request_metadata.request_id == "req_file"
       assert options.transport.route_class == "file_upload"
+      assert options.transport.forwarded_metadata_headers == [{"x-codex-client", "fixture"}]
       assert options.file_bridge.operation == :create
       assert options.file_bridge.endpoint == "/backend-api/files"
       assert options.file_bridge.route_metadata == %{"routing_strategy" => "affinity"}
@@ -377,6 +379,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.continuity.bridge_owner_lease_ttl_seconds == nil
       assert options.continuity.reconnect_window_seconds == nil
 
+      assert options.transport.forwarded_metadata_headers == [
+               {"user-agent", "codex_cli_rs/0.0.0"},
+               {"x-openai-client-user-agent", "synthetic"}
+             ]
+
       assert options.file_bridge.forwarded_headers == [
                {"user-agent", "codex_cli_rs/0.0.0"},
                {"x-openai-client-user-agent", "synthetic"}
@@ -443,6 +450,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.transport.transport == "http_json"
       assert options.transport.upstream_endpoint == "/backend-api/files"
       assert options.transport.route_class == "file_upload"
+      assert options.transport.forwarded_metadata_headers == [{"x-codex-client", "fixture"}]
       assert options.routing.quota_decision == %{"summary" => "allowed"}
       assert options.file_bridge.defer_create_request
       assert options.file_bridge.forwarded_headers == [{"x-codex-client", "fixture"}]
@@ -516,6 +524,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.request_metadata.request_id == "ws-connection"
       assert options.request_metadata.request_bytes == RequestOptions.json_request_bytes(payload)
       assert options.transport.route_class == "custom_stream"
+      assert options.transport.forwarded_metadata_headers == []
       refute Map.has_key?(options.extra, :route_class)
     end
   end
@@ -560,7 +569,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       options =
         %{}
         |> RequestOptions.build("/backend-api/codex/responses", %{"model" => "example-model"})
-        |> RequestOptions.put_transport(websocket_writer: writer)
+        |> RequestOptions.put_transport(
+          websocket_writer: writer,
+          forwarded_metadata_headers: [
+            {"x-codex-client", "fixture"},
+            {"x-codex-client", :invalid},
+            ["x-openai-client-user-agent", "invalid"],
+            :invalid
+          ]
+        )
         |> RequestOptions.put_continuity(previous_response_id: "resp_123")
         |> RequestOptions.put_routing(quota_decision: %{"summary" => "allowed"})
         |> RequestOptions.put_runtime_context(interrupt_reason: "operator_closed")
@@ -568,6 +585,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
         |> RequestOptions.put_file_bridge(pool_upstream_assignment_id: "assignment-id")
 
       assert options.transport.websocket_writer == writer
+      assert options.transport.forwarded_metadata_headers == [{"x-codex-client", "fixture"}]
       assert options.continuity.previous_response_id == "resp_123"
       assert options.routing.quota_decision == %{"summary" => "allowed"}
       assert options.runtime.interrupt_reason == "operator_closed"

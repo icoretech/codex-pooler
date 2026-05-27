@@ -250,6 +250,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec put_transport(t(), keyword()) :: t()
   def put_transport(%__MODULE__{} = options, updates) when is_list(updates) do
+    updates = updates |> Map.new() |> normalize_transport_updates()
     %{options | transport: struct!(options.transport, updates)}
   end
 
@@ -395,6 +396,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       transport: Map.get(opts, :transport) || default_transport(endpoint, payload),
       upstream_endpoint: Map.get(opts, :upstream_endpoint) || endpoint,
       websocket_writer: Map.get(opts, :websocket_writer),
+      forwarded_metadata_headers: forwarded_headers(Map.get(opts, :forwarded_headers, [])),
       upstream_websocket_session: Map.get(opts, :upstream_websocket_session),
       websocket_owner_forwarding_enabled?:
         Map.get(opts, :websocket_owner_forwarding_enabled?, false) == true,
@@ -599,6 +601,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     updates
     |> normalize_update(:bridge_owner_lease_ttl_seconds, &optional_positive_integer/1)
     |> normalize_update(:reconnect_window_seconds, &optional_non_negative_integer/1)
+  end
+
+  defp normalize_transport_updates(updates) do
+    normalize_update(updates, :forwarded_metadata_headers, &forwarded_headers/1)
   end
 
   defp normalize_file_bridge_updates(updates) do

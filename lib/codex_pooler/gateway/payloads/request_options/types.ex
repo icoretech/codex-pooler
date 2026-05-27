@@ -39,7 +39,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
     :websocket_owner_proxy_instance_id,
     :websocket_owner_instance_id,
     :websocket_owner_forwarder_opts,
-    :route_class
+    :route_class,
+    forwarded_metadata_headers: []
   ]
 
   @type websocket_writer :: (binary() -> any()) | nil
@@ -48,6 +49,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           transport: String.t() | nil,
           upstream_endpoint: String.t() | nil,
           websocket_writer: websocket_writer(),
+          forwarded_metadata_headers: [{String.t(), String.t()}],
           upstream_websocket_session: term(),
           websocket_owner_forwarding_enabled?: boolean(),
           websocket_owner_session: term(),
