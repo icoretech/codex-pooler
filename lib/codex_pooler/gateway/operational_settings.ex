@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   alias CodexPooler.{InstanceSettings, RouteClass}
 
   @default_decompression_algorithms ["gzip", "deflate", "zstd"]
+  @default_upstream_user_agent "codex_cli_rs/0.0.0"
   @default_bulkheads RouteClass.default_bulkheads()
   @websocket_owner_forwarding_env "CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING"
   @websocket_owner_forwarding_allowed_values "true,false,1,0,yes,no,on,off"
@@ -43,6 +44,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           upstream_connect_timeout_ms: pos_integer(),
           upstream_pool_timeout_ms: pos_integer(),
           upstream_receive_timeout_ms: pos_integer(),
+          upstream_user_agent: String.t(),
           model_context_window_overrides: %{String.t() => pos_integer()}
         }
 
@@ -70,6 +72,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
             upstream_connect_timeout_ms: :timer.seconds(15),
             upstream_pool_timeout_ms: :timer.seconds(15),
             upstream_receive_timeout_ms: :timer.minutes(5),
+            upstream_user_agent: @default_upstream_user_agent,
             model_context_window_overrides: %{}
 
   @spec current() :: t()
@@ -108,9 +111,13 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       upstream_connect_timeout_ms: settings.gateway.upstream_connect_timeout_ms,
       upstream_pool_timeout_ms: settings.gateway.upstream_pool_timeout_ms,
       upstream_receive_timeout_ms: settings.gateway.upstream_receive_timeout_ms,
+      upstream_user_agent: settings.gateway.upstream_user_agent,
       model_context_window_overrides: settings.gateway.model_context_window_overrides
     }
   end
+
+  @spec default_upstream_user_agent() :: String.t()
+  def default_upstream_user_agent, do: @default_upstream_user_agent
 
   @spec firewall_enabled?(t()) :: boolean()
   def firewall_enabled?(%__MODULE__{firewall_allowlist: allowlist}), do: allowlist != []

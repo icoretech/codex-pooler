@@ -19,6 +19,7 @@ defmodule CodexPooler.InstanceSettings.Defaults do
       "upstream_connect_timeout_ms" => settings.upstream_connect_timeout_ms,
       "upstream_pool_timeout_ms" => settings.upstream_pool_timeout_ms,
       "upstream_receive_timeout_ms" => settings.upstream_receive_timeout_ms,
+      "upstream_user_agent" => settings.upstream_user_agent,
       "expired_alias_ttl_seconds" => settings.expired_alias_ttl_seconds,
       "bridge_owner_lease_ttl_seconds" => settings.bridge_owner_lease_ttl_seconds,
       "bridge_owner_lease_renewal_seconds" => settings.bridge_owner_lease_renewal_seconds,

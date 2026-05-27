@@ -45,6 +45,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.gateway.circuit_open_seconds == 60
     assert settings.gateway.circuit_half_open_probe_limit == 1
     assert settings.gateway.circuit_success_threshold == 1
+    assert settings.gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
     assert settings.files.max_size_bytes == 25 * 1024 * 1024
     assert settings.transcription.max_upload_bytes == 26_214_400
 
@@ -93,7 +94,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert Repo.aggregate(Settings, :count) == 1
   end
 
-  test "changeset rejects invalid CIDR, negative TTL, invalid TLS, invalid model overrides, and malformed bulkheads" do
+  test "changeset rejects invalid CIDR, negative TTL, invalid TLS, invalid user-agent, invalid model overrides, and malformed bulkheads" do
     settings = InstanceSettings.ensure_singleton!()
 
     assert {:error, changeset} =
@@ -102,6 +103,7 @@ defmodule CodexPooler.InstanceSettingsTest do
                "files" => %{"upload_ttl_seconds" => -1},
                "smtp" => %{"tls" => "sometimes"},
                "gateway" => %{
+                 "upstream_user_agent" => "codex\r\nleak: true",
                  "model_context_window_overrides" => %{"gpt-example" => 0},
                  "bulkheads" => %{"proxy_http" => %{"max_concurrency" => 0}}
                }
@@ -238,6 +240,23 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert updated.files.upload_ttl_seconds == 600
     assert updated.mcp.enabled == false
+  end
+
+  test "legacy singleton settings rows backfill the upstream user-agent without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_user_agent'")
+    InstanceSettings.reset_cache_for_test()
+
+    assert InstanceSettings.current().gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+
+    assert {:ok, updated} =
+             InstanceSettings.update(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert updated.gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
   end
 
   test "legacy singleton settings rows backfill development helper flags without losing updates" do

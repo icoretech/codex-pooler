@@ -65,6 +65,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_connect_timeout_ms == 15_000
     assert settings.upstream_pool_timeout_ms == 15_000
     assert settings.upstream_receive_timeout_ms == 300_000
+    assert settings.upstream_user_agent == "codex_cli_rs/0.0.0"
     assert settings.model_context_window_overrides == %{}
   end
 
@@ -97,6 +98,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
                  "upstream_connect_timeout_ms" => 111,
                  "upstream_pool_timeout_ms" => 222,
                  "upstream_receive_timeout_ms" => 333,
+                 "upstream_user_agent" => "codex_cli_rs/9.9.9",
                  "expired_alias_ttl_seconds" => 120,
                  "bridge_owner_lease_ttl_seconds" => 45,
                  "bridge_owner_lease_renewal_seconds" => 15,
@@ -142,6 +144,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_connect_timeout_ms == 111
     assert settings.upstream_pool_timeout_ms == 222
     assert settings.upstream_receive_timeout_ms == 333
+    assert settings.upstream_user_agent == "codex_cli_rs/9.9.9"
     assert settings.model_context_window_overrides == %{"gpt-test-model" => 131_072}
   end
 
