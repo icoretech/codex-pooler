@@ -28,6 +28,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:timeout_before_headers, pid() | nil, reference()}
           | {:timeout_mid_stream, String.t(), pid() | nil, reference()}
           | {:websocket_upgrade_timeout, pid() | nil, reference()}
+          | {:websocket_upgrade_error, non_neg_integer(), map(), [{String.t(), String.t()}]}
 
   @doc "Starts a local fake upstream server for the given response mode."
   def start_link(mode, opts \\ []) do
@@ -195,6 +196,11 @@ defmodule CodexPooler.FakeUpstream do
      Keyword.get(opts, :release_ref, make_ref())}
   end
 
+  def websocket_upgrade_error(payload, opts \\ []) when is_map(payload) and is_list(opts) do
+    {:websocket_upgrade_error, Keyword.get(opts, :status, 401), payload,
+     Keyword.get(opts, :headers, [])}
+  end
+
   def handle(pid, conn) do
     if websocket_upgrade?(conn) do
       mode = Agent.get(pid, & &1.mode)
@@ -211,16 +217,40 @@ defmodule CodexPooler.FakeUpstream do
     WebSockAdapter.upgrade(
       conn,
       CodexPooler.FakeUpstream.WebSocket,
-      %{pid: pid, mode: Agent.get(pid, & &1.mode)},
+      %{pid: pid, mode: Agent.get(pid, & &1.mode), headers: conn.req_headers},
       []
     )
+  end
+
+  defp handle_websocket(pid, conn, {:websocket_upgrade_error, status, payload, headers}) do
+    Agent.update(pid, fn state ->
+      {_mode, next_mode} = next_response_mode(state.mode)
+      %{state | mode: next_mode}
+    end)
+
+    conn =
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        Plug.Conn.put_resp_header(conn, key, value)
+      end)
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+  end
+
+  defp handle_websocket(
+         pid,
+         conn,
+         {:sequence, [{:websocket_upgrade_error, _status, _payload, _headers} = mode | _rest]}
+       ) do
+    handle_websocket(pid, conn, mode)
   end
 
   defp handle_websocket(pid, conn, mode) do
     WebSockAdapter.upgrade(
       conn,
       CodexPooler.FakeUpstream.WebSocket,
-      %{pid: pid, mode: mode},
+      %{pid: pid, mode: mode, headers: conn.req_headers},
       []
     )
   end
@@ -697,7 +727,7 @@ defmodule CodexPooler.FakeUpstream do
         method: "WEBSOCKET",
         path: "/backend-api/codex/responses",
         query_string: "",
-        headers: [],
+        headers: Map.get(state, :headers, []),
         websocket_connection_id: state.connection_id,
         body: payload,
         json: decode_json(payload)
