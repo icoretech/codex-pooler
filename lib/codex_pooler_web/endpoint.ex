@@ -27,7 +27,7 @@ defmodule CodexPoolerWeb.Endpoint do
 
   if code_reloading? do
     socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
-    plug Phoenix.LiveReloader
+    plug :maybe_live_reloader
     plug Phoenix.CodeReloader
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :codex_pooler
   end
@@ -65,6 +65,20 @@ defmodule CodexPoolerWeb.Endpoint do
   plug CodexPoolerWeb.Router
 
   def multipart_parser_length, do: @multipart_parser_length
+
+  def maybe_live_reloader(conn, opts) do
+    if codex_desktop_browser?(conn) do
+      conn
+    else
+      apply(Module.concat(Phoenix, LiveReloader), :call, [conn, opts])
+    end
+  end
+
+  defp codex_desktop_browser?(conn) do
+    conn
+    |> Plug.Conn.get_req_header("user-agent")
+    |> Enum.any?(&(String.contains?(&1, " Codex/") and String.contains?(&1, " Electron/")))
+  end
 
   def request_log_level(%Plug.Conn{path_info: [path]}) when path in ["healthz", "readyz"],
     do: false
