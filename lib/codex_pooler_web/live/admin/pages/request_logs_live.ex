@@ -256,15 +256,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       <button
         id={"#{@id}-button"}
         type="button"
-        class="input input-sm w-full justify-between gap-2 text-left"
+        class="input input-sm flex w-full items-center justify-between gap-2 text-left"
         aria-label={@label}
         popovertarget={"#{@id}-popover"}
         style={"anchor-name: #{@anchor_name};"}
       >
-        <span :if={@inline_label} class="label min-w-0 shrink truncate text-base-content/60">
+        <span
+          :if={@inline_label}
+          class="label !mb-0 min-w-0 shrink truncate !px-2 !normal-case !tracking-normal leading-none text-base-content/60"
+        >
           {@label}
         </span>
-        <span class="min-w-0 flex-1 truncate" data-role="cally-date-label">
+        <span class="min-w-0 flex-1 truncate leading-none" data-role="cally-date-label">
           {if @value == "", do: "dd/mm/yyyy", else: @value}
         </span>
         <.icon name="hero-calendar-days" class="size-4 shrink-0 opacity-65" />
