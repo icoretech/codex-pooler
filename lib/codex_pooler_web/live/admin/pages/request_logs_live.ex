@@ -173,8 +173,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           />
           <:advanced>
             <.request_id_filter field={@filter_form[:request_id]} />
-            <.cally_date_filter field={@filter_form[:date_from]} label="Date from" inline_label />
-            <.cally_date_filter field={@filter_form[:date_to]} label="Date to" inline_label />
+            <AdminComponents.cally_date_filter field={@filter_form[:date_from]} label="Date from" />
+            <AdminComponents.cally_date_filter field={@filter_form[:date_to]} label="Date to" />
           </:advanced>
         </AdminComponents.filter_form>
 
@@ -213,7 +213,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           value={@value}
           placeholder="Correlation or row id"
           aria-label="Request ID"
-          class="min-w-0 grow text-sm font-normal"
+          class="min-w-0 grow text-xs font-normal"
         />
         <button
           id="request-log-request-id-clear"
@@ -227,99 +227,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         >
           <.icon name="hero-x-mark" class="size-4" />
         </button>
-      </div>
-    </div>
-    """
-  end
-
-  attr :field, Phoenix.HTML.FormField, required: true
-  attr :label, :string, required: true
-  attr :inline_label, :boolean, default: false
-
-  defp cally_date_filter(assigns) do
-    assigns =
-      assigns
-      |> assign(:id, assigns.field.id)
-      |> assign(:name, assigns.field.name)
-      |> assign(:value, assigns.field.value || "")
-      |> assign(:anchor_name, "--#{String.replace(assigns.field.id, "_", "-")}-cally")
-
-    ~H"""
-    <div
-      id={"#{@id}-picker"}
-      class="fieldset mb-2"
-      phx-hook="CallyDatePicker"
-      data-placeholder="dd/mm/yyyy"
-    >
-      <input type="hidden" id={@id} name={@name} value={@value} />
-      <label :if={!@inline_label} class="label mb-1" for={"#{@id}-button"}>{@label}</label>
-      <button
-        id={"#{@id}-button"}
-        type="button"
-        class="input input-sm flex w-full items-center justify-between gap-2 text-left"
-        aria-label={@label}
-        popovertarget={"#{@id}-popover"}
-        style={"anchor-name: #{@anchor_name};"}
-      >
-        <span
-          :if={@inline_label}
-          class="label !mb-0 min-w-0 shrink truncate !px-2 !normal-case !tracking-normal leading-none text-base-content/60"
-        >
-          {@label}
-        </span>
-        <span class="min-w-0 flex-1 truncate leading-none" data-role="cally-date-label">
-          {if @value == "", do: "dd/mm/yyyy", else: @value}
-        </span>
-        <.icon name="hero-calendar-days" class="size-4 shrink-0 opacity-65" />
-      </button>
-      <div
-        id={"#{@id}-popover"}
-        popover
-        class="dropdown rounded-box border border-base-300 bg-base-100 p-3 text-base-content shadow-xl"
-        style={"position-anchor: #{@anchor_name};"}
-      >
-        <calendar-date
-          class="cally"
-          value={@value}
-          locale="en-GB"
-          data-role="cally-calendar"
-        >
-          <svg
-            aria-label="Previous"
-            class="size-4 fill-current"
-            slot="previous"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-          >
-            <path d="M15.75 19.5 8.25 12l7.5-7.5"></path>
-          </svg>
-          <svg
-            aria-label="Next"
-            class="size-4 fill-current"
-            slot="next"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-          >
-            <path d="m8.25 4.5 7.5 7.5-7.5 7.5"></path>
-          </svg>
-          <calendar-month></calendar-month>
-        </calendar-date>
-        <div class="mt-3 grid grid-cols-2 gap-2 border-t border-base-300 pt-3">
-          <button
-            type="button"
-            class="btn btn-secondary btn-sm"
-            data-role="cally-clear"
-          >
-            Clear
-          </button>
-          <button
-            type="button"
-            class="btn btn-secondary btn-sm"
-            data-role="cally-cancel"
-          >
-            Cancel
-          </button>
-        </div>
       </div>
     </div>
     """

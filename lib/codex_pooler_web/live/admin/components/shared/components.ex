@@ -302,6 +302,86 @@ defmodule CodexPoolerWeb.Admin.Components do
     """
   end
 
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :inline_label, :boolean, default: true
+
+  def cally_date_filter(assigns) do
+    assigns =
+      assigns
+      |> assign(:id, assigns.field.id)
+      |> assign(:name, assigns.field.name)
+      |> assign(:value, assigns.field.value || "")
+      |> assign(:anchor_name, "--#{String.replace(assigns.field.id, "_", "-")}-cally")
+
+    ~H"""
+    <div
+      id={"#{@id}-picker"}
+      class="fieldset mb-2"
+      phx-hook="CallyDatePicker"
+      data-placeholder="dd/mm/yyyy"
+    >
+      <input type="hidden" id={@id} name={@name} value={@value} />
+      <label :if={!@inline_label} class="label mb-1" for={"#{@id}-button"}>{@label}</label>
+      <button
+        id={"#{@id}-button"}
+        type="button"
+        class="input input-sm flex w-full items-center justify-between gap-2 text-left"
+        aria-label={@label}
+        popovertarget={"#{@id}-popover"}
+        style={"anchor-name: #{@anchor_name};"}
+      >
+        <span
+          :if={@inline_label}
+          class="label !mb-0 min-w-0 shrink truncate !px-2 !normal-case !tracking-normal leading-none text-base-content/60"
+        >
+          {@label}
+        </span>
+        <span class="min-w-0 flex-1 truncate leading-none" data-role="cally-date-label">
+          {if @value == "", do: "dd/mm/yyyy", else: @value}
+        </span>
+        <.icon name="hero-calendar-days" class="size-4 shrink-0 opacity-65" />
+      </button>
+      <div
+        id={"#{@id}-popover"}
+        popover
+        class="dropdown rounded-box border border-base-300 bg-base-100 p-3 text-base-content shadow-xl"
+        style={"position-anchor: #{@anchor_name};"}
+      >
+        <calendar-date class="cally" value={@value} locale="en-GB" data-role="cally-calendar">
+          <svg
+            aria-label="Previous"
+            class="size-4 fill-current"
+            slot="previous"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+          >
+            <path d="M15.75 19.5 8.25 12l7.5-7.5"></path>
+          </svg>
+          <svg
+            aria-label="Next"
+            class="size-4 fill-current"
+            slot="next"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+          >
+            <path d="m8.25 4.5 7.5 7.5-7.5 7.5"></path>
+          </svg>
+          <calendar-month></calendar-month>
+        </calendar-date>
+        <div class="mt-3 grid grid-cols-2 gap-2 border-t border-base-300 pt-3">
+          <button type="button" class="btn btn-secondary btn-sm" data-role="cally-clear">
+            Clear
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" data-role="cally-cancel">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :title, :string, required: true
   attr :description, :string, default: nil
@@ -547,11 +627,11 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   defp advanced_filter_fields_class(true) do
-    "grid grid-cols-1 gap-2 pt-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
+    "grid grid-cols-1 gap-2 pt-2 sm:grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
   end
 
   defp advanced_filter_fields_class(false) do
-    "grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2 pt-2 [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
+    "grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2 pt-2 [&_.fieldset]:mb-0 [&_.input]:input-sm [&_.label]:mb-0.5 [&_.label]:px-1 [&_.label]:text-[0.65rem] [&_.label]:font-semibold [&_.label]:uppercase [&_.label]:tracking-wide [&_.label]:text-base-content/45 [&_.select]:select-sm"
   end
 
   defp filter_form_layout_class(true), do: "flex flex-wrap items-center gap-2"

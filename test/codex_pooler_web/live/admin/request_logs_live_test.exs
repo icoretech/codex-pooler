@@ -191,7 +191,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             ~s|#request-log-filter-form-advanced > div[class*="auto-fit"][class*="minmax(13rem,1fr)"]|
+             ~s|#request-log-filter-form-advanced > div[class*="auto-fit"][class*="minmax(10rem,1fr)"]|
            )
 
     refute has_element?(view, "#request-log-summary")

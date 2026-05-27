@@ -199,26 +199,23 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
         </details>
       </div>
       <:advanced>
-        <.input
+        <.select_filter
           field={@filter_form[:actor_type]}
-          type="select"
-          label="Actor type"
           options={Presentation.actor_type_options()}
+          label="Actor type"
         />
-        <.input
+        <.segmented_text_filter
           field={@filter_form[:actor]}
-          type="text"
           label="Actor"
           placeholder="email or id"
         />
-        <.input
+        <.segmented_text_filter
           field={@filter_form[:target]}
-          type="text"
           label="Target"
           placeholder="user or id"
         />
-        <.input field={@filter_form[:date_from]} type="date" label="Date from" />
-        <.input field={@filter_form[:date_to]} type="date" label="Date to" />
+        <AdminComponents.cally_date_filter field={@filter_form[:date_from]} label="Date from" />
+        <AdminComponents.cally_date_filter field={@filter_form[:date_to]} label="Date to" />
       </:advanced>
     </AdminComponents.filter_form>
 
@@ -233,6 +230,62 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
         <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
           <li :for={error <- @filter_errors}>{error.message}</li>
         </ul>
+      </div>
+    </div>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :options, :list, required: true
+  attr :label, :string, required: true
+
+  defp select_filter(assigns) do
+    assigns =
+      assigns
+      |> assign(:id, assigns.field.id)
+      |> assign(:name, assigns.field.name)
+      |> assign(:value, assigns.field.value || "")
+
+    ~H"""
+    <div id={"#{@id}-filter"} class="fieldset mb-2">
+      <select
+        id={@id}
+        name={@name}
+        class="w-full select"
+        aria-label={@label}
+      >
+        {Phoenix.HTML.Form.options_for_select(@options, @value)}
+      </select>
+    </div>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :placeholder, :string, required: true
+
+  defp segmented_text_filter(assigns) do
+    assigns =
+      assigns
+      |> assign(:id, assigns.field.id)
+      |> assign(:name, assigns.field.name)
+      |> assign(:value, assigns.field.value || "")
+
+    ~H"""
+    <div id={"#{@id}-filter"} class="fieldset mb-2">
+      <div class="input input-sm flex w-full items-center gap-2">
+        <span class="label !mb-0 min-w-0 shrink truncate !px-2 !normal-case !tracking-normal leading-none text-base-content/60">
+          {@label}
+        </span>
+        <input
+          type="text"
+          id={@id}
+          name={@name}
+          value={@value}
+          placeholder={@placeholder}
+          aria-label={@label}
+          class="min-w-0 grow bg-transparent p-0 text-xs font-normal outline-none placeholder:text-base-content/45"
+        />
       </div>
     </div>
     """

@@ -151,7 +151,12 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
 
     refute has_element?(view, "#audit-log-outcome-filter button[data-outcome='denied']")
     assert has_element?(view, "#filters_actor_type")
+    refute has_element?(view, "#audit-log-filter-form-advanced label[for='filters_actor_type']")
     assert has_element?(view, "#filters_actor")
+    refute has_element?(view, "#audit-log-filter-form-advanced label[for='filters_actor']")
+    assert has_element?(view, "#filters_actor[aria-label='Actor']")
+    assert has_element?(view, "#filters_actor-filter .input", "Actor")
+    assert has_element?(view, "#filters_actor[placeholder='email or id']")
     assert has_element?(view, "#filters_action[type='hidden']")
     refute has_element?(view, "#audit-log-filter-form label[for='audit-log-action-filter']")
     assert has_element?(view, "#audit-log-action-filter [aria-label='Event']")
@@ -180,9 +185,37 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
            )
 
     assert has_element?(view, "#filters_target")
+    refute has_element?(view, "#audit-log-filter-form-advanced label[for='filters_target']")
+    assert has_element?(view, "#filters_target[aria-label='Target']")
+    assert has_element?(view, "#filters_target-filter .input", "Target")
+    assert has_element?(view, "#filters_target[placeholder='user or id']")
     refute has_element?(view, "#filters_request")
-    assert has_element?(view, "#filters_date_from")
-    assert has_element?(view, "#filters_date_to")
+    assert has_element?(view, "#filters_date_from[type='hidden'][name='filters[date_from]']")
+    assert has_element?(view, "#filters_date_to[type='hidden'][name='filters[date_to]']")
+    refute has_element?(view, "input#filters_date_from[type='date']")
+    refute has_element?(view, "input#filters_date_to[type='date']")
+    assert has_element?(view, "#filters_date_from-picker[phx-hook='CallyDatePicker']")
+    assert has_element?(view, "#filters_date_to-picker[phx-hook='CallyDatePicker']")
+    refute has_element?(view, "#filters_date_from-picker > label[for='filters_date_from-button']")
+    refute has_element?(view, "#filters_date_to-picker > label[for='filters_date_to-button']")
+
+    assert has_element?(
+             view,
+             "#audit-log-filter-form-advanced #filters_date_from-picker button .label",
+             "Date from"
+           )
+
+    assert has_element?(
+             view,
+             "#audit-log-filter-form-advanced #filters_date_to-picker button .label",
+             "Date to"
+           )
+
+    assert has_element?(
+             view,
+             ~s|#audit-log-filter-form-advanced > div[class*="auto-fit"][class*="minmax(10rem,1fr)"]|
+           )
+
     assert has_element?(view, "#audit-log-page-size", "Hard limit: 50 rows")
     assert has_element?(view, "#audit-event-details-drawer-root")
     assert has_element?(view, "#audit-event-details-drawer")
