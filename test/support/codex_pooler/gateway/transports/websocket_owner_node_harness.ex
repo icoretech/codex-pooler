@@ -131,6 +131,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   defp dispatch_call_mode(:success, _node, module, function, args),
     do: apply(module, function, args)
 
+  defp dispatch_call_mode({:return, result}, _node, _module, _function, _args), do: result
+
   defp dispatch_call_mode(:timeout, _node, _module, _function, _args),
     do: {:error, :owner_forward_timeout}
 

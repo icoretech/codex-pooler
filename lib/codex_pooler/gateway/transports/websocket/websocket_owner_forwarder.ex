@@ -26,6 +26,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           upstream: map(),
           request_id: binary()
         ]
+  @type submit_error ::
+          WebsocketOwnerContract.owner_error() | UpstreamWebSocketSession.request_failure()
 
   @spec submit_frame(
           CodexSession.t(),
@@ -52,7 +54,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           UpstreamWebSocketSession.Request.t(),
           submit_opts()
         ) ::
-          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error()}
+          :ok | {:ok, term()} | {:error, submit_error()}
   def submit_request(
         %CodexSession{} = session,
         owner_lease_token,
@@ -329,7 +331,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec call_remote(node(), atom(), [term()], submit_opts()) ::
-          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error()}
+          :ok | {:ok, term()} | {:error, submit_error()}
   def call_remote(node, function, args, opts)
       when is_atom(node) and is_atom(function) and is_list(args) and is_list(opts) do
     timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
@@ -349,6 +351,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp normalize_forward_result(:ok), do: :ok
   defp normalize_forward_result({:ok, _value} = result), do: result
+
+  defp normalize_forward_result({:error, %{body: _body, reason: _reason} = response}),
+    do: {:error, response}
 
   defp normalize_forward_result({:error, reason}) do
     if WebsocketOwnerContract.owner_error?(reason),

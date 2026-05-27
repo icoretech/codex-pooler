@@ -123,6 +123,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_frame, "corr-recovered-owner", 1, :complete}
   end
 
+  test "remote request preserves structured upstream failure maps", %{auth: auth} do
+    remote_node = :"codex_pooler@structured-error-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, remote_node_string, "structured")
+
+    structured_error = %{
+      body: Jason.encode!(%{"type" => "response.failed"}),
+      reason: {:auth_refresh_first_event, %{code: "invalid_api_key"}},
+      headers: [],
+      websocket_frame_headers: %{}
+    }
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => {:return, {:error, structured_error}}}
+      )
+
+    request = %UpstreamWebSocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "request-frame",
+      timeouts: %{}
+    }
+
+    assert {:error, ^structured_error} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("corr-structured-error"),
+               request,
+               opts
+             )
+  end
+
   test "remote timeout maps to owner_forward_timeout within configured timeout", %{auth: auth} do
     remote_node = :"codex_pooler@timeout-app.example"
     remote_node_string = Atom.to_string(remote_node)

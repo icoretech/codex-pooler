@@ -237,6 +237,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> record_upstream_websocket_body(identity, request)
   end
 
+  defp owner_request_result(
+         {:error, %{body: _body, reason: _reason} = response},
+         _identity,
+         _request
+       ) do
+    {:error, response}
+  end
+
   defp owner_request_result({:error, reason}, _identity, _request) do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
