@@ -1310,7 +1310,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     captured_headers = Map.new(captured.headers)
     assert captured_headers["authorization"] == "Bearer upstream-token"
-    assert captured_headers["user-agent"] == "control-plane-safe-user-agent"
+    assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
     assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
@@ -1945,7 +1945,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["accept"] == "application/json"
     assert captured_headers["content-type"] == "application/json"
-    refute captured_headers["user-agent"] == "alpha-search-test-agent"
+    assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
     assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
@@ -2153,7 +2153,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["chatgpt-account-id"] == setup.identity.chatgpt_account_id
     assert captured_headers["accept"] == "application/json"
-    assert captured_headers["user-agent"] == "codex-jwks-test"
+    assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
     assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
@@ -2251,7 +2251,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["chatgpt-account-id"] == setup.identity.chatgpt_account_id
     assert captured_headers["accept"] == "application/json"
-    assert captured_headers["user-agent"] == "wham-jwks-test"
+    assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
     assert is_binary(captured_headers["request-id"])
     assert is_binary(captured_headers["x-request-id"])
     refute Map.has_key?(captured_headers, "x-openai-client-user-agent")

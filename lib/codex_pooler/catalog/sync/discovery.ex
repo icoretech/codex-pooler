@@ -3,6 +3,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   Upstream model catalog discovery and payload normalization.
   """
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Secrets
 
@@ -89,7 +90,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
     headers = [
       {"authorization", "Bearer #{String.trim(token)}"},
       {"accept", "application/json"},
-      {"user-agent", "codex_cli_rs/0.0.0"}
+      {"user-agent", OperationalSettings.current().upstream_user_agent}
     ]
 
     case present_string(identity.chatgpt_account_id) do

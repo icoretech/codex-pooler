@@ -168,7 +168,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     assert header!(create_request.headers, "chatgpt-account-id") ==
              upstream_assignment.identity.chatgpt_account_id
 
-    assert header!(create_request.headers, "user-agent") == "codex-test-agent"
+    assert header!(create_request.headers, "user-agent") == "codex_cli_rs/0.0.0"
     assert header!(create_request.headers, "x-openai-client") == "codex-cli"
     assert header!(create_request.headers, "x-codex-turn-state") == "safe-turn-state"
     refute Enum.any?(create_request.headers, fn {name, _value} -> name == "x-ignore-this" end)

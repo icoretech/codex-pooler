@@ -392,6 +392,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       identity,
       token,
       [{"accept", "application/json"}, {"content-type", "application/json"}],
+      include_user_agent?: true,
       forwarded_headers: forwarded_headers
     )
   end

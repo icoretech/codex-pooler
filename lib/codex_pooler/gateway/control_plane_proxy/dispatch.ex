@@ -184,18 +184,7 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.Dispatch do
         do: [{"x-request-id", request_id}, {"request-id", request_id} | base_headers],
         else: base_headers
 
-    TransportEnvelope.headers(identity, token, base_headers,
-      forwarded_headers: safe_forwarded_headers(source_headers)
-    )
-  end
-
-  defp safe_forwarded_headers(headers) do
-    headers
-    |> Enum.flat_map(fn {name, value} ->
-      name = String.downcase(to_string(name))
-
-      if name == "user-agent" and is_binary(value), do: [{name, value}], else: []
-    end)
+    TransportEnvelope.headers(identity, token, base_headers, include_user_agent?: true)
   end
 
   defp upstream_content_type(%ProxyRequest{body_mode: {:json, _route}}), do: "application/json"
