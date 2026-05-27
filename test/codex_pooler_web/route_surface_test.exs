@@ -61,6 +61,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:get, "/v1/usage"},
                {:get, "/wham/usage"},
                {:options, "/mcp"},
+               {:post, "/backend-api/codex/alpha/search"},
                {:post, "/backend-api/codex/analytics-events/events"},
                {:post, "/backend-api/codex/images/edits"},
                {:post, "/backend-api/codex/images/generations"},

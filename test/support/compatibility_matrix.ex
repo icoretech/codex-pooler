@@ -224,6 +224,17 @@ defmodule CodexPooler.CompatibilityMatrix do
         "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve raw SDP realtime bytes, allowlist response headers, and keep logs metadata-only"
     },
     %{
+      slug: :backend_alpha_search,
+      status: :supported,
+      current: :explicit_authenticated_control_plane_route,
+      categories: [:route, :auth, :error, :degraded],
+      routes: [%{method: :post, path: "/backend-api/codex/alpha/search"}],
+      future_routes: [],
+      fixture: :backend_alpha_search,
+      contract:
+        "backend alpha search is an explicit authenticated Codex backend compatibility control-plane route, uses the proxy_control route class, forwards only to upstream /alpha/search, and keeps request logs metadata-only"
+    },
+    %{
       slug: :v1_supported_surface,
       status: :supported,
       current: :authenticated_openai_compatibility,
@@ -386,6 +397,13 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       privacy: "metadata_only",
       routes: @control_plane_fixture_routes
+    },
+    backend_alpha_search: %{
+      auth: "required_bearer_api_key",
+      route_class: "proxy_control",
+      privacy: "metadata_only",
+      routes: ["/backend-api/codex/alpha/search"],
+      upstream_path: "/alpha/search"
     },
     v1_supported_surface: %{
       auth: "required_bearer_api_key",

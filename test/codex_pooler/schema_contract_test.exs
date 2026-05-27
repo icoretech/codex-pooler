@@ -144,6 +144,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["requests_endpoint_check"] =~
              "'/backend-api/codex/memories/trace_summarize'"
 
+    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/alpha/search'"
     assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/realtime/calls'"
     assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/safety/arc'"
     assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/agent-identities/jwks'"

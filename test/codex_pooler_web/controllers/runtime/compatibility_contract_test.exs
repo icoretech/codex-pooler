@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     unsupported_input_image_reference
     first_event_stream_retry
     control_plane_surface
+    backend_alpha_search
     v1_supported_surface
     v1_unsupported_public_surface
   )a
@@ -101,6 +102,33 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.analytics_forwarding_disabled == %{status: 204, upstream_call: false}
       assert "location" in fixture.response_header_allowlist
       assert fixture.privacy == "metadata_only"
+    end
+
+    test "documents backend alpha search as scoped metadata-only control-plane compatibility" do
+      feature = CompatibilityMatrix.by_slug!(:backend_alpha_search)
+      fixture = CompatibilityMatrix.fixture!(:backend_alpha_search)
+
+      assert feature.status == :supported
+      assert feature.current == :explicit_authenticated_control_plane_route
+      assert :route in feature.categories
+      assert :auth in feature.categories
+      assert :error in feature.categories
+      assert :degraded in feature.categories
+
+      assert feature.routes == [%{method: :post, path: "/backend-api/codex/alpha/search"}]
+      assert feature.contract =~ "Codex backend compatibility control-plane route"
+      assert feature.contract =~ "proxy_control"
+      assert feature.contract =~ "metadata-only"
+      assert feature.contract =~ "upstream /alpha/search"
+      refute feature.contract =~ "/v1/alpha"
+      refute feature.contract =~ "product search UI"
+      refute feature.contract =~ "generic search API"
+
+      assert fixture.auth == "required_bearer_api_key"
+      assert fixture.route_class == "proxy_control"
+      assert fixture.privacy == "metadata_only"
+      assert fixture.routes == ["/backend-api/codex/alpha/search"]
+      assert fixture.upstream_path == "/alpha/search"
     end
 
     test "documents reject versus strip behavior for unsupported OpenAI controls" do
