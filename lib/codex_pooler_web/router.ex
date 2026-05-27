@@ -13,7 +13,9 @@ defmodule CodexPoolerWeb.Router do
     plug :put_root_layout, html: {CodexPoolerWeb.Layouts, :root}
     plug :protect_from_forgery
 
-    plug :put_secure_browser_headers, %{}
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" => "default-src 'self'; base-uri 'self'; frame-ancestors 'self'"
+    }
 
     plug :fetch_current_scope_for_user
     plug CodexPoolerWeb.Plugs.AdminBrowserAdmission
