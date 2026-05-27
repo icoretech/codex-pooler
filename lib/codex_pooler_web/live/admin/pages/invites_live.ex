@@ -43,7 +43,10 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, load_invites(socket, params)}
+    {:noreply,
+     socket
+     |> load_invites(filter_params(params))
+     |> maybe_prefill_invite_dialog(params)}
   end
 
   @impl true
@@ -265,6 +268,48 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     )
   end
 
+  defp filter_params(%{"create" => "1"} = params),
+    do: Map.drop(params, ["create", "pool_id", "invited_email", "send_email"])
+
+  defp filter_params(params), do: Map.drop(params, ["create", "invited_email", "send_email"])
+
+  defp maybe_prefill_invite_dialog(socket, %{"create" => "1"} = params) do
+    pool_id = selected_pool_id(Map.get(params, "pool_id", ""), socket.assigns.pools)
+
+    invite_params = %{
+      "pool_id" => pool_id,
+      "invited_email" => string_param(params, "invited_email"),
+      "send_email" => send_email_param(params)
+    }
+
+    changeset =
+      PoolInviteForm.changeset(invite_params, selected_pool(socket.assigns.pools, pool_id))
+
+    assign(socket,
+      creating_invite: true,
+      invite_form: PoolInviteForm.form_for_changeset(changeset),
+      invite_form_valid?: changeset.valid?,
+      last_invite: nil,
+      revoking_invite: nil
+    )
+  end
+
+  defp maybe_prefill_invite_dialog(socket, _params), do: socket
+
+  defp string_param(params, key) do
+    case Map.get(params, key, "") do
+      value when is_binary(value) -> value
+      _value -> ""
+    end
+  end
+
+  defp send_email_param(params) do
+    case Map.get(params, "send_email") do
+      value when value in ["true", "false"] -> value
+      _value -> "false"
+    end
+  end
+
   defp create_invite(socket, pool, invite_params, send_email?) do
     case pool && Access.create_invite(socket.assigns.current_scope, pool, invite_params) do
       {:ok, %{invite: invite, token: token} = result} ->
@@ -365,7 +410,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   end
 
   defp dialog_pool_label(nil), do: "Unknown Pool"
-  defp dialog_pool_label(pool), do: pool.name
+  defp dialog_pool_label(pool), do: "#{pool.name} (#{pool.slug})"
 
   defp selected_pool(pools, pool_id) when is_binary(pool_id),
     do: Enum.find(pools, &(&1.id == pool_id))

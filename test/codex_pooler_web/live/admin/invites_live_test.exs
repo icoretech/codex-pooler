@@ -93,9 +93,8 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     assert has_element?(view, "#pool-invite-form")
     assert has_element?(view, "#pool-invite-submit")
     assert has_element?(view, "#invite_pool_id")
-    assert has_element?(view, "#invite_pool_id option[value='#{pool.id}']", "Admin Invites")
 
-    refute has_element?(
+    assert has_element?(
              view,
              "#invite_pool_id option[value='#{pool.id}']",
              "Admin Invites (admin-invites)"
@@ -117,6 +116,110 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     })
 
     assert has_element?(view, "#pool-invite-submit:not([disabled])")
+  end
+
+  @tag :invite_prefill_valid
+  test "query params open the invite creation dialog with a valid prefill", %{
+    conn: conn,
+    scope: scope
+  } do
+    pool = pool_fixture(%{slug: "prefill-target", name: "Prefill Target"})
+    other_pool = pool_fixture(%{slug: "prefill-other", name: "Prefill Other"})
+
+    {:ok, %{invite: target_invite}} =
+      Access.create_invite(scope, pool, %{invited_email: "target@example.com"})
+
+    {:ok, %{invite: other_invite}} =
+      Access.create_invite(scope, other_pool, %{invited_email: "other@example.com"})
+
+    {:ok, view, _html} =
+      live(
+        conn,
+        ~p"/admin/invites?create=1&pool_id=#{pool.id}&invited_email=user@example.com"
+      )
+
+    assert has_element?(view, "#pool-invite-dialog[open]")
+    assert has_element?(view, "#pool-invite-form")
+    assert has_element?(view, "#invite_pool_id")
+
+    assert has_element?(
+             view,
+             "#invite_pool_id option[value='#{pool.id}'][selected]",
+             "Prefill Target (prefill-target)"
+           )
+
+    assert has_element?(view, "#invite_invited_email[value='user@example.com']")
+    assert has_element?(view, "#invite_send_email")
+    assert has_element?(view, "#pool-invite-submit:not([disabled])")
+    assert has_element?(view, "#filters_pool_id[type='hidden'][value='']")
+    assert has_element?(view, "#invite-row-#{target_invite.id}")
+    assert has_element?(view, "#invite-row-#{other_invite.id}")
+    refute has_element?(view, "#invite-url")
+    assert Repo.aggregate(Invite, :count) == 2
+    assert_no_email_sent()
+  end
+
+  @tag :invite_prefill_invalid
+  test "query params reject invalid pool and invalid email without selecting a filter", %{
+    conn: conn,
+    scope: scope
+  } do
+    pool = pool_fixture(%{slug: "invalid-prefill-target", name: "Invalid Prefill Target"})
+    other_pool = pool_fixture(%{slug: "invalid-prefill-other", name: "Invalid Prefill Other"})
+
+    {:ok, %{invite: active_invite}} =
+      Access.create_invite(scope, pool, %{invited_email: "active-prefill@example.com"})
+
+    {:ok, %{invite: revoked_invite}} =
+      Access.create_invite(scope, other_pool, %{invited_email: "revoked-prefill@example.com"})
+
+    {:ok, _revoked} = Access.revoke_invite(scope, revoked_invite.id)
+
+    {:ok, view, _html} =
+      live(
+        conn,
+        ~p"/admin/invites?create=1&pool_id=#{Ecto.UUID.generate()}&invited_email=not-an-email&send_email=maybe&status=revoked"
+      )
+
+    assert has_element?(view, "#pool-invite-dialog[open]")
+    assert has_element?(view, "#pool-invite-form")
+    assert has_element?(view, "#invite_pool_id")
+    refute has_element?(view, "#invite_pool_id option[selected]")
+    assert has_element?(view, "#invite_invited_email[value='not-an-email']")
+    assert has_element?(view, "#invite_send_email")
+    assert has_element?(view, "#pool-invite-submit[disabled]")
+    assert has_element?(view, "#filters_pool_id[type='hidden'][value='']")
+    assert has_element?(view, "#filters_status[type='hidden'][value='revoked']")
+    assert has_element?(view, "#invite-row-#{revoked_invite.id}")
+    refute has_element?(view, "#invite-row-#{active_invite.id}")
+    refute has_element?(view, "#invite-url")
+    assert Repo.aggregate(Invite, :count) == 2
+    assert_no_email_sent()
+  end
+
+  @tag :invite_prefill_invalid
+  test "query params keep the invite dialog open when invited email is blank", %{
+    conn: conn
+  } do
+    pool = pool_fixture(%{slug: "blank-prefill-target", name: "Blank Prefill Target"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/invites?create=1&pool_id=#{pool.id}")
+
+    assert has_element?(view, "#pool-invite-dialog[open]")
+    assert has_element?(view, "#pool-invite-form")
+
+    assert has_element?(
+             view,
+             "#invite_pool_id option[value='#{pool.id}'][selected]",
+             "Blank Prefill Target (blank-prefill-target)"
+           )
+
+    assert has_element?(view, "#invite_invited_email[value='']")
+    assert has_element?(view, "#invite_send_email")
+    assert has_element?(view, "#pool-invite-submit[disabled]")
+    refute has_element?(view, "#invite-url")
+    assert Repo.aggregate(Invite, :count) == 0
+    assert_no_email_sent()
   end
 
   test "creates a pool-scoped onboarding invite from admin invites", %{
