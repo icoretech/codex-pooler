@@ -27,7 +27,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
     :route_class,
     :routing_circuit_state,
     :attempt,
-    :started
+    :started,
+    :auth_refresh_retry_attempted?
   ]
 
   @type t :: %__MODULE__{
@@ -48,6 +49,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
           route_class: String.t(),
           routing_circuit_state: RoutingCircuitState.t() | nil,
           attempt: Attempt.t() | nil,
-          started: integer() | nil
+          started: integer() | nil,
+          auth_refresh_retry_attempted?: boolean() | nil
         }
 end

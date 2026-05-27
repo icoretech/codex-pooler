@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     "overloaded_error",
     "websocket_connection_limit_reached"
   ]
+  @websocket_auth_refresh_event_codes ["invalid_api_key", "invalid_authentication"]
   @metadata_header_names ~w(openai-request-id x-openai-request-id x-request-id)
   @quota_header_prefixes ~w(x-ratelimit-limit- x-ratelimit-remaining- x-ratelimit-reset-)
   @quota_window_header_suffixes ~w(
@@ -169,6 +170,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   end
 
   def retryable_first_terminal_failure(_event), do: :error
+
+  @spec auth_refresh_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
+  def auth_refresh_first_terminal_failure(%{event_type: event_type, error_code: code} = event)
+      when event_type in @terminal_event_types and code in @websocket_auth_refresh_event_codes do
+    {:ok,
+     %{
+       code: code,
+       upstream_code: Map.get(event, :upstream_error_code),
+       event_type: event_type,
+       data_type: Map.get(event, :data_type)
+     }}
+  end
+
+  def auth_refresh_first_terminal_failure(_event), do: :error
 
   @spec internal_rate_limit_event?(term()) :: boolean()
   def internal_rate_limit_event?(%{} = event) do

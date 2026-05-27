@@ -436,8 +436,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
       |> prepend_receive_body(text)
 
     case retryable_first_text_frame(raw_text, receive_state) do
-      {:ok, failure} ->
-        {:halt, {:failure, state, receive_state, {:retryable_first_event, failure}}}
+      {:ok, reason} ->
+        {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
         receive_state.writer.(text)
@@ -453,17 +453,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
   defp retryable_first_text_frame(raw_text, %ReceiveState{downstream_output_started?: false}) do
     case StreamProtocol.first_complete_event(raw_text) do
-      {:ok, event} -> retryable_connection_limit_event(event)
+      {:ok, event} -> retryable_pre_visible_terminal_event(event)
       :incomplete -> :error
     end
   end
 
   defp retryable_first_text_frame(_raw_text, %ReceiveState{}), do: :error
 
+  defp retryable_pre_visible_terminal_event(event) do
+    case StreamProtocol.auth_refresh_first_terminal_failure(event) do
+      {:ok, failure} -> {:ok, {:auth_refresh_first_event, failure}}
+      :error -> retryable_connection_limit_event(event)
+    end
+  end
+
   defp retryable_connection_limit_event(event) do
     case StreamProtocol.retryable_first_terminal_failure(event) do
-      {:ok, %{code: "websocket_connection_limit_reached"} = failure} -> {:ok, failure}
-      _other -> :error
+      {:ok, %{code: "websocket_connection_limit_reached"} = failure} ->
+        {:ok, {:retryable_first_event, failure}}
+
+      _other ->
+        :error
     end
   end
 
