@@ -96,12 +96,19 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
                ]
              )
 
+    lineage_metadata = Jason.encode!(%{"forked_from_thread_id" => "file-bridge-lineage"})
+
     create_conn =
       conn
       |> auth(setup)
       |> put_req_header("user-agent", "codex-test-agent")
       |> put_req_header("x-openai-client", "codex-cli")
+      |> put_req_header("x-openai-extra-file-bridge", "broad-openai-file-bridge")
+      |> put_req_header("x-openai-subagent", "file-bridge-subagent")
       |> put_req_header("x-codex-turn-state", "safe-turn-state")
+      |> put_req_header("x-codex-turn-metadata", lineage_metadata)
+      |> put_req_header("x-codex-parent-thread-id", "file-bridge-parent-thread")
+      |> put_req_header("x-codex-extra-file-bridge", "broad-codex-file-bridge")
       |> put_req_header("x-ignore-this", "not-forwarded")
       |> put_req_header("content-type", "application/json")
       |> post(~p"/backend-api/files", %{
@@ -170,8 +177,33 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert header!(create_request.headers, "user-agent") == "codex_cli_rs/0.0.0"
     assert header!(create_request.headers, "x-openai-client") == "codex-cli"
+
+    assert header!(create_request.headers, "x-openai-extra-file-bridge") ==
+             "broad-openai-file-bridge"
+
+    assert header!(create_request.headers, "x-openai-subagent") == "file-bridge-subagent"
     assert header!(create_request.headers, "x-codex-turn-state") == "safe-turn-state"
+    assert header!(create_request.headers, "x-codex-turn-metadata") == lineage_metadata
+
+    assert header!(create_request.headers, "x-codex-parent-thread-id") ==
+             "file-bridge-parent-thread"
+
+    assert header!(create_request.headers, "x-codex-extra-file-bridge") ==
+             "broad-codex-file-bridge"
+
     refute Enum.any?(create_request.headers, fn {name, _value} -> name == "x-ignore-this" end)
+
+    persistence_text =
+      inspect(%{
+        file: Repo.get!(FileRecord, file.id),
+        requests: Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+      })
+
+    refute persistence_text =~ lineage_metadata
+    refute persistence_text =~ "file-bridge-lineage"
+    refute persistence_text =~ "file-bridge-parent-thread"
+    refute persistence_text =~ "broad-openai-file-bridge"
+    refute persistence_text =~ "broad-codex-file-bridge"
   end
 
   @tag :upstream_file_assignment_continuity

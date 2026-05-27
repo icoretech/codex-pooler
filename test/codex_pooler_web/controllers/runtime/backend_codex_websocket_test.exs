@@ -273,6 +273,96 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.request_metadata["codex_session_id"] == session.id
   end
 
+  test "websocket dispatch ignores regular runtime forwarded metadata headers" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_forwarded_metadata_ignored",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-forwarded-metadata"})
+
+    lineage_id = "ws-forwarded-metadata-lineage"
+    lineage_metadata = Jason.encode!(%{"forked_from_thread_id" => lineage_id})
+
+    forwarded_headers = [
+      {"x-codex-turn-metadata", lineage_metadata},
+      {"x-codex-window-id", "ws-forwarded-metadata-window"},
+      {"x-codex-parent-thread-id", "ws-forwarded-metadata-parent"},
+      {"x-openai-subagent", "ws-forwarded-metadata-subagent"},
+      {"x-codex-extra-websocket", "ws-forwarded-metadata-extra"}
+    ]
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true,
+                 "previous_response_id" => "resp_ws_forwarded_metadata_previous"
+               }),
+               %{
+                 request_id: "ws-forwarded-metadata-ignored",
+                 client_ip: "127.0.0.1",
+                 codex_session: session,
+                 forwarded_headers: forwarded_headers
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_forwarded_metadata_ignored"} = Jason.decode!(frame)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["type"] == "response.create"
+    assert captured.json["generate"] == true
+    assert captured.json["previous_response_id"] == "resp_ws_forwarded_metadata_previous"
+    assert header!(captured.headers, "openai-beta") == "responses_websockets=2026-02-06"
+    assert header!(captured.headers, "user-agent") == "codex_cli_rs/0.0.0"
+
+    for {name, _value} <- forwarded_headers do
+      refute Enum.any?(captured.headers, fn {header_name, _value} -> header_name == name end)
+    end
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "websocket"
+    assert request.status == "succeeded"
+    assert request.request_metadata["codex_session_id"] == session.id
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "websocket"
+    assert attempt.status == "succeeded"
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.request_id == request.id
+    assert turn.status == "succeeded"
+    assert turn.transport_kind == "websocket"
+
+    persistence_text =
+      inspect({request.request_metadata, attempt.response_metadata, session, turn})
+
+    refute persistence_text =~ lineage_metadata
+    refute persistence_text =~ lineage_id
+    refute persistence_text =~ "ws-forwarded-metadata-window"
+    refute persistence_text =~ "ws-forwarded-metadata-parent"
+    refute persistence_text =~ "ws-forwarded-metadata-subagent"
+    refute persistence_text =~ "ws-forwarded-metadata-extra"
+    refute persistence_text =~ setup.authorization
+  end
+
   test "websocket response dispatch returns a structured error for non-text frames" do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(upstream)
@@ -5326,6 +5416,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              QuotaWindows.list_quota_windows(identity),
              &(&1.source == "codex_rate_limit_event")
            )
+  end
+
+  defp header!(headers, name) do
+    headers
+    |> Enum.find_value(fn
+      {^name, value} -> value
+      _other -> nil
+    end)
+    |> case do
+      nil -> flunk("missing header #{name}")
+      value -> value
+    end
   end
 
   defp execute_websocket_response(auth, raw_payload, opts, push_frame) do
