@@ -652,6 +652,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "Maximum time allowed to establish a connection to an upstream account.",
           "Maximum time a gateway request may wait for an available pooled connection.",
           "Maximum idle receive window while waiting for upstream response data.",
+          "Sent to upstream Codex-compatible routes instead of forwarding downstream client user-agent strings.",
           "How long expired response aliases stay available for continuity lookups.",
           "How long a bridge owner lease remains valid without renewal.",
           "How often active bridge owners renew their lease while work is running.",
@@ -779,6 +780,35 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              "label[for=\"instance-settings-circuit-success-threshold\"]",
              "Circuit close successes"
            )
+  end
+
+  test "saves the upstream Codex user-agent from the gateway card", %{conn: conn, user: user} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#instance-settings-upstream-user-agent[value='codex_cli_rs/0.0.0']"
+           )
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"upstream_user_agent" => " codex_cli_rs/9.9.9 "}
+        }
+      })
+
+    assert html =~ "Gateway controls saved"
+    assert InstanceSettings.get!().gateway.upstream_user_agent == "codex_cli_rs/9.9.9"
+
+    assert has_element?(
+             view,
+             "#instance-settings-upstream-user-agent[value='codex_cli_rs/9.9.9']"
+           )
+
+    event = Repo.get_by!(AuditEvent, action: "instance_settings.update", actor_user_id: user.id)
+    assert get_in(event.details, ["changed_keys"]) == ["gateway.upstream_user_agent"]
   end
 
   test "saves one settings card with current scope attribution", %{conn: conn, user: user} do

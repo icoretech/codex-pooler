@@ -125,6 +125,18 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <.scalar_controls form={gateway_form} controls={gateway_scalar_controls()} />
           </div>
+          <div class="max-w-2xl">
+            <.input
+              id="instance-settings-upstream-user-agent"
+              field={gateway_form[:upstream_user_agent]}
+              type="text"
+              label="Upstream Codex user-agent"
+              placeholder="codex_cli_rs/0.0.0"
+            />
+            <p class="mt-1 text-xs leading-5 text-base-content/55">
+              Sent to upstream Codex-compatible routes instead of forwarding downstream client user-agent strings.
+            </p>
+          </div>
           <div class="grid gap-4 lg:grid-cols-2">
             <.json_textarea
               id="instance-settings-bulkheads"
