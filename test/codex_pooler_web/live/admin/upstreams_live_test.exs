@@ -255,8 +255,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-cockpit-link[href='/admin/upstreams/#{identity.id}']"
+             "#upstream-account-#{identity.id}-mail[href='/admin/upstreams/#{identity.id}']",
+             "Primary Codex"
            )
+
+    refute has_element?(view, "#upstream-account-#{identity.id}-cockpit-link")
 
     open_auth_json_import_dialog(view)
 
@@ -314,9 +317,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-limits-summary",
-             "Remaining quota · tightest GPT-5.3-Codex-Spark 5h 45%"
+             "#upstream-account-#{identity.id}-limits-summary.text-xs",
+             "Lowest remaining: GPT-5.3-Codex-Spark 5h 45%"
            )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-burn.text-right #upstream-account-#{identity.id}-token-burn-label",
+             "TOKEN BURN"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-burn-value",
+             "0"
+           )
+
+    refute has_element?(view, "#upstream-account-#{identity.id}", "refresh succeeded")
 
     refute has_element?(view, "#upstream-account-#{identity.id}", "Upstream account")
     refute has_element?(view, "#upstream-account-#{identity.id} .font-mono", identity.id)
@@ -373,7 +390,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limit-weekly-reset",
-             "reset in 5 days, 23 hours"
+             "reset in 5d 23h"
            )
 
     assert has_element?(

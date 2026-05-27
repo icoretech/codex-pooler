@@ -30,11 +30,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       >
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <h3
-              id={"upstream-account-#{@account.identity.id}-mail"}
-              class="truncate text-lg font-semibold text-base-content"
-            >
-              {@account.label}
+            <h3 class="min-w-0 text-lg font-semibold text-base-content">
+              <.link
+                id={"upstream-account-#{@account.identity.id}-mail"}
+                navigate={~p"/admin/upstreams/#{@account.identity.id}"}
+                class="block truncate hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                {@account.label}
+              </.link>
             </h3>
             <span
               id={"upstream-account-#{@account.identity.id}-state"}
@@ -43,14 +46,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
               {@account.identity.status}
             </span>
             <.upstream_plan_indicator account={@account} account_index={@account_index} />
-            <.link
-              id={"upstream-account-#{@account.identity.id}-cockpit-link"}
-              navigate={~p"/admin/upstreams/#{@account.identity.id}"}
-              class="btn btn-ghost btn-xs gap-1"
-            >
-              <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
-              <span>Cockpit</span>
-            </.link>
           </div>
           <p
             id={"upstream-account-#{@account.identity.id}-routing-readiness"}
@@ -69,14 +64,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
               <p class="text-xs font-semibold uppercase text-primary">Limits</p>
               <p
                 id={"upstream-account-#{@account.identity.id}-limits-summary"}
-                class="text-sm text-base-content/60"
+                class="text-xs text-base-content/60"
               >
                 {remaining_limits_summary(@account)}
               </p>
             </div>
-            <span class={AdminBadges.status_chip_class(@account.refresh_status)}>
-              refresh {@account.refresh_status}
-            </span>
+            <div
+              id={"upstream-account-#{@account.identity.id}-token-burn"}
+              data-role="upstream-token-burn-summary"
+              class="text-right"
+            >
+              <p
+                id={"upstream-account-#{@account.identity.id}-token-burn-label"}
+                class="text-xs font-semibold uppercase text-primary"
+              >
+                TOKEN BURN
+              </p>
+              <p
+                id={"upstream-account-#{@account.identity.id}-token-burn-value"}
+                class="text-xs text-base-content/60"
+              >
+                0
+              </p>
+            </div>
           </div>
           <div
             id={"upstream-account-#{@account.identity.id}-limits"}
@@ -405,15 +415,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
     |> Enum.filter(&match?(%{percent: %Decimal{}}, &1))
     |> case do
       [] ->
-        "Remaining quota · no reported evidence"
+        "No quota evidence"
 
       reported_limits ->
         tightest_limit = tightest_remaining_limit(reported_limits)
-        "Remaining quota · tightest #{tightest_limit.label} #{tightest_limit.percent_label}"
+        "Lowest remaining: #{tightest_limit.label} #{tightest_limit.percent_label}"
     end
   end
 
-  defp remaining_limits_summary(_account), do: "Remaining quota · no reported evidence"
+  defp remaining_limits_summary(_account), do: "No quota evidence"
 
   defp reported_quota_limits(quota_limits) when is_list(quota_limits) do
     Enum.filter(quota_limits, &match?(%{percent: %Decimal{}}, &1))

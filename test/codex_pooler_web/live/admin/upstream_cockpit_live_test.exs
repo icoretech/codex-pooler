@@ -53,12 +53,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id}-cockpit-link[href='/admin/upstreams/#{identity.id}']"
+             "#upstream-account-#{identity.id}-mail[href='/admin/upstreams/#{identity.id}']",
+             "Linked Codex"
            )
 
     refute has_element?(
              view,
-             "#upstream-account-#{identity.id}-cockpit-link[href='/admin/upstreams/#{assignment.id}']"
+             "#upstream-account-#{identity.id}-mail[href='/admin/upstreams/#{assignment.id}']"
            )
   end
 

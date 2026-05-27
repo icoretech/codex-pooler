@@ -383,7 +383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     days = div(seconds, 86_400)
     hours = seconds |> rem(86_400) |> div(3_600)
 
-    duration_parts([{days, "day"}, {hours, "hour"}])
+    duration_parts([{days, "d"}, {hours, "h"}])
   end
 
   defp format_reset_duration(seconds) when seconds >= 3_600 do
@@ -391,27 +391,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     hours = div(total_minutes, 60)
     minutes = rem(total_minutes, 60)
 
-    duration_parts([{hours, "hour"}, {minutes, "minute"}])
+    duration_parts([{hours, "h"}, {minutes, "m"}])
   end
 
   defp format_reset_duration(seconds) when seconds >= 60 do
     minutes = div(seconds + 59, 60)
 
-    duration_parts([{minutes, "minute"}])
+    duration_parts([{minutes, "m"}])
   end
 
-  defp format_reset_duration(_seconds), do: "less than 1 minute"
+  defp format_reset_duration(_seconds), do: "<1m"
 
   defp duration_parts(parts) do
     parts
     |> Enum.reject(fn {value, _unit} -> value <= 0 end)
-    |> Enum.map_join(", ", fn {value, unit} ->
-      "#{format_integer(value)} #{pluralize(unit, value)}"
+    |> Enum.map_join(" ", fn {value, unit} ->
+      "#{format_integer(value)}#{unit}"
     end)
   end
-
-  defp pluralize(unit, 1), do: unit
-  defp pluralize(unit, _value), do: "#{unit}s"
 
   defp decimal_clamp_percent(%Decimal{} = value) do
     value
