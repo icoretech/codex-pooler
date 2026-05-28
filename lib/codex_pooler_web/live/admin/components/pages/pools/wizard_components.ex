@@ -359,6 +359,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 data-role="plan-badge"
                 label={PoolForm.option_plan_label(option)}
                 family={PoolForm.option_plan_family(option)}
+                variant={:metadata}
               />
               <span
                 :if={PoolForm.option_badge_kind(option) != :plan}

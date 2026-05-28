@@ -572,7 +572,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}.badge.badge-primary.badge-sm"
+             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}.border-primary\\/20.bg-primary\\/10.text-primary"
            )
 
     view
