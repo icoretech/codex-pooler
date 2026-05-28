@@ -152,7 +152,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
 
     assert has_element?(
              view,
-             "#audit-log-outcome-filter [data-role='outcome-filter-trigger-icon'] .hero-adjustments-horizontal"
+             "#audit-log-outcome-filter [data-role='outcome-filter-trigger-icon'] .hero-squares-2x2"
            )
 
     assert has_element?(

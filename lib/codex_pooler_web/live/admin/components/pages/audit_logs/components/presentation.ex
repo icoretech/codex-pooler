@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
 
   def outcome_filter_icon("success"), do: "hero-check-circle"
   def outcome_filter_icon("failure"), do: "hero-x-circle"
-  def outcome_filter_icon(_outcome), do: "hero-adjustments-horizontal"
+  def outcome_filter_icon(_outcome), do: "hero-squares-2x2"
 
   def outcome_filter_icon_class("success"), do: "text-success"
   def outcome_filter_icon_class("failure"), do: "text-error"
