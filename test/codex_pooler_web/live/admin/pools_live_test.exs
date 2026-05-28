@@ -101,10 +101,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 1,
              request_count_5h: 0,
              tokens_per_second: nil,
-             quota_remaining_charts: %{
-               primary_5h: %{title: "5h quota"},
-               weekly: %{title: "Weekly quota"}
-             },
              routing_strategy: "deterministic_rotation"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == pool_id))
 
@@ -114,10 +110,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 0,
              request_count_5h: 0,
              tokens_per_second: nil,
-             quota_remaining_charts: %{
-               primary_5h: %{title: "5h quota"},
-               weekly: %{title: "Weekly quota"}
-             },
              routing_strategy: "bridge_ring"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == other_pool_id))
 
@@ -127,7 +119,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Deterministic rotation")
     assert has_element?(view, "#pool-row-#{pool.id}-id", pool.id)
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+    assert has_element?(view, "#pool-row-#{pool.id}-activity[data-role='pool-activity-panel']")
     assert has_element?(view, "#pool-metric-requests", "0")
     assert has_element?(view, "#pool-metric-requests", "Last 5h requests")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "0")
@@ -139,29 +131,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "5h settled tokens / upstream latency"
            )
 
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-remaining[data-role='pool-quota-remaining-panel']"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h quota"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "Weekly quota"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-remaining [data-role='pool-quota-donut']"
-           )
-
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "No current quota evidence")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+    refute has_element?(view, "#pool-row-#{pool.id}", "5h quota")
+    refute has_element?(view, "#pool-row-#{pool.id}", "Weekly quota")
+    refute has_element?(view, "#pool-row-#{pool.id} [data-role='pool-quota-donut']")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Pool quota")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-capacity")
     refute has_element?(view, "#pool-row-#{pool.id}-compatibility-mode")
@@ -172,98 +146,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{other_pool.id}-tokens-per-sec", "0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-routing-strategy", "Bridge ring")
     assert has_element?(view, "#pool-row-#{other_pool.id}-status", "active")
-    assert has_element?(view, "#pool-row-#{other_pool.id}-quota-remaining")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{other_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h quota"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{other_pool.id}-quota-remaining",
-             "No current quota evidence"
-           )
-
-    refute has_element?(
-             view,
-             "#pool-row-#{other_pool.id}-quota-remaining",
-             "No upstream accounts"
-           )
+    assert has_element?(view, "#pool-row-#{other_pool.id}-activity")
+    refute has_element?(view, "#pool-row-#{other_pool.id}-quota-remaining")
 
     refute has_element?(view, "#pool-row-#{other_pool.id}-quota-capacity")
     refute has_element?(view, "#pool-row-#{other_pool.id}-compatibility-mode")
   end
 
-  test "renders quota remaining cards for empty pools", %{conn: conn, scope: scope} do
-    {:ok, no_assignment_pool} =
-      Pools.create_pool(scope, %{slug: "token-no-assignments", name: "Token No Assignments"})
-
-    {:ok, no_usage_pool} =
-      Pools.create_pool(scope, %{slug: "token-no-usage", name: "Token No Usage"})
-
-    %{assignment: _no_usage_assignment} =
-      upstream_assignment_fixture(no_usage_pool, %{
-        account_label: "Sample no-usage account",
-        assignment_label: "Sample no-usage account"
-      })
-
-    {:ok, view, _html} = live(conn, ~p"/admin/pools")
-    _ = :sys.get_state(view.pid)
-
-    assert has_element?(view, "#pool-row-#{no_assignment_pool.id}-quota-remaining")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{no_assignment_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h quota"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{no_assignment_pool.id}-quota-remaining",
-             "Weekly quota"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{no_assignment_pool.id}-quota-remaining",
-             "No current quota evidence"
-           )
-
-    refute has_element?(
-             view,
-             "#pool-row-#{no_assignment_pool.id}-quota-remaining",
-             "usage unavailable"
-           )
-
-    refute has_element?(view, "#pool-row-#{no_assignment_pool.id}-quota-remaining", "limit 0")
-
-    assert has_element?(view, "#pool-row-#{no_usage_pool.id}-quota-remaining")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{no_usage_pool.id}-quota-remaining [data-role='pool-quota-remaining-card']",
-             "5h quota"
-           )
-
-    assert has_element?(view, "#pool-row-#{no_usage_pool.id}-quota-remaining", "Weekly quota")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{no_usage_pool.id}-quota-remaining",
-             "No current quota evidence"
-           )
-
-    refute has_element?(
-             view,
-             "#pool-row-#{no_usage_pool.id}-quota-remaining",
-             "Quota not recorded"
-           )
-  end
-
-  test "renders pool quota pressure cards from upstream quota evidence", %{
+  test "does not render pool quota pressure cards from upstream quota evidence", %{
     conn: conn,
     scope: scope
   } do
@@ -296,191 +186,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
 
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "5h quota")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Sample Team Account")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Sample Pro Account")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "2/2 reporting")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "2 usable")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Next reset")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "75% remaining")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "10% remaining")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-primary-5h [data-role='pool-quota-center-value']",
-             "10%"
-           )
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-primary-5h [phx-hook='QuotaPressureChart'][phx-update='ignore']"
-           )
-
-    refute has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "Total 1.5K")
-    refute has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h", "800")
-
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Weekly quota")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "Sample Team Account")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "1/2 reporting")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "1 missing")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-weekly", "90% remaining")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-quota-weekly [data-role='pool-quota-center-value']",
-             "90%"
-           )
-  end
-
-  test "renders partial quota evidence without absolute zero remaining", %{
-    conn: conn,
-    scope: scope
-  } do
-    {:ok, pool} =
-      Pools.create_pool(scope, %{slug: "quota-partial-pool", name: "Quota Partial Pool"})
-
-    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
-
-    %{identity: percent_identity} =
-      upstream_assignment_fixture(pool, %{
-        account_label: "Partial Percent Account",
-        assignment_label: "Partial Percent Account"
-      })
-
-    %{identity: limit_identity} =
-      upstream_assignment_fixture(pool, %{
-        account_label: "Partial Limit Account",
-        assignment_label: "Partial Limit Account"
-      })
-
-    assert {:ok, _windows} =
-             QuotaWindows.upsert_quota_windows(percent_identity, [
-               percent_only_quota_window_attrs("primary", 300, "42", reset_at)
-             ])
-
-    assert {:ok, _windows} =
-             QuotaWindows.upsert_quota_windows(limit_identity, [
-               active_limit_only_quota_window_attrs("primary", 300, 100, reset_at)
-             ])
-
-    {:ok, view, _html} = live(conn, ~p"/admin/pools")
-
-    card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
-
-    assert has_element?(view, card_selector, "5h quota")
-    assert has_element?(view, card_selector, "2/2 reporting")
-    assert has_element?(view, card_selector, "2 usable")
-
-    assert has_element?(
-             view,
-             "#{card_selector} [data-role='pool-quota-center-label']",
-             "Available"
-           )
-
-    assert has_element?(
-             view,
-             "#{card_selector} [data-role='pool-quota-center-value']",
-             "58%"
-           )
-
-    assert has_element?(
-             view,
-             "#{card_selector} .pool-quota-legend-row",
-             "Partial Percent Account"
-           )
-
-    assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "42% used")
-    assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "Partial Limit Account")
-    assert has_element?(view, "#{card_selector} .pool-quota-legend-row", "pressure unknown")
-
-    refute has_element?(
-             view,
-             "#{card_selector} .pool-quota-donut[aria-label='5h Remaining: 0 remaining']"
-           )
-
-    refute has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0")
-    refute has_element?(view, "#{card_selector} [data-role='pool-quota-legend-value']", "0")
-  end
-
-  test "does not infer absolute credits for percent-only account quota", %{
-    conn: conn,
-    scope: scope
-  } do
-    {:ok, pool} =
-      Pools.create_pool(scope, %{
-        slug: "quota-plan-inferred-pool",
-        name: "Quota Plan Inferred Pool"
-      })
-
-    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
-
-    %{identity: identity} =
-      upstream_assignment_fixture(pool, %{
-        plan_family: "pro",
-        account_label: "Plan Percent Account",
-        assignment_label: "Plan Percent Account"
-      })
-
-    assert {:ok, _windows} =
-             QuotaWindows.upsert_quota_windows(identity, [
-               percent_only_quota_window_attrs("primary", 300, "16", reset_at)
-             ])
-
-    {:ok, view, _html} = live(conn, ~p"/admin/pools")
-
-    card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
-
-    assert has_element?(view, card_selector, "5h quota")
-    assert has_element?(view, card_selector, "Plan Percent Account")
-    assert has_element?(view, card_selector, "1/1 reporting")
-    assert has_element?(view, card_selector, "84% remaining")
-
-    assert has_element?(
-             view,
-             "#{card_selector} [data-role='pool-quota-center-value']",
-             "84%"
-           )
-
-    refute has_element?(view, card_selector, "1.26K")
-    refute has_element?(view, card_selector, "1,260")
-    refute has_element?(view, card_selector, "Total 1.5K")
-  end
-
-  test "renders known exhausted quota as true zero remaining", %{
-    conn: conn,
-    scope: scope
-  } do
-    {:ok, pool} =
-      Pools.create_pool(scope, %{slug: "quota-exhausted-pool", name: "Quota Exhausted Pool"})
-
-    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
-
-    %{identity: identity} =
-      upstream_assignment_fixture(pool, %{
-        account_label: "Exhausted Account",
-        assignment_label: "Exhausted Account"
-      })
-
-    assert {:ok, _windows} =
-             QuotaWindows.upsert_quota_windows(identity, [
-               token_backed_quota_window_attrs("primary", 300, 1000, 0, reset_at)
-             ])
-
-    {:ok, view, _html} = live(conn, ~p"/admin/pools")
-
-    card_selector = "#pool-row-#{pool.id}-quota-primary-5h"
-
-    assert has_element?(view, card_selector, "5h quota")
-
-    assert has_element?(
-             view,
-             "#{card_selector} [data-role='pool-quota-center-label']",
-             "Available"
-           )
-
-    assert has_element?(view, "#{card_selector} [data-role='pool-quota-center-value']", "0%")
-
-    assert has_element?(view, card_selector, "Quota exhausted")
+    assert has_element?(view, "#pool-row-#{pool.id}-activity")
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-primary-5h")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-weekly")
+    refute has_element?(view, "#pool-row-#{pool.id}", "5h quota")
+    refute has_element?(view, "#pool-row-#{pool.id}", "Weekly quota")
+    refute has_element?(view, "#pool-row-#{pool.id}", "reporting")
+    refute has_element?(view, "#pool-row-#{pool.id}", "remaining")
+    refute has_element?(view, "#pool-row-#{pool.id} [phx-hook='QuotaPressureChart']")
   end
 
   test "renders 5h pool usage KPIs from settled usage", %{
@@ -538,9 +253,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-row-#{pool.id}-traffic-histogram-plot[data-chart-units='[\"tokens\",\"requests\"]']"
            )
 
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "5h quota")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Weekly quota")
-    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "Pool quota")
+    assert has_element?(view, "#pool-row-#{pool.id}-activity")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+    refute has_element?(view, "#pool-row-#{pool.id}", "5h quota")
+    refute has_element?(view, "#pool-row-#{pool.id}", "Weekly quota")
   end
 
   test "renders the pools shell and protected controls for authenticated admins", %{
@@ -595,7 +311,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec")
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+    assert has_element?(view, "#pool-row-#{pool.id}-activity")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-capacity")
     assert has_element?(view, "#pool-actions-menu-#{pool.id}")
     refute has_element?(view, "#pool-status-form-#{pool.id}")
@@ -1380,7 +1097,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-metric-tokens-per-sec", "50.0")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "1 request")
-    assert has_element?(view, "#pool-row-#{pool.id}-quota-remaining", "No current quota evidence")
+    refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
   end
 
   @tag feature_pool_control_plane_analytics: true
@@ -1625,58 +1342,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       window_minutes: window_minutes,
       active_limit: active_limit,
       used_percent: Decimal.new(used_percent),
-      reset_at: reset_at,
-      source: "codex_response_headers",
-      source_precision: "observed",
-      quota_scope: "account",
-      quota_family: "account",
-      freshness_state: "fresh"
-    }
-  end
-
-  defp percent_only_quota_window_attrs(window_kind, window_minutes, used_percent, reset_at) do
-    %{
-      quota_key: "account",
-      window_kind: window_kind,
-      window_minutes: window_minutes,
-      used_percent: Decimal.new(used_percent),
-      reset_at: reset_at,
-      source: "codex_response_headers",
-      source_precision: "observed",
-      quota_scope: "account",
-      quota_family: "account",
-      freshness_state: "fresh"
-    }
-  end
-
-  defp active_limit_only_quota_window_attrs(window_kind, window_minutes, active_limit, reset_at) do
-    %{
-      quota_key: "account",
-      window_kind: window_kind,
-      window_minutes: window_minutes,
-      active_limit: active_limit,
-      reset_at: reset_at,
-      source: "codex_response_headers",
-      source_precision: "observed",
-      quota_scope: "account",
-      quota_family: "account",
-      freshness_state: "fresh"
-    }
-  end
-
-  defp token_backed_quota_window_attrs(
-         window_kind,
-         window_minutes,
-         active_limit,
-         credits,
-         reset_at
-       ) do
-    %{
-      quota_key: "account",
-      window_kind: window_kind,
-      window_minutes: window_minutes,
-      active_limit: active_limit,
-      credits: credits,
       reset_at: reset_at,
       source: "codex_response_headers",
       source_precision: "observed",

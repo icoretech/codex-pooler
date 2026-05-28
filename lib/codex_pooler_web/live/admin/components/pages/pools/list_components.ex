@@ -13,14 +13,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   alias Phoenix.LiveView.JS
 
-  @quota_chart_order [:primary_5h, :weekly]
-  @quota_chart_colors [
-    {"bg-success", "var(--color-success)"},
-    {"bg-primary", "var(--color-primary)"},
-    {"bg-info", "var(--color-info)"},
-    {"bg-secondary", "var(--color-secondary)"}
-  ]
-
   attr :deleting_pool, :any, default: nil
   attr :delete_form, Phoenix.HTML.Form, required: true
   attr :delete_form_version, :integer, required: true
@@ -379,56 +371,56 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           </div>
           <.pool_action_menu pool_row={@pool_row} can_manage_pools?={@can_manage_pools?} />
         </div>
+      </div>
+      <footer class="pool-card-metrics" data-role="pool-card-metrics">
         <dl class="audit-metrics">
           <div class="audit-metric">
-            <span>Upstreams</span>
-            <span id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}>
+            <dt>Upstreams</dt>
+            <dd id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}>
               {@pool_row.upstream_count}
-            </span>
+            </dd>
           </div>
           <div class="audit-metric">
-            <span>Keys</span>
-            <span id={"pool-row-#{@pool_row.pool.id}-api-key-count"}>
+            <dt>Keys</dt>
+            <dd id={"pool-row-#{@pool_row.pool.id}-api-key-count"}>
               {@pool_row.api_key_count}
-            </span>
+            </dd>
           </div>
           <div class="audit-metric">
-            <span>Requests</span>
-            <span id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}>
+            <dt>Requests</dt>
+            <dd id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}>
               {PoolsReadModel.format_metric_integer(@pool_row.request_count_5h)}
-            </span>
+            </dd>
           </div>
           <div class="audit-metric">
-            <span>TPS</span>
-            <span id={"pool-row-#{@pool_row.pool.id}-tokens-per-sec"}>
+            <dt>TPS</dt>
+            <dd id={"pool-row-#{@pool_row.pool.id}-tokens-per-sec"}>
               {PoolsReadModel.format_metric_float(@pool_row.tokens_per_second)}
-            </span>
+            </dd>
           </div>
         </dl>
-      </div>
-      <.pool_quota_remaining_panel pool_row={@pool_row} />
+      </footer>
+      <.pool_activity_panel pool_row={@pool_row} />
     </article>
     """
   end
 
   attr :pool_row, :map, required: true
 
-  defp pool_quota_remaining_panel(assigns) do
+  defp pool_activity_panel(assigns) do
     assigns =
-      assigns
-      |> assign(:traffic_histogram_card, pool_traffic_histogram_card(assigns.pool_row))
-      |> assign(:quota_cards, quota_remaining_cards(assigns.pool_row))
+      assign(assigns, :traffic_histogram_card, pool_traffic_histogram_card(assigns.pool_row))
 
     ~H"""
     <div
-      id={"pool-row-#{@pool_row.pool.id}-quota-remaining"}
-      data-role="pool-quota-remaining-panel"
-      class="pool-quota-panel"
+      id={"pool-row-#{@pool_row.pool.id}-activity"}
+      data-role="pool-activity-panel"
+      class="pool-activity-panel"
     >
-      <article
+      <section
         id={"pool-row-#{@pool_row.pool.id}-traffic-histogram"}
-        data-role="pool-traffic-histogram-card"
-        class="pool-token-histogram-card"
+        data-role="pool-traffic-histogram"
+        class="pool-token-histogram"
       >
         <div class="pool-token-histogram-header">
           <div class="grid gap-1">
@@ -456,7 +448,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           data-chart-compact="true"
         >
         </div>
-        <p :if={@traffic_histogram_card.empty?} class="pool-quota-empty-copy">
+        <p :if={@traffic_histogram_card.empty?} class="pool-activity-empty-copy">
           No traffic in the last 24h
         </p>
         <ul class="sr-only">
@@ -464,67 +456,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             {point.label}: {point.tokens} tokens, {point.requests} requests
           </li>
         </ul>
-      </article>
-      <div class="pool-quota-cards">
-        <article
-          :for={card <- @quota_cards}
-          id={"pool-row-#{@pool_row.pool.id}-quota-#{card.id_suffix}"}
-          data-role="pool-quota-remaining-card"
-          class="pool-quota-card"
-        >
-          <div class="pool-quota-card-title">
-            <h3>{card.title}</h3>
-            <p>{card.summary_label}</p>
-          </div>
-
-          <div class="pool-quota-card-body">
-            <div class="pool-quota-chart-shell">
-              <div
-                id={"pool-row-#{@pool_row.pool.id}-quota-#{card.id_suffix}-chart"}
-                data-role="pool-quota-donut"
-                class="pool-quota-donut"
-                phx-hook="QuotaPressureChart"
-                phx-update="ignore"
-                data-value={card.chart_value}
-                data-label={card.chart_label}
-                data-color={card.chart_color}
-                data-track-color="var(--color-base-300)"
-                role="img"
-                aria-label={card.aria_label}
-              >
-              </div>
-              <div class="pool-quota-donut-center">
-                <span data-role="pool-quota-center-label">{card.center_label}</span>
-                <strong data-role="pool-quota-center-value">{card.center_value}</strong>
-              </div>
-            </div>
-
-            <div class="pool-quota-legend">
-              <dl :if={card.stat_rows != []} class="pool-quota-stats">
-                <div :for={row <- card.stat_rows}>
-                  <dt>{row.label}</dt>
-                  <dd>{row.value}</dd>
-                </div>
-              </dl>
-              <p :if={card.empty_copy} class="pool-quota-empty-copy">
-                {card.empty_copy}
-              </p>
-              <div
-                :for={segment <- card.legend_segments}
-                class="pool-quota-legend-row"
-              >
-                <span class="pool-quota-legend-label">
-                  <span class={["pool-quota-dot", segment.dot_class]}></span>
-                  <span>{segment.label}</span>
-                </span>
-                <span data-role="pool-quota-legend-value" class="pool-quota-legend-value">
-                  {segment.value_label}
-                </span>
-              </div>
-            </div>
-          </div>
-        </article>
-      </div>
+      </section>
     </div>
     """
   end
@@ -629,210 +561,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     }
   end
 
-  defp quota_remaining_cards(pool_row) do
-    charts = Map.get(pool_row, :quota_remaining_charts, %{})
-
-    Enum.map(@quota_chart_order, fn key ->
-      charts
-      |> Map.get(key, empty_quota_remaining_chart(key))
-      |> quota_remaining_card()
-    end)
-  end
-
-  defp empty_quota_remaining_chart(:primary_5h) do
-    empty_quota_remaining_chart(:primary_5h, "5h quota")
-  end
-
-  defp empty_quota_remaining_chart(:weekly) do
-    empty_quota_remaining_chart(:weekly, "Weekly quota")
-  end
-
-  defp empty_quota_remaining_chart(key, title) do
-    %{
-      key: key,
-      title: title,
-      account_count: 0,
-      evidence_count: 0,
-      usable_count: 0,
-      blocked_count: 0,
-      missing_count: 0,
-      remaining_total: Decimal.new(0),
-      capacity_total: nil,
-      used_total: nil,
-      used_percent: nil,
-      lowest_remaining_percent: nil,
-      next_reset_at: nil,
-      items: [],
-      state: "empty"
-    }
-  end
-
-  defp quota_remaining_card(chart) do
-    items = Map.get(chart, :items, [])
-    lowest_remaining_percent = decimal_value(Map.get(chart, :lowest_remaining_percent))
-    exhausted? = quota_exhausted?(chart)
-    chart_percent = quota_chart_percent(lowest_remaining_percent, exhausted?)
-
-    legend_segments = Enum.map(items, &quota_item_segment/1)
-    empty_copy = quota_empty_copy(chart, legend_segments, exhausted?)
-    title = Map.get(chart, :title, "Quota pressure")
-    chart_color = quota_pressure_color(chart_percent, chart, exhausted?)
-
-    %{
-      id_suffix: quota_chart_id_suffix(Map.get(chart, :key)),
-      title: title,
-      summary_label: quota_summary_label(chart),
-      center_label: quota_center_label(lowest_remaining_percent, exhausted?, empty_copy),
-      center_value: quota_center_value(lowest_remaining_percent, exhausted?, empty_copy),
-      chart_value: chart_percent |> Float.round(1) |> compact_float(),
-      chart_label: "quota available",
-      chart_color: chart_color,
-      stat_rows: quota_stat_rows(chart),
-      legend_segments: legend_segments,
-      empty_copy: empty_copy,
-      aria_label: quota_aria_label(title, lowest_remaining_percent, exhausted?, empty_copy)
-    }
-  end
-
-  defp quota_chart_id_suffix(:primary_5h), do: "primary-5h"
-  defp quota_chart_id_suffix(:weekly), do: "weekly"
-  defp quota_chart_id_suffix(key), do: key |> to_string() |> String.replace("_", "-")
-
-  defp quota_item_segment(item) do
-    {dot_class, color} = quota_color(Map.get(item, :color_index, 0))
-    remaining = decimal_value(Map.get(item, :remaining))
-
-    %{
-      label: Map.get(item, :label) || "Upstream account",
-      value: remaining,
-      value_label: quota_item_value_label(item, remaining),
-      dot_class: dot_class,
-      color: color
-    }
-  end
-
-  defp quota_exhausted?(chart) do
-    Map.get(chart, :state) == "blocked" and
-      chart
-      |> Map.get(:excluded_reasons, %{})
-      |> Map.get("exhausted", 0)
-      |> then(&(&1 > 0))
-  end
-
-  defp quota_empty_copy(_chart, [_segment | _segments], _exhausted?), do: nil
-  defp quota_empty_copy(_chart, [], true), do: "Quota exhausted"
-
-  defp quota_empty_copy(%{state: state}, [], false) when state in ["empty", "missing"],
-    do: "No current quota evidence"
-
-  defp quota_empty_copy(_chart, [], false), do: "No usable quota evidence"
-
-  defp quota_summary_label(%{account_count: count}) when count in [nil, 0],
-    do: "No quota evidence"
-
-  defp quota_summary_label(chart) do
-    "#{Map.get(chart, :evidence_count, 0)}/#{Map.get(chart, :account_count, 0)} reporting"
-  end
-
-  defp quota_center_label(%Decimal{}, _exhausted?, _empty_copy), do: "Available"
-  defp quota_center_label(nil, true, _empty_copy), do: "Available"
-  defp quota_center_label(nil, _exhausted?, _empty_copy), do: "No data"
-
-  defp quota_center_value(%Decimal{} = remaining_percent, _exhausted?, _empty_copy),
-    do: format_quota_percent(remaining_percent)
-
-  defp quota_center_value(nil, true, _empty_copy), do: "0%"
-  defp quota_center_value(nil, _exhausted?, _empty_copy), do: "No data"
-
-  defp quota_aria_label(title, %Decimal{} = remaining_percent, _exhausted?, _empty_copy) do
-    "#{title}: #{format_quota_percent(remaining_percent)} available on the most constrained account"
-  end
-
-  defp quota_aria_label(title, nil, true, _empty_copy), do: "#{title}: quota exhausted"
-
-  defp quota_aria_label(title, nil, _exhausted?, "No current quota evidence"),
-    do: "#{title}: no current quota evidence"
-
-  defp quota_aria_label(title, nil, _exhausted?, _empty_copy),
-    do: "#{title}: quota pressure unknown"
-
-  defp quota_item_value_label(item, remaining) do
-    used_percent = decimal_value(Map.get(item, :used_percent))
-    remaining_percent = decimal_value(Map.get(item, :remaining_percent))
-
-    cond do
-      is_nil(remaining) && is_nil(Map.get(item, :capacity)) && used_percent ->
-        "#{format_quota_percent(used_percent)} used"
-
-      remaining_percent ->
-        "#{format_quota_percent(remaining_percent)} remaining"
-
-      match?(%Decimal{}, remaining) ->
-        format_quota_value(remaining)
-
-      used_percent ->
-        "#{format_quota_percent(used_percent)} used"
-
-      true ->
-        "pressure unknown"
-    end
-  end
-
-  defp quota_stat_rows(chart) do
-    [
-      quota_lowest_row(decimal_value(Map.get(chart, :lowest_remaining_percent))),
-      %{label: "Usable", value: "#{Map.get(chart, :usable_count, 0)} usable"},
-      quota_count_row("Missing", Map.get(chart, :missing_count, 0), "missing"),
-      quota_count_row("Blocked", Map.get(chart, :blocked_count, 0), "blocked"),
-      quota_reset_row(Map.get(chart, :next_reset_at))
-    ]
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp quota_lowest_row(nil), do: nil
-
-  defp quota_lowest_row(%Decimal{} = remaining_percent) do
-    %{label: "Pressure", value: "#{format_quota_percent(remaining_percent)} remaining"}
-  end
-
-  defp quota_count_row(_label, count, _suffix) when count in [nil, 0], do: nil
-  defp quota_count_row(label, count, suffix), do: %{label: label, value: "#{count} #{suffix}"}
-
-  defp quota_reset_row(nil), do: nil
-
-  defp quota_reset_row(%DateTime{} = reset_at) do
-    %{label: "Next reset", value: format_reset_at(reset_at)}
-  end
-
-  defp quota_color(index) when is_integer(index) do
-    Enum.at(@quota_chart_colors, rem(max(index, 0), length(@quota_chart_colors)))
-  end
-
-  defp quota_color(_index), do: List.first(@quota_chart_colors)
-
-  defp quota_chart_percent(%Decimal{} = remaining_percent, _exhausted?),
-    do: decimal_to_float(remaining_percent)
-
-  defp quota_chart_percent(nil, true), do: 0.0
-  defp quota_chart_percent(nil, _exhausted?), do: 0.0
-
-  defp quota_pressure_color(percent, _chart, true) when percent <= 0.0, do: "var(--color-error)"
-
-  defp quota_pressure_color(_percent, %{lowest_remaining_percent: nil}, false),
-    do: "var(--color-base-300)"
-
-  defp quota_pressure_color(percent, _chart, _exhausted?) when percent <= 15.0,
-    do: "var(--color-error)"
-
-  defp quota_pressure_color(percent, _chart, _exhausted?) when percent <= 35.0,
-    do: "var(--color-warning)"
-
-  defp quota_pressure_color(_percent, _chart, _exhausted?), do: "var(--color-success)"
-
-  defp format_reset_at(%DateTime{} = reset_at) do
-    Calendar.strftime(reset_at, "%b %-d, %H:%M UTC")
-  end
-
   defp format_chart_bucket(<<_date::binary-size(10), "T", hour::binary-size(2), ":00:00Z">>),
     do: hour <> ":00"
 
@@ -847,32 +575,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp format_request_count(value) when is_float(value),
     do: value |> round() |> format_request_count()
 
-  defp decimal_value(%Decimal{} = value), do: value
-  defp decimal_value(value) when is_integer(value), do: Decimal.new(value)
-  defp decimal_value(value) when is_float(value), do: Decimal.from_float(value)
-  defp decimal_value(_value), do: nil
-
-  defp decimal_to_float(%Decimal{} = value), do: Decimal.to_float(value)
-
-  defp format_quota_percent(%Decimal{} = percent) do
-    percent
-    |> decimal_to_float()
-    |> Float.round(1)
-    |> compact_float()
-    |> Kernel.<>("%")
-  end
-
-  defp format_quota_percent(_percent), do: "unknown"
-
-  defp format_quota_value(%Decimal{} = value) do
-    number = value |> decimal_to_float() |> max(0.0)
-
-    formatted =
-      if number >= 100, do: number |> round() |> format_integer(), else: compact_float(number)
-
-    "#{formatted} remaining"
-  end
-
   defp format_integer(number) when is_integer(number) do
     number
     |> Integer.to_string()
@@ -882,15 +584,5 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     |> Enum.map(&Enum.reverse/1)
     |> Enum.reverse()
     |> Enum.map_join(",", &Enum.join/1)
-  end
-
-  defp compact_float(value) do
-    decimals = if value < 10 and value != Float.round(value, 0), do: 2, else: 1
-    rounded = Float.round(value, decimals)
-
-    rounded
-    |> :erlang.float_to_binary(decimals: decimals)
-    |> String.trim_trailing("0")
-    |> String.trim_trailing(".")
   end
 end

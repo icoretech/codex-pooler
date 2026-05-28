@@ -5,7 +5,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   alias CodexPooler.Admin.Stats
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
-  alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.PoolForm
 
@@ -25,10 +24,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:reasoning_tokens) => non_neg_integer(),
           required(:total_tokens) => non_neg_integer()
         }
-  @type quota_remaining_charts :: %{
-          required(:primary_5h) => map(),
-          required(:weekly) => map()
-        }
   @type pool_row :: %{
           required(:pool) => Pool.t(),
           required(:api_key_count) => non_neg_integer(),
@@ -39,7 +34,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:token_usage_weekly) => token_usage(),
           required(:token_histogram_24h) => [map()],
           required(:request_histogram_24h) => [map()],
-          required(:quota_remaining_charts) => quota_remaining_charts(),
           required(:routing_strategy) => String.t()
         }
   @type page_state :: %{
@@ -104,7 +98,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     upstream_counts = CodexPooler.Upstreams.count_pool_assignments_by_pool_ids(pool_ids)
     routing_settings = Pools.routing_settings_by_pool_ids(pool_ids)
     usage_metrics = Stats.pool_usage_metrics_by_pool_ids(pool_ids)
-    quota_remaining_charts = QuotaCharts.quota_remaining_charts_by_pool_ids(pool_ids)
 
     Enum.map(pools, fn pool ->
       usage = Map.fetch!(usage_metrics, pool.id)
@@ -119,40 +112,9 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         token_usage_weekly: usage.token_usage_weekly,
         token_histogram_24h: usage.token_histogram_24h,
         request_histogram_24h: usage.request_histogram_24h,
-        quota_remaining_charts:
-          Map.get(quota_remaining_charts, pool.id, empty_quota_remaining_charts()),
         routing_strategy: Map.get(routing_settings, pool.id).routing_strategy
       }
     end)
-  end
-
-  defp empty_quota_remaining_charts do
-    %{
-      primary_5h: empty_quota_remaining_chart(:primary_5h, "5h quota"),
-      weekly: empty_quota_remaining_chart(:weekly, "Weekly quota")
-    }
-  end
-
-  defp empty_quota_remaining_chart(key, title) do
-    %{
-      key: key,
-      title: title,
-      account_count: 0,
-      evidence_count: 0,
-      usable_count: 0,
-      blocked_count: 0,
-      missing_count: 0,
-      remaining_total: Decimal.new(0),
-      capacity_total: nil,
-      used_total: nil,
-      used_percent: nil,
-      lowest_remaining_percent: nil,
-      next_reset_at: nil,
-      items: [],
-      excluded_count: 0,
-      excluded_reasons: %{},
-      state: "empty"
-    }
   end
 
   defp filter_pool_rows(pool_rows, filters) do
