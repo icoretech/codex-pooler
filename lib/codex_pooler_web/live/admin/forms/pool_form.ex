@@ -48,6 +48,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "bridge_ring_size" => settings.bridge_ring_size,
       "sticky_websocket_sessions" => settings.sticky_websocket_sessions,
       "sticky_http_sessions" => settings.sticky_http_sessions,
+      "prompt_cache_affinity_enabled" => settings.prompt_cache_affinity_enabled,
       "control_plane_analytics_forwarding_enabled" =>
         settings.control_plane_analytics_forwarding_enabled,
       "v1_compatibility_enabled" => settings.v1_compatibility_enabled,
@@ -158,6 +159,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "bridge_ring_size" => 3,
       "sticky_websocket_sessions" => true,
       "sticky_http_sessions" => false,
+      "prompt_cache_affinity_enabled" => true,
       "control_plane_analytics_forwarding_enabled" => true,
       "v1_compatibility_enabled" => true,
       "upstream_identity_ids" => [],

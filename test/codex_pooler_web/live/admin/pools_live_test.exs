@@ -404,11 +404,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-routing-controls #pool_bridge_ring_size")
     assert has_element?(view, "#pool-create-routing-controls #pool_sticky_websocket_sessions")
     assert has_element?(view, "#pool-create-routing-controls #pool_sticky_http_sessions")
+    assert has_element?(view, "#pool-create-routing-controls #pool_prompt_cache_affinity_enabled")
     assert has_element?(view, "#pool-create-routing-controls #pool_v1_compatibility_enabled")
     assert has_element?(view, "#pool_routing_strategy")
     assert has_element?(view, "#pool_bridge_ring_size")
     assert has_element?(view, "#pool_sticky_websocket_sessions")
     assert has_element?(view, "#pool_sticky_http_sessions")
+    assert has_element?(view, "#pool_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_v1_compatibility_enabled")
 
     assert has_element?(
@@ -421,6 +423,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-create-routing-controls",
              "Identity-aware routing behavior."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Keep related prompt-cache-key requests near the same upstream for routing locality only."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Codex Pooler does not store prompts or responses for this control."
            )
 
     assert has_element?(
@@ -539,6 +553,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     settings = Pools.get_routing_settings(created_pool)
 
     assert created_pool.name == "Generated Slug Pool"
+    assert settings.prompt_cache_affinity_enabled == true
     assert settings.control_plane_analytics_forwarding_enabled == true
     assert settings.v1_compatibility_enabled == true
     assert has_element?(view, "#pool-row-#{created_pool.id}", "Generated Slug Pool")
@@ -581,6 +596,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       "pool" => %{
         "name" => "Routed Create Pool",
         "routing_strategy" => "least_recent_success",
+        "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "upstream_identity_ids" => [first_identity.id, second_identity.id]
@@ -593,6 +609,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert created_pool.name == "Routed Create Pool"
     assert settings.routing_strategy == "least_recent_success"
+    assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
 
@@ -640,6 +657,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       "pool" => %{
         "name" => "Duplicate Routed Pool!!!",
         "routing_strategy" => "quota_first",
+        "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "upstream_identity_ids" => [identity.id]
@@ -654,6 +672,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-create-upstream-identity-options input[checked][value='#{identity.id}']"
            )
 
+    refute has_element?(view, "#pool_prompt_cache_affinity_enabled[checked]")
     refute has_element?(view, "#pool_control_plane_analytics_forwarding_enabled[checked]")
     refute has_element?(view, "#pool_v1_compatibility_enabled[checked]")
 
@@ -754,6 +773,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
+             "#pool-edit-routing-controls #pool_edit_prompt_cache_affinity_enabled"
+           )
+
+    assert has_element?(
+             view,
              "#pool-edit-routing-controls #pool_edit_control_plane_analytics_forwarding_enabled"
            )
 
@@ -762,6 +786,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool_edit_bridge_ring_size")
     assert has_element?(view, "#pool_edit_sticky_websocket_sessions")
     assert has_element?(view, "#pool_edit_sticky_http_sessions")
+    assert has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_edit_control_plane_analytics_forwarding_enabled")
     assert has_element?(view, "#pool_edit_v1_compatibility_enabled")
 
@@ -775,6 +800,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-edit-routing-controls",
              "Identity-aware routing behavior."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Keep related prompt-cache-key requests near the same upstream for routing locality only."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Codex Pooler does not store prompts or responses for this control."
            )
 
     assert has_element?(
@@ -882,6 +919,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "bridge_ring_size" => "5",
         "sticky_websocket_sessions" => "false",
         "sticky_http_sessions" => "true",
+        "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "upstream_identity_ids" => [kept_assignment.upstream_identity_id],
@@ -894,6 +932,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.bridge_ring_size == 5
     assert settings.sticky_websocket_sessions == false
     assert settings.sticky_http_sessions == true
+    assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert Repo.get!(PoolUpstreamAssignment, removed_assignment.id).status == "deleted"
@@ -1145,12 +1184,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "bridge_ring_size" => 7,
         "sticky_websocket_sessions" => false,
         "sticky_http_sessions" => true,
+        "prompt_cache_affinity_enabled" => false,
         "control_plane_analytics_forwarding_enabled" => true
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
 
     view
     |> element("#pool-edit-form")
@@ -1160,6 +1202,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "name" => "Preserved Routing",
         "status" => "active",
         "routing_strategy" => "quota_first",
+        "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "upstream_identity_ids" => []
@@ -1172,6 +1215,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.bridge_ring_size == 7
     assert settings.sticky_websocket_sessions == false
     assert settings.sticky_http_sessions == true
+    assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
@@ -1255,6 +1299,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "name" => "",
         "status" => "active",
         "routing_strategy" => "deterministic_rotation",
+        "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "upstream_identity_ids" => [second_assignment.upstream_identity_id]
@@ -1273,6 +1318,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-edit-upstream-assignment-options input[checked][value='#{second_assignment.upstream_identity_id}']"
            )
 
+    refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     refute has_element?(view, "#pool_edit_control_plane_analytics_forwarding_enabled[checked]")
     refute has_element?(view, "#pool_edit_v1_compatibility_enabled[checked]")
 

@@ -201,6 +201,17 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         Same upstream preference for related HTTP requests.
                       </p>
                     </div>
+                    <div class="routing-matrix-option">
+                      <.input
+                        field={@form[:prompt_cache_affinity_enabled]}
+                        type="checkbox"
+                        label="Prompt cache affinity"
+                      />
+                      <p class="routing-option-help">
+                        Keep related prompt-cache-key requests near the same upstream for routing locality only.
+                        Codex Pooler does not store prompts or responses for this control.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
