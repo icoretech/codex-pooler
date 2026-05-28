@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPoolerWeb.WebsocketConnectionLogger
 
   require Logger
 
@@ -16,6 +17,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def init(state) do
+    started_at = System.monotonic_time(:millisecond)
+
     case Gateway.prepare_websocket_session(state.auth, state.opts) do
       {:ok,
        %{
@@ -28,13 +31,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} ->
         {:ok,
          state
+         |> put_socket_lifecycle_state()
          |> Map.put(:tasks, MapSet.new())
          |> Map.put(:task_monitors, %{})
          |> Map.put(:codex_session, session)
          |> Map.put(:upstream_websocket_session, upstream_websocket_session)}
 
       {:error, reason} ->
-        init_error(reason, state)
+        init_error(reason, state, started_at)
     end
   end
 
@@ -132,7 +136,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def handle_info(_message, state), do: {:ok, state}
 
   @impl WebSock
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
+    log_closed_before_request_reservation(reason, state)
+
     remaining_tasks =
       state
       |> Map.get(:tasks, MapSet.new())
@@ -154,6 +160,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       await_response_tasks(remaining_tasks, @post_cleanup_response_task_drain_ms)
     end
   end
+
+  defp log_closed_before_request_reservation(
+         reason,
+         %{request_response_work_started?: false} = state
+       ) do
+    unless clean_pre_request_close_reason?(reason) do
+      state
+      |> terminate_close_metadata()
+      |> WebsocketConnectionLogger.log_closed_before_request_reservation(reason)
+    end
+
+    :ok
+  end
+
+  defp log_closed_before_request_reservation(_reason, _state), do: :ok
+
+  defp clean_pre_request_close_reason?(:normal), do: true
+  defp clean_pre_request_close_reason?(:shutdown), do: true
+  defp clean_pre_request_close_reason?({:shutdown, _reason}), do: true
+  defp clean_pre_request_close_reason?(_reason), do: false
 
   defp log_interrupt_failure({:ok, _result}, _state), do: :ok
 
@@ -177,12 +203,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp put_owner_runtime_state(state, session, owner_lease_token, downstream) do
     state
+    |> put_socket_lifecycle_state()
     |> Map.put(:tasks, MapSet.new())
     |> Map.put(:task_monitors, %{})
     |> Map.put(:codex_session, session)
     |> Map.put(:websocket_owner_lease_token, owner_lease_token)
     |> Map.put(:websocket_owner_downstream, downstream)
     |> put_websocket_owner_monitor(session)
+  end
+
+  defp put_socket_lifecycle_state(state) do
+    state
+    |> Map.put(:connection_started_at_monotonic_ms, System.monotonic_time(:millisecond))
+    |> Map.put(:request_response_work_started?, false)
   end
 
   defp put_websocket_owner_monitor(state, session) do
@@ -214,12 +247,54 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp owner_monitor_down_reason({:shutdown, _details}), do: :owner_drained
   defp owner_monitor_down_reason(_reason), do: :owner_crashed
 
-  defp init_error(reason, state) do
+  defp init_error(reason, state, started_at) do
+    log_init_failed_before_request_reservation(reason, state, started_at)
+
     if WebsocketOwnerContract.owner_error?(reason) do
       {:stop, :normal, owner_close_detail(reason), state}
     else
       {:stop, reason, state}
     end
+  end
+
+  defp log_init_failed_before_request_reservation(reason, state, started_at) do
+    state
+    |> init_failure_metadata(started_at)
+    |> WebsocketConnectionLogger.log_init_failed_before_request_reservation(reason)
+  end
+
+  defp init_failure_metadata(state, started_at) do
+    opts = Map.get(state, :opts)
+
+    %{
+      request_id: request_id(opts),
+      endpoint: metadata_endpoint(opts),
+      transport: metadata_transport(opts),
+      route_class: metadata_route_class(opts),
+      phase: "init",
+      elapsed_ms: socket_elapsed_ms(started_at),
+      codex_session_id: metadata_codex_session_id(state, opts),
+      owner_instance_id: metadata_owner_instance_id(state, opts),
+      proxy_instance_id: metadata_proxy_instance_id(opts),
+      downstream_epoch: metadata_downstream_epoch(state, opts)
+    }
+  end
+
+  defp terminate_close_metadata(state) do
+    opts = Map.get(state, :opts)
+
+    %{
+      request_id: request_id(opts),
+      endpoint: metadata_endpoint(opts),
+      transport: metadata_transport(opts),
+      route_class: metadata_route_class(opts),
+      phase: "terminate",
+      elapsed_ms: socket_elapsed_ms(Map.get(state, :connection_started_at_monotonic_ms)),
+      codex_session_id: metadata_codex_session_id(state, opts),
+      owner_instance_id: metadata_owner_instance_id(state, opts),
+      proxy_instance_id: metadata_proxy_instance_id(opts),
+      downstream_epoch: metadata_downstream_epoch(state, opts)
+    }
   end
 
   defp owner_close_detail(:owner_crashed), do: {1011, "websocket owner crashed"}
@@ -304,6 +379,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_tracked_response_task(payload, state) do
+    state = maybe_mark_request_response_work_started(state, payload)
     parent = self()
     {:ok, pid} = start_response_task(parent, payload, state)
     monitor = Process.monitor(pid)
@@ -319,6 +395,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       &:queue.in(payload, &1)
     )
   end
+
+  @spec maybe_mark_request_response_work_started(map(), term()) :: map()
+  defp maybe_mark_request_response_work_started(state, payload) do
+    if request_row_producing_response_payload?(payload) do
+      Map.put(state, :request_response_work_started?, true)
+    else
+      state
+    end
+  end
+
+  @spec request_row_producing_response_payload?(term()) :: boolean()
+  defp request_row_producing_response_payload?(payload) when is_binary(payload) do
+    case Jason.decode(payload) do
+      {:ok, %{"type" => "response.processed"}} -> true
+      {:ok, %{"generate" => false}} -> false
+      {:ok, %{"type" => "response.create"}} -> true
+      {:ok, %{"model" => model}} when is_binary(model) and model != "" -> true
+      _payload -> false
+    end
+  end
+
+  defp request_row_producing_response_payload?(_payload), do: false
 
   defp owner_forwarded_socket?(state), do: is_map(Map.get(state, :websocket_owner_downstream))
 
@@ -605,6 +703,98 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp downstream_epoch(%{epoch: epoch}) when is_integer(epoch), do: Integer.to_string(epoch)
   defp downstream_epoch(_downstream), do: "none"
+
+  defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})
+       when is_binary(endpoint),
+       do: endpoint
+
+  defp metadata_endpoint(%{endpoint: endpoint}) when is_binary(endpoint), do: endpoint
+  defp metadata_endpoint(%{upstream_endpoint: endpoint}) when is_binary(endpoint), do: endpoint
+  defp metadata_endpoint(_opts), do: nil
+
+  defp metadata_transport(%RequestOptions{transport: %{transport: transport}})
+       when is_binary(transport),
+       do: transport
+
+  defp metadata_transport(%{transport: transport}) when is_binary(transport), do: transport
+  defp metadata_transport(_opts), do: nil
+
+  defp metadata_route_class(%RequestOptions{} = opts), do: RequestOptions.route_class(opts)
+
+  defp metadata_route_class(%{route_class: route_class}) when is_binary(route_class),
+    do: route_class
+
+  defp metadata_route_class(_opts), do: nil
+
+  defp metadata_codex_session_id(%{codex_session: %{id: id}}, _opts) when is_binary(id), do: id
+
+  defp metadata_codex_session_id(_state, %RequestOptions{continuity: %{codex_session: %{id: id}}})
+       when is_binary(id),
+       do: id
+
+  defp metadata_codex_session_id(_state, _opts), do: nil
+
+  defp metadata_owner_instance_id(
+         %{codex_session: %{owner_instance_id: owner_instance_id}},
+         _opts
+       )
+       when is_binary(owner_instance_id),
+       do: owner_instance_id
+
+  defp metadata_owner_instance_id(
+         _state,
+         %RequestOptions{transport: %{websocket_owner_instance_id: owner_instance_id}}
+       )
+       when is_binary(owner_instance_id),
+       do: owner_instance_id
+
+  defp metadata_owner_instance_id(
+         _state,
+         %RequestOptions{continuity: %{owner_instance_id: owner_instance_id}}
+       )
+       when is_binary(owner_instance_id),
+       do: owner_instance_id
+
+  defp metadata_owner_instance_id(_state, %{owner_instance_id: owner_instance_id})
+       when is_binary(owner_instance_id),
+       do: owner_instance_id
+
+  defp metadata_owner_instance_id(_state, _opts), do: nil
+
+  defp metadata_proxy_instance_id(%RequestOptions{
+         transport: %{websocket_owner_proxy_instance_id: proxy_instance_id}
+       })
+       when is_binary(proxy_instance_id),
+       do: proxy_instance_id
+
+  defp metadata_proxy_instance_id(%{websocket_owner_proxy_instance_id: proxy_instance_id})
+       when is_binary(proxy_instance_id),
+       do: proxy_instance_id
+
+  defp metadata_proxy_instance_id(_opts), do: nil
+
+  defp metadata_downstream_epoch(%{websocket_owner_downstream: downstream}, _opts)
+       when is_map(downstream),
+       do: downstream_epoch(downstream)
+
+  defp metadata_downstream_epoch(
+         _state,
+         %RequestOptions{transport: %{websocket_owner_downstream_epoch: epoch}}
+       )
+       when is_integer(epoch),
+       do: Integer.to_string(epoch)
+
+  defp metadata_downstream_epoch(_state, %{websocket_owner_downstream_epoch: epoch})
+       when is_integer(epoch),
+       do: Integer.to_string(epoch)
+
+  defp metadata_downstream_epoch(_state, _opts), do: nil
+
+  defp socket_elapsed_ms(started_at) when is_integer(started_at) do
+    max(System.monotonic_time(:millisecond) - started_at, 0)
+  end
+
+  defp socket_elapsed_ms(_started_at), do: nil
 
   defp log_response_task_failure(kind, reason, stacktrace, payload, state, opts) do
     metadata =

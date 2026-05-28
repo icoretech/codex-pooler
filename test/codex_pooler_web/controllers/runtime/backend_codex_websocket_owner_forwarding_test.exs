@@ -53,9 +53,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPoolerWeb.WebsocketConnectionLogger
   alias CodexPoolerWeb.CodexResponsesSocket
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
+
+  @websocket_lifecycle_metadata_keys ~w(
+    codex_session_id
+    downstream_epoch
+    elapsed_ms
+    endpoint
+    owner_instance_id
+    phase
+    proxy_instance_id
+    reason_class
+    request_id
+    route_class
+    transport
+  )
+
+  @websocket_lifecycle_forbidden_terms ~w(
+    auth.json
+    authorization
+    bearer
+    cookie
+    headers
+    idempotency
+    payload
+    prompt
+    upstream_body
+    websocket_frame
+  )
 
   defmodule StaleOwnerNodeClient do
     @moduledoc false
@@ -619,6 +647,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.response_status_code == 200))
   end
 
+  test "owner-forwarded response processed close while in flight is not pre-request lifecycle" do
+    release_ref = make_ref()
+    upstream_boundary = chained_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-ws-owner-processed-close"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-owner-processed-close-first", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    try do
+      first_payload =
+        websocket_payload(setup, "first owner processed close turn", %{
+          "request_id" => "ws-owner-processed-close-first"
+        })
+
+      assert {:ok, first_state} =
+               CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+      assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
+      assert %{"id" => "resp_owner_queue_first"} = Jason.decode!(first_frame)
+      assert {:ok, _first_state} = receive_socket_done(first_state)
+    after
+      CodexResponsesSocket.terminate(:closed, first_state)
+    end
+
+    {:ok, processed_state} = owner_socket(auth, "ws-owner-processed-close", turn_state)
+
+    processed_payload =
+      Jason.encode!(%{
+        "type" => "response.processed",
+        "response_id" => "resp_owner_queue_first",
+        "request_id" => "ws-owner-processed-close"
+      })
+
+    assert {:ok, processed_state} =
+             CodexResponsesSocket.handle_in({processed_payload, [opcode: :text]}, processed_state)
+
+    assert processed_state.request_response_work_started?
+    assert_receive {:chained_owner_upstream_processed_blocked, processed_pid, ^release_ref}
+
+    try do
+      logs =
+        capture_websocket_lifecycle_log(fn ->
+          assert :ok = CodexResponsesSocket.terminate(:closed, processed_state)
+        end)
+
+      refute logs =~ WebsocketConnectionLogger.closed_message()
+      refute logs =~ WebsocketConnectionLogger.init_failed_message()
+      assert_no_websocket_lifecycle_leaks!(logs)
+
+      send(processed_pid, {:chained_owner_upstream_release, release_ref})
+      flush_socket_done(processed_state)
+    after
+      send(processed_pid, {:chained_owner_upstream_release, release_ref})
+    end
+
+    assert [first_log | _rest] = request_logs(setup.pool.id)
+    assert first_log.correlation_id == "ws-owner-processed-close-first"
+    assert first_log.status == "succeeded"
+  end
+
   test "owner forwarding does not acquire a second proxy websocket admission slot" do
     with_single_proxy_websocket_slot(fn ->
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_admission"}))
@@ -776,6 +869,99 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              } = Jason.decode!(error_frame)
 
       assert message =~ "owner_unavailable"
+      assert FakeUpstream.count(upstream) == 0
+    after
+      CodexResponsesSocket.terminate(:closed, Map.delete(state, :websocket_owner_downstream))
+    end
+  end
+
+  test "owner-forwarded anomalous close before request reservation logs bounded lifecycle metadata only" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_id = "ws-owner-pre-request-close-#{System.unique_integer([:positive])}"
+    turn_state = "stable-owner-pre-request-close-#{System.unique_integer([:positive])}"
+
+    logs =
+      capture_websocket_lifecycle_log(fn ->
+        assert {:ok, state} =
+                 CodexResponsesSocket.init(%{
+                   auth: auth,
+                   opts:
+                     owner_lifecycle_request_options(request_id, turn_state,
+                       authorization_header: "Bearer owner-close-secret-sentinel",
+                       idempotency_key: "owner-close-idempotency-secret",
+                       forwarded_headers: [{"cookie", "owner-close-cookie-secret"}]
+                     ),
+                   raw_frame: @sentinel
+                 })
+
+        refute state.request_response_work_started?
+        assert is_map(state.websocket_owner_downstream)
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.closed_message(),
+        ~w(codex_session_id downstream_epoch elapsed_ms endpoint phase reason_class request_id route_class transport),
+        ~w(owner_instance_id proxy_instance_id)
+      )
+
+    owner_instance_id = String.replace(Atom.to_string(node()), ~r/[^a-zA-Z0-9_.:-]+/, "_")
+
+    assert line =~ "request_id=#{request_id}"
+    assert line =~ "endpoint=_backend-api_codex_responses"
+    assert line =~ "transport=websocket"
+    assert line =~ "route_class=proxy_websocket"
+    assert line =~ "phase=terminate"
+    assert line =~ "reason_class=closed"
+    assert line =~ "codex_session_id="
+    assert line =~ "downstream_epoch=1"
+    assert line =~ "owner_instance_id=#{owner_instance_id}"
+    refute logs =~ "websocket owner detach failed"
+    refute logs =~ "owner_unavailable"
+    assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "owner-forwarded cleanup-only remote detach failure stays quiet without active turn" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_id = "ws-owner-cleanup-only-detach"
+    turn_state = "stable-ws-owner-cleanup-only-detach"
+
+    assert {:ok, state} =
+             CodexResponsesSocket.init(%{
+               auth: auth,
+               opts: owner_lifecycle_request_options(request_id, turn_state)
+             })
+
+    remote_node = :"codex_pooler@nodedown-cleanup-only-detach.example"
+
+    remote_state = %{
+      state
+      | codex_session: %{state.codex_session | owner_instance_id: Atom.to_string(remote_node)},
+        opts:
+          RequestOptions.put_transport(state.opts,
+            websocket_owner_forwarder_opts:
+              WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+                calls: %{remote_node => :nodedown}
+              )
+          )
+    }
+
+    try do
+      logs =
+        capture_log([level: :warning], fn ->
+          assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+        end)
+
+      assert logs == ""
+      assert_no_leak!("cleanup-only remote detach logs", logs)
+      assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
       assert FakeUpstream.count(upstream) == 0
     after
       CodexResponsesSocket.terminate(:closed, Map.delete(state, :websocket_owner_downstream))
@@ -1722,26 +1908,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         owner_instance_id: remote_node_string
       })
 
-    opts =
-      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-        calls: %{remote_node => :timeout}
+    request_id = "ws-owner-init-timeout"
+
+    logs =
+      capture_websocket_lifecycle_log(fn ->
+        assert :ok =
+                 WebsocketConnectionLogger.log_init_failed_before_request_reservation(
+                   %{
+                     request_id: request_id,
+                     endpoint: "/backend-api/codex/responses",
+                     transport: "websocket",
+                     route_class: "proxy_websocket",
+                     phase: "init",
+                     elapsed_ms: 17,
+                     codex_session_id: session.id,
+                     owner_instance_id: remote_node_string,
+                     proxy_instance_id: Atom.to_string(node())
+                   },
+                   :timeout
+                 )
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        "websocket init failed before request reservation",
+        ~w(codex_session_id elapsed_ms endpoint phase reason_class request_id route_class transport),
+        ~w(owner_instance_id proxy_instance_id)
       )
 
-    state = %{
-      auth: auth,
-      opts: %{
-        request_id: "ws-owner-init-timeout",
-        accepted_turn_state: "stable-ws-owner-init-timeout",
-        client_ip: "127.0.0.1",
-        websocket_owner_forwarder_opts: Keyword.put(opts, :timeout, 25)
-      }
-    }
+    expected_endpoint = String.replace("/backend-api/codex/responses", ~r/[^a-zA-Z0-9_.:-]+/, "_")
+    expected_owner_instance_id = String.replace(remote_node_string, ~r/[^a-zA-Z0-9_.:-]+/, "_")
 
-    assert {:stop, :normal, {1011, "websocket owner forwarding timed out"}, ^state} =
-             CodexResponsesSocket.init(state)
+    expected_proxy_instance_id =
+      String.replace(Atom.to_string(node()), ~r/[^a-zA-Z0-9_.:-]+/, "_")
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{function: :remote_attach_downstream, timeout: 25}}
+    assert line =~ "request_id=#{request_id}"
+    assert line =~ "endpoint=#{expected_endpoint}"
+    assert line =~ "transport=websocket"
+    assert line =~ "route_class=proxy_websocket"
+    assert line =~ "codex_session_id=#{session.id}"
+    assert line =~ "owner_instance_id=#{expected_owner_instance_id}"
+    assert line =~ "proxy_instance_id=#{expected_proxy_instance_id}"
+
+    assert [] = request_logs(setup.pool.id)
 
     assert active_owner_lease(session.id).owner_instance_id == remote_node_string
     assert FakeUpstream.count(upstream) == 0
@@ -2374,8 +2584,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     payload = websocket_payload(setup, "close while owner request is active")
 
     assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    assert state.request_response_work_started?
     assert_receive {:blocking_owner_upstream_received, owner_worker_pid, ^release_ref}
-    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+
+    logs =
+      capture_websocket_lifecycle_log(fn ->
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    refute logs =~ WebsocketConnectionLogger.closed_message()
+    refute logs =~ WebsocketConnectionLogger.init_failed_message()
+    refute logs =~ "websocket owner detach failed"
+    assert_no_websocket_lifecycle_leaks!(logs)
+
     send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
 
     session = Repo.get_by!(CodexSession, session_key: "close-during-request")
@@ -2704,6 +2925,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  defp capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      capture_log(
+        [
+          level: :info,
+          format: "$metadata$message\n",
+          metadata: @websocket_lifecycle_metadata_keys,
+          colors: [enabled: false]
+        ],
+        fun
+      )
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
   defp stale_owner_node_client_opts(nodes) when is_list(nodes) do
     previous = Process.get(StaleOwnerNodeClient)
     Process.put(StaleOwnerNodeClient, %{nodes: nodes})
@@ -2733,6 +2973,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     })
   end
 
+  defp owner_lifecycle_request_options(request_id, turn_state, extra_opts \\ []) do
+    %{
+      request_id: request_id,
+      accepted_turn_state: turn_state,
+      client_ip: "127.0.0.1"
+    }
+    |> Map.merge(Map.new(extra_opts))
+    |> RequestOptions.for_websocket()
+  end
+
   defp receive_owner_socket_push(state) do
     receive do
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
@@ -2757,6 +3007,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  defp flush_socket_done(state) do
+    receive do
+      {:codex_response_done, pid, result} ->
+        CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state)
+    after
+      100 -> :ok
+    end
+  end
+
   defp request_logs(pool_id) do
     Repo.all(
       from(r in Request,
@@ -2764,6 +3023,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         order_by: [asc: r.admitted_at]
       )
     )
+  end
+
+  defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do
+    lifecycle_lines =
+      logs
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.contains?(&1, message))
+
+    assert [line] = lifecycle_lines
+
+    metadata_text =
+      line
+      |> String.replace_prefix(message, "")
+      |> String.trim_leading()
+
+    metadata_keys =
+      metadata_text
+      |> String.split(" ", trim: true)
+      |> Enum.map(fn token -> token |> String.split("=", parts: 2) |> hd() end)
+
+    assert Enum.all?(metadata_keys, &(&1 in @websocket_lifecycle_metadata_keys))
+    assert Enum.all?(required_keys, &(&1 in metadata_keys))
+    assert Enum.all?(metadata_keys, &(&1 in (required_keys ++ optional_keys)))
+    assert_no_websocket_lifecycle_leaks!(logs)
+
+    line
+  end
+
+  defp assert_no_websocket_lifecycle_leaks!(logs) do
+    downcased_logs = String.downcase(logs)
+
+    for forbidden_term <- @websocket_lifecycle_forbidden_terms do
+      refute downcased_logs =~ forbidden_term
+    end
+
+    refute downcased_logs =~ @sentinel
   end
 
   defp assert_abnormal_owner_monitor_down_crashes_active_turn!(owner_reason, suffix) do

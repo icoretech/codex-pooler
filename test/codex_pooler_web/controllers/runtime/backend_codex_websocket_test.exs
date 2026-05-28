@@ -34,10 +34,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.WebsocketConnectionLogger
   alias Ecto.Adapters.SQL.Sandbox
 
   @websocket_frame_timeout 1_000
   @large_websocket_frame_timeout 5_000
+
+  @websocket_lifecycle_metadata_keys ~w(
+    codex_session_id
+    downstream_epoch
+    elapsed_ms
+    endpoint
+    owner_instance_id
+    phase
+    proxy_instance_id
+    reason_class
+    request_id
+    route_class
+    transport
+  )
+
+  @websocket_lifecycle_forbidden_terms ~w(
+    auth.json
+    authorization
+    bearer
+    cookie
+    header
+    idempotency
+    payload
+    prompt
+    upstream_body
+    websocket_frame
+    init-failure-secret-sentinel
+    init-cookie-secret
+    init-idempotency-secret
+    init-prompt-sentinel
+  )
 
   test "GET /backend-api/codex/responses requires websocket upgrade", %{conn: conn} do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
@@ -172,6 +204,208 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     after
       Mint.HTTP.close(conn)
     end
+  end
+
+  test "socket init failure before request reservation logs one bounded warning and creates no request row" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_id = "ws-init-failure-#{System.unique_integer([:positive])}"
+
+    request_options =
+      %{
+        request_id: request_id,
+        client_ip: "127.0.0.1",
+        previous_response_id: "resp_missing_init_failure",
+        authorization_header: "Bearer init-failure-secret-sentinel",
+        idempotency_key: "init-idempotency-secret",
+        forwarded_headers: [{"cookie", "init-cookie-secret"}]
+      }
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_continuity(authenticated_owner_attach: true)
+
+    logs =
+      capture_websocket_lifecycle_log(:warning, fn ->
+        assert {:stop, :normal, {1011, "websocket owner is unavailable"}, returned_state} =
+                 CodexResponsesSocket.init(%{
+                   auth: auth,
+                   opts: request_options,
+                   raw_frame: "init-prompt-sentinel"
+                 })
+
+        assert returned_state.opts.request_metadata.request_id == request_id
+        refute Map.has_key?(returned_state, :request_response_work_started?)
+        refute Map.has_key?(returned_state, :connection_started_at_monotonic_ms)
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.init_failed_message(),
+        ~w(elapsed_ms endpoint phase reason_class request_id route_class transport),
+        ~w(codex_session_id downstream_epoch owner_instance_id proxy_instance_id)
+      )
+
+    assert line =~ "request_id=#{request_id}"
+    assert line =~ "endpoint=_backend-api_codex_responses"
+    assert line =~ "transport=websocket"
+    assert line =~ "route_class=proxy_websocket"
+    assert line =~ "phase=init"
+    assert line =~ "reason_class=owner_unavailable"
+    assert line =~ "elapsed_ms="
+
+    assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+    assert %{items: [], total: 0} = Accounting.list_request_logs(setup.pool)
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "socket init lifecycle warning does not cover controller auth or upgrade errors", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+
+    auth_logs =
+      capture_websocket_lifecycle_log(:warning, fn ->
+        conn = get(conn, "/backend-api/codex/responses")
+        assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      end)
+
+    refute auth_logs =~ WebsocketConnectionLogger.init_failed_message()
+
+    upgrade_logs =
+      capture_websocket_lifecycle_log(:warning, fn ->
+        conn =
+          Phoenix.ConnTest.build_conn()
+          |> auth(setup)
+          |> get("/backend-api/codex/responses")
+
+        assert json_response(conn, 400)["error"]["code"] == "websocket_upgrade_required"
+      end)
+
+    refute upgrade_logs =~ WebsocketConnectionLogger.init_failed_message()
+    assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "socket terminate anomalous close before request reservation logs one bounded line and creates no request row" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_id = "ws-pre-request-close-#{System.unique_integer([:positive])}"
+
+    logs =
+      capture_websocket_lifecycle_log(:info, fn ->
+        assert {:ok, state} =
+                 CodexResponsesSocket.init(%{
+                   auth: auth,
+                   opts:
+                     websocket_lifecycle_request_options(request_id,
+                       authorization_header: "Bearer terminate-secret-sentinel",
+                       idempotency_key: "terminate-idempotency-secret",
+                       forwarded_headers: [{"cookie", "terminate-cookie-secret"}]
+                     ),
+                   raw_frame: "terminate-websocket-frame-sentinel"
+                 })
+
+        refute state.request_response_work_started?
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.closed_message(),
+        ~w(codex_session_id elapsed_ms endpoint phase reason_class request_id route_class transport),
+        ~w(downstream_epoch owner_instance_id proxy_instance_id)
+      )
+
+    assert line =~ "request_id=#{request_id}"
+    assert line =~ "endpoint=_backend-api_codex_responses"
+    assert line =~ "transport=websocket"
+    assert line =~ "route_class=proxy_websocket"
+    assert line =~ "phase=terminate"
+    assert line =~ "reason_class=closed"
+    assert line =~ "codex_session_id="
+    assert line =~ "elapsed_ms="
+
+    assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+    assert %{items: [], total: 0} = Accounting.list_request_logs(setup.pool)
+  end
+
+  test "socket terminate clean pre-request closes stay quiet for normal and shutdown" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    logs =
+      capture_websocket_lifecycle_log(:info, fn ->
+        for reason <- [:normal, :shutdown] do
+          request_id =
+            "ws-clean-pre-request-close-#{reason}-#{System.unique_integer([:positive])}"
+
+          assert {:ok, state} =
+                   CodexResponsesSocket.init(%{
+                     auth: auth,
+                     opts: websocket_lifecycle_request_options(request_id)
+                   })
+
+          refute state.request_response_work_started?
+          assert :ok = CodexResponsesSocket.terminate(reason, state)
+        end
+      end)
+
+    refute logs =~ WebsocketConnectionLogger.closed_message()
+    refute logs =~ WebsocketConnectionLogger.init_failed_message()
+    assert_no_websocket_lifecycle_leaks!(logs)
+    assert [] = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+    assert %{items: [], total: 0} = Accounting.list_request_logs(setup.pool)
+  end
+
+  test "socket terminate after request work starts does not emit pre-request lifecycle line" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_post_work_close",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    logs =
+      capture_websocket_lifecycle_log(:info, fn ->
+        assert {:ok, state} =
+                 CodexResponsesSocket.init(%{
+                   auth: auth,
+                   opts: websocket_lifecycle_request_options("ws-post-work-close")
+                 })
+
+        payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+            "stream" => true,
+            "generate" => true
+          })
+
+        assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+        assert state.request_response_work_started?
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    refute logs =~ WebsocketConnectionLogger.closed_message()
+    refute logs =~ WebsocketConnectionLogger.init_failed_message()
+    assert_no_websocket_lifecycle_leaks!(logs)
+
+    assert [request] =
+             Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "websocket"
   end
 
   @tag :websocket_session_success
@@ -5285,6 +5519,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     send(task, :stop)
 
     assert_receive ^unrelated
+  end
+
+  defp capture_websocket_lifecycle_log(level, fun) when is_atom(level) and is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: level)
+
+    try do
+      capture_log(
+        [
+          level: level,
+          format: "$metadata$message\n",
+          metadata: @websocket_lifecycle_metadata_keys,
+          colors: [enabled: false]
+        ],
+        fun
+      )
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
+  defp websocket_lifecycle_request_options(request_id, attrs \\ []) when is_binary(request_id) do
+    %{
+      request_id: request_id,
+      accepted_turn_state: "#{request_id}-turn",
+      client_ip: "127.0.0.1"
+    }
+    |> Map.merge(Map.new(attrs))
+    |> RequestOptions.for_websocket()
+  end
+
+  defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do
+    lifecycle_lines =
+      logs
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.contains?(&1, message))
+
+    assert [line] = lifecycle_lines
+
+    metadata_text =
+      line
+      |> String.replace_prefix(message, "")
+      |> String.trim_leading()
+
+    metadata_keys =
+      metadata_text
+      |> String.split(" ", trim: true)
+      |> Enum.map(fn token -> token |> String.split("=", parts: 2) |> hd() end)
+
+    assert Enum.all?(metadata_keys, &(&1 in @websocket_lifecycle_metadata_keys))
+    assert Enum.all?(required_keys, &(&1 in metadata_keys))
+    assert Enum.all?(metadata_keys, &(&1 in (required_keys ++ optional_keys)))
+    assert_no_websocket_lifecycle_leaks!(logs)
+
+    line
+  end
+
+  defp assert_no_websocket_lifecycle_leaks!(logs) do
+    downcased_logs = String.downcase(logs)
+
+    for forbidden_term <- @websocket_lifecycle_forbidden_terms do
+      refute downcased_logs =~ forbidden_term
+    end
   end
 
   defp websocket_auth_refresh_payload(setup, marker) do
