@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
+    CodexSession,
     CodexTurn,
     RoutingCircuitState
   }
@@ -1439,6 +1440,172 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.transport == "http_json"
     assert request.status == "succeeded"
+  end
+
+  test "POST /backend-api/codex/responses uses session-id for local continuity without forwarding it",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_session_id_continuity",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    session_header = "session-id-continuity-fixture"
+
+    first_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-session-id", " ")
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "session id continuity fixture"
+      })
+
+    second_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "session id continuity reuse fixture"
+      })
+
+    assert %{"id" => "resp_session_id_continuity"} = json_response(first_conn, 200)
+    assert %{"id" => "resp_session_id_continuity"} = json_response(second_conn, 200)
+
+    assert %CodexSession{} = session = Repo.get_by(CodexSession, session_key: session_header)
+
+    requests =
+      Repo.all(
+        from r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+      )
+
+    assert length(requests) == 2
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_id"] == session.id))
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_key"] == session_header))
+
+    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+
+    for captured <- [first_upstream_request, second_upstream_request] do
+      captured_headers = Map.new(captured.headers)
+
+      refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-affinity")
+    end
+  end
+
+  test "POST /backend-api/codex/responses uses x-session-affinity for local continuity without forwarding it",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_session_affinity_continuity",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    session_header = "session-affinity-continuity-fixture"
+
+    first_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-affinity", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "session affinity continuity fixture"
+      })
+
+    second_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("x-session-affinity", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "session affinity continuity reuse fixture"
+      })
+
+    assert %{"id" => "resp_session_affinity_continuity"} = json_response(first_conn, 200)
+    assert %{"id" => "resp_session_affinity_continuity"} = json_response(second_conn, 200)
+
+    assert %CodexSession{} = session = Repo.get_by(CodexSession, session_key: session_header)
+
+    requests =
+      Repo.all(
+        from r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+      )
+
+    assert length(requests) == 2
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_id"] == session.id))
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_key"] == session_header))
+
+    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+
+    for captured <- [first_upstream_request, second_upstream_request] do
+      captured_headers = Map.new(captured.headers)
+
+      refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-affinity")
+    end
+  end
+
+  test "POST /backend-api/codex/responses prefers x-codex-session-id over opencode continuity headers",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_header_precedence",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-session-id", "codex-session-wins-fixture")
+      |> put_req_header("session-id", "session-id-lower-priority-fixture")
+      |> put_req_header("x-session-affinity", "session-affinity-lower-priority-fixture")
+      |> put_req_header("session_id", "session-underscore-lower-priority-fixture")
+      |> put_req_header("x-codex-conversation-id", "conversation-lower-priority-fixture")
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "header precedence continuity fixture"
+      })
+
+    assert %{"id" => "resp_header_precedence"} = json_response(conn, 200)
+
+    assert %CodexSession{} =
+             session =
+             Repo.get_by(CodexSession, session_key: "codex-session-wins-fixture")
+
+    refute Repo.get_by(CodexSession, session_key: "session-id-lower-priority-fixture")
+    refute Repo.get_by(CodexSession, session_key: "session-affinity-lower-priority-fixture")
+    refute Repo.get_by(CodexSession, session_key: "session-underscore-lower-priority-fixture")
+    refute Repo.get_by(CodexSession, session_key: "conversation-lower-priority-fixture")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.request_metadata["codex_session_id"] == session.id
+    assert request.request_metadata["codex_session_key"] == "codex-session-wins-fixture"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    captured_headers = Map.new(captured.headers)
+
+    refute Map.has_key?(captured_headers, "session-id")
+    refute Map.has_key?(captured_headers, "x-session-affinity")
   end
 
   @tag :feature_control_plane_proxy_core
@@ -6062,6 +6229,79 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert turn.status == "succeeded"
   end
 
+  test "POST /backend-api/codex/responses/compact keeps opencode continuity headers local without forwarding",
+       %{
+         conn: conn
+       } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    session_id_header = "compact-session-id-#{System.unique_integer([:positive])}"
+    affinity_header = "compact-session-affinity-#{System.unique_integer([:positive])}"
+
+    first_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-session-id", " ")
+      |> put_req_header("session-id", session_id_header)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "compact session-id continuity fixture"
+      })
+
+    second_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-affinity", affinity_header)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "compact affinity continuity fixture"
+      })
+
+    assert %{"object" => "response.compaction"} = json_response(first_conn, 200)
+    assert %{"object" => "response.compaction"} = json_response(second_conn, 200)
+
+    assert %CodexSession{} =
+             session_id_session = Repo.get_by(CodexSession, session_key: session_id_header)
+
+    assert %CodexSession{} =
+             affinity_session = Repo.get_by(CodexSession, session_key: affinity_header)
+
+    requests =
+      Repo.all(
+        from r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+      )
+
+    assert Enum.map(requests, & &1.request_metadata["codex_session_id"]) == [
+             session_id_session.id,
+             affinity_session.id
+           ]
+
+    assert Enum.map(requests, & &1.request_metadata["codex_session_key"]) == [
+             session_id_header,
+             affinity_header
+           ]
+
+    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+
+    for captured <- [first_upstream_request, second_upstream_request] do
+      assert captured.path == "/backend-api/codex/responses/compact"
+      captured_headers = Map.new(captured.headers)
+
+      refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-affinity")
+    end
+  end
+
   test "POST /backend-api/codex/v1/responses/compact proxies to canonical compact path", %{
     conn: conn
   } do
@@ -7026,12 +7266,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp lineage_metadata_fixture(forked_thread_id) do
+    request_kind = "task3-lineage-request-#{forked_thread_id}"
+    window_id = "window-#{forked_thread_id}"
+    compaction_source_window_id = "compaction-source-#{forked_thread_id}"
+    compaction_target_window_id = "compaction-target-#{forked_thread_id}"
+    compaction_strategy = "task3-synthetic-summary"
+    compaction_trigger = "task3-manual-fixture"
+
     %{
-      turn_metadata: Jason.encode!(%{"forked_from_thread_id" => forked_thread_id}),
+      turn_metadata:
+        Jason.encode!(%{
+          "forked_from_thread_id" => forked_thread_id,
+          "request_kind" => request_kind,
+          "window_id" => window_id,
+          "compaction" => %{
+            "source_window_id" => compaction_source_window_id,
+            "target_window_id" => compaction_target_window_id,
+            "strategy" => compaction_strategy,
+            "trigger" => compaction_trigger
+          }
+        }),
       forked_thread_id: forked_thread_id,
-      window_id: "window-#{forked_thread_id}",
+      request_kind: request_kind,
+      window_id: window_id,
       parent_thread_id: "parent-#{forked_thread_id}",
-      subagent: "subagent-#{forked_thread_id}"
+      subagent: "subagent-#{forked_thread_id}",
+      compaction_source_window_id: compaction_source_window_id,
+      compaction_target_window_id: compaction_target_window_id,
+      compaction_strategy: compaction_strategy,
+      compaction_trigger: compaction_trigger
     }
   end
 
@@ -7065,6 +7328,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     captured_headers = Map.new(captured.headers)
 
     assert captured_headers["x-codex-turn-metadata"] == metadata.turn_metadata
+    assert captured_headers["x-codex-turn-metadata"] =~ ~s("request_kind")
+    assert captured_headers["x-codex-turn-metadata"] =~ metadata.request_kind
+    assert captured_headers["x-codex-turn-metadata"] =~ ~s("window_id")
+    assert captured_headers["x-codex-turn-metadata"] =~ metadata.window_id
+    assert captured_headers["x-codex-turn-metadata"] =~ ~s("compaction")
+    assert captured_headers["x-codex-turn-metadata"] =~ metadata.compaction_source_window_id
+    assert captured_headers["x-codex-turn-metadata"] =~ metadata.compaction_target_window_id
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
@@ -7115,9 +7385,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp refute_lineage_text!(text, metadata) do
     refute text =~ metadata.turn_metadata
     refute text =~ metadata.forked_thread_id
+    refute text =~ metadata.request_kind
     refute text =~ metadata.window_id
     refute text =~ metadata.parent_thread_id
     refute text =~ metadata.subagent
+    refute text =~ metadata.compaction_source_window_id
+    refute text =~ metadata.compaction_target_window_id
+    refute text =~ metadata.compaction_strategy
+    refute text =~ metadata.compaction_trigger
   end
 
   defp post_json_runtime(conn, path, payload) do

@@ -198,9 +198,19 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpers do
   end
 
   defp session_header(conn) do
-    List.first(get_req_header(conn, "x-codex-session-id")) ||
-      List.first(get_req_header(conn, "session_id")) ||
-      List.first(get_req_header(conn, "x-codex-conversation-id"))
+    [
+      "x-codex-session-id",
+      "session-id",
+      "x-session-affinity",
+      "session_id",
+      "x-codex-conversation-id"
+    ]
+    |> Enum.find_value(fn header ->
+      conn
+      |> get_req_header(header)
+      |> List.first()
+      |> blank_to_nil()
+    end)
   end
 
   defp request_id(conn) do
