@@ -12,8 +12,8 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Repo
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   require Logger

@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_chat,
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path, keep safe OpenAI Responses fields like text, store, include, parallel_tool_calls, prompt_cache_key, and metadata, reject known locally unsupported SDK controls, and strip backend-only unsupported controls before dispatch"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path, keep safe OpenAI Responses fields like text, store, include, parallel_tool_calls, prompt_cache_key, and metadata, consume prompt_cache_key only as typed transient routing-locality input on allowlisted POST routes, reject known locally unsupported SDK controls, and strip backend-only unsupported controls before dispatch"
     },
     %{
       slug: :backend_v1_alias_surface,
@@ -92,7 +92,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :backend_v1_alias_surface,
       contract:
-        "backend /backend-api/codex/v1 aliases are explicit authenticated backend routes for models, responses, websocket responses, compact, and chat completions, preserve generic backend API-key auth, and proxy to the canonical backend gateway paths"
+        "backend /backend-api/codex/v1 aliases are explicit authenticated backend routes for models, responses, websocket responses, compact, and chat completions, preserve generic backend API-key auth, proxy to the canonical backend gateway paths, and allow prompt-cache routing locality only on POST responses and chat completions aliases"
     },
     %{
       slug: :websocket_continuity,
@@ -103,7 +103,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity and is excluded from prompt-cache routing locality"
     },
     %{
       slug: :reasoning_minimal,
@@ -257,7 +257,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, and return OpenAI-shaped errors without anonymous local or CIDR bypasses"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, and allow prompt-cache routing locality only on POST responses and chat completions"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -305,6 +305,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     responses_chat: %{
+      prompt_cache_routing: %{
+        setting: "prompt_cache_affinity_enabled",
+        default_enabled: true,
+        mode: "stateless_locality_over_already_eligible_assignments",
+        typed_input: "prompt_cache_key",
+        privacy: "raw_key_not_persisted",
+        provider_cache_evidence: "upstream_cached_input_tokens_only"
+      },
       json: %{
         "model" => "gpt-fixture-text",
         "input" => "synthetic text request",
@@ -314,6 +322,14 @@ defmodule CodexPooler.CompatibilityMatrix do
     backend_v1_alias_surface: %{
       auth: "required_bearer_api_key",
       default_enabled: true,
+      prompt_cache_routing_allowed_routes: [
+        "/backend-api/codex/v1/responses",
+        "/backend-api/codex/v1/chat/completions"
+      ],
+      prompt_cache_routing_excluded_routes: [
+        "/backend-api/codex/v1/responses websocket",
+        "/backend-api/codex/v1/responses/compact"
+      ],
       routes: [
         "/backend-api/codex/v1/models",
         "/backend-api/codex/v1/responses",
@@ -408,6 +424,16 @@ defmodule CodexPooler.CompatibilityMatrix do
     v1_supported_surface: %{
       auth: "required_bearer_api_key",
       default_enabled: true,
+      prompt_cache_routing_allowed_routes: [
+        "/v1/responses",
+        "/v1/chat/completions"
+      ],
+      prompt_cache_routing_excluded_surfaces: [
+        "compact",
+        "files",
+        "audio",
+        "images"
+      ],
       routes: [
         "/v1/models",
         "/v1/responses",

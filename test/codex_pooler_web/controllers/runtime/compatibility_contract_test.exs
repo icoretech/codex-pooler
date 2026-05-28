@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -243,6 +244,52 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/backend-api/codex/v1/responses/compact",
                "/backend-api/codex/v1/chat/completions"
              ]
+    end
+
+    test "keeps prompt cache routing input limited to the exact POST route contract" do
+      allowed_routes = [
+        "/v1/responses",
+        "/v1/chat/completions",
+        "/backend-api/codex/responses",
+        "/backend-api/codex/v1/responses",
+        "/backend-api/codex/v1/chat/completions"
+      ]
+
+      excluded_routes = [
+        {"GET", "/backend-api/codex/responses", %{transport: "websocket"}},
+        {"POST", "/backend-api/codex/responses/compact", %{}},
+        {"POST", "/backend-api/codex/v1/responses/compact", %{}},
+        {"POST", "/v1/responses/compact", %{}},
+        {"POST", "/backend-api/files", %{}},
+        {"POST", "/backend-api/transcribe", %{}},
+        {"POST", "/v1/audio/transcriptions", %{}},
+        {"POST", "/v1/images/generations", %{}},
+        {"POST", "/v1/images/edits", %{}},
+        {"POST", "/backend-api/codex/images/generations", %{}},
+        {"POST", "/backend-api/codex/images/edits", %{}}
+      ]
+
+      for endpoint <- allowed_routes do
+        request_options =
+          RequestOptions.build(%{request_method: "POST"}, endpoint, %{
+            "model" => "gpt-fixture-text",
+            "prompt_cache_key" => "fixture-cache-key"
+          })
+
+        assert request_options.routing.prompt_cache_key == "fixture-cache-key"
+      end
+
+      for {method, endpoint, opts} <- excluded_routes do
+        request_options =
+          opts
+          |> Map.put(:request_method, method)
+          |> RequestOptions.build(endpoint, %{
+            "model" => "gpt-fixture-text",
+            "prompt_cache_key" => "fixture-cache-key"
+          })
+
+        assert request_options.routing.prompt_cache_key == nil
+      end
     end
 
     test "documents backend image proxy surface as explicit authenticated JSON proxy routes" do
