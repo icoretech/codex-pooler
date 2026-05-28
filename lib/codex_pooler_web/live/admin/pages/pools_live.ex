@@ -329,7 +329,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           <AdminComponents.metric_card
             id="pool-metric-tokens-per-sec"
             icon="hero-bolt"
-            label="Token throughput"
+            label="TPS 5h"
             value={PoolsReadModel.format_metric_float(@pool_metrics.tokens_per_second)}
             tone={:primary}
             compact_mobile

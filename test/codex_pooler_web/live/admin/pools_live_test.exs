@@ -141,7 +141,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-metric-requests", "0")
     refute has_element?(view, "#pool-metric-requests", "Last 5h requests")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "0")
-    assert has_element?(view, "#pool-metric-tokens-per-sec", "Token throughput")
+    assert has_element?(view, "#pool-metric-tokens-per-sec", "TPS 5h")
 
     refute has_element?(
              view,
@@ -247,7 +247,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-metric-requests", "1")
     refute has_element?(view, "#pool-metric-requests", "Last 5h requests")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "50.0")
-    assert has_element?(view, "#pool-metric-tokens-per-sec", "Token throughput")
+    assert has_element?(view, "#pool-metric-tokens-per-sec", "TPS 5h")
 
     refute has_element?(
              view,
