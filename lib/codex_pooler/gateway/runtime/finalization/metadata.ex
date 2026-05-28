@@ -99,6 +99,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   def safe_reason({:chunk, :closed}), do: "client disconnected while writing downstream stream"
   def safe_reason({:chunk, reason}), do: "downstream chunk failed: #{reason_class(reason)}"
   def safe_reason({:upstream_idle_timeout, _reason}), do: "upstream stream idle timeout"
+  def safe_reason(:upstream_websocket_receive_timeout), do: "upstream stream idle timeout"
 
   def safe_reason({:terminal_stream_failure, %{code: code}}) when is_binary(code),
     do: "upstream stream returned terminal event #{safe_code(code)}"

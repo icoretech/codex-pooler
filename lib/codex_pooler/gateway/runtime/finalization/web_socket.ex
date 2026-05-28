@@ -240,12 +240,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
            )
          ) do
       {:ok, _finalized} ->
-        {:error,
-         error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))}
+        {:error, failed_error_response(endpoint, code, reason)}
 
       {:error, gateway_error} ->
         {:error, gateway_error}
     end
+  end
+
+  defp failed_error_response(_endpoint, "stream_idle_timeout", reason) do
+    error(502, "stream_idle_timeout", Metadata.safe_reason(reason))
+  end
+
+  defp failed_error_response(endpoint, _code, _reason) do
+    error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)

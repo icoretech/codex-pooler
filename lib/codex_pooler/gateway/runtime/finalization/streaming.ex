@@ -162,6 +162,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def error_code({:chunk, :closed}), do: "client_disconnected"
   def error_code({:chunk, _reason}), do: "downstream_stream_error"
   def error_code({:upstream_idle_timeout, _reason}), do: "stream_idle_timeout"
+  def error_code(:upstream_websocket_receive_timeout), do: "stream_idle_timeout"
   def error_code({:terminal_stream_failure, %{code: code}}) when is_binary(code), do: code
   def error_code(:upstream_unauthorized), do: "upstream_unauthorized"
   def error_code(_reason), do: "upstream_stream_error"
