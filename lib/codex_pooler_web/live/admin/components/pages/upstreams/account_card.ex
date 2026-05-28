@@ -33,7 +33,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       >
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <h3 class="min-w-0 text-lg font-semibold text-base-content">
+            <h3 class="min-w-0 text-base font-semibold text-base-content">
               <.link
                 id={"upstream-account-#{@account.identity.id}-mail"}
                 navigate={~p"/admin/upstreams/#{@account.identity.id}"}

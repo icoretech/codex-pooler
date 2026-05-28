@@ -323,6 +323,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "Primary Codex"
            )
 
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id} h3.text-base #upstream-account-#{identity.id}-mail",
+             "Primary Codex"
+           )
+
     refute has_element?(view, "#upstream-account-#{identity.id}-cockpit-link")
 
     open_auth_json_import_dialog(view)
