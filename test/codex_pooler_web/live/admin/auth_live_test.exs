@@ -75,6 +75,11 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
 
         assert has_element?(
                  view,
+                 "#admin-nav.min-h-0.overflow-y-auto.overscroll-contain.scrollbar-none"
+               )
+
+        assert has_element?(
+                 view,
                  "#topbar-connection-indicator[data-state='connecting'][data-transport='pending']"
                )
 

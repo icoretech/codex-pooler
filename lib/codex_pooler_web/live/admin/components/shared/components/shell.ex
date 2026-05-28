@@ -186,7 +186,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
           class="fixed left-0 top-12 z-40 flex h-[calc(100svh-3rem)] w-16 flex-col border-r border-base-300/70 bg-base-100 py-4 md:w-64"
           aria-label="Admin navigation"
         >
-          <div class="mb-6 flex min-w-0 justify-center px-3 text-center md:flex-col md:items-start md:gap-1 md:px-4 md:text-left">
+          <div class="mb-6 flex min-w-0 shrink-0 justify-center px-3 text-center md:flex-col md:items-start md:gap-1 md:px-4 md:text-left">
             <OperatorComponents.operator_avatar
               id="admin-sidebar-operator-avatar"
               operator={@current_scope.user}
@@ -209,7 +209,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
           <nav
             id="admin-nav"
             aria-label="Admin workflow navigation"
-            class="flex flex-1 flex-col gap-1"
+            class="scrollbar-none flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain"
           >
             <.link
               :for={item <- @admin_nav_items}
@@ -231,7 +231,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             </.link>
           </nav>
 
-          <div id="admin-sidebar-footer" class="mt-auto grid gap-1">
+          <div id="admin-sidebar-footer" class="mt-auto grid shrink-0 gap-1">
             <.link
               :for={item <- @admin_footer_nav_items}
               id={item.id}
