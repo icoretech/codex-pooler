@@ -867,3 +867,7 @@ docker compose -f docker-compose.dev.yml config
 docker build .
 helm template codex-pooler ./charts/codex-pooler
 ```
+
+`mix test` and `mix precommit` serialize database-backed test runs with a
+PostgreSQL advisory lock keyed by the configured test database, so concurrent
+local runs wait instead of deadlocking the shared sandbox database.

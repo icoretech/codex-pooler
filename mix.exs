@@ -98,7 +98,7 @@ defmodule CodexPooler.MixProject do
         "pricing.import_openai"
       ],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: ["codex_pooler.test"],
       "assets.setup": [
         "cmd npm ci --prefix assets",
         "tailwind.install --if-missing",
