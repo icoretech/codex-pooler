@@ -312,7 +312,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-account-table")
     assert has_element?(view, "#upstream-account-grid")
     assert has_element?(view, "#admin-upstreams-live.min-w-0")
-    assert has_element?(view, "#upstream-account-grid.min-w-0")
+    assert has_element?(view, "#upstream-account-grid.min-w-0.items-start")
     assert has_element?(view, "#upstream-account-#{identity.id}.min-w-0")
     assert has_element?(view, "[data-role='upstream-account-card']")
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label", "Team")

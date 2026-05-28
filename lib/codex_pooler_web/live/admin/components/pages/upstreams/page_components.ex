@@ -182,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     <div
       :if={@accounts != []}
       id="upstream-account-grid"
-      class="grid min-w-0 gap-3 lg:grid-cols-2 2xl:grid-cols-3"
+      class="grid min-w-0 items-start gap-3 lg:grid-cols-2 2xl:grid-cols-3"
     >
       <UpstreamAccountCard.account_card
         :for={{account, account_index} <- Enum.with_index(@accounts)}
