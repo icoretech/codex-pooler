@@ -386,7 +386,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id} footer[data-role='upstream-account-card-footer'] #upstream-account-#{identity.id}-routing-readiness",
-             "Routing candidate · 1 Pool"
+             "Routing candidate"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-pool-count-cell']",
+             "1 Pool"
            )
 
     refute has_element?(

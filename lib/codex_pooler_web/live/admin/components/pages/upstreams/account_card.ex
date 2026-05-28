@@ -99,14 +99,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       </div>
       <footer
         data-role="upstream-account-card-footer"
-        class="border-t border-base-300 bg-base-200/20 px-4 py-2"
+        class="border-t border-base-300 bg-base-200/20 px-4 py-2.5"
       >
-        <p
+        <dl
           id={"upstream-account-#{@account.identity.id}-routing-readiness"}
-          class="truncate text-xs leading-5 text-base-content/55"
+          class="grid min-w-0 grid-cols-2 divide-x divide-base-300/70 text-xs leading-5"
         >
-          {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
-        </p>
+          <div class="min-w-0 pr-3" data-role="upstream-routing-cell">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
+              Routing
+            </dt>
+            <dd class="truncate text-base-content/60">{routing_signal_label(@account)}</dd>
+          </div>
+          <div class="min-w-0 pl-3" data-role="upstream-pool-count-cell">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
+              Pools
+            </dt>
+            <dd class="truncate text-base-content/60">
+              {assignment_count_label(@account.assignments)}
+            </dd>
+          </div>
+        </dl>
       </footer>
       <.upstream_refresh_status account={@account} />
       <.upstream_selector_contracts account={@account} />
