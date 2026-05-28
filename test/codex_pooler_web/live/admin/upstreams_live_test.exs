@@ -8,10 +8,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   import Phoenix.LiveViewTest
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
   alias CodexPooler.Events.PostgresBridge
-  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Mailer
   alias CodexPooler.Pools

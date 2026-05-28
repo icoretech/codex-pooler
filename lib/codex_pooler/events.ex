@@ -10,6 +10,7 @@ defmodule CodexPooler.Events do
   alias CodexPooler.Events.Event
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
   alias Phoenix.PubSub
 
   require Logger
@@ -142,9 +143,9 @@ defmodule CodexPooler.Events do
   def broadcast_local_event(%Event{} = event) do
     message = {@message_tag, event}
 
-    with :ok <- PubSub.broadcast(@pubsub, pubsub_topic(event.pool_id), message),
-         :ok <- PubSub.broadcast(@pubsub, @all_topic, message) do
-      :ok
+    case PubSub.broadcast(@pubsub, pubsub_topic(event.pool_id), message) do
+      :ok -> PubSub.broadcast(@pubsub, @all_topic, message)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -191,7 +192,7 @@ defmodule CodexPooler.Events do
   defp broadcast_postgres_event(%Event{} = event) do
     with {:ok, payload} <- event_to_postgres_payload(event),
          {:ok, _result} <-
-           Ecto.Adapters.SQL.query(Repo, "SELECT pg_notify($1, $2)", [@postgres_channel, payload]) do
+           SQL.query(Repo, "SELECT pg_notify($1, $2)", [@postgres_channel, payload]) do
       :ok
     else
       {:error, reason} ->

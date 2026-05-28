@@ -61,9 +61,8 @@ defmodule CodexPooler.Events.PostgresBridge do
   end
 
   defp relay_remote_payload(payload) do
-    with {:ok, false} <- local_origin?(payload) do
-      relay_payload(payload)
-    else
+    case local_origin?(payload) do
+      {:ok, false} -> relay_payload(payload)
       {:ok, true} -> :ok
       {:error, reason} -> {:error, reason}
     end
