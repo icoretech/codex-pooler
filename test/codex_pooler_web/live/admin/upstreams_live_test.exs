@@ -441,6 +441,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#refresh-upstream-account-#{identity.id}[disabled]")
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limits")
+    assert has_element?(view, "#upstream-account-#{identity.id}-limits.md\\:grid-cols-2")
     refute has_element?(view, "#upstream-account-#{identity.id}-limits", "windows")
 
     assert has_element?(
@@ -514,6 +515,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     assert has_element?(view, "#upstream-account-#{browser_identity.id}-limit-weekly", "75%")
+    assert has_element?(view, "#upstream-account-#{browser_identity.id}-limits.grid.gap-3")
+    refute has_element?(view, "#upstream-account-#{browser_identity.id}-limits.md\\:grid-cols-2")
 
     refute has_element?(view, "#upstream-account-#{browser_identity.id}-limit-primary_5h")
     refute has_element?(view, "#upstream-account-#{browser_identity.id}-limit-weekly-count")

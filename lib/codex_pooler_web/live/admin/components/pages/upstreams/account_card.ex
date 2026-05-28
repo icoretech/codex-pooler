@@ -15,6 +15,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   attr :account_index, :integer, required: true
 
   def account_card(assigns) do
+    assigns =
+      assign(assigns, :reported_quota_limits, reported_quota_limits(assigns.account.quota_limits))
+
     ~H"""
     <article
       id={"upstream-account-#{@account.identity.id}"}
@@ -88,10 +91,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
           </div>
           <div
             id={"upstream-account-#{@account.identity.id}-limits"}
-            class="grid gap-3 md:grid-cols-2"
+            class={quota_limits_grid_class(@reported_quota_limits)}
           >
             <.quota_limit_row
-              :for={limit <- reported_quota_limits(@account.quota_limits)}
+              :for={limit <- @reported_quota_limits}
               id={"upstream-account-#{@account.identity.id}-limit-#{limit.key}"}
               limit={limit}
             />
@@ -472,6 +475,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   end
 
   defp reported_quota_limits(_quota_limits), do: []
+
+  defp quota_limits_grid_class([_single_limit]), do: "grid gap-3"
+  defp quota_limits_grid_class(_limits), do: "grid gap-3 md:grid-cols-2"
 
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"
