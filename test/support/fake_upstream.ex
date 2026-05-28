@@ -19,6 +19,8 @@ defmodule CodexPooler.FakeUpstream do
           | {:reject_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
           | {:require_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
           | {:sse, [String.t()]}
+          | {:delayed_sse, [String.t()], pos_integer(), pid() | nil}
+          | {:websocket_text, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
           | {:sequence, [mode()]}
           | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
@@ -151,6 +153,19 @@ defmodule CodexPooler.FakeUpstream do
     chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
 
     {:sse, chunks}
+  end
+
+  def websocket_text_frames(messages) when is_list(messages), do: {:websocket_text, messages}
+
+  def delayed_sse_stream(events, opts) do
+    include_done? = Keyword.get(opts, :done, true)
+    interval_ms = Keyword.fetch!(opts, :interval_ms)
+    notify = Keyword.get(opts, :notify)
+
+    chunks = Enum.map(events, &sse_chunk/1)
+    chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
+
+    {:delayed_sse, chunks, interval_ms, notify}
   end
 
   def barrier_sse_stream(events, opts) do
@@ -422,6 +437,23 @@ defmodule CodexPooler.FakeUpstream do
     end)
   end
 
+  defp respond(_pid, conn, {:delayed_sse, chunks, interval_ms, notify}, _request) do
+    conn =
+      conn
+      |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    chunks
+    |> Enum.with_index(1)
+    |> Enum.reduce(conn, fn {chunk, index}, conn ->
+      if index > 1, do: wait_for_delay(interval_ms)
+      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+      notify_chunk_sent(notify, index)
+      conn
+    end)
+  end
+
   defp respond(_pid, conn, {:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
     conn =
       conn
@@ -614,6 +646,13 @@ defmodule CodexPooler.FakeUpstream do
   defp notify_chunk_sent(nil, _index), do: :ok
   defp notify_chunk_sent(pid, index), do: send(pid, {:fake_upstream_chunk_sent, index})
 
+  defp wait_for_delay(interval_ms) do
+    receive do
+    after
+      interval_ms -> :ok
+    end
+  end
+
   defp maybe_wait_for_sse_barrier(index, index, notify, release_ref) when is_pid(notify) do
     send(notify, {:fake_upstream_chunk_barrier, index, self(), release_ref})
 
@@ -676,6 +715,14 @@ defmodule CodexPooler.FakeUpstream do
 
     def handle_info({:fake_upstream_close_websocket, code, reason}, state),
       do: {:stop, :normal, {code, reason}, state}
+
+    def handle_info(
+          {:fake_upstream_delayed_websocket_message, message, remaining, interval_ms},
+          state
+        ) do
+      schedule_delayed_websocket_message(remaining, interval_ms)
+      {:push, {:text, message}, state}
+    end
 
     def handle_info(_message, state), do: {:ok, state}
 
@@ -747,6 +794,10 @@ defmodule CodexPooler.FakeUpstream do
           send(self(), {:fake_upstream_close_websocket, code, reason})
           {:push, Enum.map(messages, &{:text, &1}), state}
 
+        {:delayed_push, messages, interval_ms} ->
+          schedule_delayed_websocket_message(messages, interval_ms)
+          {:ok, state}
+
         messages ->
           {:push, Enum.map(messages, &{:text, &1}), state}
       end
@@ -798,6 +849,19 @@ defmodule CodexPooler.FakeUpstream do
     defp websocket_messages({:sse, chunks}, _request),
       do: messages_from_sse_chunk(Enum.join(chunks))
 
+    defp websocket_messages({:delayed_sse, chunks, interval_ms, _notify}, _request),
+      do: {:delayed_push, Enum.flat_map(chunks, &messages_from_sse_chunk/1), interval_ms}
+
+    defp websocket_messages({:timeout_mid_stream, first_chunk, notify, release_ref}, _request) do
+      if is_pid(notify) do
+        send(notify, {:fake_upstream_timeout_barrier, :mid_stream, self(), release_ref})
+      end
+
+      messages_from_sse_chunk(first_chunk)
+    end
+
+    defp websocket_messages({:websocket_text, messages}, _request), do: messages
+
     defp websocket_messages({:websocket_sse_then_close, chunks, code, reason}, _request) do
       {:push_then_close, messages_from_sse_chunk(Enum.join(chunks)), code, reason}
     end
@@ -844,6 +908,18 @@ defmodule CodexPooler.FakeUpstream do
       |> Enum.filter(&String.starts_with?(&1, "data: "))
       |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
       |> Enum.reject(&(&1 in ["", "[DONE]"]))
+    end
+
+    defp schedule_delayed_websocket_message([], _interval_ms), do: :ok
+
+    defp schedule_delayed_websocket_message([message | remaining], interval_ms) do
+      Process.send_after(
+        self(),
+        {:fake_upstream_delayed_websocket_message, message, remaining, interval_ms},
+        interval_ms
+      )
+
+      :ok
     end
 
     defp maybe_wait_for_sse_barrier(index, index, notify, release_ref) when is_pid(notify) do

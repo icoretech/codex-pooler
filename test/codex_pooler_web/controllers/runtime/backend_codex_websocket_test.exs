@@ -4674,6 +4674,149 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "websocket multiline previous response error frame is masked without replaying or circuiting" do
+    previous_response_id = "resp_multiline_missing"
+    request_content = "multiline previous response request content sentinel"
+
+    raw_upstream_frame =
+      Jason.encode!(
+        %{
+          "type" => "error",
+          "status" => 400,
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "previous_response_not_found",
+            "param" => "previous_response_id",
+            "message" =>
+              "Previous response with id '#{previous_response_id}' not found for #{request_content}."
+          },
+          "headers" => %{
+            "X-Request-ID" => "ws-multiline-previous-request",
+            "Authorization" => "synthetic-auth-redacted",
+            "Should-Not-Persist" => "synthetic-sentinel",
+            "X-Arbitrary-Debug" => ["drop-array"]
+          }
+        },
+        pretty: true
+      )
+
+    assert raw_upstream_frame =~ "
+"
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([raw_upstream_frame]))
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_multiline_previous_fallback_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-multiline-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "multiline-missing-previous"})
+
+    session =
+      session
+      |> Ecto.Changeset.change(%{pool_upstream_assignment_id: setup.assignment.id})
+      |> Repo.update!()
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [
+                   %{"type" => "message", "role" => "user", "content" => request_content}
+                 ],
+                 "stream" => true,
+                 "generate" => true,
+                 "previous_response_id" => previous_response_id
+               }),
+               %{request_id: "ws-multiline-previous-response-not-found", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{
+             "type" => "response.failed",
+             "response" => %{
+               "error" => %{
+                 "code" => "stream_incomplete",
+                 "message" => "upstream stream incomplete"
+               }
+             }
+           } = Jason.decode!(frame)
+
+    refute frame =~ "previous_response_not_found"
+    refute frame =~ previous_response_id
+    refute frame =~ request_content
+    refute frame =~ raw_upstream_frame
+    refute frame =~ "headers"
+    refute frame =~ "synthetic-auth-redacted"
+    refute frame =~ "synthetic-sentinel"
+    refute frame =~ "drop-array"
+
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["previous_response_id"] == previous_response_id
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 200
+    assert request.last_error_code == "stream_incomplete"
+    refute get_in(request.request_metadata, ["routing", "demotion_reason"])
+    refute Map.has_key?(request.request_metadata || %{}, "websocket_frame_headers")
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.network_error_code == "stream_incomplete"
+    assert attempt.response_metadata["upstream_error_code"] == "previous_response_not_found"
+    assert attempt.response_metadata["masked_error_code"] == "stream_incomplete"
+
+    assert attempt.response_metadata["websocket_frame_headers"] == %{
+             "x-request-id" => "ws-multiline-previous-request"
+           }
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ raw_upstream_frame
+    refute metadata_text =~ previous_response_id
+    refute metadata_text =~ request_content
+    refute metadata_text =~ "synthetic-auth-redacted"
+    refute metadata_text =~ "synthetic-sentinel"
+    refute metadata_text =~ "drop-array"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ "upstream-token"
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    assert turn.status == "failed"
+    assert turn.error_code == "stream_incomplete"
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+  end
+
   test "websocket wrapped status_code rate limit error records useful upstream metadata" do
     reset_at = DateTime.utc_now() |> DateTime.add(90, :minute) |> DateTime.truncate(:second)
 
