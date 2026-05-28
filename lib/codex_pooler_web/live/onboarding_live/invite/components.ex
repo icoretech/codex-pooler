@@ -35,17 +35,6 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                 Approve this invite with the OpenAI device page. Codex Pooler stores only the account connection metadata needed for the selected Pool.
               </p>
             </div>
-
-            <div class="grid gap-3 rounded-box border border-base-300 bg-base-100/70 p-4 text-sm text-base-content/70">
-              <div class="flex gap-3">
-                <span class="grid size-8 shrink-0 place-items-center rounded-box bg-primary/10 text-primary">
-                  <.icon name="hero-shield-check" class="size-4" />
-                </span>
-                <p>
-                  The device-code flow keeps browser callbacks out of this public page and never shows stored tokens.
-                </p>
-              </div>
-            </div>
           </div>
 
           <div class="p-6 sm:p-8">

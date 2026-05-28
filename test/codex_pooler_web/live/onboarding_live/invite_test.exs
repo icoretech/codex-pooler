@@ -50,6 +50,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     refute html =~ "Redemptions"
     refute html =~ "Browser sign-in"
     refute html =~ "oauth/authorize"
+    refute html =~ "The device-code flow keeps browser callbacks out of this public page"
     refute html =~ token
   end
 
