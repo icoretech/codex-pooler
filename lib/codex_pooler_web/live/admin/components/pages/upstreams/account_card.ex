@@ -43,12 +43,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
               </.link>
             </h3>
           </div>
-          <p
-            id={"upstream-account-#{@account.identity.id}-routing-readiness"}
-            class="mt-1 text-xs leading-5 text-base-content/55"
-          >
-            {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
-          </p>
         </div>
         <div
           id={"upstream-account-#{@account.identity.id}-header-actions"}
@@ -103,6 +97,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
         <.upstream_reauth_warning account={@account} />
       </div>
+      <footer
+        data-role="upstream-account-card-footer"
+        class="border-t border-base-300 bg-base-200/20 px-4 py-2"
+      >
+        <p
+          id={"upstream-account-#{@account.identity.id}-routing-readiness"}
+          class="truncate text-xs leading-5 text-base-content/55"
+        >
+          {routing_signal_label(@account)} · {assignment_count_label(@account.assignments)}
+        </p>
+      </footer>
       <.upstream_refresh_status account={@account} />
       <.upstream_selector_contracts account={@account} />
     </article>
