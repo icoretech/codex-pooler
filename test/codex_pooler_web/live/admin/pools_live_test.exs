@@ -549,7 +549,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   @tag feature_pool_control_plane_analytics: true
   test "creates pools with routing strategy, analytics forwarding toggle, compatibility toggle, and selected upstream identities",
        %{conn: conn} do
-    first_identity = active_identity_fixture(account_label: "First create account")
+    first_identity =
+      active_identity_fixture(account_label: "First create account", plan_label: "pro")
+
     second_identity = active_identity_fixture(account_label: "Second create account")
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
@@ -561,6 +563,17 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-upstream-identity-options", "Second create account")
     assert has_element?(view, "#pool-create-upstream-identity-options-card-#{first_identity.id}")
     assert has_element?(view, "#pool-create-upstream-identity-options-card-#{second_identity.id}")
+
+    assert has_element?(
+             view,
+             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}[data-role='plan-badge']",
+             "Pro"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-upstream-identity-options-plan-badge-#{first_identity.id}.badge.badge-primary.badge-sm"
+           )
 
     view
     |> element("#pool-create-form")
@@ -1382,8 +1395,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert {:ok, identity} =
              IdentityLifecycle.create_upstream_identity(Map.merge(defaults, attrs))
 
+    plan_attrs = Map.take(attrs, [:plan_family, :plan_label])
+
     assert {:ok, identity} =
-             IdentityLifecycle.activate_upstream_identity(identity)
+             IdentityLifecycle.activate_upstream_identity_with_plan(identity, plan_attrs)
 
     identity
   end

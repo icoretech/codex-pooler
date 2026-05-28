@@ -134,6 +134,12 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   def option_plan_label(%{plan_label: label}), do: label
   def option_plan_label(_option), do: "Plan unknown"
 
+  def option_plan_family(%{plan_family: family}), do: family
+  def option_plan_family(_option), do: nil
+
+  def option_badge_kind(%{badge_kind: kind}), do: kind
+  def option_badge_kind(_option), do: :metadata
+
   def option_status(%{status: status}), do: status
   def option_status(_option), do: "unknown"
 
@@ -212,6 +218,8 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       label: upstream_identity_label(identity),
       value: identity.id,
       plan_label: plan_label(identity),
+      plan_family: plan_family(identity),
+      badge_kind: :plan,
       status: identity_status(identity)
     }
   end
@@ -223,6 +231,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       label: api_key.display_name || api_key.key_prefix || "API key",
       value: api_key.id,
       plan_label: if(pool, do: pool.name, else: "Unknown Pool"),
+      badge_kind: :metadata,
       status: api_key.status
     }
   end
@@ -253,6 +262,17 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   end
 
   defp plan_family_label(_identity), do: "Plan unknown"
+
+  defp plan_family(%{plan_family: family}) when is_binary(family) do
+    family
+    |> String.trim()
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp plan_family(_identity), do: nil
 
   defp identity_status(%{status: status}) when is_binary(status), do: status
   defp identity_status(_identity), do: "unknown"

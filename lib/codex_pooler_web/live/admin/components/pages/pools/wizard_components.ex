@@ -353,7 +353,17 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
               {PoolForm.option_label(option)}
             </span>
             <span class="flex shrink-0 flex-wrap items-center gap-2">
-              <span class="inline-flex items-center rounded-box bg-base-200 px-2 py-1 text-xs font-semibold text-base-content/70">
+              <AdminBadges.plan_badge
+                :if={PoolForm.option_badge_kind(option) == :plan}
+                id={"#{@id}-plan-badge-#{PoolForm.dom_token(PoolForm.option_value(option))}"}
+                data-role="plan-badge"
+                label={PoolForm.option_plan_label(option)}
+                family={PoolForm.option_plan_family(option)}
+              />
+              <span
+                :if={PoolForm.option_badge_kind(option) != :plan}
+                class="inline-flex items-center rounded-box bg-base-200 px-2 py-1 text-xs font-semibold text-base-content/70"
+              >
                 {PoolForm.option_plan_label(option)}
               </span>
               <span class={AdminBadges.lifecycle_chip_class(PoolForm.option_status(option))}>
