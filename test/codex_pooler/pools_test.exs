@@ -3,6 +3,7 @@ defmodule CodexPooler.PoolsTest do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Admin.PoolWorkflow
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{Membership, RoutingSettings}
@@ -62,7 +63,7 @@ defmodule CodexPooler.PoolsTest do
 
   describe "pool management" do
     @tag feature_pool_control_plane_analytics: true
-    test "routing settings load defaults, analytics forwarding flag, compatibility flag, and persisted strategies by pool id" do
+    test "routing settings load defaults, prompt cache affinity flag, analytics forwarding flag, compatibility flag, and persisted strategies by pool id" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
 
@@ -74,6 +75,7 @@ defmodule CodexPooler.PoolsTest do
 
       assert %RoutingSettings{
                routing_strategy: "bridge_ring",
+               prompt_cache_affinity_enabled: true,
                control_plane_analytics_forwarding_enabled: true,
                v1_compatibility_enabled: true
              } =
@@ -90,19 +92,23 @@ defmodule CodexPooler.PoolsTest do
                  "bridge_ring_size" => 5,
                  "sticky_websocket_sessions" => false,
                  "sticky_http_sessions" => true,
+                 "prompt_cache_affinity_enabled" => false,
                  "control_plane_analytics_forwarding_enabled" => false,
                  "v1_compatibility_enabled" => false
                })
 
+      refute Pools.get_routing_settings(routed_pool).prompt_cache_affinity_enabled
       refute Pools.get_routing_settings(routed_pool).control_plane_analytics_forwarding_enabled
       refute Pools.v1_compatibility_enabled?(routed_pool)
 
       assert {:ok, %RoutingSettings{} = reenabled_settings} =
                Pools.update_routing_settings(scope, routed_pool, %{
+                 "prompt_cache_affinity_enabled" => true,
                  "control_plane_analytics_forwarding_enabled" => true,
                  "v1_compatibility_enabled" => true
                })
 
+      assert reenabled_settings.prompt_cache_affinity_enabled
       assert reenabled_settings.control_plane_analytics_forwarding_enabled
       assert reenabled_settings.v1_compatibility_enabled
       assert Pools.v1_compatibility_enabled?(routed_pool)
@@ -120,6 +126,8 @@ defmodule CodexPooler.PoolsTest do
              ]
 
       assert Enum.map(audits, & &1.details["sticky_http_sessions"]) == [true, true]
+      assert Enum.map(audits, & &1.details["prompt_cache_affinity_enabled"]) == [false, true]
+      assert Enum.all?(audits, &is_boolean(&1.details["prompt_cache_affinity_enabled"]))
       assert Enum.map(audits, & &1.pool_id) == [routed_pool.id, routed_pool.id]
 
       pool_id = pool.id
@@ -132,20 +140,52 @@ defmodule CodexPooler.PoolsTest do
       assert %{
                ^pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
+                 prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true
                },
                ^routed_pool_id => %RoutingSettings{
                  routing_strategy: "deterministic_rotation",
+                 prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true
                },
                ^missing_pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
+                 prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true
                }
              } = settings_by_pool_id
+    end
+
+    test "pool workflow defaults prompt cache affinity on and persists explicit disables" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, default_pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Workflow Default"
+               })
+
+      assert Pools.get_routing_settings(default_pool).prompt_cache_affinity_enabled == true
+
+      assert {:ok, disabled_pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Workflow Disabled",
+                 "prompt_cache_affinity_enabled" => "false"
+               })
+
+      assert Pools.get_routing_settings(disabled_pool).prompt_cache_affinity_enabled == false
+
+      assert {:ok, _updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, disabled_pool, %{
+                 "name" => disabled_pool.name,
+                 "status" => disabled_pool.status,
+                 "prompt_cache_affinity_enabled" => true
+               })
+
+      assert Pools.get_routing_settings(disabled_pool).prompt_cache_affinity_enabled == true
     end
 
     test "authenticated admin scopes can list and manage all pools" do

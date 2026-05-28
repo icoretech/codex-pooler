@@ -97,6 +97,14 @@ defmodule CodexPooler.Pools.Routing do
           parse_boolean(
             routing_attr(attrs, "sticky_http_sessions", settings.sticky_http_sessions)
           ),
+        prompt_cache_affinity_enabled:
+          parse_boolean(
+            routing_attr(
+              attrs,
+              "prompt_cache_affinity_enabled",
+              settings.prompt_cache_affinity_enabled
+            )
+          ),
         control_plane_analytics_forwarding_enabled:
           parse_boolean(
             routing_attr(
@@ -125,6 +133,7 @@ defmodule CodexPooler.Pools.Routing do
             bridge_ring_size: settings.bridge_ring_size,
             sticky_websocket_sessions: settings.sticky_websocket_sessions,
             sticky_http_sessions: settings.sticky_http_sessions,
+            prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
             control_plane_analytics_forwarding_enabled:
               settings.control_plane_analytics_forwarding_enabled
           })
@@ -161,6 +170,7 @@ defmodule CodexPooler.Pools.Routing do
       bridge_ring_size: 3,
       sticky_websocket_sessions: true,
       sticky_http_sessions: false,
+      prompt_cache_affinity_enabled: true,
       control_plane_analytics_forwarding_enabled: true,
       v1_compatibility_enabled: true,
       metadata: %{},

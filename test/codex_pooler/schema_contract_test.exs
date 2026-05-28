@@ -11,6 +11,7 @@ defmodule CodexPooler.SchemaContractTest do
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, RoutingCircuitState}
   alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota
 
@@ -51,7 +52,7 @@ defmodule CodexPooler.SchemaContractTest do
     CodexPooler.Gateway.Persistence.RoutingCircuitState,
     CodexPooler.Pools.Membership,
     CodexPooler.Pools.Pool,
-    CodexPooler.Pools.RoutingSettings,
+    RoutingSettings,
     Quota.AccountQuotaWindow,
     CodexPooler.Upstreams.Schemas.EncryptedSecret,
     CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
@@ -188,6 +189,7 @@ defmodule CodexPooler.SchemaContractTest do
 
   test "preserves JSONB, decimal-compatible money/rate fields, and integer token counters" do
     assert column_type("pool_routing_settings", "metadata") == "jsonb"
+    assert column_type("pool_routing_settings", "prompt_cache_affinity_enabled") == "boolean"
     assert column_type("models", "metadata") == "jsonb"
     assert column_type("ledger_entries", "details") == "jsonb"
     assert column_type("account_quota_windows", "metadata") == "jsonb"
@@ -315,6 +317,21 @@ defmodule CodexPooler.SchemaContractTest do
     end
   end
 
+  test "pool routing settings expose prompt cache affinity as non-null default-on storage" do
+    columns = table_columns("pool_routing_settings")
+
+    assert columns["prompt_cache_affinity_enabled"] == {"boolean", "NO"}
+
+    assert [["true"]] =
+             Repo.query!("""
+             SELECT column_default
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'pool_routing_settings'
+               AND column_name = 'prompt_cache_affinity_enabled'
+             """).rows
+  end
+
   test "codex files expose bridge metadata columns without upload table dependency" do
     columns = table_columns("codex_files")
 
@@ -375,6 +392,9 @@ defmodule CodexPooler.SchemaContractTest do
     assert APIKey.__schema__(:type, :enforced_model_identifier) == :string
     assert APIKey.__schema__(:type, :enforced_reasoning_effort) == :string
     assert APIKey.__schema__(:type, :enforced_service_tier) == :string
+
+    assert RoutingSettings.__schema__(:type, :prompt_cache_affinity_enabled) ==
+             :boolean
 
     assert Model.__schema__(:type, :metadata) == :map
     assert FileRecord.__schema__(:type, :byte_size) == :integer
