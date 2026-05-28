@@ -455,7 +455,49 @@ body {
   border-color: color-mix(in oklab, var(--color-base-content) 16%, transparent) !important;
   background: var(--color-base-100) !important;
   color: var(--color-base-content) !important;
+  padding: 0.45rem 0.55rem !important;
+  border-radius: var(--radius-field) !important;
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.18) !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-title {
+  margin: 0 0 0.35rem !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  color: color-mix(in oklab, var(--color-base-content) 62%, transparent) !important;
+  font-family: inherit !important;
+  font-size: 0.7rem !important;
+  font-weight: 600 !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-series-group {
+  gap: 0.45rem !important;
+  padding: 0.12rem 0 !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-marker {
+  width: 0.5rem !important;
+  height: 0.5rem !important;
+  margin-right: 0 !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-text {
+  font-family: inherit !important;
+  font-size: 0.72rem !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-y-group {
+  padding: 0 !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-text-y-label {
+  color: color-mix(in oklab, var(--color-base-content) 72%, transparent) !important;
+}
+
+.admin-apex-bar-chart .apexcharts-tooltip-text-y-value {
+  color: var(--color-base-content) !important;
+  font-weight: 700 !important;
 }
 
 @media (width < 48rem) {
