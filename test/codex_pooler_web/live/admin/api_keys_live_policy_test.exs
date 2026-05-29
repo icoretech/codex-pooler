@@ -257,6 +257,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert policy.enforced_model_identifier == "gpt-allowed"
   end
 
+  test "external API key changes live-update the mounted list", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "external-key-update", name: "External Key Update"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+
+    assert {:ok, %{api_key: api_key}} =
+             publish_from_task(fn ->
+               Access.create_api_key(scope, pool, %{display_name: "Externally created key"})
+             end)
+
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#api-key-row-#{api_key.id}", "Externally created key")
+  end
+
   defp extract_raw_key!(html) do
     case Regex.run(~r/sk-cxp-[A-Za-z0-9_-]+-[A-Za-z0-9_-]+/, html) do
       [raw_key] -> raw_key
@@ -275,6 +291,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
   defp assert_api_key_section(view, section) do
     assert has_element?(view, "#api-key-tab-#{section}[aria-selected='true']")
     assert has_element?(view, "#api-key-section-#{section}[role='tabpanel']")
+  end
+
+  defp publish_from_task(fun) when is_function(fun, 0) do
+    fun
+    |> Task.async()
+    |> Task.await(5_000)
   end
 
   defp insert_sync_run!(pool) do

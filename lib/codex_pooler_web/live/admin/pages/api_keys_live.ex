@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Events
+  alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.ApiKeyPageComponents
   alias CodexPoolerWeb.Admin.ApiKeyPageSupport, as: Support
   alias CodexPoolerWeb.Admin.ApiKeyPolicyForm
@@ -10,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   alias CodexPoolerWeb.Admin.ApiKeyWizardComponents
   alias CodexPoolerWeb.Admin.ApiKeyWizardComponents.{Limits, Review}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.PoolEventSubscriptions
 
   @impl true
   def mount(_params, _session, socket) do
@@ -232,6 +235,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   end
 
   @impl true
+  def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
+    if api_key_event_in_scope?(socket, pool_id, topics) do
+      {:noreply, load_api_keys(socket, reset_form: false, clear_secret: false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def render(assigns) do
     assigns = assign(assigns, :policy_limit_fields, ApiKeyPolicyForm.limit_fields())
 
@@ -245,7 +257,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         >
           <:actions>
             <AdminComponents.action_button
-              :if={@pools == []}
+              :if={@pools == [] && Pools.owner?(@current_scope)}
               id="api-key-page-create-action"
               icon="hero-server-stack"
               label="Create Pool"
@@ -343,6 +355,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
           pools={@pools}
           groups={@api_key_pool_groups}
           usage_summaries={@api_key_usage_summaries}
+          can_manage_pools?={Pools.can_manage_pools?(@current_scope)}
         />
       </section>
     </AdminComponents.admin_shell>
@@ -447,9 +460,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
     socket
     |> assign(read_model)
+    |> maybe_subscribe_pool_events(read_model.pools)
     |> maybe_reset_form(opts, read_model.pools)
     |> assign_api_key_wizard_state()
     |> Support.maybe_clear_secret(opts)
+  end
+
+  defp maybe_subscribe_pool_events(socket, pools) do
+    pools
+    |> PoolEventSubscriptions.pool_id_set()
+    |> then(fn target_pool_ids ->
+      {socket, _stale_pool_ids} = PoolEventSubscriptions.reconcile(socket, target_pool_ids)
+      socket
+    end)
+  end
+
+  defp api_key_event_in_scope?(socket, pool_id, topics) do
+    Enum.any?(topics, &(&1 in ["pools", "request_logs", "usage"])) and
+      MapSet.member?(socket.assigns.subscribed_pool_ids, pool_id)
   end
 
   defp maybe_reset_form(socket, opts, pools) do

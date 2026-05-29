@@ -2,9 +2,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounts
   alias CodexPooler.Pools
 
   setup :register_and_log_in_user
@@ -17,6 +19,25 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert has_element?(view, "#api-key-empty-create-action[href='/admin/pools']", "Create Pool")
     refute has_element?(view, "#api-key-page-create-action[disabled]")
     refute has_element?(view, "#api-key-empty-create-action[disabled]")
+  end
+
+  test "unassigned instance admins do not get Pool creation CTAs on API keys", %{scope: scope} do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "unassigned-api-admin@example.com",
+        "role" => "instance_admin",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/api-keys")
+
+    assert has_element?(view, "#api-key-empty-state")
+    refute has_element?(view, "#api-key-page-create-action")
+    refute has_element?(view, "#api-key-empty-create-action")
   end
 
   test "renders required form, grouped tables, row, and action selectors", %{

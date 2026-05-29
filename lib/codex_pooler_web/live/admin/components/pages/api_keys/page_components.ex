@@ -149,6 +149,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   attr :pools, :list, required: true
   attr :groups, :list, required: true
   attr :usage_summaries, :map, required: true
+  attr :can_manage_pools?, :boolean, required: true
 
   def api_key_groups(assigns) do
     ~H"""
@@ -166,7 +167,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       >
         <:actions>
           <AdminComponents.action_button
-            :if={@pools == []}
+            :if={@pools == [] && @can_manage_pools?}
             id="api-key-empty-create-action"
             icon="hero-server-stack"
             label="Create Pool"
