@@ -161,7 +161,8 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   end
 
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
-    if "upstreams" in topics and invite_event_in_scope?(socket, pool_id) do
+    if Enum.any?(topics, &(&1 in ["pools", "upstreams"])) and
+         invite_event_in_scope?(socket, pool_id) do
       {:noreply, load_invites(socket, socket.assigns.filter_values)}
     else
       {:noreply, socket}
@@ -180,7 +181,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
         >
           <:actions>
             <AdminComponents.action_button
-              :if={@pools == []}
+              :if={@pools == [] && Pools.owner?(@current_scope)}
               id="invite-page-create-pool"
               icon="hero-server-stack"
               label="Create Pool"

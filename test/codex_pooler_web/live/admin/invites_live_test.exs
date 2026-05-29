@@ -3,11 +3,13 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
 
   import Ecto.Query
   import Phoenix.LiveViewTest
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import Swoosh.TestAssertions
 
   alias CodexPooler.Access
   alias CodexPooler.Access.Invite
+  alias CodexPooler.Accounts
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Mailer
@@ -27,6 +29,25 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     end)
 
     :ok
+  end
+
+  test "unassigned instance admins do not get Pool creation CTAs on invites", %{scope: scope} do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "unassigned-invite-admin@example.com",
+        "role" => "instance_admin",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/invites")
+
+    assert has_element?(view, "#invite-empty-state")
+    refute has_element?(view, "#invite-page-create-pool")
+    refute has_element?(view, "#invite-page-create-action")
   end
 
   test "lists Pool invites and links from the sidebar under operators", %{
