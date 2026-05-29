@@ -2,9 +2,11 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import Phoenix.LiveViewTest
 
+  alias CodexPooler.Accounts
   alias CodexPooler.Audit
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.InstanceSettings
@@ -503,5 +505,125 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
     assert has_element?(view, "#audit-event-detail-metadata", "configured")
     refute drawer_html =~ metrics_token
     refute drawer_html =~ smtp_password
+  end
+
+  test "scoped admins see only currently assigned pool audit rows and never nilified deleted-pool history",
+       %{scope: scope} do
+    {:ok, assigned_pool} =
+      Pools.create_pool(scope, %{slug: "audit-scope-assigned", name: "Audit Scope Assigned"})
+
+    {:ok, hidden_pool} =
+      Pools.create_pool(scope, %{slug: "audit-scope-hidden", name: "Audit Scope Hidden"})
+
+    {:ok, delete_pool} =
+      Pools.create_pool(scope, %{slug: "audit-scope-delete", name: "Audit Scope Delete"})
+
+    assert {:ok, assigned_event} =
+             Audit.record_system_event(%{
+               pool_id: assigned_pool.id,
+               action: "pool.update",
+               target_type: "pool",
+               target_id: assigned_pool.id,
+               details: %{"safe" => "assigned"}
+             })
+
+    assert {:ok, hidden_event} =
+             Audit.record_system_event(%{
+               pool_id: hidden_pool.id,
+               action: "pool.update",
+               target_type: "pool",
+               target_id: hidden_pool.id,
+               details: %{"safe" => "hidden"}
+             })
+
+    assert {:ok, global_event} =
+             Audit.record_user_event(scope.user, %{
+               action: "operator.update",
+               target_type: "user",
+               target_id: scope.user.id,
+               details: %{"safe" => "global"}
+             })
+
+    %{conn: admin_conn} =
+      assigned_admin_conn(scope, assigned_pool, "audit-scope-admin@example.com")
+
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/audit-logs")
+
+    assert has_element?(view, "#audit-log-row-#{assigned_event.id}", "Pool updated")
+    refute has_element?(view, "#audit-log-row-#{hidden_event.id}")
+    refute has_element?(view, "#audit-log-row-#{global_event.id}")
+    assert has_element?(view, "#audit-log-pool-filter button[data-pool-id='#{assigned_pool.id}']")
+    refute has_element?(view, "#audit-log-pool-filter button[data-pool-id='#{hidden_pool.id}']")
+
+    {:ok, hidden_filter_view, _html} =
+      live(admin_conn, ~p"/admin/audit-logs?pool_id=#{hidden_pool.id}&target=#{hidden_pool.id}")
+
+    assert has_element?(
+             hidden_filter_view,
+             "#audit-log-filter-errors",
+             "Pool filter did not match an available Pool"
+           )
+
+    refute has_element?(hidden_filter_view, "#audit-log-row-#{hidden_event.id}")
+
+    assert {:ok, archived_pool} = Pools.change_pool_status(scope, assigned_pool, "archived")
+
+    {:ok, revoked_admin_view, _html} = live(admin_conn, ~p"/admin/audit-logs")
+    refute has_element?(revoked_admin_view, "#audit-log-row-#{assigned_event.id}")
+
+    refute has_element?(
+             revoked_admin_view,
+             "#audit-log-pool-filter button[data-pool-id='#{archived_pool.id}']"
+           )
+
+    assert {:ok, archived_delete_pool} = Pools.change_pool_status(scope, delete_pool, "archived")
+
+    assert {:ok, _deleted_pool} =
+             Pools.delete_archived_pool(scope, archived_delete_pool, archived_delete_pool.slug)
+
+    nilified_event =
+      Repo.one!(
+        from audit in AuditEvent,
+          where: audit.action == "pool.delete" and audit.target_id == ^delete_pool.id,
+          order_by: [desc: audit.occurred_at, desc: audit.id],
+          limit: 1
+      )
+
+    assert is_nil(nilified_event.pool_id)
+
+    {:ok, deleted_filter_view, _html} =
+      live(admin_conn, ~p"/admin/audit-logs?target=#{delete_pool.id}")
+
+    refute has_element?(deleted_filter_view, "#audit-log-row-#{nilified_event.id}")
+
+    {:ok, owner_view, _html} =
+      live(
+        build_conn() |> log_in_user(scope.user, session_token(scope.user)),
+        ~p"/admin/audit-logs?target=#{delete_pool.id}"
+      )
+
+    assert has_element?(owner_view, "#audit-log-row-#{nilified_event.id}", "Pool deleted")
+  end
+
+  defp assigned_admin_conn(scope, pool, email) do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => email,
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    %{conn: log_in_user(build_conn(), admin, token), user: admin}
+  end
+
+  defp session_token(user) do
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => user.email, "password" => valid_user_password()})
+
+    token
   end
 end

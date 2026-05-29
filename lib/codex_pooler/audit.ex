@@ -67,6 +67,7 @@ defmodule CodexPooler.Audit do
           | {:offset, integer()}
           | {:filters, audit_filters()}
           | {:visible_pool_ids, [Ecto.UUID.t()]}
+          | {:include_global_events, boolean()}
         ]
   @type audit_result ::
           {:ok, AuditEvent.t()}
@@ -149,7 +150,13 @@ defmodule CodexPooler.Audit do
   @spec list_events_for_scope(Scope.t(), list_opts()) :: audit_page()
   def list_events_for_scope(%Scope{} = scope, opts \\ []) do
     visible_pool_ids = scope |> Pools.list_log_filter_pools() |> Enum.map(& &1.id)
-    list_events_for_pool_filter(nil, Keyword.put(opts, :visible_pool_ids, visible_pool_ids))
+
+    opts =
+      opts
+      |> Keyword.put(:visible_pool_ids, visible_pool_ids)
+      |> Keyword.put(:include_global_events, Pools.owner?(scope))
+
+    list_events_for_pool_filter(nil, opts)
   end
 
   defp list_events_for_pool_filter(pool_id, opts) do
@@ -157,6 +164,7 @@ defmodule CodexPooler.Audit do
     offset = max(Keyword.get(opts, :offset, 0), 0)
     filters = opts |> Keyword.get(:filters, []) |> Map.new()
     visible_pool_ids = Keyword.get(opts, :visible_pool_ids)
+    include_global_events = Keyword.get(opts, :include_global_events, true)
 
     query =
       from event in AuditEvent,
@@ -167,7 +175,7 @@ defmodule CodexPooler.Audit do
 
     query =
       query
-      |> maybe_filter_visible_pools(visible_pool_ids)
+      |> maybe_filter_visible_pools(visible_pool_ids, include_global_events)
       |> maybe_filter_pool(pool_id)
       |> apply_event_filters(filters)
 
@@ -214,11 +222,16 @@ defmodule CodexPooler.Audit do
   defp maybe_filter_pool(query, pool_id),
     do: from([event, ...] in query, where: event.pool_id == ^pool_id)
 
-  defp maybe_filter_visible_pools(query, nil), do: query
+  defp maybe_filter_visible_pools(query, nil, _include_global_events), do: query
 
-  defp maybe_filter_visible_pools(query, pool_ids) when is_list(pool_ids) do
+  defp maybe_filter_visible_pools(query, pool_ids, true) when is_list(pool_ids) do
     from [event, ...] in query,
       where: is_nil(event.pool_id) or event.pool_id in ^pool_ids
+  end
+
+  defp maybe_filter_visible_pools(query, pool_ids, false) when is_list(pool_ids) do
+    from [event, ...] in query,
+      where: event.pool_id in ^pool_ids
   end
 
   defp apply_event_filters(query, filters) do
