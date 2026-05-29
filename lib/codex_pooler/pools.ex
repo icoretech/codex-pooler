@@ -9,20 +9,32 @@ defmodule CodexPooler.Pools do
   alias CodexPooler.Accounts.User
   alias CodexPooler.Audit
   alias CodexPooler.Events
-  alias CodexPooler.Pools.{Authorization, Membership, Pool, Routing, RoutingSettings}
+
+  alias CodexPooler.Pools.{
+    Authorization,
+    Membership,
+    OperatorPoolAssignment,
+    Pool,
+    Routing,
+    RoutingSettings
+  }
+
   alias CodexPooler.Repo
 
   @status_active "active"
+  @status_revoked "revoked"
   @status_disabled "disabled"
   @status_archived "archived"
   @management_pool_statuses [@status_active, @status_disabled, @status_archived]
+  @reporting_pool_statuses [@status_active, @status_disabled]
 
   @type capability_key :: Authorization.capability_key()
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
   @type pools_result :: {:ok, [Pool.t()]} | {:error, access_error()}
   @type pool_result :: {:ok, Pool.t()} | {:error, Ecto.Changeset.t() | access_error()}
-  @type membership_result :: {:ok, Membership.t()} | {:error, Ecto.Changeset.t() | access_error()}
+  @type membership_result ::
+          {:ok, Membership.t()} | {:error, Ecto.Changeset.t() | access_error() | atom()}
   @type routing_settings_result ::
           {:ok, RoutingSettings.t()} | {:error, Ecto.Changeset.t() | access_error()}
   @type capability_decision :: %{
@@ -39,10 +51,7 @@ defmodule CodexPooler.Pools do
 
   @spec list_pools(term()) :: pools_result()
   def list_pools(%Scope{} = scope) do
-    with {:ok, _decision} <- require_capability(scope, capability(:pool_operate)) do
-      {:ok,
-       Repo.all(from p in Pool, where: p.status == ^@status_active, order_by: [asc: p.created_at])}
-    end
+    Authorization.list_pools_for_capability(scope, capability(:pool_operate), [@status_active])
   end
 
   def list_pools(_scope),
@@ -58,13 +67,11 @@ defmodule CodexPooler.Pools do
 
   @spec list_log_filter_pools(term()) :: [Pool.t()]
   def list_log_filter_pools(%Scope{} = scope) do
-    case require_capability(scope, capability(:pool_operate)) do
-      {:ok, _decision} ->
-        Repo.all(
-          from p in Pool,
-            where: p.status in [^@status_active, ^@status_disabled],
-            order_by: [asc: p.created_at]
-        )
+    statuses = if owner?(scope), do: @management_pool_statuses, else: @reporting_pool_statuses
+
+    case Authorization.list_pools_for_capability(scope, capability(:pool_operate), statuses) do
+      {:ok, pools} ->
+        pools
 
       {:error, _reason} ->
         []
@@ -73,10 +80,29 @@ defmodule CodexPooler.Pools do
 
   def list_log_filter_pools(_scope), do: []
 
+  @spec list_reporting_pools(term()) :: {:ok, [Pool.t()]} | {:error, access_error()}
+  def list_reporting_pools(%Scope{} = scope) do
+    Authorization.list_pools_for_capability(
+      scope,
+      capability(:pool_operate),
+      @reporting_pool_statuses
+    )
+  end
+
+  def list_reporting_pools(_scope),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
   @spec list_pools_for_management(Scope.t()) :: {:ok, [Pool.t()]} | {:error, access_error()}
   def list_pools_for_management(%Scope{} = scope) do
-    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)) do
-      {:ok, Repo.all(from p in Pool, order_by: [asc: p.created_at])}
+    case require_capability(scope, capability(:pool_manage)) do
+      {:ok, _decision} ->
+        {:ok, Repo.all(from p in Pool, order_by: [asc: p.created_at])}
+
+      {:error, %{code: :capability_denied}} ->
+        Authorization.list_pools_for_capability(scope, capability(:pool_operate), [@status_active])
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -89,6 +115,18 @@ defmodule CodexPooler.Pools do
   end
 
   def can_manage_pools?(_scope), do: false
+
+  @spec owner?(term()) :: boolean()
+  defdelegate owner?(scope), to: Authorization
+
+  @spec assigned_pool?(term(), term()) :: boolean()
+  defdelegate assigned_pool?(scope, pool_or_id), to: Authorization
+
+  @spec list_assigned_pool_ids(term()) :: [Ecto.UUID.t()]
+  defdelegate list_assigned_pool_ids(scope), to: Authorization
+
+  @spec scope_assigned_pool_ids(term()) :: [Ecto.UUID.t()]
+  defdelegate scope_assigned_pool_ids(scope), to: Scope, as: :assigned_pool_ids
 
   @spec list_active_pools() :: [Pool.t()]
   def list_active_pools do
@@ -169,14 +207,16 @@ defmodule CodexPooler.Pools do
 
   def update_pool(%Scope{} = scope, pool_or_id, attrs, opts)
       when is_map(attrs) and is_list(opts) do
-    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)),
-         %Pool{} = pool <- normalize_pool(pool_or_id),
-         {:ok, update_attrs} <- pool_update_attrs(attrs) do
+    with %Pool{} = pool <- normalize_pool(pool_or_id),
+         {:ok, update_attrs} <- pool_update_attrs(attrs),
+         {:ok, _decision} <- require_pool_update_capability(scope, pool, update_attrs) do
       now = now()
 
-      pool
-      |> Pool.changeset(Map.put(update_attrs, :updated_at, now))
-      |> Repo.update()
+      update_pool_and_revoke_archived_assignments(
+        pool,
+        Map.put(update_attrs, :updated_at, now),
+        now
+      )
       |> tap(fn
         {:ok, pool} ->
           record_pool_audit_event(scope, "pool.update", pool, %{
@@ -207,13 +247,15 @@ defmodule CodexPooler.Pools do
       now = now()
       previous_status = pool.status
 
-      pool
-      |> Pool.changeset(%{
-        status: status,
-        disabled_at: pool_status_disabled_at(status),
-        updated_at: now
-      })
-      |> Repo.update()
+      update_pool_and_revoke_archived_assignments(
+        pool,
+        %{
+          status: status,
+          disabled_at: pool_status_disabled_at(status),
+          updated_at: now
+        },
+        now
+      )
       |> tap(fn
         {:ok, pool} ->
           record_pool_audit_event(scope, "pool.status_update", pool, %{
@@ -293,11 +335,47 @@ defmodule CodexPooler.Pools do
 
   def create_instance_admin_membership(%User{} = actor, %User{} = user) do
     actor
-    |> Scope.for_user([])
+    |> Scope.for_user()
     |> create_instance_admin_membership(user)
   end
 
   def create_instance_admin_membership(_actor, _user),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec create_instance_owner_membership(Scope.t() | User.t(), User.t()) :: membership_result()
+  def create_instance_owner_membership(%Scope{} = scope, %User{} = user) do
+    create_membership(scope, %{user_id: user.id, role: role(:instance_owner)})
+  end
+
+  def create_instance_owner_membership(%User{} = actor, %User{} = user) do
+    actor
+    |> Scope.for_user()
+    |> create_instance_owner_membership(user)
+  end
+
+  def create_instance_owner_membership(_actor, _user),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec change_membership_role(Scope.t(), Membership.t() | Ecto.UUID.t(), String.t()) ::
+          membership_result()
+  def change_membership_role(%Scope{} = scope, membership_or_id, role) when is_binary(role) do
+    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)),
+         {:ok, role} <- normalize_membership_role(role) do
+      change_membership_role_transaction(scope, membership_or_id, role)
+    end
+  end
+
+  def change_membership_role(_scope, _membership_or_id, _role),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec revoke_membership(Scope.t(), Membership.t() | Ecto.UUID.t()) :: membership_result()
+  def revoke_membership(%Scope{} = scope, membership_or_id) do
+    with {:ok, _decision} <- require_capability(scope, capability(:pool_manage)) do
+      revoke_membership_transaction(scope, membership_or_id)
+    end
+  end
+
+  def revoke_membership(_scope, _membership_or_id),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
   @spec list_active_memberships_for_user(term()) :: [Membership.t()]
@@ -321,11 +399,138 @@ defmodule CodexPooler.Pools do
   @spec access_error(atom(), String.t()) :: access_error()
   defdelegate access_error(code, message), to: Authorization
 
+  defp change_membership_role_transaction(scope, membership_or_id, role) do
+    Repo.transaction(fn ->
+      with {:ok, membership} <- lock_membership(membership_or_id),
+           :ok <- ensure_owner_authority_remains(membership, role: role),
+           previous_role = membership.role,
+           {:ok, membership} <-
+             membership
+             |> Membership.changeset(%{role: role})
+             |> Repo.update(),
+           {:ok, _audit} <-
+             record_membership_audit_event(scope, "membership.role_update", membership, %{
+               previous_role: previous_role,
+               role: membership.role,
+               status: membership.status
+             }) do
+        membership
+      else
+        error -> rollback_transaction_error(error)
+      end
+    end)
+    |> normalize_transaction_error()
+  end
+
+  defp revoke_membership_transaction(scope, membership_or_id) do
+    Repo.transaction(fn ->
+      with {:ok, membership} <- lock_membership(membership_or_id),
+           :ok <- ensure_owner_authority_remains(membership, status: @status_revoked),
+           now = now(),
+           previous_status = membership.status,
+           {:ok, membership} <-
+             membership
+             |> Membership.changeset(%{status: @status_revoked, revoked_at: now})
+             |> Repo.update(),
+           {:ok, _audit} <-
+             record_membership_audit_event(scope, "membership.revoke", membership, %{
+               previous_status: previous_status,
+               status: membership.status,
+               role: membership.role
+             }) do
+        membership
+      else
+        error -> rollback_transaction_error(error)
+      end
+    end)
+    |> normalize_transaction_error()
+  end
+
+  defp lock_membership(%Membership{id: id}), do: lock_membership(id)
+
+  defp lock_membership(id) when is_binary(id) do
+    case Repo.one(from membership in Membership, where: membership.id == ^id, lock: "FOR UPDATE") do
+      %Membership{} = membership -> {:ok, membership}
+      nil -> {:error, access_error(:membership_not_found, "membership was not found")}
+    end
+  end
+
+  defp lock_membership(_membership_or_id),
+    do: {:error, access_error(:membership_not_found, "membership was not found")}
+
+  defp normalize_membership_role(role) when role in ["instance_owner", "instance_admin"],
+    do: {:ok, role}
+
+  defp normalize_membership_role(_role),
+    do: {:error, access_error(:invalid_role, "role must be instance_owner or instance_admin")}
+
+  defp ensure_owner_authority_remains(
+         %Membership{role: "instance_owner", status: @status_active} = membership,
+         role: replacement_role
+       )
+       when replacement_role != "instance_owner" do
+    ensure_not_final_active_owner(membership)
+  end
+
+  defp ensure_owner_authority_remains(
+         %Membership{role: "instance_owner", status: @status_active} = membership,
+         status: replacement_status
+       )
+       when replacement_status != @status_active do
+    ensure_not_final_active_owner(membership)
+  end
+
+  defp ensure_owner_authority_remains(_membership, _attrs), do: :ok
+
+  defp ensure_not_final_active_owner(%Membership{user_id: user_id}) do
+    active_owner_user_ids =
+      Repo.all(
+        from membership in Membership,
+          join: user in User,
+          on: user.id == membership.user_id,
+          where:
+            membership.role == "instance_owner" and membership.status == ^@status_active and
+              user.status == ^@status_active and is_nil(user.deleted_at),
+          order_by: [asc: membership.user_id],
+          lock: "FOR UPDATE",
+          select: membership.user_id
+      )
+      |> Enum.map(&normalize_uuid/1)
+      |> Enum.uniq()
+
+    if active_owner_user_ids == [user_id], do: {:error, :last_active_owner}, else: :ok
+  end
+
+  defp normalize_uuid(<<_::128>> = raw_uuid), do: Ecto.UUID.load!(raw_uuid)
+  defp normalize_uuid(uuid), do: uuid
+
+  defp rollback_transaction_error({:error, %Ecto.Changeset{} = changeset}),
+    do: Repo.rollback(changeset)
+
+  defp rollback_transaction_error({:error, reason}), do: Repo.rollback(reason)
+  defp rollback_transaction_error(reason), do: Repo.rollback(reason)
+
+  defp normalize_transaction_error({:ok, value}), do: {:ok, value}
+
+  defp normalize_transaction_error({:error, %Ecto.Changeset{} = changeset}),
+    do: {:error, changeset}
+
+  defp normalize_transaction_error({:error, reason}), do: {:error, reason}
+
   defp normalize_pool(%Pool{} = pool), do: pool
 
   defp normalize_pool(id) when is_binary(id), do: Repo.get(Pool, id)
 
   defp normalize_pool(_id), do: nil
+
+  defp require_pool_update_capability(scope, pool, update_attrs) do
+    capability =
+      if Map.has_key?(update_attrs, :status),
+        do: capability(:pool_manage),
+        else: capability(:pool_operate)
+
+    require_capability(scope, capability, pool_id: pool.id)
+  end
 
   defp pool_update_attrs(attrs) do
     with {:ok, status} <-
@@ -358,6 +563,40 @@ defmodule CodexPooler.Pools do
 
   defp pool_status_disabled_at(@status_active), do: nil
   defp pool_status_disabled_at(_status), do: now()
+
+  @spec update_pool_and_revoke_archived_assignments(Pool.t(), map(), DateTime.t()) ::
+          pool_result()
+  defp update_pool_and_revoke_archived_assignments(%Pool{} = pool, attrs, now) do
+    Repo.transaction(fn ->
+      with {:ok, pool} <-
+             pool
+             |> Pool.changeset(attrs)
+             |> Repo.update(),
+           {:ok, _revoked_count} <-
+             revoke_active_operator_pool_assignments(pool, Map.get(attrs, :status), now) do
+        pool
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> normalize_transaction_error()
+  end
+
+  @spec revoke_active_operator_pool_assignments(Pool.t(), String.t() | nil, DateTime.t()) ::
+          {:ok, non_neg_integer()}
+  defp revoke_active_operator_pool_assignments(%Pool{} = pool, @status_archived, now) do
+    {revoked_count, _rows} =
+      Repo.update_all(
+        from(assignment in OperatorPoolAssignment,
+          where: assignment.pool_id == ^pool.id and assignment.status == ^@status_active
+        ),
+        set: [status: @status_revoked, revoked_at: now, updated_at: now]
+      )
+
+    {:ok, revoked_count}
+  end
+
+  defp revoke_active_operator_pool_assignments(%Pool{}, _status, _now), do: {:ok, 0}
 
   defp ensure_archived_pool(%Pool{status: @status_archived}), do: :ok
 
@@ -401,6 +640,24 @@ defmodule CodexPooler.Pools do
   end
 
   defp record_pool_audit_event(_scope, _action, _pool, _details), do: :ok
+
+  defp record_membership_audit_event(%Scope{user: %User{} = user}, action, membership, details) do
+    Audit.record_user_event(user, %{
+      action: action,
+      target_type: "membership",
+      target_id: membership.id,
+      details:
+        Map.merge(
+          %{
+            membership_id: membership.id,
+            user_id: membership.user_id
+          },
+          details
+        )
+    })
+  end
+
+  defp record_membership_audit_event(_scope, _action, _membership, _details), do: {:ok, nil}
 
   defp pool_audit_details(%Pool{} = pool) do
     %{

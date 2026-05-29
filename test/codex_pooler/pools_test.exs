@@ -6,10 +6,11 @@ defmodule CodexPooler.PoolsTest do
   alias CodexPooler.Admin.PoolWorkflow
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.{Membership, RoutingSettings}
+  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, RoutingSettings}
   alias CodexPooler.Repo
 
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures, only: [operator_pool_assignment_fixture: 3]
 
   describe "pool lifecycle" do
     test "instance owners create normalized pools and list active pools" do
@@ -24,13 +25,93 @@ defmodule CodexPooler.PoolsTest do
       assert pool.created_by_user_id == owner.id
       assert {:ok, [^pool]} = Pools.list_pools(scope)
       assert Pools.list_visible_pools(scope) == [pool]
-      assert Pools.list_log_filter_pools(scope) == [pool]
+      assert Enum.any?(Pools.list_log_filter_pools(scope), &(&1.id == pool.id))
 
       assert audit = Repo.get_by(AuditEvent, action: "pool.create", target_id: pool.id)
       assert audit.actor_user_id == owner.id
       assert audit.pool_id == pool.id
       assert audit.details["slug"] == "team-alpha"
       assert audit.details["status"] == "active"
+    end
+
+    test "updating a pool to archived revokes assigned admins through the update path" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      owner_scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               Pools.create_pool(owner_scope, %{slug: "update-archive", name: "Update Archive"})
+
+      admin = user_fixture(%{"email" => "update-archive-admin@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
+
+      assignment = operator_pool_assignment_fixture(admin, pool, created_by_user_id: owner.id)
+
+      assert {:ok, archived_pool} = Pools.update_pool(owner_scope, pool, %{status: "archived"})
+      assert archived_pool.status == "archived"
+
+      revoked_assignment = Repo.get!(OperatorPoolAssignment, assignment.id)
+      assert revoked_assignment.status == "revoked"
+      assert revoked_assignment.revoked_at
+      assert revoked_assignment.updated_at == revoked_assignment.revoked_at
+      assert Scope.for_user(admin).assigned_pool_ids == []
+    end
+
+    test "archiving a pool revokes assigned admins and restoration does not restore grants" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      owner_scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               Pools.create_pool(owner_scope, %{
+                 slug: "assignment-archive",
+                 name: "Assignment Archive"
+               })
+
+      admin = user_fixture(%{"email" => "archive-admin@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
+
+      assignment = operator_pool_assignment_fixture(admin, pool, created_by_user_id: owner.id)
+
+      assert Scope.for_user(admin).assigned_pool_ids == [pool.id]
+      assert Enum.map(Pools.list_visible_pools(Scope.for_user(admin)), & &1.id) == [pool.id]
+
+      assert {:ok, archived_pool} = Pools.change_pool_status(owner_scope, pool, "archived")
+      assert archived_pool.status == "archived"
+
+      revoked_assignment = Repo.get!(OperatorPoolAssignment, assignment.id)
+      assert revoked_assignment.status == "revoked"
+      assert revoked_assignment.revoked_at
+      assert revoked_assignment.updated_at == revoked_assignment.revoked_at
+
+      assert Scope.for_user(admin).assigned_pool_ids == []
+      assert Pools.list_visible_pools(Scope.for_user(admin)) == []
+      refute Pools.assigned_pool?(Scope.for_user(admin), pool)
+
+      assert Pools.can_manage_pools?(Scope.for_user(owner, []))
+      assert {:ok, management_pools} = Pools.list_pools_for_management(Scope.for_user(owner, []))
+      assert Enum.any?(management_pools, &(&1.id == pool.id and &1.status == "archived"))
+
+      assert {:ok, restored_pool} = Pools.change_pool_status(owner_scope, archived_pool, "active")
+      assert restored_pool.status == "active"
+      assert Scope.for_user(admin).assigned_pool_ids == []
+      assert Pools.list_visible_pools(Scope.for_user(admin)) == []
+
+      assert {:ok, archived_again} =
+               Pools.change_pool_status(owner_scope, restored_pool, "archived")
+
+      assert {:ok, _deleted_pool} =
+               Pools.delete_archived_pool(owner_scope, archived_again, archived_again.slug)
+
+      refute Repo.get(OperatorPoolAssignment, assignment.id)
+
+      assert {:ok, replacement_pool} =
+               Pools.create_pool(owner_scope, %{slug: pool.slug, name: "Assignment Archive Again"})
+
+      assert Scope.for_user(admin).assigned_pool_ids == []
+      refute Pools.assigned_pool?(Scope.for_user(admin), replacement_pool)
     end
 
     test "pool slugs stay unique until archived deletion is confirmed" do
@@ -188,10 +269,10 @@ defmodule CodexPooler.PoolsTest do
       assert Pools.get_routing_settings(disabled_pool).prompt_cache_affinity_enabled == true
     end
 
-    test "authenticated admin scopes can list and manage all pools" do
+    test "instance owner memberships can list and manage all pools without cached scope roles" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       owner_scope = Scope.for_user(owner, ["instance_owner"])
-      admin_scope = Scope.for_user(owner, [])
+      db_owner_scope = Scope.for_user(owner, [])
 
       assert {:ok, managed_pool} =
                Pools.create_pool(owner_scope, %{slug: "managed", name: "Managed"})
@@ -203,28 +284,28 @@ defmodule CodexPooler.PoolsTest do
                Pools.create_pool(owner_scope, %{slug: "archived", name: "Archived"})
 
       assert {:ok, _disabled_pool} =
-               Pools.change_pool_status(admin_scope, disabled_pool, "disabled")
+               Pools.change_pool_status(db_owner_scope, disabled_pool, "disabled")
 
       assert {:ok, _archived_pool} =
-               Pools.change_pool_status(admin_scope, archived_pool, "archived")
+               Pools.change_pool_status(db_owner_scope, archived_pool, "archived")
 
-      assert Pools.can_manage_pools?(admin_scope)
+      assert Pools.can_manage_pools?(db_owner_scope)
       refute Pools.can_manage_pools?(nil)
 
-      assert {:ok, managed_pools} = Pools.list_pools_for_management(admin_scope)
+      assert {:ok, managed_pools} = Pools.list_pools_for_management(db_owner_scope)
+      managed_pools_by_id = Map.new(managed_pools, &{&1.id, &1})
 
-      assert managed_pools
-             |> Enum.map(& &1.status)
-             |> Enum.sort() == ["active", "archived", "disabled"]
-
-      assert managed_pools
-             |> Enum.map(& &1.slug)
-             |> Enum.sort() == ["archived", "disabled", "managed"]
+      assert managed_pools_by_id[managed_pool.id].status == "active"
+      assert managed_pools_by_id[disabled_pool.id].status == "disabled"
+      assert managed_pools_by_id[archived_pool.id].status == "archived"
+      assert managed_pools_by_id[managed_pool.id].slug == "managed"
+      assert managed_pools_by_id[disabled_pool.id].slug == "disabled"
+      assert managed_pools_by_id[archived_pool.id].slug == "archived"
 
       managed_updated_at = managed_pool.updated_at
 
       assert {:ok, updated_pool} =
-               Pools.update_pool(admin_scope, managed_pool, %{
+               Pools.update_pool(db_owner_scope, managed_pool, %{
                  name: "Managed Prime",
                  slug: "ignored"
                })
@@ -246,7 +327,7 @@ defmodule CodexPooler.PoolsTest do
       status_updated_at = status_pool.updated_at
 
       assert {:ok, transitioned_pool} =
-               Pools.change_pool_status(admin_scope, status_pool, "disabled")
+               Pools.change_pool_status(db_owner_scope, status_pool, "disabled")
 
       assert transitioned_pool.id == status_pool.id
       assert transitioned_pool.status == "disabled"
@@ -260,7 +341,7 @@ defmodule CodexPooler.PoolsTest do
       assert status_audit.details["status"] == "disabled"
 
       assert {:error, %{code: :invalid_status}} =
-               Pools.change_pool_status(admin_scope, managed_pool, "paused")
+               Pools.change_pool_status(db_owner_scope, managed_pool, "paused")
     end
 
     test "invalid or missing scopes are denied" do
@@ -332,6 +413,51 @@ defmodule CodexPooler.PoolsTest do
   end
 
   describe "membership authorization" do
+    test "canonical scope construction carries active roles and assigned pool ids" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      owner_scope = Scope.for_user(owner)
+
+      assert owner_scope.roles == ["instance_owner"]
+      assert owner_scope.assigned_pool_ids == []
+
+      assert {:ok, assigned_pool} =
+               Pools.create_pool(owner_scope, %{slug: "scope-assigned", name: "Scope Assigned"})
+
+      assert {:ok, hidden_pool} =
+               Pools.create_pool(owner_scope, %{slug: "scope-hidden", name: "Scope Hidden"})
+
+      admin = user_fixture(%{"email" => "canonical-admin@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
+
+      operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+
+      admin_scope = Scope.for_user(admin)
+
+      assert admin_scope.roles == ["instance_admin"]
+      assert admin_scope.assigned_pool_ids == [assigned_pool.id]
+      assert Pools.list_assigned_pool_ids(admin_scope) == [assigned_pool.id]
+      assert Enum.map(Pools.list_visible_pools(admin_scope), & &1.id) == [assigned_pool.id]
+      refute Enum.any?(Pools.list_visible_pools(admin_scope), &(&1.id == hidden_pool.id))
+
+      unassigned_admin = user_fixture(%{"email" => "canonical-unassigned@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(owner_scope, %{
+                 user_id: unassigned_admin.id,
+                 role: "instance_admin"
+               })
+
+      unassigned_scope = Scope.for_user(unassigned_admin)
+
+      assert unassigned_scope.roles == ["instance_admin"]
+      assert unassigned_scope.assigned_pool_ids == []
+      assert Pools.list_assigned_pool_ids(unassigned_scope) == []
+      assert Pools.list_visible_pools(unassigned_scope) == []
+      assert Pools.list_log_filter_pools(unassigned_scope) == []
+    end
+
     test "instance owner can manage pools globally" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
@@ -342,41 +468,145 @@ defmodule CodexPooler.PoolsTest do
       assert is_nil(decision.pool_id)
     end
 
-    test "instance admin can manage API keys and operate only for an existing pool" do
+    test "instance admin pool capabilities require active operator pool assignments" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       owner_scope = Scope.for_user(owner, ["instance_owner"])
-      assert {:ok, pool} = Pools.create_pool(owner_scope, %{slug: "ops", name: "Ops"})
+
+      assert {:ok, assigned_pool} = Pools.create_pool(owner_scope, %{slug: "ops", name: "Ops"})
+
+      assert {:ok, unassigned_pool} =
+               Pools.create_pool(owner_scope, %{slug: "unassigned", name: "Unassigned"})
+
+      assert {:ok, disabled_pool} =
+               Pools.create_pool(owner_scope, %{slug: "disabled-ops", name: "Disabled Ops"})
+
+      assert {:ok, disabled_pool} =
+               Pools.change_pool_status(owner_scope, disabled_pool, "disabled")
+
+      assert {:ok, revoked_pool} =
+               Pools.create_pool(owner_scope, %{slug: "revoked-ops", name: "Revoked Ops"})
 
       admin = user_fixture(%{"email" => "admin@example.com"})
 
       assert {:ok, membership} =
                Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
 
-      admin_scope = Scope.for_user(admin, [membership.role])
+      operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+      operator_pool_assignment_fixture(admin, disabled_pool, created_by_user_id: owner.id)
+
+      operator_pool_assignment_fixture(admin, revoked_pool,
+        created_by_user_id: owner.id,
+        status: "revoked"
+      )
+
+      admin_scope = Scope.for_user(admin, [])
+
+      assert membership.role == "instance_admin"
+      refute Pools.owner?(admin_scope)
+      assert Pools.assigned_pool?(admin_scope, assigned_pool)
+      refute Pools.assigned_pool?(admin_scope, unassigned_pool)
+      refute Pools.assigned_pool?(admin_scope, revoked_pool)
+
+      assert Pools.list_assigned_pool_ids(admin_scope) |> Enum.sort() ==
+               [assigned_pool.id, disabled_pool.id] |> Enum.sort()
 
       assert {:ok, decision} =
                Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage),
-                 pool_id: pool.id
+                 pool_id: assigned_pool.id
                )
 
       assert decision.actor_role == "instance_admin"
-      assert decision.pool_id == pool.id
+      assert decision.pool_id == assigned_pool.id
 
       assert {:ok, _decision} =
                Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
-                 pool_id: pool.id
+                 pool_id: assigned_pool.id
                )
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
+                 pool_id: unassigned_pool.id
+               )
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.require_capability(admin_scope, Pools.capability(:pool_api_key_manage),
+                 pool_id: revoked_pool.id
+               )
+
+      assert {:error, %{code: :pool_not_found}} =
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate),
+                 pool_id: disabled_pool.id
+               )
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.require_capability(admin_scope, Pools.capability(:pool_operate))
+
+      assert {:ok, visible_pools} = Pools.list_pools(admin_scope)
+      assert Enum.map(visible_pools, & &1.slug) == [assigned_pool.slug]
+      assert Enum.map(Pools.list_visible_pools(admin_scope), & &1.slug) == [assigned_pool.slug]
+
+      assert Enum.map(Pools.list_log_filter_pools(admin_scope), & &1.slug) == [
+               assigned_pool.slug,
+               disabled_pool.slug
+             ]
 
       assert {:error, %{code: :capability_denied}} =
                Pools.require_capability(admin_scope, Pools.capability(:pool_manage))
 
       refute Pools.can_manage_pools?(admin_scope)
 
-      assert {:error, %{code: :capability_denied}} =
-               Pools.list_pools_for_management(admin_scope)
+      assert {:ok, scoped_management_pools} = Pools.list_pools_for_management(admin_scope)
+      assert Enum.map(scoped_management_pools, & &1.id) == [assigned_pool.id]
 
       assert {:error, %{code: :capability_denied}} =
                Pools.create_pool(admin_scope, %{slug: "admin-global", name: "Admin Global"})
+    end
+
+    test "assigned admins cannot perform destructive pool lifecycle actions" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      owner_scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, assigned_pool} =
+               Pools.create_pool(owner_scope, %{
+                 slug: "assigned-lifecycle",
+                 name: "Assigned Lifecycle"
+               })
+
+      assert {:ok, archived_pool} =
+               Pools.create_pool(owner_scope, %{
+                 slug: "assigned-archived",
+                 name: "Assigned Archived"
+               })
+
+      assert {:ok, archived_pool} =
+               Pools.change_pool_status(owner_scope, archived_pool, "archived")
+
+      admin = user_fixture(%{"email" => "assigned-lifecycle-admin@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(owner_scope, %{user_id: admin.id, role: "instance_admin"})
+
+      assignment =
+        operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+
+      archived_assignment =
+        operator_pool_assignment_fixture(admin, archived_pool, created_by_user_id: owner.id)
+
+      admin_scope = Scope.for_user(admin, [])
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.update_pool(admin_scope, assigned_pool, %{status: "archived"})
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.change_pool_status(admin_scope, assigned_pool, "archived")
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.delete_archived_pool(admin_scope, archived_pool, archived_pool.slug)
+
+      assert Repo.get!(Pools.Pool, assigned_pool.id).status == "active"
+      assert Repo.get!(OperatorPoolAssignment, assignment.id).status == "active"
+      assert Repo.get!(OperatorPoolAssignment, archived_assignment.id).status == "active"
+      assert Repo.get!(Pools.Pool, archived_pool.id).status == "archived"
     end
 
     test "creates instance admin memberships through the pools boundary" do
