@@ -41,6 +41,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     %{identity: identity} =
       active_upstream_assignment_fixture(pool, %{
         account_label: email,
+        account_email: email,
         access_token: secret,
         metadata: %{"account_email" => email, "secret_note" => secret}
       })
@@ -57,7 +58,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert text =~ "1 upstream metadata records returned"
     assert text =~ "label=TA***@example.com"
     assert text =~ "status=active"
-    assert text =~ "account=TA***@example.com"
+    assert text =~ "account=ta***@example.com"
     assert text =~ "plan=unknown"
     assert text =~ "assignments=1 active of 1 Pool assignments"
 
@@ -71,6 +72,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert [presented] = result["structuredContent"]["items"]
     assert presented["id"] == identity.id
     assert presented["account_label"] == "TA***@example.com"
+    assert presented["account_email"] == "ta***@example.com"
     assert presented["assignment_summary"]["count"] == 1
     assert presented["metadata"]["summary"] == "metadata keys omitted"
 

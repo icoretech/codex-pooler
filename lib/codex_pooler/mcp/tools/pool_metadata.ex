@@ -565,7 +565,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
       id: identity.id,
       chatgpt_account_id: identity.chatgpt_account_id,
       account_label: safe_label(identity.account_label),
-      account_email: identity.metadata && Map.get(identity.metadata, "account_email"),
+      account_email: identity.account_email,
       onboarding_method: identity.onboarding_method,
       status: identity.status,
       plan_family: identity.plan_family,
