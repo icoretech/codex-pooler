@@ -18,6 +18,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   @type parse_error :: %{required(:code) => parse_error_code(), required(:message) => String.t()}
   @type import_attrs :: %{
           required(:account_identifier) => String.t(),
+          required(:account_email) => String.t() | nil,
           required(:account_label) => String.t(),
           required(:plan_label) => String.t() | nil,
           required(:token) => String.t(),
@@ -42,12 +43,13 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
       {:ok,
        %{
          account_identifier: account_identifier,
+         account_email: account_email(id_claims),
          account_label: account_label(id_claims),
          plan_label: plan_label(id_claims),
          token: tokens["access_token"],
          refresh_token: refresh_token,
          access_token_expires_at: expires_at(access_claims),
-         import_metadata: @safe_onboarding_metadata
+         import_metadata: import_metadata(id_claims)
        }}
     end
   end
@@ -141,14 +143,24 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   end
 
   defp account_label(id_claims) do
+    account_email(id_claims) || "Codex account"
+  end
+
+  defp account_email(id_claims) do
     present_string(id_claims["email"]) ||
       id_claims
       |> Map.get("https://api.openai.com/profile", %{})
       |> case do
         %{} = profile -> present_string(profile["email"])
         _profile -> nil
-      end ||
-      "Codex account"
+      end
+  end
+
+  defp import_metadata(id_claims) do
+    case account_email(id_claims) do
+      nil -> @safe_onboarding_metadata
+      email -> Map.put(@safe_onboarding_metadata, "account_email", email)
+    end
   end
 
   defp plan_label(id_claims), do: auth_claim(id_claims, "chatgpt_plan_type")

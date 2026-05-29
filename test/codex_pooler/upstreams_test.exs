@@ -594,8 +594,10 @@ defmodule CodexPooler.UpstreamsTest do
               } = result} = Upstreams.import_codex_auth_json(scope, pool, auth_json)
 
       assert identity.chatgpt_account_id == "acct_fixture_auth_json"
+      assert identity.account_email == "fixture-user@example.com"
       assert identity.account_label == "fixture-user@example.com"
       assert identity.plan_label == "pro"
+      assert identity.metadata["account_email"] == "fixture-user@example.com"
       assert identity.metadata["auth_json_imported"] == true
       assert identity.metadata["access_token_expires_at"]
       assert assignment.pool_id == pool.id

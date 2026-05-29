@@ -105,6 +105,7 @@ defmodule CodexPooler.Upstreams.Import do
     identity_attrs =
       %{
         chatgpt_account_id: attrs.account_identifier,
+        account_email: attrs.account_email,
         account_label: attrs.account_label,
         onboarding_method: "import",
         auth_verified_at: timestamp,
@@ -256,6 +257,7 @@ defmodule CodexPooler.Upstreams.Import do
         |> Kernel.||(import_value(attrs, :chatgpt_account_id))
         |> Kernel.||(import_value(attrs, :account_email))
         |> present_string(),
+      account_email: attrs |> import_value(:account_email) |> normalize_email(),
       account_label: attrs |> import_value(:account_label) |> present_string(),
       pool_id: attrs |> import_value(:pool_id) |> present_string(),
       plan_label: attrs |> import_value(:plan_label) |> present_string(),
@@ -455,6 +457,15 @@ defmodule CodexPooler.Upstreams.Import do
   end
 
   defp present_string(_value), do: nil
+
+  defp normalize_email(value) do
+    value
+    |> present_string()
+    |> case do
+      nil -> nil
+      email -> String.downcase(email)
+    end
+  end
 
   defp blank?(value), do: is_nil(value) or value == ""
 
