@@ -64,7 +64,7 @@ defmodule CodexPooler.Admin.Stats.Filters do
   defp selected_pool(pool_id, pools) do
     case Enum.find(pools, &(&1.id == pool_id)) do
       %Pool{} = pool -> {:ok, pool}
-      nil -> {:error, access_error(:pool_not_found, "pool is not visible to this operator")}
+      nil -> {:error, access_error(:pool_not_found, "pool filter is not available")}
     end
   end
 

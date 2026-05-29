@@ -27,14 +27,7 @@ defmodule CodexPooler.Admin.Stats do
   def build_dashboard(scope, filters \\ %{})
 
   def build_dashboard(%Scope{} = scope, filters) when is_map(filters) or is_list(filters) do
-    case Pools.require_capability(scope, Pools.capability(:pool_manage)) do
-      {:ok, _decision} ->
-        do_build_dashboard(scope, filters)
-
-      {:error, _reason} ->
-        {:error,
-         Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
-    end
+    do_build_dashboard(scope, filters)
   end
 
   def build_dashboard(_scope, _filters),
@@ -111,106 +104,164 @@ defmodule CodexPooler.Admin.Stats do
   def pool_usage_metrics_by_pool_ids(_pool_ids, _opts), do: %{}
 
   defp do_build_dashboard(scope, filters) do
-    with {:ok, pools} <- Pools.list_pools_for_management(scope),
+    with {:ok, pools} <- Pools.list_reporting_pools(scope),
          {:ok, normalized} <- Filters.normalize(filters, pools) do
       pool_ids = Filters.dashboard_pool_ids(normalized, pools)
 
-      requests =
-        GatewayReadModel.requests_for_pool_ids(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
+      if pool_ids == [] do
+        {:ok, empty_dashboard(normalized, pools)}
+      else
+        build_dashboard_for_pool_ids(normalized, pools, pool_ids)
+      end
+    else
+      {:error, %{code: code}} when code in [:capability_denied, :invalid_request] ->
+        {:error,
+         Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
 
-      attempts =
-        GatewayReadModel.attempts_for_pool_ids(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
-
-      settlements =
-        AccountingReporting.settlements_for_pool_ids(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
-
-      daily_rollups =
-        AccountingReporting.daily_rollups_for_pool_ids(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
-
-      active_session_count = GatewayReadModel.active_session_count_for_pool_ids(pool_ids)
-
-      turns =
-        GatewayReadModel.turns_for_pool_ids(pool_ids, normalized.started_at, normalized.ended_at)
-
-      recent_activity =
-        ActivityReadModel.recent_activity_for_pool_ids(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
-
-      activity_counts =
-        ActivityReadModel.activity_source_counts(
-          pool_ids,
-          normalized.started_at,
-          normalized.ended_at
-        )
-
-      quota_accounts =
-        Quota.ReadModel.account_summaries_for_pool_ids(pool_ids, normalized.ended_at)
-
-      quota_summary = Quota.ReadModel.summary(quota_accounts)
-
-      dashboard = %{
-        filters: Filters.public(normalized, pools),
-        selected_pool: Filters.pool_summary(normalized.selected_pool),
-        kpis: %{
-          requests: request_kpi(requests),
-          success_rate: success_rate_kpi(requests),
-          tokens: token_kpi(settlements),
-          tokens_per_second: tokens_per_second_kpi(settlements, attempts),
-          estimated_cost: estimated_cost_kpi(settlements),
-          average_latency_ms: average_latency_kpi(attempts),
-          active_sessions: %{value: active_session_count},
-          turns: turn_kpi(turns),
-          quota_health: quota_summary
-        },
-        tables: %{
-          top_api_keys: top_api_keys(settlements),
-          upstreams: upstream_table(settlements, quota_accounts),
-          recent_failures: recent_failures(requests),
-          daily_rollups: daily_rollup_table(daily_rollups),
-          recent_activity: recent_activity
-        },
-        charts: %{
-          requests: request_series(requests, normalized),
-          tokens: token_series(settlements, normalized),
-          estimated_cost: cost_series(settlements, normalized)
-        },
-        quota: %{
-          summary: quota_summary,
-          accounts: quota_accounts
-        },
-        sources:
-          source_summary(
-            requests,
-            attempts,
-            settlements,
-            daily_rollups,
-            turns,
-            activity_counts
-          ),
-        empty_states: empty_states(requests, settlements, quota_accounts)
-      }
-
-      {:ok, dashboard}
+      {:error, _reason} = error ->
+        error
     end
+  end
+
+  defp build_dashboard_for_pool_ids(normalized, pools, pool_ids) do
+    requests =
+      GatewayReadModel.requests_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    attempts =
+      GatewayReadModel.attempts_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    settlements =
+      AccountingReporting.settlements_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    daily_rollups =
+      AccountingReporting.daily_rollups_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    active_session_count = GatewayReadModel.active_session_count_for_pool_ids(pool_ids)
+
+    turns =
+      GatewayReadModel.turns_for_pool_ids(pool_ids, normalized.started_at, normalized.ended_at)
+
+    recent_activity =
+      ActivityReadModel.recent_activity_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    activity_counts =
+      ActivityReadModel.activity_source_counts(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at
+      )
+
+    quota_accounts =
+      Quota.ReadModel.account_summaries_for_pool_ids(pool_ids, normalized.ended_at)
+
+    quota_summary = Quota.ReadModel.summary(quota_accounts)
+
+    dashboard = %{
+      filters: Filters.public(normalized, pools),
+      selected_pool: Filters.pool_summary(normalized.selected_pool),
+      kpis: %{
+        requests: request_kpi(requests),
+        success_rate: success_rate_kpi(requests),
+        tokens: token_kpi(settlements),
+        tokens_per_second: tokens_per_second_kpi(settlements, attempts),
+        estimated_cost: estimated_cost_kpi(settlements),
+        average_latency_ms: average_latency_kpi(attempts),
+        active_sessions: %{value: active_session_count},
+        turns: turn_kpi(turns),
+        quota_health: quota_summary
+      },
+      tables: %{
+        top_api_keys: top_api_keys(settlements),
+        upstreams: upstream_table(settlements, quota_accounts),
+        recent_failures: recent_failures(requests),
+        daily_rollups: daily_rollup_table(daily_rollups),
+        recent_activity: recent_activity
+      },
+      charts: %{
+        requests: request_series(requests, normalized),
+        tokens: token_series(settlements, normalized),
+        estimated_cost: cost_series(settlements, normalized)
+      },
+      quota: %{
+        summary: quota_summary,
+        accounts: quota_accounts
+      },
+      sources:
+        source_summary(
+          requests,
+          attempts,
+          settlements,
+          daily_rollups,
+          turns,
+          activity_counts
+        ),
+      empty_states: empty_states(requests, settlements, quota_accounts)
+    }
+
+    {:ok, dashboard}
+  end
+
+  defp empty_dashboard(normalized, pools) do
+    quota_summary = Quota.ReadModel.summary([])
+
+    %{
+      filters: Filters.public(normalized, pools),
+      selected_pool: nil,
+      kpis: %{
+        requests: request_kpi([]),
+        success_rate: success_rate_kpi([]),
+        tokens: token_kpi([]),
+        tokens_per_second: tokens_per_second_kpi([], []),
+        estimated_cost: estimated_cost_kpi([]),
+        average_latency_ms: average_latency_kpi([]),
+        active_sessions: %{value: 0},
+        turns: turn_kpi([]),
+        quota_health: quota_summary
+      },
+      tables: %{
+        top_api_keys: [],
+        upstreams: [],
+        recent_failures: [],
+        daily_rollups: [],
+        recent_activity: []
+      },
+      charts: %{
+        requests: [],
+        tokens: [],
+        estimated_cost: []
+      },
+      quota: %{
+        summary: quota_summary,
+        accounts: []
+      },
+      sources: source_summary([], [], [], [], [], %{audit_events: 0, jobs: 0}),
+      empty_states: [
+        %{
+          code: :no_reporting_pools,
+          message: "No Pools are available for this stats scope"
+        }
+      ]
+    }
   end
 
   defp pool_tokens_per_second(total_tokens, latency_ms) when total_tokens > 0 and latency_ms > 0,
