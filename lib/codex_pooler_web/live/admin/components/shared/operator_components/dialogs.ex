@@ -6,10 +6,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   alias CodexPooler.Accounts.User
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
+  alias CodexPoolerWeb.Admin.OperatorForm
 
   attr :creating_operator, :boolean, required: true
   attr :create_form, Phoenix.HTML.Form, required: true
   attr :temporary_password_receipt, :map, default: nil
+  attr :pool_options, :list, default: []
 
   def operator_create_dialog(assigns) do
     ~H"""
@@ -58,6 +60,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               label="Display name"
               placeholder="Local operator"
             />
+            <.operator_role_fields
+              form={@create_form}
+              pool_options={@pool_options}
+              field_prefix="operator"
+            />
             <.temporary_password_fields form={@create_form} />
           </div>
           <div class="modal-action mt-0">
@@ -86,6 +93,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
 
   attr :editing_operator, :any, default: nil
   attr :edit_form, Phoenix.HTML.Form, default: nil
+  attr :pool_options, :list, default: []
 
   def operator_edit_dialog(assigns) do
     ~H"""
@@ -116,6 +124,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               field={@edit_form[:password_change_required]}
               type="checkbox"
               label="Require password change on next sign in"
+            />
+            <.operator_role_fields
+              form={@edit_form}
+              pool_options={@pool_options}
+              field_prefix="operator_edit"
             />
           </div>
           <div class="modal-action mt-0">
@@ -258,6 +271,58 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       <p :for={msg <- @errors} class="mt-1.5 flex items-center gap-2 text-sm text-error">
         <.icon name="hero-exclamation-circle" class="size-5" />
         {msg}
+      </p>
+    </div>
+    """
+  end
+
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :pool_options, :list, required: true
+  attr :field_prefix, :string, required: true
+
+  defp operator_role_fields(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :selected_pool_ids,
+        OperatorForm.selected_pool_ids(assigns.form)
+      )
+
+    ~H"""
+    <.input
+      field={@form[:role]}
+      type="select"
+      label="Operator role"
+      options={OperatorForm.role_options()}
+    />
+    <div class="fieldset mb-2 md:col-span-2">
+      <span class="label mb-1">Assigned Pools for instance admins</span>
+      <input type="hidden" name={@field_prefix <> "[pool_ids][]"} value="" />
+      <div
+        id={@field_prefix <> "_pool_ids_group"}
+        class="grid gap-2 rounded-box border border-base-300 bg-base-200/60 p-3"
+      >
+        <p :if={@pool_options == []} class="text-sm text-base-content/60">
+          No Pools are available yet. Owners can still create another owner.
+        </p>
+        <label
+          :for={pool <- @pool_options}
+          id={@field_prefix <> "_pool_id_" <> pool.id <> "_option"}
+          class="flex items-center gap-3 rounded-box bg-base-100 px-3 py-2 text-sm"
+        >
+          <input
+            id={@field_prefix <> "_pool_id_" <> pool.id}
+            type="checkbox"
+            name={@field_prefix <> "[pool_ids][]"}
+            value={pool.id}
+            checked={MapSet.member?(@selected_pool_ids, pool.id)}
+            class="checkbox checkbox-sm"
+          />
+          <span>{OperatorForm.pool_option_label(pool)}</span>
+        </label>
+      </div>
+      <p class="mt-1 text-xs text-base-content/60">
+        Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
       </p>
     </div>
     """

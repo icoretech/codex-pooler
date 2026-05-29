@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents
   alias CodexPoolerWeb.Admin.OperatorForm
@@ -33,10 +34,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   @impl true
   def handle_event("create_operator", %{"operator" => operator_params}, socket) do
-    attrs =
-      operator_params
-      |> OperatorForm.password_attrs()
-      |> Map.merge(OperatorForm.profile_attrs(operator_params))
+    attrs = OperatorForm.create_attrs(operator_params)
 
     case Accounts.create_operator(socket.assigns.current_scope, attrs, operator_metadata()) do
       {:ok, result} ->
@@ -303,11 +301,13 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           creating_operator={@creating_operator}
           create_form={@create_form}
           temporary_password_receipt={@temporary_password_receipt}
+          pool_options={@pool_options}
         />
         <OperatorComponents.operator_edit_dialog
           :if={!@operator_management_denied?}
           editing_operator={@editing_operator}
           edit_form={@edit_form}
+          pool_options={@pool_options}
         />
         <OperatorComponents.operator_password_dialog
           :if={!@operator_management_denied?}
@@ -417,6 +417,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         socket =
           socket
           |> assign(:operator_management_denied?, false)
+          |> assign(:pool_options, management_pool_options(socket.assigns.current_scope))
           |> assign(:operator_count, length(operators))
           |> assign(:active_operator_count, OperatorForm.active_operator_count(operators))
           |> stream(:operators, filtered_operators, reset: true, dom_id: &"operator-row-#{&1.id}")
@@ -427,6 +428,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         socket =
           socket
           |> assign(:operator_management_denied?, true)
+          |> assign(:pool_options, [])
           |> assign(:operator_count, 0)
           |> assign(:active_operator_count, 0)
           |> stream(:operators, [], reset: true, dom_id: &"operator-row-#{&1.id}")
@@ -437,10 +439,20 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   defp operator_management_denied?(socket), do: socket.assigns.operator_management_denied?
 
+  defp management_pool_options(current_scope) do
+    case Pools.list_pools_for_management(current_scope) do
+      {:ok, pools} -> pools
+      {:error, _reason} -> []
+    end
+  end
+
   defp self_operator_id?(operator_id, %{user: %{id: operator_id}}), do: true
   defp self_operator_id?(_operator_id, _current_scope), do: false
 
-  defp error_message(:last_active_admin), do: "At least one active operator must remain."
+  defp error_message(:last_active_owner), do: "At least one active instance owner must remain."
+  defp error_message(:last_active_admin), do: "At least one active instance owner must remain."
+  defp error_message(:invalid_operator_role), do: "Role must be instance owner or instance admin."
+  defp error_message(:invalid_pool_assignment), do: "Assigned Pools were not valid."
   defp error_message(:invalid_operator), do: "Operator was not found"
 
   defp error_message(:operator_management_denied),

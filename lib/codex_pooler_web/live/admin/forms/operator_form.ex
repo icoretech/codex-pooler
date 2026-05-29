@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Pools.Pool
   alias CodexPoolerWeb.Admin.OperatorComponents
 
   @operator_statuses ["active", "disabled"]
@@ -55,7 +56,9 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
       "password_mode" => "generated",
       "password" => "",
       "password_change_required" => "true",
-      "send_email" => "true"
+      "send_email" => "true",
+      "role" => "instance_admin",
+      "pool_ids" => []
     }
 
     defaults
@@ -70,11 +73,15 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
 
   @spec edit_form(User.t()) :: Phoenix.HTML.Form.t()
   def edit_form(%User{} = operator) do
+    lifecycle = Accounts.operator_lifecycle(operator)
+
     %{
       "id" => operator.id,
       "email" => operator.email,
       "display_name" => operator.display_name || "",
-      "password_change_required" => operator.password_change_required
+      "password_change_required" => operator.password_change_required,
+      "role" => lifecycle.role,
+      "pool_ids" => lifecycle.assigned_pool_ids
     }
     |> to_form(as: :operator_edit)
   end
@@ -115,7 +122,35 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
     params
     |> profile_attrs()
     |> Map.put("password_change_required", checkbox_value(params["password_change_required"]))
+    |> Map.merge(lifecycle_attrs(params))
   end
+
+  @spec create_attrs(map()) :: map()
+  def create_attrs(params) do
+    params
+    |> password_attrs()
+    |> Map.merge(profile_attrs(params))
+    |> Map.merge(lifecycle_attrs(params))
+  end
+
+  @spec role_options() :: [{String.t(), String.t()}]
+  def role_options do
+    [
+      {"Instance admin", "instance_admin"},
+      {"Instance owner", "instance_owner"}
+    ]
+  end
+
+  @spec selected_pool_ids(Phoenix.HTML.Form.t()) :: MapSet.t(String.t())
+  def selected_pool_ids(%Phoenix.HTML.Form{} = form) do
+    form[:pool_ids].value
+    |> pool_ids_list()
+    |> Enum.map(&to_string/1)
+    |> MapSet.new()
+  end
+
+  @spec pool_option_label(Pool.t()) :: String.t()
+  def pool_option_label(%Pool{name: name, slug: slug}), do: "#{name} (#{slug})"
 
   @spec password_attrs(map()) :: map()
   def password_attrs(params) do
@@ -153,6 +188,31 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
 
   @spec active_operator_count([User.t()]) :: non_neg_integer()
   def active_operator_count(operators), do: Enum.count(operators, &(&1.status == "active"))
+
+  defp lifecycle_attrs(params) do
+    %{
+      "role" => role_value(params["role"]),
+      "pool_ids" => pool_ids_value(params)
+    }
+  end
+
+  defp role_value("instance_owner"), do: "instance_owner"
+  defp role_value(_role), do: "instance_admin"
+
+  defp pool_ids_value(params) do
+    params
+    |> Map.get("pool_ids", [])
+    |> pool_ids_list()
+  end
+
+  defp pool_ids_list(pool_ids) when is_list(pool_ids) do
+    pool_ids
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.map(&to_string/1)
+  end
+
+  defp pool_ids_list(pool_id) when is_binary(pool_id), do: [pool_id]
+  defp pool_ids_list(_pool_ids), do: []
 
   defp checkbox_value(value) when value in [true, "true", "1", "on", 1], do: "true"
   defp checkbox_value(_value), do: "false"

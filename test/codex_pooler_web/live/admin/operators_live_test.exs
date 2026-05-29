@@ -4,9 +4,11 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
   import Phoenix.LiveViewTest
   import Swoosh.TestAssertions
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures, only: [pool_fixture: 1]
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Pools.OperatorPoolAssignment
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AvatarComponents
 
@@ -34,6 +36,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator_password")
     assert has_element?(view, "#operator_password_change_required")
     assert has_element?(view, "#operator_send_email")
+    assert has_element?(view, "#operator_role")
+    assert has_element?(view, "#operator_pool_ids_group")
     assert has_element?(view, "#operator-create-cancel + #operator-create-submit")
     assert has_element?(view, "#operators-table-scroll-region")
     assert has_element?(view, "#operators-table[phx-update='stream']")
@@ -178,6 +182,46 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator-row-#{operator.id}", "Live Updated Operator")
   end
 
+  test "creates an instance admin with selected Pool assignments", %{conn: conn} do
+    pool = pool_fixture(%{slug: "live-operator-pool", name: "Live Operator Pool"})
+    {:ok, view, _html} = live(conn, ~p"/admin/operators")
+    open_create_dialog(view)
+
+    assert has_element?(view, "#operator_pool_id_#{pool.id}_option", "Live Operator Pool")
+
+    view
+    |> element("#operator-create-form")
+    |> render_submit(%{
+      "operator" => %{
+        "email" => "assigned.live.operator@example.com",
+        "display_name" => "Assigned Live Operator",
+        "password_mode" => "manual",
+        "password" => "ManualTempPass123!",
+        "password_change_required" => "true",
+        "send_email" => "false",
+        "role" => "instance_admin",
+        "pool_ids" => [pool.id]
+      }
+    })
+
+    operator = Accounts.get_user_by_email("assigned.live.operator@example.com")
+
+    assert %User{} = operator
+
+    assert Repo.get_by(OperatorPoolAssignment,
+             user_id: operator.id,
+             pool_id: pool.id,
+             status: "active"
+           )
+
+    assert Accounts.operator_lifecycle(operator) == %{
+             role: "instance_admin",
+             assigned_pool_ids: [pool.id]
+           }
+
+    assert has_element?(view, "#operator-row-#{operator.id}", "Assigned Live Operator")
+  end
+
   test "creates a manual-password operator and sends the text credential email", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/operators")
     open_create_dialog(view)
@@ -268,6 +312,145 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     refute has_element?(view, "#operator-row-#{owner.id}")
   end
 
+  test "forged instance-admin operator events deny without operator side effects", %{
+    scope: scope,
+    user: owner
+  } do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "forged-admin@example.com",
+        "role" => "instance_admin",
+        "password_change_required" => "false"
+      })
+
+    %{user: target_operator} =
+      operator_fixture(scope, %{
+        "email" => "forged-target@example.com",
+        "display_name" => "Forged Target",
+        "role" => "instance_admin"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/operators")
+
+    assert render_click(view, "open_create_operator") =~
+             "Only instance owners can manage operators."
+
+    assert render_click(view, "edit_operator", %{"id" => target_operator.id}) =~
+             "Operator was not found"
+
+    assert render_click(view, "deactivate_operator", %{"id" => target_operator.id}) =~
+             "Only instance owners can manage operators."
+
+    assert render_click(view, "reset_operator_password", %{"id" => target_operator.id}) =~
+             "Operator was not found"
+
+    assert render_submit(view, "create_operator", %{
+             "operator" => %{
+               "email" => "forged-created@example.com",
+               "display_name" => "Forged Created",
+               "password_mode" => "manual",
+               "password" => "ForgedPassword123!",
+               "password_change_required" => "false",
+               "send_email" => "false",
+               "role" => "instance_owner",
+               "pool_ids" => []
+             }
+           }) =~ "Only instance owners can manage operators."
+
+    assert render_submit(view, "save_operator", %{
+             "operator_edit" => %{
+               "id" => target_operator.id,
+               "email" => target_operator.email,
+               "display_name" => "Forged Escalated",
+               "password_change_required" => "false",
+               "role" => "instance_owner",
+               "pool_ids" => []
+             }
+           }) =~ "Only instance owners can manage operators."
+
+    assert render_submit(view, "save_temporary_password", %{
+             "operator_reset" => %{
+               "id" => target_operator.id,
+               "operation" => "reset",
+               "password_mode" => "manual",
+               "password" => "ForgedReset123!",
+               "password_change_required" => "false"
+             }
+           }) =~ "Only instance owners can manage operators."
+
+    refute Accounts.get_user_by_email("forged-created@example.com")
+
+    assert Accounts.operator_lifecycle(admin) == %{
+             role: "instance_admin",
+             assigned_pool_ids: []
+           }
+
+    assert Accounts.operator_lifecycle(target_operator) == %{
+             role: "instance_admin",
+             assigned_pool_ids: []
+           }
+
+    target_operator = Accounts.get_user!(target_operator.id)
+    assert target_operator.status == "active"
+    assert target_operator.display_name == "Forged Target"
+    assert owner.status == "active"
+  end
+
+  test "edits operator role and selected Pool assignments", %{conn: conn, scope: scope} do
+    original_pool = pool_fixture(%{slug: "live-edit-original", name: "Live Edit Original"})
+    new_pool = pool_fixture(%{slug: "live-edit-new", name: "Live Edit New"})
+
+    %{user: operator} =
+      operator_fixture(scope, %{
+        "email" => "role-edit.operator@example.com",
+        "role" => "instance_admin",
+        "pool_ids" => [original_pool.id]
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/operators")
+
+    view |> element("#edit-operator-#{operator.id}") |> render_click()
+
+    assert has_element?(view, "#operator_edit_pool_id_#{original_pool.id}[checked]")
+    assert has_element?(view, "#operator_edit_pool_id_#{new_pool.id}")
+
+    view
+    |> element("#operator-edit-form")
+    |> render_submit(%{
+      "operator_edit" => %{
+        "id" => operator.id,
+        "email" => "role-edit.operator@example.com",
+        "display_name" => "Role Edited Operator",
+        "password_change_required" => "true",
+        "role" => "instance_owner",
+        "pool_ids" => [new_pool.id]
+      }
+    })
+
+    assert Accounts.operator_lifecycle(operator) == %{
+             role: "instance_owner",
+             assigned_pool_ids: []
+           }
+
+    refute Repo.get_by(OperatorPoolAssignment,
+             user_id: operator.id,
+             pool_id: original_pool.id,
+             status: "active"
+           )
+
+    refute Repo.get_by(OperatorPoolAssignment,
+             user_id: operator.id,
+             pool_id: new_pool.id,
+             status: "active"
+           )
+
+    assert has_element?(view, "#operator-row-#{operator.id}", "Role Edited Operator")
+  end
+
   test "edits operator email, display name, and password-change requirement", %{
     conn: conn,
     scope: scope
@@ -282,6 +465,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator_edit_email")
     assert has_element?(view, "#operator_edit_display_name")
     assert has_element?(view, "#operator_edit_password_change_required")
+    assert has_element?(view, "#operator_edit_role")
+    assert has_element?(view, "#operator_edit_pool_ids_group")
     assert has_element?(view, "#operator-edit-cancel + #operator-edit-submit")
 
     view
