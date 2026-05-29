@@ -2,9 +2,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounts
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPooler.Repo
@@ -1993,6 +1995,82 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "tr[id^='request-log-row-']")
   end
 
+  test "scoped admins see only currently assigned request log history while owners keep archived history",
+       %{scope: scope} do
+    {:ok, assigned_pool} =
+      Pools.create_pool(scope, %{slug: "log-scope-assigned", name: "Log Scope Assigned"})
+
+    {:ok, hidden_pool} =
+      Pools.create_pool(scope, %{slug: "log-scope-hidden", name: "Log Scope Hidden"})
+
+    %{request: assigned_request} =
+      request_log_fixture(assigned_pool, %{
+        correlation_id: "req-log-scope-assigned",
+        requested_model: "gpt-log-scope-assigned"
+      })
+
+    %{request: hidden_request} =
+      request_log_fixture(hidden_pool, %{
+        correlation_id: "req-log-scope-hidden",
+        requested_model: "gpt-log-scope-hidden"
+      })
+
+    %{conn: admin_conn} = assigned_admin_conn(scope, assigned_pool, "log-scope-admin@example.com")
+
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/request-logs")
+
+    assert has_element?(view, "#request-log-row-#{assigned_request.id}", "gpt-log-scope-assigned")
+    refute has_element?(view, "#request-log-row-#{hidden_request.id}")
+
+    assert has_element?(
+             view,
+             "#request-log-pool-filter button[data-pool-id='#{assigned_pool.id}']"
+           )
+
+    refute has_element?(view, "#request-log-pool-filter button[data-pool-id='#{hidden_pool.id}']")
+
+    {:ok, hidden_filter_view, _html} =
+      live(
+        admin_conn,
+        ~p"/admin/request-logs?pool_id=#{hidden_pool.id}&request_id=#{hidden_request.id}"
+      )
+
+    assert has_element?(
+             hidden_filter_view,
+             "#request-log-filter-errors",
+             "Pool filter did not match an available Pool"
+           )
+
+    refute has_element?(hidden_filter_view, "#request-log-row-#{hidden_request.id}")
+
+    assert {:ok, archived_pool} = Pools.change_pool_status(scope, assigned_pool, "archived")
+
+    {:ok, revoked_admin_view, _html} = live(admin_conn, ~p"/admin/request-logs")
+    refute has_element?(revoked_admin_view, "#request-log-row-#{assigned_request.id}")
+
+    refute has_element?(
+             revoked_admin_view,
+             "#request-log-pool-filter button[data-pool-id='#{assigned_pool.id}']"
+           )
+
+    {:ok, owner_view, _html} =
+      live(
+        build_conn() |> log_in_user(scope.user, session_token(scope.user)),
+        ~p"/admin/request-logs"
+      )
+
+    assert has_element?(
+             owner_view,
+             "#request-log-row-#{assigned_request.id}",
+             "gpt-log-scope-assigned"
+           )
+
+    assert has_element?(
+             owner_view,
+             "#request-log-pool-filter button[data-pool-id='#{archived_pool.id}']"
+           )
+  end
+
   defp request_log_fixture(pool, attrs) do
     %{api_key: api_key} =
       active_api_key_fixture(pool, %{
@@ -2062,5 +2140,27 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     })
 
     %{request: request, attempt: attempt, identity: identity, assignment: assignment}
+  end
+
+  defp assigned_admin_conn(scope, pool, email) do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => email,
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    %{conn: log_in_user(build_conn(), admin, token), user: admin}
+  end
+
+  defp session_token(user) do
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => user.email, "password" => valid_user_password()})
+
+    token
   end
 end

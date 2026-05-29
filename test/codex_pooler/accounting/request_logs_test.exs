@@ -203,13 +203,22 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
   test "exact scoped request log lookup is not affected by fuzzy correlation matches" do
     reset_bootstrap_state_fixture!()
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
-    scope = Scope.for_user(owner, [])
+    owner_scope = Scope.for_user(owner, [])
 
     visible_pool = pool_fixture(%{slug: "request-log-exact-visible", name: "Exact Visible"})
     hidden_pool = pool_fixture(%{slug: "request-log-exact-hidden", name: "Exact Hidden"})
     %{api_key: visible_key} = active_api_key_fixture(visible_pool)
     %{api_key: hidden_key} = active_api_key_fixture(hidden_pool)
     hidden_pool = hidden_pool |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
+
+    %{user: admin} =
+      operator_fixture(owner_scope, %{
+        "email" => unique_user_email(),
+        "role" => "instance_admin",
+        "pool_ids" => [visible_pool.id]
+      })
+
+    scope = Scope.for_user(admin)
     older_time = ~U[2026-05-26 00:00:00.000000Z]
     newer_time = DateTime.add(older_time, 60, :second)
 
@@ -247,6 +256,11 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert exact_match.id == target_request.id
     assert exact_match.requested_model == "gpt-exact-target"
     assert is_nil(Accounting.get_request_log_for_scope(scope, hidden_request.id))
+
+    assert owner_hidden_match =
+             Accounting.get_request_log_for_scope(owner_scope, hidden_request.id)
+
+    assert owner_hidden_match.id == hidden_request.id
   end
 
   test "policy denial request logs keep sanitized reason metadata only" do
