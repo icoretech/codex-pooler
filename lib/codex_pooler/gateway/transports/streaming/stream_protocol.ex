@@ -78,12 +78,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   def canonicalize_codex_responses_json_message(data) when is_binary(data) do
-    with {:ok, %{} = decoded} <- Jason.decode(data),
-         {event_type, _decoded} <- {decoded_string(decoded, "type"), decoded},
-         true <- codex_responses_error_needs_canonical_response?(event_type, decoded) do
-      Jason.encode!(canonical_codex_responses_error_event(decoded))
-    else
-      _other -> data
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        canonicalize_codex_responses_json_decoded_message(decoded, data)
+
+      _other ->
+        data
     end
   end
 
@@ -334,6 +334,32 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     ]
   end
 
+  defp canonicalize_codex_responses_json_decoded_message(decoded, data) do
+    cond do
+      typeless_detail_error?(decoded) ->
+        Jason.encode!(canonical_typeless_detail_error_event())
+
+      codex_responses_error_needs_canonical_response?(decoded_string(decoded, "type"), decoded) ->
+        Jason.encode!(canonical_codex_responses_error_event(decoded))
+
+      true ->
+        data
+    end
+  end
+
+  defp canonical_typeless_detail_error_event do
+    error = %{
+      "code" => "upstream_terminal_failure",
+      "message" => "upstream websocket returned terminal detail"
+    }
+
+    %{
+      "type" => "response.failed",
+      "error" => error,
+      "response" => %{"status" => "failed", "error" => error}
+    }
+  end
+
   defp canonical_codex_responses_error_event(decoded) do
     error = canonical_codex_responses_error(decoded)
     response = canonical_codex_responses_error_response(decoded, error)
@@ -435,6 +461,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   defp direct_stream_event_summary(data) when is_binary(data) do
     case Jason.decode(data) do
       {:ok, %{} = decoded} ->
+        decoded =
+          if typeless_detail_error?(decoded),
+            do: canonical_typeless_detail_error_event(),
+            else: decoded
+
         {:ok,
          %{
            event_type: decoded_string(decoded, "type"),
@@ -529,6 +560,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
       wrapped_top_level_error(decoded)
     ])
   end
+
+  defp typeless_detail_error?(%{"detail" => _detail} = decoded) do
+    is_nil(decoded_string(decoded, "type")) and not Map.has_key?(decoded, "error") and
+      not Map.has_key?(decoded, "response")
+  end
+
+  defp typeless_detail_error?(_decoded), do: false
 
   defp wrapped_top_level_error(%{"type" => "error"} = decoded) do
     decoded

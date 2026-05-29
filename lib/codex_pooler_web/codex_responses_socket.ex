@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
@@ -55,13 +56,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def handle_info({:codex_response_chunk, data}, state) when is_binary(data) do
-    {:push, {:text, data}, state}
+    {:push, {:text, downstream_response_chunk(data)}, state}
   end
 
   def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
     case accept_owner_downstream_message(message, state) do
       {:ok, {:data, data}} ->
-        {:push, {:text, data}, state}
+        {:push, {:text, downstream_response_chunk(data)}, state}
 
       {:ok, {:error, _reason, payload}} ->
         {:push, {:text, Jason.encode!(websocket_error(payload))}, state}
@@ -154,6 +155,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     :ok
   end
+
+  defp downstream_response_chunk(data) when is_binary(data),
+    do: StreamProtocol.canonicalize_codex_responses_json_message(data)
 
   defp remaining_response_tasks_after_cleanup(state, remaining_tasks) do
     if owner_forwarded_socket?(state) do

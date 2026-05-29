@@ -41,6 +41,32 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "wrapped websocket/direct JSON terminal error frames" do
+    test "canonicalizes typeless detail-only websocket frames as terminal failures" do
+      frame = Jason.encode!(%{"detail" => "synthetic upstream detail must stay out of metadata"})
+
+      assert {:ok, event} = StreamProtocol.first_complete_event(frame)
+      assert event.event_type == "response.failed"
+      assert event.error_code == "upstream_terminal_failure"
+      assert event.upstream_error_code == "upstream_terminal_failure"
+
+      assert {:ok, failure} = StreamProtocol.terminal_failure(frame)
+      assert failure.code == "upstream_terminal_failure"
+      assert failure.event_type == "response.failed"
+
+      assert %{"type" => "response.failed", "error" => error, "response" => response} =
+               frame
+               |> StreamProtocol.canonicalize_codex_responses_json_message()
+               |> Jason.decode!()
+
+      assert error["code"] == "upstream_terminal_failure"
+      assert error["message"] == "upstream websocket returned terminal detail"
+      assert response["status"] == "failed"
+      assert response["error"]["code"] == "upstream_terminal_failure"
+
+      canonical_text = inspect({error, response})
+      refute canonical_text =~ "synthetic upstream detail"
+    end
+
     test "masks previous-response nested errors when status is present" do
       frame =
         Jason.encode!(%{
