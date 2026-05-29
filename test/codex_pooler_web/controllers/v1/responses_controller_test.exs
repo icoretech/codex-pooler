@@ -10,16 +10,22 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       await_public_websocket_upgrade: 2,
       gateway_setup: 1,
       gateway_setup: 2,
+      gateway_upstream: 4,
       mint_websocket_new!: 4,
+      prime_routing_quota!: 1,
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
+      put_model_source_assignments!: 2,
       start_public_endpoint!: 0,
-      start_upstream: 1
+      start_upstream: 1,
+      use_routing_strategy!: 3
     ]
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Access
+  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Repo
@@ -98,6 +104,185 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     refute Map.has_key?(captured_headers, "session-id")
     refute Map.has_key?(captured_headers, "x-session-affinity")
+  end
+
+  defp assert_pinned_reauth_recovery_body!(conn) do
+    assert get_resp_header(conn, "x-codex-recovery-kind") == ["restart_with_full_context"]
+
+    assert %{
+             "error" => %{
+               "code" => "pinned_continuation_reauth_required",
+               "retryable" => false,
+               "requires_new_upstream_session" => true,
+               "recovery_kind" => "restart_with_full_context",
+               "recovery" => recovery
+             }
+           } = json_response(conn, 503)
+
+    assert_pinned_reauth_recovery_contract!(recovery)
+  end
+
+  defp assert_pinned_reauth_recovery_frame!(frame) do
+    assert %{
+             "type" => "error",
+             "status" => 503,
+             "error" => %{
+               "code" => "pinned_continuation_reauth_required",
+               "retryable" => false,
+               "requires_new_upstream_session" => true,
+               "recovery_kind" => "restart_with_full_context",
+               "recovery" => recovery
+             }
+           } = Jason.decode!(frame)
+
+    assert_pinned_reauth_recovery_contract!(recovery)
+  end
+
+  defp assert_pinned_reauth_recovery_contract!(recovery) do
+    assert recovery["kind"] == "restart_with_full_context"
+    assert recovery["anchor_removal"]["body"] == ["previous_response_id"]
+
+    assert recovery["anchor_removal"]["headers"] == [
+             "x-codex-previous-response-id",
+             "x-codex-turn-state",
+             "x-codex-session-id",
+             "session-id",
+             "x-session-affinity",
+             "session_id",
+             "x-codex-conversation-id"
+           ]
+  end
+
+  defp pinned_reauth_gateway_setup(pinned_upstream, fallback_upstream) do
+    setup = gateway_setup(pinned_upstream)
+
+    fallback =
+      gateway_upstream(
+        setup.pool,
+        fallback_upstream,
+        "upstream-token-v1-pinned-reauth-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    mark_pinned_assignment_reauth_required!(setup)
+
+    {setup, fallback}
+  end
+
+  defp register_previous_response_anchor!(auth, assignment, previous_response_id) do
+    session = register_session_header_anchor!(auth, assignment, "v1-previous-anchor-session")
+
+    assert :ok =
+             Gateway.register_codex_session_continuity(
+               session,
+               %{},
+               Jason.encode!(%{"id" => previous_response_id})
+             )
+
+    session
+  end
+
+  defp register_turn_state_anchor!(auth, assignment, turn_state) do
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: turn_state})
+    pin_session_to_assignment!(session, assignment)
+  end
+
+  defp register_session_header_anchor!(auth, assignment, session_header) do
+    {:ok, session} = Gateway.start_codex_session(auth, %{session_header: session_header})
+    pin_session_to_assignment!(session, assignment)
+  end
+
+  defp pin_session_to_assignment!(session, assignment) do
+    session
+    |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
+    |> Repo.update!()
+  end
+
+  defp mark_pinned_assignment_reauth_required!(setup) do
+    setup.identity
+    |> Ecto.Changeset.change(%{
+      status: "reauth_required",
+      metadata: %{
+        "base_url" => setup.identity.metadata["base_url"],
+        "token_refresh" => %{
+          "status" => "reauth_required",
+          "reason" => %{
+            "code" => "refresh_token_revoked",
+            "message" => "synthetic refresh state"
+          }
+        }
+      }
+    })
+    |> Repo.update!()
+
+    setup.assignment
+    |> Ecto.Changeset.change(%{
+      health_status: "disabled",
+      eligibility_status: "ineligible"
+    })
+    |> Repo.update!()
+  end
+
+  defp put_request_headers(conn, headers) do
+    Enum.reduce(headers, conn, fn {key, value}, conn -> put_req_header(conn, key, value) end)
+  end
+
+  defp visible_pinned_input do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "input_text",
+            "text" => "visible v1 pinned reauth context must not persist"
+          }
+        ]
+      },
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_v1_pinned_reauth",
+        "output" => "visible v1 tool result must not persist"
+      }
+    ]
+  end
+
+  defp assert_no_pinned_reauth_leakage!(
+         value,
+         setup,
+         previous_response_id,
+         label \\ "pinned reauth leakage"
+       )
+
+  defp assert_no_pinned_reauth_leakage!(
+         text,
+         setup,
+         previous_response_id,
+         label
+       )
+       when is_binary(text) do
+    refute text =~ previous_response_id, label
+    refute text =~ "visible v1 pinned reauth context must not persist", label
+    refute text =~ "visible v1 tool result must not persist", label
+    refute text =~ "call_v1_pinned_reauth", label
+    refute text =~ setup.authorization, label
+    refute text =~ setup.raw_key, label
+    refute text =~ "Bearer ", label
+    refute text =~ "upstream-token", label
+  end
+
+  defp assert_no_pinned_reauth_leakage!(value, setup, previous_response_id, label) do
+    assert_no_pinned_reauth_leakage!(inspect(value), setup, previous_response_id, label)
   end
 
   @tag :v1_websocket
@@ -474,6 +659,161 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     for captured <- [first_upstream_request, second_upstream_request] do
       assert captured.path == "/backend-api/codex/responses"
       assert_no_continuity_headers_forwarded!(captured)
+    end
+  end
+
+  @tag :pinned_reauth
+  test "POST /v1/responses fails closed for pinned reauth continuation anchors", %{
+    conn: conn
+  } do
+    pinned_upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+
+    fallback_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "should_not_fallback"}))
+
+    {setup, _fallback} = pinned_reauth_gateway_setup(pinned_upstream, fallback_upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    previous_response_id = "resp_v1_pinned_reauth_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, setup.assignment, previous_response_id)
+
+    turn_state = "turn-v1-pinned-reauth-#{System.unique_integer([:positive])}"
+    register_turn_state_anchor!(auth, setup.assignment, turn_state)
+
+    local_header_cases =
+      for header <- [
+            "x-codex-session-id",
+            "session-id",
+            "x-session-affinity",
+            "session_id",
+            "x-codex-conversation-id"
+          ] do
+        value = "#{header}-v1-pinned-reauth-#{System.unique_integer([:positive])}"
+        register_session_header_anchor!(auth, setup.assignment, value)
+        {"local #{header}", [{header, value}], %{}}
+      end
+
+    anchored_cases =
+      [
+        {"body previous_response_id", [], %{"previous_response_id" => previous_response_id}},
+        {"header previous response", [{"x-codex-previous-response-id", previous_response_id}],
+         %{}},
+        {"accepted turn state", [{"x-codex-turn-state", turn_state}], %{}}
+      ] ++ local_header_cases
+
+    for {{label, headers, payload_updates}, index} <- Enum.with_index(anchored_cases) do
+      payload =
+        Map.merge(
+          %{
+            "model" => setup.model.exposed_model_id,
+            "input" => visible_pinned_input()
+          },
+          payload_updates
+        )
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> put_request_headers(headers)
+        |> post("/v1/responses", payload)
+
+      assert_pinned_reauth_recovery_body!(response)
+
+      response_text = inspect(json_response(response, 503))
+      assert_no_pinned_reauth_leakage!(response_text, setup, previous_response_id, label)
+
+      assert FakeUpstream.count(pinned_upstream) == 0, label
+      assert FakeUpstream.count(fallback_upstream) == 0, label
+      assert Repo.aggregate(Attempt, :count) == 0, label
+
+      denied_requests =
+        Repo.all(
+          from(r in Request,
+            where: r.pool_id == ^setup.pool.id,
+            order_by: [asc: r.admitted_at, asc: r.id]
+          )
+        )
+
+      assert length(denied_requests) == index + 1, label
+      denied_request = List.last(denied_requests)
+      assert denied_request.status == "rejected", label
+      assert denied_request.last_error_code == "pinned_continuation_reauth_required", label
+
+      assert denied_request.request_metadata["continuity_denial"]["denial_family"] ==
+               "pinned_continuation_reauth"
+
+      assert denied_request.endpoint == "/backend-api/codex/responses", label
+
+      denied_metadata_text =
+        inspect({Enum.map(denied_requests, & &1.request_metadata), RequestLogs.list(setup.pool)})
+
+      assert_no_pinned_reauth_leakage!(denied_metadata_text, setup, previous_response_id, label)
+    end
+  end
+
+  @tag :v1_websocket
+  @tag :pinned_reauth
+  test "GET /v1/responses websocket fails closed for pinned reauth continuation anchors" do
+    pinned_upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+
+    fallback_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "should_not_fallback"}))
+
+    {setup, _fallback} = pinned_reauth_gateway_setup(pinned_upstream, fallback_upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    previous_response_id = "resp_v1_ws_pinned_reauth_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, setup.assignment, previous_response_id)
+
+    port = start_public_endpoint!()
+    turn_state = "v1-ws-pinned-reauth-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"},
+        {"x-codex-previous-response-id", previous_response_id}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => visible_pinned_input(),
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert_pinned_reauth_recovery_frame!(frame)
+      assert_no_pinned_reauth_leakage!(frame, setup, previous_response_id)
+
+      assert FakeUpstream.count(pinned_upstream) == 0
+      assert FakeUpstream.count(fallback_upstream) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+
+      assert [denied_request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert denied_request.endpoint == "/backend-api/codex/responses"
+      assert denied_request.transport == "websocket"
+      assert denied_request.status == "rejected"
+      assert denied_request.response_status_code == 503
+      assert denied_request.last_error_code == "pinned_continuation_reauth_required"
+
+      assert denied_request.request_metadata["continuity_denial"]["denial_family"] ==
+               "pinned_continuation_reauth"
+
+      denied_metadata_text =
+        inspect({denied_request.request_metadata, RequestLogs.list(setup.pool)})
+
+      assert_no_pinned_reauth_leakage!(denied_metadata_text, setup, previous_response_id)
+
+      conn
+    after
+      Mint.HTTP.close(conn)
     end
   end
 
