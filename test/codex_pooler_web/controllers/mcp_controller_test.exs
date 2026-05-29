@@ -672,6 +672,120 @@ defmodule CodexPoolerWeb.McpControllerTest do
       assert :ok = Redaction.assert_mcp_output_safe!(sentinel_result)
     end
 
+    test "tools call hides operator inventory from scoped admin tokens", %{conn: conn, user: user} do
+      target = operator_fixture(user, %{"display_name" => "Wire Hidden Operator"}).user
+
+      %{user: admin} = operator_fixture(user, %{"email" => unique_user_email()})
+      admin = admin |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
+      pool = pool_fixture(%{name: "Wire Scoped Admin Pool"})
+      operator_pool_assignment_fixture(admin, pool, created_by_user_id: user.id)
+      raw_token = enabled_mcp_token!(admin)
+
+      response =
+        call_tool(conn, raw_token, "wire-scoped-list-operators", "codex_pooler_list_operators", %{
+          "query" => "Wire Hidden Operator",
+          "limit" => 10
+        })
+
+      {list_result, text, structured} =
+        assert_successful_tool_response(response, "wire-scoped-list-operators")
+
+      assert text == "No operator metadata records matched the visible scope"
+      assert structured["operators"] == []
+      assert structured["total"] == 0
+      refute inspect(response) =~ target.id
+      refute inspect(response) =~ "Wire Hidden Operator"
+      assert_no_wire_leaks(response, raw_token, [target.email])
+      assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+      get_response =
+        conn
+        |> recycle()
+        |> call_tool(raw_token, "wire-scoped-get-operator", "codex_pooler_get_operator", %{
+          "selector" => target.id
+        })
+
+      {get_result, _get_text, get_structured} =
+        assert_successful_tool_response(get_response, "wire-scoped-get-operator")
+
+      assert get_structured == %{
+               "status" => "not_found",
+               "kind" => "operator",
+               "item" => nil,
+               "candidates" => [],
+               "message" => "Operator selector did not match"
+             }
+
+      refute inspect(get_response) =~ target.id
+      assert_no_wire_leaks(get_response, raw_token, [target.email])
+      assert :ok = Redaction.assert_mcp_output_safe!(get_result)
+    end
+
+    test "tools call enforces scoped admin visibility for pool-derived metadata over json-rpc", %{
+      conn: conn,
+      user: user
+    } do
+      visible_pool = pool_fixture(%{name: "Wire Visible Pool"})
+      hidden_pool = pool_fixture(%{name: "Wire Hidden Pool"})
+      %{user: admin} = operator_fixture(user, %{"email" => unique_user_email()})
+      admin = admin |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
+      operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: user.id)
+      raw_token = enabled_mcp_token!(admin)
+
+      %{api_key: visible_key} =
+        active_api_key_fixture(visible_pool, %{display_name: "Wire visible key"})
+
+      %{api_key: hidden_key} =
+        active_api_key_fixture(hidden_pool, %{display_name: "Wire hidden key"})
+
+      visible_request =
+        request_fixture(%{pool: visible_pool, api_key: visible_key}, %{
+          correlation_id: "wire-visible-request-log"
+        })
+
+      hidden_request =
+        request_fixture(%{pool: hidden_pool, api_key: hidden_key}, %{
+          correlation_id: "wire-hidden-request-log"
+        })
+
+      list_response =
+        call_tool(conn, raw_token, "wire-scoped-list-keys", "codex_pooler_list_pool_api_keys", %{
+          "limit" => 10
+        })
+
+      {list_result, _list_text, list_structured} =
+        assert_successful_tool_response(list_response, "wire-scoped-list-keys")
+
+      assert [%{"id" => visible_key_id}] = list_structured["items"]
+      assert visible_key_id == visible_key.id
+      refute inspect(list_response) =~ hidden_key.id
+      assert_no_wire_leaks(list_response, raw_token, [hidden_key.key_prefix])
+      assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+      hidden_log_response =
+        conn
+        |> recycle()
+        |> call_tool(raw_token, "wire-scoped-hidden-log", "codex_pooler_get_request_log", %{
+          "id" => hidden_request.id
+        })
+
+      {hidden_log_result, _hidden_log_text, hidden_log_structured} =
+        assert_successful_tool_response(hidden_log_response, "wire-scoped-hidden-log")
+
+      assert hidden_log_structured == %{
+               "status" => "not_found",
+               "kind" => "request_log",
+               "item" => nil,
+               "candidates" => [],
+               "message" => "request_log selector did not match"
+             }
+
+      refute inspect(hidden_log_response) =~ hidden_request.id
+      refute inspect(hidden_log_response) =~ visible_request.id
+      assert_no_wire_leaks(hidden_log_response, raw_token, ["wire-hidden-request-log"])
+      assert :ok = Redaction.assert_mcp_output_safe!(hidden_log_result)
+    end
+
     test "tools call validates nullable edge shapes over json-rpc", %{conn: conn, user: user} do
       raw_token = enabled_mcp_token!(user)
 

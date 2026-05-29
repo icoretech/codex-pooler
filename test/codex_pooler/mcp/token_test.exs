@@ -3,12 +3,14 @@ defmodule CodexPooler.MCP.TokenTest do
 
   import Ecto.Query
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures, only: [operator_pool_assignment_fixture: 3]
 
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
 
   setup do
@@ -23,7 +25,7 @@ defmodule CodexPooler.MCP.TokenTest do
 
     %{user: user} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     user = user |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
-    %{user: user, scope: Scope.for_user(user, ["instance_owner"])}
+    %{user: user, scope: Scope.for_user(user)}
   end
 
   test "creates operator MCP keys with one-time raw token and light storage", %{user: user} do
@@ -102,6 +104,9 @@ defmodule CodexPooler.MCP.TokenTest do
     assert settings.enabled == true
     assert {:ok, auth} = MCP.authenticate_token(raw_token)
     assert auth.operator.id == user.id
+    assert auth.scope.user.id == user.id
+    assert auth.scope.roles == ["instance_owner"]
+    assert auth.scope.assigned_pool_ids == []
     refute Map.has_key?(auth.key, :raw_token)
 
     assert {:ok, disabled_settings} = MCP.set_operator_mcp_enabled(user, false)
@@ -113,6 +118,36 @@ defmodule CodexPooler.MCP.TokenTest do
     disable_global_mcp!()
     assert {:error, %{code: :mcp_service_disabled}} = MCP.authenticate_token(raw_token)
     assert Repo.get!(OperatorMCPKey, key.id)
+  end
+
+  test "token authentication attaches the canonical pool-scoped admin scope", %{
+    scope: owner_scope,
+    user: owner
+  } do
+    enable_global_mcp!()
+
+    assert {:ok, assigned_pool} =
+             Pools.create_pool(owner_scope, %{slug: "mcp-assigned", name: "MCP Assigned"})
+
+    assert {:ok, _hidden_pool} =
+             Pools.create_pool(owner_scope, %{slug: "mcp-hidden", name: "MCP Hidden"})
+
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin = admin |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+
+    assert {:ok, _settings} = MCP.set_operator_mcp_enabled(admin, true)
+
+    assert {:ok, %{raw_token: raw_token}} =
+             MCP.create_operator_token(admin, %{label: "Admin MCP"})
+
+    assert {:ok, auth} = MCP.authenticate_token(raw_token)
+
+    assert auth.operator.id == admin.id
+    assert auth.scope.user.id == admin.id
+    assert auth.scope.roles == ["instance_admin"]
+    assert auth.scope.assigned_pool_ids == [assigned_pool.id]
+    assert Enum.map(Pools.list_visible_pools(auth.scope), & &1.id) == [assigned_pool.id]
   end
 
   test "operator MCP enable and disable writes are audited without token material", %{user: user} do

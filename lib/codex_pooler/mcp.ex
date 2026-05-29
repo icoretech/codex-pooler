@@ -3,7 +3,7 @@ defmodule CodexPooler.MCP do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounts.User
+  alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP.AuditLog
   alias CodexPooler.MCP.{Material, OperatorMCPKey, OperatorMCPSettings}
@@ -125,7 +125,8 @@ defmodule CodexPooler.MCP do
          %User{} = operator <- Repo.get(User, key.operator_id),
          :ok <- ensure_operator_usable(operator),
          :ok <- ensure_account_enabled(operator) do
-      {:ok, %{operator: Map.put(operator, :password, nil), key: key, key_id: key.id}}
+      operator = Map.put(operator, :password, nil)
+      {:ok, %{operator: operator, scope: Scope.for_user(operator), key: key, key_id: key.id}}
     else
       nil -> {:error, error(:mcp_token_missing, "MCP token is required")}
       {:error, :empty_mcp_token} -> {:error, error(:mcp_token_missing, "MCP token is required")}
