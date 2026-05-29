@@ -164,6 +164,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "exclude broad /v1/realtime routes"
       assert feature.contract =~ "documented local precedence"
       assert feature.contract =~ "without forwarding session-id or x-session-affinity upstream"
+      assert feature.contract =~ "pinned /v1/responses continuations"
+      assert feature.contract =~ "restart_with_full_context recovery guidance"
       refute feature.contract =~ "metadata"
 
       assert fixture.auth == "required_bearer_api_key"
@@ -183,6 +185,28 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "session-id",
                "x-session-affinity"
              ]
+
+      assert fixture.pinned_continuation_reauth == %{
+               routes: [
+                 %{method: :post, path: "/v1/responses"},
+                 %{method: :get, path: "/v1/responses", transport: "websocket"}
+               ],
+               status: 503,
+               error_code: "pinned_continuation_reauth_required",
+               recovery_kind: "restart_with_full_context",
+               anchor_removal: %{
+                 body: ["previous_response_id"],
+                 headers: [
+                   "x-codex-previous-response-id",
+                   "x-codex-turn-state",
+                   "x-codex-session-id",
+                   "session-id",
+                   "x-session-affinity",
+                   "session_id",
+                   "x-codex-conversation-id"
+                 ]
+               }
+             }
 
       assert fixture.timeout_contract == %{
                route_specific_defaults_added: false,

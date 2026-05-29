@@ -258,7 +258,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, and allow prompt-cache routing locality only on POST responses and chat completions"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, and allow prompt-cache routing locality only on POST responses and chat completions"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -456,6 +456,27 @@ defmodule CodexPooler.CompatibilityMatrix do
         "x-codex-conversation-id"
       ],
       local_continuity_headers_not_forwarded: ["session-id", "x-session-affinity"],
+      pinned_continuation_reauth: %{
+        routes: [
+          %{method: :post, path: "/v1/responses"},
+          %{method: :get, path: "/v1/responses", transport: "websocket"}
+        ],
+        status: 503,
+        error_code: "pinned_continuation_reauth_required",
+        recovery_kind: "restart_with_full_context",
+        anchor_removal: %{
+          body: ["previous_response_id"],
+          headers: [
+            "x-codex-previous-response-id",
+            "x-codex-turn-state",
+            "x-codex-session-id",
+            "session-id",
+            "x-session-affinity",
+            "session_id",
+            "x-codex-conversation-id"
+          ]
+        }
+      },
       timeout_contract: %{
         route_specific_defaults_added: false,
         progress_receive_timeout_ms: 250,
