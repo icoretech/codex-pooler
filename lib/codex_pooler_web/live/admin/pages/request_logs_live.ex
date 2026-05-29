@@ -243,12 +243,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     visible_upstream_identities =
       Upstreams.list_visible_upstream_identities(socket.assigns.current_scope)
 
+    {selected_pool, pool_error} = RequestLogFilterForm.select_pool(pools, params["pool_id"])
+
+    upstream_filter_identities =
+      upstream_filter_identities(visible_upstream_identities, selected_pool)
+
     visible_upstream_identity_ids =
-      visible_upstream_identities
+      upstream_filter_identities
       |> Enum.map(& &1.id)
       |> MapSet.new()
-
-    {selected_pool, pool_error} = RequestLogFilterForm.select_pool(pools, params["pool_id"])
 
     {filters, form_values, filter_errors} =
       RequestLogFilterForm.parse_filters(params, selected_pool, visible_upstream_identity_ids)
@@ -289,7 +292,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       filter_errors: filter_errors,
       pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
       model_filter_options: model_filter_options(model_filter_models, form_values["model"]),
-      upstream_account_options: upstream_account_options(visible_upstream_identities)
+      upstream_account_options: upstream_account_options(upstream_filter_identities)
     )
   end
 
@@ -336,6 +339,20 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           %{label: model, value: model, icon: "hero-cpu-chip"}
         end)
     ]
+  end
+
+  defp upstream_filter_identities(visible_upstream_identities, nil),
+    do: visible_upstream_identities
+
+  defp upstream_filter_identities(visible_upstream_identities, selected_pool) do
+    selected_pool_identity_ids =
+      selected_pool
+      |> Upstreams.list_pool_assignments()
+      |> Enum.reject(&(&1.status == "deleted"))
+      |> Enum.map(& &1.upstream_identity_id)
+      |> MapSet.new()
+
+    Enum.filter(visible_upstream_identities, &MapSet.member?(selected_pool_identity_ids, &1.id))
   end
 
   defp upstream_account_options(visible_upstream_identities) do
