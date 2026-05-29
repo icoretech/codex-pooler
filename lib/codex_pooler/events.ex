@@ -143,8 +143,8 @@ defmodule CodexPooler.Events do
   def broadcast_local_event(%Event{} = event) do
     message = {@message_tag, event}
 
-    case PubSub.broadcast(@pubsub, pubsub_topic(event.pool_id), message) do
-      :ok -> PubSub.broadcast(@pubsub, @all_topic, message)
+    case PubSub.broadcast_from(@pubsub, self(), pubsub_topic(event.pool_id), message) do
+      :ok -> PubSub.broadcast_from(@pubsub, self(), @all_topic, message)
       {:error, reason} -> {:error, reason}
     end
   end

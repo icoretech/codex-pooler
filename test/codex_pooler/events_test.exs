@@ -12,53 +12,76 @@ defmodule CodexPooler.EventsTest do
     assert :ok = Events.subscribe_pool(pool.id)
 
     assert {:ok, request_logs} =
-             Events.broadcast_request_logs(pool.id, "request_log_created", %{
-               request_id: "request-test"
-             })
+             publish_from_task(fn ->
+               Events.broadcast_request_logs(pool.id, "request_log_created", %{
+                 request_id: "request-test"
+               })
+             end)
 
     assert_receive {Events, ^request_logs}
     assert_event_shape(request_logs, pool.id, ["request_logs"], "request_log_created")
     assert request_logs.payload == %{"request_id" => "request-test"}
 
-    assert {:ok, usage} = Events.broadcast_usage(pool.id, "usage_updated", %{request_count: 1})
+    assert {:ok, usage} =
+             publish_from_task(fn ->
+               Events.broadcast_usage(pool.id, "usage_updated", %{request_count: 1})
+             end)
+
     assert_receive {Events, ^usage}
     assert_event_shape(usage, pool.id, ["usage"], "usage_updated")
     assert usage.payload == %{"request_count" => 1}
 
     assert {:ok, job_status} =
-             Events.broadcast_job_status(pool.id, "job_status_updated", %{
-               id: "job-test",
-               status: "complete"
-             })
+             publish_from_task(fn ->
+               Events.broadcast_job_status(pool.id, "job_status_updated", %{
+                 id: "job-test",
+                 status: "complete"
+               })
+             end)
 
     assert_receive {Events, ^job_status}
     assert_event_shape(job_status, pool.id, ["job_status"], "job_status_updated")
     assert job_status.payload == %{"id" => "job-test", "status" => "complete"}
 
     assert {:ok, model_sync} =
-             Events.broadcast_model_sync(pool.id, "model_sync_completed", %{status: "succeeded"})
+             publish_from_task(fn ->
+               Events.broadcast_model_sync(pool.id, "model_sync_completed", %{status: "succeeded"})
+             end)
 
     assert_receive {Events, ^model_sync}
     assert_event_shape(model_sync, pool.id, ["model_sync"], "model_sync_completed")
     assert model_sync.payload == %{"status" => "succeeded"}
 
     assert {:ok, pools} =
-             Events.broadcast_pools(pool.id, "pool_routing_settings_updated", %{
-               routing_strategy: "bridge_ring"
-             })
+             publish_from_task(fn ->
+               Events.broadcast_pools(pool.id, "pool_routing_settings_updated", %{
+                 routing_strategy: "bridge_ring"
+               })
+             end)
 
     assert_receive {Events, ^pools}
     assert_event_shape(pools, pool.id, ["pools"], "pool_routing_settings_updated")
     assert pools.payload == %{"routing_strategy" => "bridge_ring"}
 
     assert {:ok, upstreams} =
-             Events.broadcast_upstreams(pool.id, "upstream_account_imported", %{
-               upstream_identity_id: "upstream-test"
-             })
+             publish_from_task(fn ->
+               Events.broadcast_upstreams(pool.id, "upstream_account_imported", %{
+                 upstream_identity_id: "upstream-test"
+               })
+             end)
 
     assert_receive {Events, ^upstreams}
     assert_event_shape(upstreams, pool.id, ["upstreams"], "upstream_account_imported")
     assert upstreams.payload == %{"upstream_identity_id" => "upstream-test"}
+  end
+
+  test "does not deliver local pool events back to the broadcasting subscriber" do
+    pool = pool_fixture()
+    assert :ok = Events.subscribe_pool(pool.id)
+
+    assert {:ok, event} = Events.broadcast_pools(pool.id, "pool_routing_settings_updated", %{})
+
+    refute_receive {Events, ^event}
   end
 
   test "rejects invalid event topics" do
@@ -83,9 +106,15 @@ defmodule CodexPooler.EventsTest do
     }
 
     assert {:ok, payload} = Events.event_to_postgres_payload(event)
-    assert :ok = PostgresBridge.relay_payload(payload)
+    assert :ok = publish_from_task(fn -> PostgresBridge.relay_payload(payload) end)
 
     assert_receive {Events, ^event}
+  end
+
+  defp publish_from_task(fun) when is_function(fun, 0) do
+    fun
+    |> Task.async()
+    |> Task.await(5_000)
   end
 
   defp assert_event_shape(event, pool_id, topics, reason) do

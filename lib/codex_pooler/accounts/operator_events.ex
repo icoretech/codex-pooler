@@ -24,6 +24,6 @@ defmodule CodexPooler.Accounts.OperatorEvents do
       emitted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     }
 
-    PubSub.broadcast(@pubsub, @topic, {@message_tag, event})
+    PubSub.broadcast_from(@pubsub, self(), @topic, {@message_tag, event})
   end
 end
