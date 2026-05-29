@@ -77,6 +77,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
         StreamProtocol.terminal_error_code(body, terminal)
 
     code = StreamProtocol.client_visible_error_code(upstream_code)
+    websocket_frame_headers = Map.get(finalization, :websocket_frame_headers, %{})
+    metadata_headers = headers ++ Map.to_list(websocket_frame_headers)
 
     with :ok <- Streaming.record_health_failure(upstream_code, upstream_code, context) do
       case AttemptSettlement.finalize_partial_stream_failure(
@@ -88,11 +90,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
                status,
                code,
                code,
-               headers
+               metadata_headers
                |> Metadata.websocket_response_metadata(
                  code,
                  request_options,
-                 Map.get(finalization, :websocket_frame_headers, %{})
+                 websocket_frame_headers
                )
                |> Metadata.maybe_put_masked_error_metadata(upstream_code, code),
                started: started

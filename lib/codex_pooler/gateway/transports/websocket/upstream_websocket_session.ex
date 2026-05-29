@@ -404,7 +404,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
   defp handle_frames(state, frames, %ReceiveState{} = receive_state) do
     Enum.reduce_while(frames, {:continue, state, receive_state}, fn
       {:text, raw_text}, {:continue, state, receive_state} ->
-        text = map_message(raw_text, receive_state.message_mapper)
+        text =
+          raw_text
+          |> map_message(receive_state.message_mapper)
+          |> sanitize_downstream_text()
 
         handle_text_frame(state, receive_state, raw_text, text)
 
@@ -514,6 +517,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
   defp map_message(text, mapper) when is_function(mapper, 1), do: mapper.(text)
   defp map_message(text, _mapper), do: text
+
+  defp sanitize_downstream_text(text) when is_binary(text) do
+    with {:ok, %{} = decoded} <- Jason.decode(text),
+         type
+         when type in ["response.completed", "response.failed", "response.incomplete", "error"] <-
+           Map.get(decoded, "type") do
+      decoded
+      |> Map.drop(["headers"])
+      |> Jason.encode!()
+    else
+      _other -> text
+    end
+  end
 
   defp send_frame(state, frame), do: WebSocketFrameWriter.send_frame(state, frame)
 

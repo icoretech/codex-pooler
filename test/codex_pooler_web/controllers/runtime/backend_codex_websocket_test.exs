@@ -1375,6 +1375,138 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     wait_for_rate_limit_event_tasks()
   end
 
+  test "websocket first-and-only usage-limit terminal event fails without retrying or leaking" do
+    raw_body_sentinel = "raw-websocket-usage-limit-body-do-not-persist"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "headers" => %{
+                 "X-Codex-Rate-Limit-Reached-Type" => "workspace_owner_usage_limit_reached",
+                 "Authorization" => "Bearer ws-usage-limit-header-do-not-persist",
+                 "Cookie" => "ws-usage-limit-cookie=drop",
+                 "X-Raw-Body" => raw_body_sentinel
+               },
+               "response" => %{
+                 "id" => "resp_usage_limit_terminal",
+                 "status" => "failed",
+                 "error" => %{"code" => "usage_limit_exceeded"},
+                 "usage" => %{
+                   "input_tokens" => 10,
+                   "cached_input_tokens" => 4,
+                   "output_tokens" => 2,
+                   "reasoning_tokens" => 1,
+                   "total_tokens" => 12
+                 }
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_usage_limit_fallback_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-usage-limit-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "usage-limit"})
+    session = pin_session_to_assignment!(session, setup.assignment)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "trigger websocket usage limit terminal",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-usage-limit-terminal", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{
+             "type" => "response.failed",
+             "response" => %{
+               "id" => "resp_usage_limit_terminal",
+               "status" => "failed",
+               "error" => %{"code" => "usage_limit_exceeded"}
+             }
+           } = Jason.decode!(frame)
+
+    refute frame =~ "headers"
+    refute frame =~ "workspace_owner_usage_limit_reached"
+    refute frame =~ "ws-usage-limit-header-do-not-persist"
+    refute frame =~ "ws-usage-limit-cookie"
+    refute frame =~ raw_body_sentinel
+
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "websocket"
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "usage_limit_exceeded"
+    refute Map.has_key?(request.request_metadata || %{}, "websocket_frame_headers")
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.transport == "websocket"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "usage_limit_exceeded"
+    assert attempt.response_metadata["error_kind"] == "usage_limit_exceeded"
+
+    assert attempt.response_metadata["rate_limit_reached_type"] ==
+             "workspace_owner_usage_limit_reached"
+
+    assert attempt.response_metadata["websocket_frame_headers"] == %{
+             "x-codex-rate-limit-reached-type" => "workspace_owner_usage_limit_reached"
+           }
+
+    refute Enum.any?(Repo.all(from(a in Attempt)), &(&1.status == "succeeded"))
+    refute Enum.any?(Repo.all(from(r in Request)), &(&1.status == "succeeded"))
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ "response.failed"
+    refute metadata_text =~ "resp_usage_limit_terminal"
+    refute metadata_text =~ "ws-usage-limit-header-do-not-persist"
+    refute metadata_text =~ "ws-usage-limit-cookie"
+    refute metadata_text =~ raw_body_sentinel
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "Bearer "
+    refute metadata_text =~ "upstream-token"
+  end
+
   test "websocket malformed partial codex.rate_limits body event does not crash or persist" do
     upstream =
       start_upstream(
@@ -3792,6 +3924,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     metadata_text = inspect({request.request_metadata, first_attempt.response_metadata})
     refute metadata_text =~ setup.authorization
     refute metadata_text =~ "upstream-token"
+  end
+
+  test "non-101 websocket upgrade rejection stays classified as upstream_stream_error" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_error(
+          %{
+            "error" => %{
+              "code" => "upgrade_rejected",
+              "message" => "upgrade body sentinel"
+            }
+          },
+          status: 403,
+          headers: [
+            {"x-upstream-status", "upgrade-denied-sentinel"},
+            {"set-cookie", "cookie-sentinel"}
+          ]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:error,
+            %{
+              code: "upstream_request_failed",
+              message: "upstream request failed",
+              status: 502
+            }} =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "non-101 websocket upgrade rejection",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-upgrade-rejected"},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.transport == "websocket"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "Bearer "
+    refute metadata_text =~ "upgrade body sentinel"
+    refute metadata_text =~ "upgrade-denied-sentinel"
+    refute metadata_text =~ "cookie-sentinel"
+    refute metadata_text =~ "upgrade_rejected"
   end
 
   @tag :feature_websocket_terminal_auth_refresh
