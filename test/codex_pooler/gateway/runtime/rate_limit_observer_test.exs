@@ -35,6 +35,23 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       assert DateTime.compare(window.reset_at, reset_at) == :eq
       wait_for_rate_limit_event_tasks()
     end
+
+    test "ignores local usage-limit response.failed events as quota evidence" do
+      identity = active_upstream_assignment_fixture().identity
+
+      assert :ok =
+               RateLimitObserver.record_complete_events(
+                 identity,
+                 "event: response.failed\n" <>
+                   "data: #{Jason.encode!(usage_limit_terminal_payload())}\n\n"
+               )
+
+      wait_for_rate_limit_event_tasks()
+
+      refute identity
+             |> QuotaWindows.list_quota_windows()
+             |> Enum.any?(&(&1.source == "codex_rate_limit_event"))
+    end
   end
 
   describe "record_events/3" do
@@ -61,6 +78,24 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
                  RateLimitObserver.event_state()
                )
     end
+  end
+
+  defp usage_limit_terminal_payload do
+    %{
+      "type" => "response.failed",
+      "response" => %{
+        "id" => "resp_usage_limit_terminal",
+        "status" => "failed",
+        "error" => %{"code" => "usage_limit_exceeded"},
+        "usage" => %{
+          "input_tokens" => 10,
+          "cached_input_tokens" => 4,
+          "output_tokens" => 2,
+          "reasoning_tokens" => 1,
+          "total_tokens" => 12
+        }
+      }
+    }
   end
 
   defp codex_rate_limits_payload(used_percent, reset_at) do

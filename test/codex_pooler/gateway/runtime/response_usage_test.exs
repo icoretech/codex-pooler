@@ -98,6 +98,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
              } = ResponseUsage.from_sse(body)
     end
 
+    test "extracts usage from local usage-limit response.failed without changing failure semantics" do
+      body =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_usage_limit_terminal",
+            "status" => "failed",
+            "error" => %{"code" => "usage_limit_exceeded"},
+            "usage" => %{
+              "input_tokens" => 10,
+              "cached_input_tokens" => 4,
+              "output_tokens" => 2,
+              "reasoning_tokens" => 1,
+              "total_tokens" => 12
+            }
+          }
+        })
+
+      assert ResponseUsage.from_sse(body) == %{
+               status: "usage_known",
+               source: "upstream_usage",
+               input_tokens: 10,
+               cached_input_tokens: 4,
+               output_tokens: 2,
+               reasoning_tokens: 1,
+               total_tokens: 12,
+               service_tier: nil
+             }
+    end
+
     test "marks SSE without usage as unknown" do
       body = ~S"""
       data: {"type":"response.created"}
@@ -267,5 +297,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
       assert ResponseUsage.from_websocket_body(body) ==
                %{status: "usage_unknown", source: "websocket_usage_missing"}
     end
+  end
+
+  defp sse_event(event, payload) do
+    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
   end
 end
