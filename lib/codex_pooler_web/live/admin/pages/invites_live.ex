@@ -25,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Admin invites",
+       page_title: "Invites",
        pools: [],
        invites: empty_invites(),
        filter_form: to_form(%{}, as: :filters),

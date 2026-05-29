@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
 
     socket =
       assign(socket,
-        page_title: "Admin settings",
+        page_title: "Settings",
         selected_tab: @default_tab,
         settings_tabs: @settings_tabs,
         current_user_token: session["user_token"],

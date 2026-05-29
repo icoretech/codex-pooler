@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
     {:ok,
      socket
      |> assign(
-       page_title: "Admin operators",
+       page_title: "Operators",
        operator_filters: OperatorForm.filter(),
        operator_filter_form: OperatorForm.filter_form(),
        subscribed_operator_events?: false,
