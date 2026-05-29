@@ -16,18 +16,22 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok,
-     socket
-     |> assign(
-       page_title: "Jobs",
-       jobs: [],
-       worker_cards: worker_cards(%{}),
-       recent_jobs: [],
-       jobs_reload_timer: nil,
-       subscribed_pool_ids: MapSet.new()
-     )
-     |> refresh_jobs()
-     |> maybe_start_connected_refresh()}
+    socket =
+      assign(socket,
+        page_title: "Jobs",
+        owner_authorized?: Pools.owner?(socket.assigns.current_scope),
+        jobs: [],
+        worker_cards: worker_cards(%{}),
+        recent_jobs: [],
+        jobs_reload_timer: nil,
+        subscribed_pool_ids: MapSet.new()
+      )
+
+    if socket.assigns.owner_authorized? do
+      {:ok, socket |> refresh_jobs() |> maybe_start_connected_refresh()}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
@@ -59,11 +63,19 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
           description="Monitor background work and quickly check whether jobs are queued, running, completed, or need attention."
         />
 
-        <div id="admin-jobs-worker-grid" class="grid gap-4 xl:grid-cols-2">
+        <AdminComponents.empty_state
+          :if={!@owner_authorized?}
+          id="admin-jobs-owner-denied"
+          title="System jobs require owner access"
+          description="Only instance owners can inspect global background job state."
+          icon="hero-lock-closed"
+        />
+
+        <div :if={@owner_authorized?} id="admin-jobs-worker-grid" class="grid gap-4 xl:grid-cols-2">
           <JobWorkerCards.job_worker_card :for={card <- @worker_cards} card={card} />
         </div>
 
-        <.recent_jobs_surface recent_jobs={@recent_jobs} />
+        <.recent_jobs_surface :if={@owner_authorized?} recent_jobs={@recent_jobs} />
       </section>
     </AdminComponents.admin_shell>
     """
@@ -169,7 +181,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   end
 
   defp maybe_start_connected_refresh(socket) do
-    if connected?(socket) do
+    if socket.assigns.owner_authorized? and connected?(socket) do
       schedule_fallback_refresh()
       reconcile_pool_subscriptions(socket)
     else
@@ -178,21 +190,25 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   end
 
   defp refresh_jobs(socket) do
-    page_state = JobsReadModel.load(socket.assigns.current_scope, limit: @recent_jobs_limit)
+    if socket.assigns.owner_authorized? do
+      page_state = JobsReadModel.load(socket.assigns.current_scope, limit: @recent_jobs_limit)
 
-    socket
-    |> cancel_jobs_reload_timer()
-    |> assign(
-      jobs: page_state.recent_jobs,
-      worker_cards: worker_cards(page_state.worker_jobs_by_group),
-      recent_jobs: page_state.recent_jobs,
-      jobs_reload_timer: nil
-    )
-    |> reconcile_pool_subscriptions()
+      socket
+      |> cancel_jobs_reload_timer()
+      |> assign(
+        jobs: page_state.recent_jobs,
+        worker_cards: worker_cards(page_state.worker_jobs_by_group),
+        recent_jobs: page_state.recent_jobs,
+        jobs_reload_timer: nil
+      )
+      |> reconcile_pool_subscriptions()
+    else
+      socket
+    end
   end
 
   defp reconcile_pool_subscriptions(socket) do
-    if connected?(socket) do
+    if socket.assigns.owner_authorized? and connected?(socket) do
       socket.assigns.current_scope
       |> Pools.list_visible_pools()
       |> PoolEventSubscriptions.pool_id_set()

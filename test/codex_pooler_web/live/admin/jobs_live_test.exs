@@ -3,8 +3,10 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
   import Ecto.Query
   import Phoenix.LiveViewTest
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounts
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
@@ -20,6 +22,41 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
   setup do
     Repo.delete_all(Oban.Job)
     :ok
+  end
+
+  test "denies instance admins without loading global jobs", %{scope: scope} do
+    job =
+      insert_job(
+        1,
+        worker: RuntimeStateCleanupWorker,
+        state: "completed",
+        inserted_at: ~U[2026-05-04 10:00:00Z]
+      )
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "jobs-denied-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, html} = live(admin_conn, ~p"/admin/jobs")
+
+    assert has_element?(view, "#admin-jobs-owner-denied", "System jobs require owner access")
+    refute has_element?(view, "#admin-jobs-worker-grid")
+    refute has_element?(view, "#admin-jobs-recent-activity")
+    refute has_element?(view, "#job-#{job.id}")
+    refute html =~ "RuntimeStateCleanupWorker"
+    refute has_element?(view, "#admin-nav-jobs")
+    refute has_element?(view, "#admin-nav-system")
+
+    state = :sys.get_state(view.pid)
+    refute state.socket.assigns.owner_authorized?
+    assert state.socket.assigns.recent_jobs == []
+    assert state.socket.assigns.subscribed_pool_ids == MapSet.new()
   end
 
   test "renders worker cards and compact recent activity", %{conn: conn} do
