@@ -135,6 +135,54 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSessionTest 
     assert_receive {:fake_upstream_chunk_sent, 3}, 1_000
   end
 
+  test "does not treat response.created as upstream websocket terminal success" do
+    parent = self()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.delayed_sse_stream(
+          [
+            %{
+              "type" => "response.created",
+              "response" => %{"id" => "resp_ws_created_only"}
+            },
+            %{
+              "type" => "response.completed",
+              "response" => %{"id" => "resp_ws_created_only"}
+            }
+          ],
+          done: false,
+          interval_ms: 250
+        )
+      )
+
+    {:ok, session} = UpstreamWebSocketSession.start_link([])
+
+    request = %Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      headers: [{"authorization", "Bearer synthetic-upstream-token"}],
+      payload:
+        Jason.encode!(%{
+          "model" => "upstream-test-model",
+          "input" => [%{"type" => "message", "role" => "user", "content" => "sample"}],
+          "stream" => true
+        }),
+      timeouts: @timeouts,
+      writer: fn text -> send(parent, {:upstream_websocket_frame, text}) end,
+      message_mapper: nil
+    }
+
+    request_task = Task.async(fn -> UpstreamWebSocketSession.request(session, request) end)
+
+    assert_receive {:upstream_websocket_frame, created_frame}, 1_000
+    assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+    refute Task.yield(request_task, 50)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} = Task.await(request_task, 1_000)
+    assert_receive {:upstream_websocket_frame, completed_frame}, 1_000
+    assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+  end
+
   test "non-101 websocket upgrade failure preserves the leaf reason and drops the body" do
     upstream =
       start_upstream(

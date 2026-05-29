@@ -539,8 +539,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
       when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
         type
 
-      {:ok, %{"id" => id}} when is_binary(id) ->
-        "response.completed"
+      {:ok, %{"id" => id} = decoded} when is_binary(id) ->
+        if Map.has_key?(decoded, "type"), do: nil, else: "response.completed"
 
       _decoded ->
         nil
