@@ -2,6 +2,8 @@ defmodule CodexPooler.DBInvariantsTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounts.{Scope, User}
+  alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Pools
   alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -122,6 +124,9 @@ defmodule CodexPooler.DBInvariantsTest do
     upstream_identity_id = create_upstream_identity!(user_id, "pool-cascade")
     assignment_id = create_assignment!(pool_id, upstream_identity_id, user_id, "pool-cascade")
 
+    operator_pool_assignment_id =
+      create_operator_pool_assignment!(user_id, pool_id, "active", "NULL")
+
     fixture = %{
       api_key_id: api_key_id,
       assignment_id: assignment_id,
@@ -145,6 +150,7 @@ defmodule CodexPooler.DBInvariantsTest do
     assert count_rows("pools", pool_id) == 0
     assert count_rows("api_keys", api_key_id) == 0
     assert count_rows("models", model_id) == 0
+    assert count_rows("operator_pool_assignments", operator_pool_assignment_id) == 0
     assert count_rows("requests", request_id) == 0
     assert count_rows("attempts", attempt_id) == 0
     assert count_rows("ledger_entries", ledger_entry_id) == 0
@@ -225,6 +231,273 @@ defmodule CodexPooler.DBInvariantsTest do
              Repo.query!("SELECT status FROM pool_upstream_assignments WHERE id = $1", [
                fixture.assignment_id
              ]).rows
+  end
+
+  test "database rejects duplicate active operator pool assignments by status predicate" do
+    user_id = create_user!("owner-operator-pool-assignment-unique@example.com")
+    pool_id = create_pool!(user_id, "operator-pool-assignment-unique", "Operator Assignment")
+
+    create_operator_pool_assignment!(user_id, pool_id, "active", "now()")
+    create_operator_pool_assignment!(user_id, pool_id, "revoked", "now()")
+
+    assert_db_error(:unique_violation, fn ->
+      create_operator_pool_assignment!(user_id, pool_id, "active", "now()")
+    end)
+  end
+
+  test "database enforces operator pool assignment statuses" do
+    user_id = create_user!("owner-operator-pool-assignment-status@example.com")
+
+    pool_id =
+      create_pool!(user_id, "operator-pool-assignment-status", "Operator Assignment Status")
+
+    assert_db_error(:check_violation, fn ->
+      create_operator_pool_assignment!(user_id, pool_id, "disabled", "NULL")
+    end)
+
+    assert_db_error(:check_violation, fn ->
+      create_operator_pool_assignment!(user_id, pool_id, "unknown", "NULL")
+    end)
+  end
+
+  test "database preserves revoked operator assignment history while allowing regrant" do
+    user_id = create_user!("owner-operator-pool-assignment-regrant@example.com")
+
+    pool_id =
+      create_pool!(user_id, "operator-pool-assignment-regrant", "Operator Assignment Regrant")
+
+    first_active_id = create_operator_pool_assignment!(user_id, pool_id, "active", "NULL")
+
+    Repo.query!(
+      "UPDATE operator_pool_assignments SET status = 'revoked', revoked_at = now() WHERE id = $1",
+      [first_active_id]
+    )
+
+    first_revoked_id = create_operator_pool_assignment!(user_id, pool_id, "revoked", "now()")
+    second_active_id = create_operator_pool_assignment!(user_id, pool_id, "active", "NULL")
+
+    assert [[2]] =
+             Repo.query!(
+               "SELECT COUNT(*) FROM operator_pool_assignments WHERE user_id = $1 AND pool_id = $2 AND status = 'revoked'",
+               [user_id, pool_id]
+             ).rows
+
+    assert [[1]] =
+             Repo.query!(
+               "SELECT COUNT(*) FROM operator_pool_assignments WHERE user_id = $1 AND pool_id = $2 AND status = 'active'",
+               [user_id, pool_id]
+             ).rows
+
+    assert count_rows("operator_pool_assignments", first_active_id) == 1
+    assert count_rows("operator_pool_assignments", first_revoked_id) == 1
+    assert count_rows("operator_pool_assignments", second_active_id) == 1
+  end
+
+  test "database allows multiple active owner memberships" do
+    first_owner_id = create_user!("owner-multiple-active-owner-1@example.com")
+    second_owner_id = create_user!("owner-multiple-active-owner-2@example.com")
+
+    first_membership_id =
+      create_membership!(first_owner_id, "instance_owner", "active", first_owner_id)
+
+    second_membership_id =
+      create_membership!(second_owner_id, "instance_owner", "active", first_owner_id)
+
+    assert [[2]] =
+             Repo.query!(
+               """
+               SELECT COUNT(*)
+               FROM memberships
+               WHERE role = 'instance_owner'
+                 AND status = 'active'
+                 AND id = ANY($1::uuid[])
+               """,
+               [[first_membership_id, second_membership_id]]
+             ).rows
+  end
+
+  test "legacy active instance admin membership backfill rewrites all rows to active owners" do
+    existing_owner_id = create_user!("owner-legacy-admin-existing-owner@example.com")
+    first_admin_id = create_user!("owner-legacy-admin-backfill-1@example.com")
+    second_admin_id = create_user!("owner-legacy-admin-backfill-2@example.com")
+
+    owner_membership_id =
+      create_membership!(existing_owner_id, "instance_owner", "active", existing_owner_id)
+
+    first_membership_id =
+      create_membership!(first_admin_id, "instance_admin", "active", existing_owner_id)
+
+    second_membership_id =
+      create_membership!(second_admin_id, "instance_admin", "active", existing_owner_id)
+
+    rewrite_legacy_instance_admin_memberships!()
+
+    rows =
+      Repo.query!(
+        """
+        SELECT id, role, status, revoked_at
+        FROM memberships
+        WHERE id = ANY($1::uuid[])
+        """,
+        [[first_membership_id, owner_membership_id, second_membership_id]]
+      ).rows
+
+    assert Enum.sort(rows) ==
+             Enum.sort([
+               [first_membership_id, "instance_owner", "active", nil],
+               [owner_membership_id, "instance_owner", "active", nil],
+               [second_membership_id, "instance_owner", "active", nil]
+             ])
+
+    assert [[0]] =
+             Repo.query!(
+               "SELECT COUNT(*) FROM memberships WHERE role = 'instance_admin' AND status = 'active'"
+             ).rows
+  end
+
+  test "membership role demotion blocks the final active owner" do
+    revoke_all_active_memberships!()
+    owner_id = create_user!("owner-final-role-demotion@example.com")
+    membership_id = create_membership!(owner_id, "instance_owner", "active", owner_id)
+    owner = Repo.get!(User, load_uuid!(owner_id))
+    membership = Repo.get!(Membership, load_uuid!(membership_id))
+
+    assert {:error, :last_active_owner} =
+             Pools.change_membership_role(Scope.for_user(owner, []), membership, "instance_admin")
+
+    assert %Membership{role: "instance_owner", status: "active"} = Repo.reload!(membership)
+
+    refute Repo.get_by(AuditEvent,
+             action: "membership.role_update",
+             actor_user_id: owner.id,
+             target_id: membership.id
+           )
+  end
+
+  test "membership revocation blocks the final active owner" do
+    revoke_all_active_memberships!()
+    owner_id = create_user!("owner-final-membership-revoke@example.com")
+    membership_id = create_membership!(owner_id, "instance_owner", "active", owner_id)
+    owner = Repo.get!(User, load_uuid!(owner_id))
+    membership = Repo.get!(Membership, load_uuid!(membership_id))
+
+    assert {:error, :last_active_owner} =
+             Pools.revoke_membership(Scope.for_user(owner, []), membership)
+
+    assert %Membership{role: "instance_owner", status: "active", revoked_at: nil} =
+             Repo.reload!(membership)
+
+    refute Repo.get_by(AuditEvent,
+             action: "membership.revoke",
+             actor_user_id: owner.id,
+             target_id: membership.id
+           )
+  end
+
+  test "membership owner demotion and revocation are deterministic and audited when another active owner remains" do
+    revoke_all_active_memberships!()
+    actor_id = create_user!("owner-membership-change-actor@example.com")
+    demoted_owner_id = create_user!("owner-membership-change-demoted@example.com")
+    revoked_owner_id = create_user!("owner-membership-change-revoked@example.com")
+
+    create_membership!(actor_id, "instance_owner", "active", actor_id)
+
+    demoted_membership_id =
+      create_membership!(demoted_owner_id, "instance_owner", "active", actor_id)
+
+    revoked_membership_id =
+      create_membership!(revoked_owner_id, "instance_owner", "active", actor_id)
+
+    actor = Repo.get!(User, load_uuid!(actor_id))
+    demoted_membership = Repo.get!(Membership, load_uuid!(demoted_membership_id))
+    revoked_membership = Repo.get!(Membership, load_uuid!(revoked_membership_id))
+    scope = Scope.for_user(actor, [])
+
+    assert {:ok, %Membership{} = demoted} =
+             Pools.change_membership_role(scope, demoted_membership, "instance_admin")
+
+    assert demoted.role == "instance_admin"
+    assert demoted.status == "active"
+
+    assert {:ok, %Membership{} = revoked} = Pools.revoke_membership(scope, revoked_membership)
+
+    assert revoked.role == "instance_owner"
+    assert revoked.status == "revoked"
+    refute is_nil(revoked.revoked_at)
+
+    assert Repo.get_by(AuditEvent,
+             action: "membership.role_update",
+             actor_user_id: actor.id,
+             target_id: demoted_membership.id
+           )
+
+    assert Repo.get_by(AuditEvent,
+             action: "membership.revoke",
+             actor_user_id: actor.id,
+             target_id: revoked_membership.id
+           )
+  end
+
+  test "legacy admin backfill keeps an existing same-user active owner grant" do
+    user_id = create_user!("owner-legacy-admin-duplicate-owner@example.com")
+
+    owner_membership_id =
+      create_membership!(user_id, "instance_owner", "active", user_id)
+
+    duplicate_admin_membership_id =
+      create_membership!(user_id, "instance_admin", "active", user_id)
+
+    rewrite_legacy_instance_admin_memberships!()
+
+    rows =
+      Repo.query!(
+        """
+        SELECT id, role, status, revoked_at
+        FROM memberships
+        WHERE id = ANY($1::uuid[])
+        """,
+        [[owner_membership_id, duplicate_admin_membership_id]]
+      ).rows
+      |> Map.new(fn [id, role, status, revoked_at] -> {id, {role, status, revoked_at}} end)
+
+    assert {"instance_owner", "active", nil} = rows[owner_membership_id]
+    assert {"instance_owner", "revoked", revoked_at} = rows[duplicate_admin_membership_id]
+    refute is_nil(revoked_at)
+
+    assert [[1]] =
+             Repo.query!(
+               """
+               SELECT COUNT(*)
+               FROM memberships
+               WHERE user_id = $1
+                 AND role = 'instance_owner'
+                 AND status = 'active'
+               """,
+               [user_id]
+             ).rows
+
+    assert [[0]] =
+             Repo.query!(
+               """
+               SELECT COUNT(*)
+               FROM memberships
+               WHERE user_id = $1
+                 AND role = 'instance_admin'
+                 AND status = 'active'
+               """,
+               [user_id]
+             ).rows
+  end
+
+  defp load_uuid!(uuid), do: Ecto.UUID.load!(uuid)
+
+  defp revoke_all_active_memberships! do
+    Repo.query!("""
+    UPDATE memberships
+    SET status = 'revoked',
+        revoked_at = COALESCE(revoked_at, now())
+    WHERE status = 'active'
+    """)
   end
 
   defp create_user!(email) do
@@ -373,6 +646,60 @@ defmodule CodexPooler.DBInvariantsTest do
       ).rows
 
     id
+  end
+
+  defp create_operator_pool_assignment!(user_id, pool_id, status, revoked_at_sql) do
+    [[id]] =
+      Repo.query!(
+        """
+        INSERT INTO operator_pool_assignments (
+          user_id, pool_id, status, created_by_user_id, revoked_at
+        ) VALUES ($1, $2, $3, $4, #{revoked_at_sql})
+        RETURNING id
+        """,
+        [user_id, pool_id, status, user_id]
+      ).rows
+
+    id
+  end
+
+  defp create_membership!(user_id, role, status, created_by_user_id) do
+    [[id]] =
+      Repo.query!(
+        """
+        INSERT INTO memberships (user_id, role, status, created_by_user_id)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        """,
+        [user_id, role, status, created_by_user_id]
+      ).rows
+
+    id
+  end
+
+  defp rewrite_legacy_instance_admin_memberships! do
+    Repo.query!("DROP INDEX IF EXISTS public.memberships_single_instance_owner_active_uq")
+
+    Repo.query!("""
+    UPDATE public.memberships legacy_admin
+    SET status = 'revoked',
+        revoked_at = COALESCE(legacy_admin.revoked_at, now())
+    WHERE legacy_admin.role = 'instance_admin'
+      AND legacy_admin.status = 'active'
+      AND EXISTS (
+        SELECT 1
+        FROM public.memberships active_owner
+        WHERE active_owner.user_id = legacy_admin.user_id
+          AND active_owner.role = 'instance_owner'
+          AND active_owner.status = 'active'
+      )
+    """)
+
+    Repo.query!("""
+    UPDATE public.memberships membership
+    SET role = 'instance_owner'
+    WHERE membership.role = 'instance_admin'
+    """)
   end
 
   defp create_pricing_snapshot!(suffix) do

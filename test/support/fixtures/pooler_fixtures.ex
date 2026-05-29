@@ -16,8 +16,7 @@ defmodule CodexPooler.PoolerFixtures do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
   alias CodexPooler.Catalog.Model
-  alias CodexPooler.Pools.Membership
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -38,6 +37,24 @@ defmodule CodexPooler.PoolerFixtures do
       updated_at: now,
       disabled_at: Map.get(attrs, :disabled_at)
     }
+    |> Repo.insert!()
+  end
+
+  def operator_pool_assignment_fixture(%User{} = user, %Pool{} = pool, attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    now = now()
+    status = Map.get(attrs, :status, "active")
+
+    %OperatorPoolAssignment{}
+    |> OperatorPoolAssignment.changeset(%{
+      user_id: Map.get(attrs, :user_id, user.id),
+      pool_id: Map.get(attrs, :pool_id, pool.id),
+      status: status,
+      created_by_user_id: Map.get(attrs, :created_by_user_id, user.id),
+      created_at: Map.get(attrs, :created_at, now),
+      updated_at: Map.get(attrs, :updated_at, now),
+      revoked_at: Map.get(attrs, :revoked_at, if(status == "revoked", do: now))
+    })
     |> Repo.insert!()
   end
 
