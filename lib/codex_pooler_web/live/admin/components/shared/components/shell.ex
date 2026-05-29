@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.OperatorComponents
 
   @admin_nav_items [
@@ -97,7 +98,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   def admin_shell(assigns) do
     assigns =
       assigns
-      |> assign(:admin_nav_items, @admin_nav_items)
+      |> assign(:admin_nav_items, admin_nav_items(assigns.current_scope))
       |> assign(:admin_footer_nav_items, @admin_footer_nav_items)
       |> assign(:admin_identity, admin_identity(assigns.current_scope))
       |> assign(:app_version, app_version())
@@ -286,6 +287,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content md:justify-start md:px-4 md:text-xs",
       active? && "!border-l-primary bg-base-300 text-base-content opacity-100"
     ]
+  end
+
+  defp admin_nav_items(current_scope) do
+    if Pools.owner?(current_scope) do
+      @admin_nav_items
+    else
+      Enum.reject(@admin_nav_items, &(&1.key in [:jobs, :system]))
+    end
   end
 
   defp admin_identity(%{user: %{display_name: display_name, email: email}}) do

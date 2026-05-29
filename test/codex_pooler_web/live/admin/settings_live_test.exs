@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.UserAuth
 
-  import CodexPooler.AccountsFixtures, only: [valid_user_password: 0]
+  import CodexPooler.AccountsFixtures, only: [operator_fixture: 2, valid_user_password: 0]
 
   setup :register_and_log_in_user
 
@@ -43,6 +43,30 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     refute has_element?(view, "#system-settings-panel")
     refute has_element?(view, "#instance-settings-form")
     refute has_element?(view, "#instance-settings-gateway")
+  end
+
+  test "instance admins keep self-service settings access", %{scope: scope} do
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "settings-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/settings?tab=account")
+
+    assert has_element?(view, "#admin-settings-live")
+    assert has_element?(view, "#admin-nav-settings[aria-current='page']")
+    assert has_element?(view, "#settings-tab-account[aria-selected='true']")
+    assert has_element?(view, "#settings-account-form")
+    assert has_element?(view, "#settings-mcp-panel")
+    refute has_element?(view, "#system-settings-panel")
+    refute has_element?(view, "#admin-nav-jobs")
+    refute has_element?(view, "#admin-nav-system")
   end
 
   test "renders account and security tabs through patch params", %{conn: conn, user: user} do

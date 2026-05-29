@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
@@ -34,6 +35,105 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     end)
 
     :ok
+  end
+
+  test "denies instance admins before loading global settings or MCP counts", %{scope: scope} do
+    assert {:ok, _settings} =
+             InstanceSettings.update(InstanceSettings.ensure_singleton!(), %{
+               "files" => %{"upload_ttl_seconds" => 777}
+             })
+
+    owner_settings = InstanceSettings.get!()
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "system-denied-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, html} = live(admin_conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#admin-system-owner-denied",
+             "System settings require owner access"
+           )
+
+    refute has_element?(view, "#system-workspace")
+    refute has_element?(view, "#system-settings-panel")
+    refute has_element?(view, "#instance-settings-gateway-form")
+    refute has_element?(view, "#admin-nav-system")
+    refute has_element?(view, "#admin-nav-jobs")
+    refute html =~ "777"
+    refute html =~ "MCP keys exist in this system"
+
+    state = :sys.get_state(view.pid)
+    refute state.socket.assigns.owner_authorized?
+    refute Map.has_key?(state.socket.assigns, :settings)
+    refute Map.has_key?(state.socket.assigns, :mcp_key_count)
+
+    assert InstanceSettings.get!().lock_version == owner_settings.lock_version
+  end
+
+  test "forged instance-admin system events deny without global side effects", %{scope: scope} do
+    Application.put_env(:codex_pooler, :dev_features_enabled, true)
+
+    assert {:ok, settings} =
+             InstanceSettings.update(InstanceSettings.ensure_singleton!(), %{
+               "files" => %{"upload_ttl_seconds" => 321},
+               "mcp" => %{"enabled" => false}
+             })
+
+    pool_count = Repo.aggregate(Pool, :count)
+    pricing_snapshot_count = Repo.aggregate(PricingSnapshot, :count)
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "system-forged-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/system?#{%{"tab" => "development"}}")
+
+    admin_audit_count =
+      Repo.aggregate(from(event in AuditEvent, where: event.actor_user_id == ^admin.id), :count)
+
+    for {event, params} <- [
+          {"validate_instance_settings",
+           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"save_instance_settings",
+           %{"instance_settings" => %{"files" => %{"upload_ttl_seconds" => "999"}}}},
+          {"autosave_instance_settings",
+           %{"instance_settings" => %{"mcp" => %{"enabled" => "true"}}}},
+          {"test_smtp", %{}},
+          {"import_sample_data", %{}},
+          {"import_pricing_catalog", %{}}
+        ] do
+      html = render_click(view, event, params)
+      assert html =~ "Only instance owners can manage system settings"
+      assert has_element?(view, "#admin-system-owner-denied")
+    end
+
+    current = InstanceSettings.get!()
+    assert current.lock_version == settings.lock_version
+    assert current.files.upload_ttl_seconds == 321
+    assert current.mcp.enabled == false
+    assert Repo.aggregate(Pool, :count) == pool_count
+    assert Repo.aggregate(PricingSnapshot, :count) == pricing_snapshot_count
+
+    assert Repo.aggregate(
+             from(event in AuditEvent, where: event.actor_user_id == ^admin.id),
+             :count
+           ) ==
+             admin_audit_count
   end
 
   test "renders system setting tabs and scopes cards to the selected tab", %{conn: conn} do
@@ -265,7 +365,11 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert html =~ "Sample data imported"
     assert has_element?(view, "#instance-settings-development-action-status", "2 pools")
-    assert Repo.aggregate(Pool, :count) == 2
+
+    assert Repo.aggregate(
+             from(pool in Pool, where: pool.slug in ["dev-primary", "dev-disabled"]),
+             :count
+           ) == 2
   end
 
   test "imports pricing catalog from the development action using the saved catalog URL", %{

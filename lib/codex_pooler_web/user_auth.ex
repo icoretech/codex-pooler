@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.UserAuth do
     if token = get_session(conn, @session_key) do
       case Accounts.authenticate_session_token(token) do
         {user, _session_inserted_at} ->
-          assign(conn, :current_scope, Scope.for_user(user, Accounts.roles_for_user(user)))
+          assign(conn, :current_scope, Scope.for_user(user))
 
         nil ->
           assign(conn, :current_scope, Scope.for_user(nil))
@@ -153,7 +153,7 @@ defmodule CodexPoolerWeb.UserAuth do
       Phoenix.Component.assign_new(socket, :current_scope, fn ->
         with token when is_binary(token) <- session[Atom.to_string(@session_key)],
              {user, _session_inserted_at} <- Accounts.authenticate_session_token(token) do
-          Scope.for_user(user, Accounts.roles_for_user(user))
+          Scope.for_user(user)
         else
           _ -> Scope.for_user(nil)
         end
@@ -235,7 +235,7 @@ defmodule CodexPoolerWeb.UserAuth do
     |> renew_session()
     |> put_session(@session_key, token)
     |> put_session(:live_socket_id, SessionNotifier.user_session_topic(token))
-    |> assign(:current_scope, Scope.for_user(user, Accounts.roles_for_user(user)))
+    |> assign(:current_scope, Scope.for_user(user))
   end
 
   defp maybe_store_return_to(%{method: "GET"} = conn),
