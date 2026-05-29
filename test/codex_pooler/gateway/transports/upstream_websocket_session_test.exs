@@ -135,6 +135,52 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSessionTest 
     assert_receive {:fake_upstream_chunk_sent, 3}, 1_000
   end
 
+  test "non-101 websocket upgrade failure preserves the leaf reason and drops the body" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_error(
+          %{
+            "error" => %{
+              "code" => "upgrade_rejected",
+              "message" => "upgrade body sentinel"
+            }
+          },
+          status: 403,
+          headers: [{"x-upstream-status", "upgrade-denied-sentinel"}]
+        )
+      )
+
+    request = %Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      headers: [{"authorization", "Bearer synthetic-upstream-token"}],
+      payload: "{}",
+      timeouts: @timeouts,
+      writer: fn _text -> :ok end,
+      message_mapper: nil
+    }
+
+    result = UpstreamWebSocketSession.request_once(request)
+
+    assert {:error,
+            %{
+              body: "",
+              headers: [],
+              reason: {:websocket_upgrade_failed, 403, reason_headers},
+              websocket_frame_headers: %{}
+            }} = result
+
+    assert [
+             {"date", _},
+             {"content-length", _},
+             {"vary", _},
+             {"cache-control", _},
+             {"x-upstream-status", "upgrade-denied-sentinel"},
+             {"content-type", _}
+           ] = reason_headers
+
+    refute inspect({reason_headers, result}) =~ "upgrade body sentinel"
+  end
+
   defp start_upstream(mode) do
     {:ok, upstream} = FakeUpstream.start_link(mode)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
