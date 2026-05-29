@@ -139,7 +139,7 @@ defmodule CodexPooler.Accounting.Metadata do
           retry_count: attr(attrs, :retry_count) || 0,
           last_error_code: attr(attrs, :last_error_code),
           upstream_account_label: identity.account_label,
-          upstream_account_email: email_label_or_nil(identity.account_label),
+          upstream_account_email: identity_account_email(identity),
           upstream_account_plan_label: identity.plan_label,
           upstream_account_plan_family: identity.plan_family
         }
@@ -169,7 +169,7 @@ defmodule CodexPooler.Accounting.Metadata do
 
   defp metadata_identity_email(attrs) do
     case attr(attrs, :upstream_identity) do
-      %UpstreamIdentity{} = identity -> email_label_or_nil(identity.account_label)
+      %UpstreamIdentity{} = identity -> identity_account_email(identity)
       _value -> attr(attrs, :upstream_account_email) |> blank_to_nil() |> email_label_or_nil()
     end
   end
@@ -179,6 +179,12 @@ defmodule CodexPooler.Accounting.Metadata do
       %UpstreamIdentity{} = identity -> identity.plan_label
       _value -> blank_to_nil(attr(attrs, :upstream_account_plan_label))
     end
+  end
+
+  defp identity_account_email(%UpstreamIdentity{} = identity) do
+    identity.account_email
+    |> blank_to_nil()
+    |> email_label_or_nil()
   end
 
   defp metadata_identity_plan_family(attrs) do

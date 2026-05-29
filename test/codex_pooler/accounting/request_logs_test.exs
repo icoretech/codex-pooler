@@ -1033,7 +1033,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
-        account_label: "control-plane-upstream@example.com",
+        account_label: "Control plane upstream",
+        account_email: "control-plane-upstream@example.com",
         assignment_label: "Control plane assignment"
       })
 
@@ -1046,7 +1047,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
         correlation_id: "control-plane-request-log",
         response_status_code: 502,
         upstream_account_label: identity.account_label,
-        upstream_account_email: identity.account_label,
+        upstream_account_email: identity.account_email,
         upstream_account_plan_label: identity.plan_label,
         upstream_account_plan_family: identity.plan_family,
         request_metadata: %{
@@ -1097,7 +1098,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert log.endpoint == "/backend-api/codex/safety/arc"
     assert log.response_status_code == 502
     assert log.assignment_label == "Control plane assignment"
-    assert log.upstream_identity_label == "control-plane-upstream@example.com"
+    assert log.upstream_identity_label == "Control plane upstream"
     assert log.metadata["endpoint"] == "/backend-api/codex/safety/arc"
     assert log.metadata["routing"]["route_class"] == "proxy_control"
     assert log.metadata["routing"]["selected_assignment_id"] == assignment.id

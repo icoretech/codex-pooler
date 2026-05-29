@@ -10,7 +10,8 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
     test "request snapshot keeps original upstream account fields after identity mutation" do
       setup =
         accounting_setup(%{
-          account_label: "operator@example.com",
+          account_label: "Operator account",
+          account_email: "operator@example.com",
           plan_label: "Pro",
           plan_family: "paid"
         })
@@ -40,6 +41,7 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
       setup.identity
       |> Ecto.Changeset.change(%{
         account_label: "changed@example.com",
+        account_email: "changed@example.com",
         plan_label: "Team",
         updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
       })
@@ -47,7 +49,7 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
 
       persisted = Repo.get!(CodexPooler.Accounting.Request, reserved.request.id)
 
-      assert persisted.upstream_account_label == "operator@example.com"
+      assert persisted.upstream_account_label == "Operator account"
       assert persisted.upstream_account_email == "operator@example.com"
       assert persisted.upstream_account_plan_label == "Pro"
       assert persisted.upstream_account_plan_family == "paid"
@@ -56,7 +58,8 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
     test "request snapshot keeps attempt-time identity when identity mutates before finalization" do
       setup =
         accounting_setup(%{
-          account_label: "operator@example.com",
+          account_label: "Operator account",
+          account_email: "operator@example.com",
           plan_label: "Pro",
           plan_family: "paid"
         })
@@ -74,6 +77,7 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
       setup.identity
       |> Ecto.Changeset.change(%{
         account_label: "changed@example.com",
+        account_email: "changed@example.com",
         plan_label: "Team",
         plan_family: "enterprise",
         updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -89,7 +93,7 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
                )
 
       persisted = Repo.get!(CodexPooler.Accounting.Request, reserved.request.id)
-      assert persisted.upstream_account_label == "operator@example.com"
+      assert persisted.upstream_account_label == "Operator account"
       assert persisted.upstream_account_email == "operator@example.com"
       assert persisted.upstream_account_plan_label == "Pro"
       assert persisted.upstream_account_plan_family == "paid"
@@ -151,7 +155,13 @@ defmodule CodexPooler.Accounting.RequestSnapshotTest do
     end
 
     test "request snapshot stores model settings with effective tier preferring actual tier" do
-      setup = accounting_setup(%{account_label: "operator@example.com", plan_label: "Pro"})
+      setup =
+        accounting_setup(%{
+          account_label: "Operator account",
+          account_email: "operator@example.com",
+          plan_label: "Pro"
+        })
+
       raw_secret = "sk-cxp-123456789abc-SECRET-token"
       raw_prompt = "keep this prompt out of snapshots"
 

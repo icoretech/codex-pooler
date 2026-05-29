@@ -88,7 +88,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
       %UpstreamIdentity{} = identity ->
         %{
           upstream_account_label: normalize_snapshot_value(identity.account_label),
-          upstream_account_email: email_label_or_nil(identity.account_label),
+          upstream_account_email: normalize_snapshot_email(identity.account_email),
           upstream_account_plan_label: normalize_snapshot_value(identity.plan_label),
           upstream_account_plan_family: normalize_snapshot_value(identity.plan_family)
         }
@@ -98,12 +98,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
     end
   end
 
-  defp email_label_or_nil(label) when is_binary(label) do
-    normalized = String.trim(label)
-    if String.contains?(normalized, "@"), do: normalized, else: nil
+  defp normalize_snapshot_email(email) when is_binary(email) do
+    email
+    |> normalize_snapshot_value()
+    |> case do
+      nil -> nil
+      normalized -> if(String.contains?(normalized, "@"), do: normalized, else: nil)
+    end
   end
 
-  defp email_label_or_nil(_label), do: nil
+  defp normalize_snapshot_email(_email), do: nil
 
   defp maybe_put_snapshot_attr(attrs, _key, existing, _incoming)
        when is_binary(existing) and existing != "",

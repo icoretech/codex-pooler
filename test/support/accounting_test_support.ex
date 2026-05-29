@@ -27,6 +27,7 @@ defmodule CodexPooler.AccountingTestSupport do
     %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
         account_label: Map.get(pricing_attrs, :account_label, "Primary upstream"),
+        account_email: Map.get(pricing_attrs, :account_email),
         plan_label: Map.get(pricing_attrs, :plan_label),
         plan_family: Map.get(pricing_attrs, :plan_family)
       })
