@@ -116,6 +116,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     ])
     |> Map.put("pool", pool_text(item))
     |> Map.put("retries", Map.get(item, "retry_count") || 0)
+    |> maybe_put_continuity_denial_text(Map.get(item, "errors"))
     |> maybe_put_debug_text(Map.get(item, "debug"))
   end
 
@@ -146,6 +147,11 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       {"turn_status", "turn_status"},
       {"terminal_state", "terminal"},
       {"failure_code", "failure"},
+      {"denial_family", "denial_family"},
+      {"continuity_family", "continuity_family"},
+      {"upstream_lifecycle_family", "lifecycle"},
+      {"token_refresh_reason_code_preview", "refresh_reason"},
+      {"operator_action", "action"},
       {"attempt_count", "attempts"}
     ]
   end
@@ -195,6 +201,29 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   end
 
   defp maybe_put_debug_text(row, _debug), do: row
+
+  defp maybe_put_continuity_denial_text(row, errors) when is_list(errors) do
+    case Enum.find(errors, &(Map.get(&1, "kind") == "continuity_denial")) do
+      nil ->
+        row
+
+      denial ->
+        row
+        |> maybe_put_value("denial_family", Map.get(denial, "denial_family"))
+        |> maybe_put_value("continuity_family", Map.get(denial, "continuity_family"))
+        |> maybe_put_value(
+          "upstream_lifecycle_family",
+          Map.get(denial, "upstream_lifecycle_family")
+        )
+        |> maybe_put_value(
+          "token_refresh_reason_code_preview",
+          Map.get(denial, "token_refresh_reason_code_preview")
+        )
+        |> maybe_put_value("operator_action", Map.get(denial, "operator_action"))
+    end
+  end
+
+  defp maybe_put_continuity_denial_text(row, _errors), do: row
 
   defp maybe_put_continuity_text(row, continuity) do
     row

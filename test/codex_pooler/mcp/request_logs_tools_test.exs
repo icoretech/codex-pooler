@@ -11,6 +11,8 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
   alias CodexPooler.MCP.Tools.LogMetadata
   alias CodexPooler.Repo
 
+  @pinned_continuation_operator_action "reauthenticate the pinned upstream account and restart the client without continuation anchors"
+
   setup do
     reset_bootstrap_state_fixture!()
     Repo.delete_all(OperatorMCPKey)
@@ -1239,6 +1241,127 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(missing)
   end
 
+  test "request-log tools expose pinned reauth denial metadata without unsafe anchors", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-pinned-denial", name: "MCP Pinned Denial"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP pinned key"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Pinned upstream",
+        assignment_label: "Pinned assignment"
+      })
+
+    request = pinned_denial_request_fixture(pool, api_key, assignment, identity)
+
+    assert {:ok, list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert list_result["isError"] == false
+    assert [%{"type" => "text", "text" => list_text}] = list_result["content"]
+    assert [list_item] = list_result["structuredContent"]["items"]
+    assert list_item["id"] == request.id
+    assert_pinned_denial_mcp_item(list_item, assignment, identity)
+    assert list_text =~ "denial_family=pinned_continuation_reauth"
+    assert list_text =~ "continuity_family=pinned_codex_session"
+    assert list_text =~ "lifecycle=reauth_required"
+    assert list_text =~ "refresh_reason=refresh_token_revoked"
+    assert list_text =~ "action=#{@pinned_continuation_operator_action}"
+    assert_no_pinned_denial_mcp_leaks(list_result)
+    assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+
+    assert {:ok, get_result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert get_result["isError"] == false
+    assert [%{"type" => "text", "text" => get_text}] = get_result["content"]
+    assert %{"status" => "ok", "item" => get_item} = get_result["structuredContent"]
+    assert get_item["id"] == request.id
+    assert_pinned_denial_mcp_item(get_item, assignment, identity)
+    assert get_text =~ "denial_family=pinned_continuation_reauth"
+    assert get_text =~ "action=#{@pinned_continuation_operator_action}"
+    assert_no_pinned_denial_mcp_leaks(get_result)
+    assert :ok = Redaction.assert_mcp_output_safe!(get_result)
+  end
+
+  test "scoped admin request-log tools keep pinned denial metadata inside assigned pools", %{
+    user: owner
+  } do
+    visible_pool = pool_fixture(%{slug: "mcp-pinned-visible", name: "MCP Pinned Visible"})
+    hidden_pool = pool_fixture(%{slug: "mcp-pinned-hidden", name: "MCP Pinned Hidden"})
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin = admin |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: owner.id)
+
+    %{api_key: visible_key} = active_api_key_fixture(visible_pool)
+    %{api_key: hidden_key} = active_api_key_fixture(hidden_pool)
+
+    %{identity: visible_identity, assignment: visible_assignment} =
+      upstream_assignment_fixture(visible_pool)
+
+    %{identity: hidden_identity, assignment: hidden_assignment} =
+      upstream_assignment_fixture(hidden_pool)
+
+    visible_request =
+      pinned_denial_request_fixture(
+        visible_pool,
+        visible_key,
+        visible_assignment,
+        visible_identity
+      )
+
+    hidden_request =
+      pinned_denial_request_fixture(hidden_pool, hidden_key, hidden_assignment, hidden_identity)
+
+    assert {:ok, _operator_settings} = MCP.set_operator_mcp_enabled(admin, true)
+
+    assert {:ok, %{raw_token: raw_token}} =
+             MCP.create_operator_token(admin, %{label: "Scoped pinned MCP"})
+
+    assert {:ok, admin_auth} = MCP.authenticate_token(raw_token)
+
+    assert {:ok, list_result} =
+             ToolDispatch.call("codex_pooler_list_request_logs", %{"limit" => 10}, %{
+               auth: admin_auth
+             })
+
+    assert list_result["isError"] == false
+    assert [presented] = list_result["structuredContent"]["items"]
+    assert presented["id"] == visible_request.id
+    assert_pinned_denial_mcp_item(presented, visible_assignment, visible_identity)
+
+    hidden_dump = inspect(list_result)
+    refute hidden_dump =~ hidden_request.id
+    refute hidden_dump =~ hidden_assignment.id
+    refute hidden_dump =~ hidden_identity.id
+
+    assert {:ok, hidden_result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => hidden_request.id}, %{
+               auth: admin_auth
+             })
+
+    assert hidden_result["structuredContent"] == %{
+             "status" => "not_found",
+             "kind" => "request_log",
+             "item" => nil,
+             "candidates" => [],
+             "message" => "request_log selector did not match"
+           }
+
+    refute inspect(hidden_result) =~ hidden_request.id
+    refute inspect(hidden_result) =~ hidden_assignment.id
+    refute inspect(hidden_result) =~ hidden_identity.id
+    assert :ok = Redaction.assert_mcp_output_safe!(list_result)
+    assert :ok = Redaction.assert_mcp_output_safe!(hidden_result)
+  end
+
   test "scoped admin request-log tools return assigned-pool logs only", %{user: owner} do
     visible_pool =
       pool_fixture(%{slug: "mcp-visible-request-logs", name: "MCP Visible Request Logs"})
@@ -1297,6 +1420,113 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
 
     assert :ok = Redaction.assert_mcp_output_safe!(list_result)
     assert :ok = Redaction.assert_mcp_output_safe!(hidden_result)
+  end
+
+  defp pinned_denial_request_fixture(pool, api_key, assignment, identity) do
+    request_fixture(%{pool: pool, api_key: api_key}, %{
+      requested_model: "gpt-pinned-denial-mcp",
+      endpoint: "/backend-api/codex/responses",
+      transport: "http_json",
+      status: "rejected",
+      usage_status: "not_applicable",
+      correlation_id: "mcp-pinned-denial-#{System.unique_integer([:positive])}",
+      response_status_code: 503,
+      last_error_code: "pinned_continuation_reauth_required",
+      request_metadata: %{
+        "gateway_denial" => %{
+          "code" => "pinned_continuation_reauth_required",
+          "message" => "restart with full visible context"
+        },
+        "continuity_denial" =>
+          continuity_denial_metadata(assignment, identity)
+          |> Map.merge(%{
+            "previous_response_id" => "resp_raw_anchor_mcp",
+            "previous-response-id" => %{
+              "id" => "resp_raw_nested_map_anchor_mcp",
+              "preview" => "resp_raw_nested_map_preview_mcp"
+            },
+            "previous response id" => [%{"id" => "resp_raw_nested_list_anchor_mcp"}],
+            "prompt" => Redaction.forbidden_sentinel!(:prompt),
+            "request_body" => Redaction.forbidden_sentinel!(:request_body),
+            "response_body" => Redaction.forbidden_sentinel!(:response_body),
+            "raw_idempotency_key" => Redaction.forbidden_sentinel!(:raw_idempotency_key),
+            "access_token" => Redaction.forbidden_sentinel!(:access_token),
+            "refresh_token" => Redaction.forbidden_sentinel!(:refresh_token),
+            "cookie" => Redaction.forbidden_sentinel!(:cookies),
+            "auth_json" => Redaction.forbidden_sentinel!(:upstream_auth_json),
+            "provider_payload" => Redaction.forbidden_sentinel!(:provider_payload),
+            "websocket_frame" => Redaction.forbidden_sentinel!(:websocket_frame)
+          })
+      }
+    })
+  end
+
+  defp continuity_denial_metadata(assignment, identity) do
+    %{
+      "denial_family" => "pinned_continuation_reauth",
+      "continuity_family" => "pinned_codex_session",
+      "upstream_lifecycle_family" => "reauth_required",
+      "token_refresh_reason_code_preview" => "refresh_token_revoked",
+      "pool_upstream_assignment_id" => assignment.id,
+      "upstream_identity_id" => identity.id,
+      "operator_action" => @pinned_continuation_operator_action
+    }
+  end
+
+  defp assert_pinned_denial_mcp_item(item, assignment, identity) do
+    assert item["denial_reason"] == "pinned_continuation_reauth_required"
+
+    continuity_denial = item["metadata"]["continuity_denial"]
+    assert continuity_denial["denial_family"] == "pinned_continuation_reauth"
+    assert continuity_denial["continuity_family"] == "pinned_codex_session"
+    assert continuity_denial["upstream_lifecycle_family"] == "reauth_required"
+    assert continuity_denial["token_refresh_reason_code_preview"] == "refresh_token_revoked"
+    assert continuity_denial["pool_upstream_assignment_id"] == assignment.id
+    assert continuity_denial["upstream_identity_id"] == identity.id
+    assert continuity_denial["operator_action"] == @pinned_continuation_operator_action
+    refute Map.has_key?(continuity_denial, "previous_response_id")
+    refute Map.has_key?(continuity_denial, "previous-response-id")
+    refute Map.has_key?(continuity_denial, "previous response id")
+    refute Map.has_key?(continuity_denial, "request_body")
+    refute Map.has_key?(continuity_denial, "response_body")
+    refute Map.has_key?(continuity_denial, "raw_idempotency_key")
+    refute Map.has_key?(continuity_denial, "access_token")
+    refute Map.has_key?(continuity_denial, "refresh_token")
+    refute Map.has_key?(continuity_denial, "cookie")
+    refute Map.has_key?(continuity_denial, "auth_json")
+    refute Map.has_key?(continuity_denial, "provider_payload")
+    refute Map.has_key?(continuity_denial, "websocket_frame")
+
+    assert Enum.any?(item["errors"], fn error ->
+             error["kind"] == "continuity_denial" and
+               error["code"] == "pinned_continuation_reauth" and
+               error["denial_family"] == "pinned_continuation_reauth" and
+               error["continuity_family"] == "pinned_codex_session" and
+               error["upstream_lifecycle_family"] == "reauth_required" and
+               error["token_refresh_reason_code_preview"] == "refresh_token_revoked" and
+               error["pool_upstream_assignment_id"] == assignment.id and
+               error["upstream_identity_id"] == identity.id and
+               error["operator_action"] == @pinned_continuation_operator_action
+           end)
+  end
+
+  defp assert_no_pinned_denial_mcp_leaks(result) do
+    inspected = inspect(result)
+
+    refute inspected =~ "resp_raw_anchor_mcp"
+    refute inspected =~ "resp_raw_nested_map_anchor_mcp"
+    refute inspected =~ "resp_raw_nested_map_preview_mcp"
+    refute inspected =~ "resp_raw_nested_list_anchor_mcp"
+    refute inspected =~ Redaction.forbidden_sentinel!(:prompt)
+    refute inspected =~ Redaction.forbidden_sentinel!(:request_body)
+    refute inspected =~ Redaction.forbidden_sentinel!(:response_body)
+    refute inspected =~ Redaction.forbidden_sentinel!(:raw_idempotency_key)
+    refute inspected =~ Redaction.forbidden_sentinel!(:access_token)
+    refute inspected =~ Redaction.forbidden_sentinel!(:refresh_token)
+    refute inspected =~ Redaction.forbidden_sentinel!(:cookies)
+    refute inspected =~ Redaction.forbidden_sentinel!(:upstream_auth_json)
+    refute inspected =~ Redaction.forbidden_sentinel!(:provider_payload)
+    refute inspected =~ Redaction.forbidden_sentinel!(:websocket_frame)
   end
 
   defp failed_debug_request_fixture(pool, api_key, assignment, attrs) do

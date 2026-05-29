@@ -6,14 +6,16 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
   @dangerous_key_fragments ~w(
     api_key apikey authorization bearer token access_token refresh_token upstream_token
     upstream_secret cookie set_cookie secret password prompt messages input output completion
-    raw_request raw_response request_body response_body multipart_body websocket_frame body payload
+    raw_request raw_response request_body response_body multipart_body body payload
     file filename audio image transcript transcription upload_url download_url sas_url signed_url
     idempotency_key raw_idempotency_key audit_before_blob audit_after_blob raw_headers headers
     before after raw_before raw_after auth_json metrics_hmac metrics_fingerprint smtp_secret
     session_token totp_secret recovery_secret temporary_password pii_sentinel
   )
 
+  @dangerous_exact_keys MapSet.new(~w(previous_response_id websocket_frame))
   @safe_content_keys MapSet.new(~w(content_type request_content_type response_content_type))
+  @safe_dangerous_keys MapSet.new(~w(token_refresh_reason_code_preview))
 
   @spec safe_metadata(term()) :: map()
   def safe_metadata(value) when is_map(value), do: value |> scrub_value(nil) |> safe_value()
@@ -92,7 +94,9 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
     normalized = normalize_key(key)
 
     normalized not in @safe_content_keys and
-      Enum.any?(@dangerous_key_fragments, &String.contains?(normalized, &1))
+      not MapSet.member?(@safe_dangerous_keys, normalized) and
+      (MapSet.member?(@dangerous_exact_keys, normalized) or
+         Enum.any?(@dangerous_key_fragments, &String.contains?(normalized, &1)))
   end
 
   defp forbidden_sentinel?(value) do
