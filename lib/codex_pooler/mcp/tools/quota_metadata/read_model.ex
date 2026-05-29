@@ -3,6 +3,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.MCP.PrivacyMatrix
+  alias CodexPooler.Pools
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -54,10 +55,12 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
     offset = bounded_offset(Map.get(opts, :offset) || Map.get(opts, "offset"))
     timestamp = Map.get(opts, :at) || Map.get(opts, "at") || now()
 
+    visible_pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
+
     accounts =
       scope
       |> Upstreams.list_visible_upstream_identities()
-      |> Enum.map(&account_summary(&1, timestamp))
+      |> Enum.map(&account_summary(&1, timestamp, visible_pool_ids))
       |> Enum.sort_by(&account_sort_key/1)
 
     %{
@@ -78,6 +81,10 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
   @spec account_summary(UpstreamIdentity.t(), DateTime.t()) :: map()
   def account_summary(%UpstreamIdentity{} = identity, timestamp \\ now()) do
+    account_summary(identity, timestamp, :all)
+  end
+
+  defp account_summary(%UpstreamIdentity{} = identity, timestamp, visible_pool_ids) do
     all_windows =
       identity
       |> Quota.Windows.list_quota_windows()
@@ -92,7 +99,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
       stored_account_id: present_string(identity.chatgpt_account_id),
       status: identity.status,
       plan_family: present_string(identity.plan_family),
-      assignment_summary: assignment_summary(identity),
+      assignment_summary: assignment_summary(identity, visible_pool_ids),
       quota_summary: quota_summary(all_windows),
       quota_windows: returned_windows
     }
@@ -125,8 +132,25 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
     }
   end
 
-  defp assignment_summary(%UpstreamIdentity{} = identity) do
+  defp assignment_summary(%UpstreamIdentity{} = identity, :all) do
     assignments = Upstreams.list_pool_assignments_for_identity(identity)
+
+    assignment_summary_from(identity, assignments)
+  end
+
+  defp assignment_summary(%UpstreamIdentity{} = identity, visible_pool_ids) do
+    visible_pool_ids = MapSet.new(visible_pool_ids)
+
+    assignments =
+      identity
+      |> Upstreams.list_pool_assignments_for_identity()
+      |> Enum.reject(&(&1.status == "deleted"))
+      |> Enum.filter(&MapSet.member?(visible_pool_ids, &1.pool_id))
+
+    assignment_summary_from(identity, assignments)
+  end
+
+  defp assignment_summary_from(identity, assignments) do
     active_count = Enum.count(assignments, &(&1.status == "active"))
 
     %{

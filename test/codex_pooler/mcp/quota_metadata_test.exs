@@ -673,15 +673,16 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
   test "pool_id filter resolves against authenticated operator visible pools", %{owner: owner} do
     %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
     admin = admin |> Ecto.Changeset.change(password_change_required: false) |> Repo.update!()
+    active_pool = pool_fixture(%{name: "Visible quota filter pool"})
+    disabled_pool = pool_fixture(%{name: "Invisible quota filter pool", status: "disabled"})
+    operator_pool_assignment_fixture(admin, active_pool, created_by_user_id: owner.id)
+
     assert {:ok, _operator_settings} = MCP.set_operator_mcp_enabled(admin, true)
 
     assert {:ok, %{raw_token: raw_token}} =
              MCP.create_operator_token(admin, %{label: "Quota pool visibility"})
 
     assert {:ok, admin_auth} = MCP.authenticate_token(raw_token)
-
-    active_pool = pool_fixture(%{name: "Visible quota filter pool"})
-    disabled_pool = pool_fixture(%{name: "Invisible quota filter pool", status: "disabled"})
 
     %{identity: identity} =
       upstream_assignment_fixture(active_pool, %{
@@ -705,6 +706,8 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
 
     assert [active_item] = active_result["structuredContent"]["items"]
     assert active_item["id"] == identity.id
+    assert active_item["assignment_summary"]["count"] == 1
+    assert active_item["assignment_summary"]["summary"] == "1 active of 1 Pool assignments"
 
     assert {:ok, disabled_result} =
              ToolDispatch.call(

@@ -3,7 +3,6 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
   Metadata-only MCP tools for upstream quota summaries.
   """
 
-  alias CodexPooler.Accounts
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.MCP.Tools.DetailEnvelope
   alias CodexPooler.MCP.Tools.QuotaMetadata.ReadModel
@@ -173,20 +172,15 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata do
     }
   end
 
-  defp scope_from_context(%{auth: %{operator: operator}}) do
-    {:ok, Scope.for_user(operator, Accounts.roles_for_user(operator))}
-  end
+  defp scope_from_context(%{auth: %{scope: %Scope{} = scope}}), do: {:ok, scope}
+
+  defp scope_from_context(%{auth: %{operator: operator}}), do: {:ok, Scope.for_user(operator)}
 
   defp scope_from_context(_context) do
     {:error, %{code: :tool_execution_failed, message: "MCP authenticated actor is unavailable"}}
   end
 
-  defp load_pools(scope) do
-    case Pools.list_pools_for_management(scope) do
-      {:ok, pools} -> {:ok, pools}
-      {:error, _reason} -> Pools.list_pools(scope)
-    end
-  end
+  defp load_pools(scope), do: {:ok, Pools.list_visible_pools(scope)}
 
   defp all_visible_accounts(scope) do
     scope
