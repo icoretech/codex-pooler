@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     {:ok,
      socket
      |> assign(
-       page_title: "Admin Pools",
+       page_title: "Pools",
        pools: [],
        can_manage_pools?: false,
        creating_pool: false,

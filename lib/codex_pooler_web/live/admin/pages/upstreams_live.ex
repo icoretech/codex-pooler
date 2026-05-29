@@ -16,7 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     socket =
       socket
       |> assign(
-        page_title: "Admin upstreams",
+        page_title: "Upstreams",
         pools: [],
         pool_options: [],
         dialog_pool_options: [],
