@@ -42,15 +42,7 @@ defmodule CodexPooler.Jobs.ReadModel do
   def list_latest_jobs(scope, opts \\ [])
 
   def list_latest_jobs(%Scope{} = scope, opts) do
-    pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
-    assignment_ids = assignment_ids_for_pools(pool_ids)
-    api_key_ids = api_key_ids_for_pools(pool_ids)
-    identity_ids = identity_ids_for_assignments(assignment_ids)
-
-    pool_ids
-    |> authorized_job_query(assignment_ids, identity_ids, api_key_ids)
-    |> latest_jobs_query(opts)
-    |> Repo.all()
+    if Pools.owner?(scope), do: list_system_jobs(opts), else: []
   end
 
   def list_latest_jobs(:system, opts) do
@@ -65,14 +57,11 @@ defmodule CodexPooler.Jobs.ReadModel do
   def worker_job_summary(_scope, []), do: empty_worker_job_summary()
 
   def worker_job_summary(%Scope{} = scope, workers) do
-    pool_ids = scope |> Pools.list_visible_pools() |> Enum.map(& &1.id)
-    assignment_ids = assignment_ids_for_pools(pool_ids)
-    api_key_ids = api_key_ids_for_pools(pool_ids)
-    identity_ids = identity_ids_for_assignments(assignment_ids)
-
-    pool_ids
-    |> authorized_job_query(assignment_ids, identity_ids, api_key_ids)
-    |> worker_job_summary_query(workers)
+    if Pools.owner?(scope) do
+      worker_job_summary(:system, workers)
+    else
+      empty_worker_job_summary()
+    end
   end
 
   def worker_job_summary(:system, workers) do
@@ -311,71 +300,6 @@ defmodule CodexPooler.Jobs.ReadModel do
           rollup_date: fragment("?->>?", job.args, "rollup_date")
         }
       }
-  end
-
-  defp authorized_job_query([], [], [], []), do: system_job_query()
-
-  defp authorized_job_query(pool_ids, assignment_ids, identity_ids, api_key_ids) do
-    authorized_job =
-      dynamic(
-        [job],
-        fragment("?->>?", job.args, "pool_id") in ^pool_ids or
-          fragment("?->>?", job.args, "pool_upstream_assignment_id") in ^assignment_ids or
-          fragment("?->>?", job.args, "upstream_identity_id") in ^identity_ids or
-          fragment("?->>?", job.args, "api_key_id") in ^api_key_ids
-      )
-
-    system_job = system_job_dynamic()
-    filter = dynamic([job], ^authorized_job or ^system_job)
-
-    from job in Oban.Job, where: ^filter
-  end
-
-  defp system_job_query do
-    system_job = system_job_dynamic()
-
-    from job in Oban.Job, where: ^system_job
-  end
-
-  defp system_job_dynamic do
-    dynamic(
-      [job],
-      (is_nil(fragment("?->>?", job.args, "pool_id")) and
-         is_nil(fragment("?->>?", job.args, "pool_upstream_assignment_id")) and
-         is_nil(fragment("?->>?", job.args, "upstream_identity_id")) and
-         is_nil(fragment("?->>?", job.args, "api_key_id"))) or
-        fragment("?->>?", job.args, "rollup_date") != ""
-    )
-  end
-
-  defp assignment_ids_for_pools([]), do: []
-
-  defp assignment_ids_for_pools(pool_ids) do
-    Repo.all(
-      from assignment in PoolUpstreamAssignment,
-        where: assignment.pool_id in ^pool_ids,
-        select: assignment.id
-    )
-  end
-
-  defp identity_ids_for_assignments([]), do: []
-
-  defp identity_ids_for_assignments(assignment_ids) do
-    Repo.all(
-      from assignment in PoolUpstreamAssignment,
-        where: assignment.id in ^assignment_ids,
-        select: assignment.upstream_identity_id
-    )
-  end
-
-  defp api_key_ids_for_pools([]), do: []
-
-  defp api_key_ids_for_pools(pool_ids) do
-    Repo.all(
-      from api_key in APIKey,
-        where: api_key.pool_id in ^pool_ids,
-        select: api_key.id
-    )
   end
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")

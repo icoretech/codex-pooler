@@ -331,10 +331,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       ]
 
       assert {:ok, first_job} =
-               Jobs.enqueue_account_reconciliation(pool, assignment,
-                 trigger_kind: "gateway",
-                 unique: unique
-               )
+               publish_from_task(fn ->
+                 Jobs.enqueue_account_reconciliation(pool, assignment,
+                   trigger_kind: "gateway",
+                   unique: unique
+                 )
+               end)
 
       assert first_job.args == %{
                "pool_id" => pool.id,
@@ -366,10 +368,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         )
 
       assert {:ok, second_job} =
-               Jobs.enqueue_account_reconciliation(pool, assignment,
-                 trigger_kind: "gateway",
-                 unique: unique
-               )
+               publish_from_task(fn ->
+                 Jobs.enqueue_account_reconciliation(pool, assignment,
+                   trigger_kind: "gateway",
+                   unique: unique
+                 )
+               end)
 
       refute first_job.conflict?
       assert second_job.conflict?
@@ -385,6 +389,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert job.id == first_job.id
     end
+  end
+
+  defp publish_from_task(fun) when is_function(fun, 0) do
+    fun
+    |> Task.async()
+    |> Task.await(5_000)
   end
 
   defp insert_running_catalog_sync(pool, attrs \\ []) do

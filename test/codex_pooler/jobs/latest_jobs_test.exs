@@ -71,7 +71,7 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
       refute serialized =~ "authorization-bearer-value"
     end
 
-    test "filters latest jobs by operator-visible pool metadata" do
+    test "owner scope sees global latest jobs while instance admins see no jobs" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "jobs-owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
       visible_pool = pool_fixture()
@@ -92,13 +92,14 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
           }
         )
 
-      insert_listing_job(2,
-        inserted_at: ~U[2026-05-04 10:01:00Z],
-        args: %{
-          "pool_id" => hidden_pool.id,
-          "pool_upstream_assignment_id" => hidden_assignment.id
-        }
-      )
+      hidden_job =
+        insert_listing_job(2,
+          inserted_at: ~U[2026-05-04 10:01:00Z],
+          args: %{
+            "pool_id" => hidden_pool.id,
+            "pool_upstream_assignment_id" => hidden_assignment.id
+          }
+        )
 
       rollup_job =
         insert_listing_job(3,
@@ -113,22 +114,102 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
           args: %{"upstream_identity_id" => visible_identity.id}
         )
 
-      insert_listing_job(5,
-        worker: TokenRefreshWorker,
-        inserted_at: ~U[2026-05-04 10:04:00Z],
-        args: %{"upstream_identity_id" => hidden_identity.id}
-      )
+      hidden_identity_job =
+        insert_listing_job(5,
+          worker: TokenRefreshWorker,
+          inserted_at: ~U[2026-05-04 10:04:00Z],
+          args: %{"upstream_identity_id" => hidden_identity.id}
+        )
 
       assert Enum.map(Jobs.list_latest_jobs(scope), & &1.id) == [
+               hidden_identity_job.id,
                visible_identity_job.id,
                rollup_job.id,
+               hidden_job.id,
                visible_job.id
              ]
 
+      assert %{
+               latest: %{id: latest_id},
+               active: [_active | _],
+               unresolved_failures: []
+             } = Jobs.worker_job_summary(scope, [worker_name(TokenRefreshWorker)])
+
+      assert latest_id == hidden_identity_job.id
+
+      %{user: admin} = operator_fixture(scope, %{"email" => "jobs-admin@example.com"})
+      admin_scope = Scope.for_user(admin, ["instance_admin"])
+
+      assert Jobs.list_latest_jobs(admin_scope) == []
+
+      assert Jobs.worker_job_summary(admin_scope, [worker_name(TokenRefreshWorker)]) == %{
+               latest: nil,
+               latest_success: nil,
+               latest_failure: nil,
+               pending: nil,
+               active: [],
+               unresolved_failures: []
+             }
+
       memberless_user = user_fixture(%{"email" => "jobs-memberless@example.com"})
 
-      assert Enum.map(Jobs.list_latest_jobs(Scope.for_user(memberless_user, [])), & &1.id) == [
-               rollup_job.id
+      assert Jobs.list_latest_jobs(Scope.for_user(memberless_user, [])) == []
+    end
+
+    test "system scope still returns safe system jobs for internal callers" do
+      visible_pool = pool_fixture()
+      hidden_pool = pool_fixture(%{status: "disabled"})
+
+      %{identity: visible_identity, assignment: visible_assignment} =
+        upstream_assignment_fixture(visible_pool, %{assignment_label: "Visible assignment"})
+
+      %{identity: hidden_identity, assignment: hidden_assignment} =
+        upstream_assignment_fixture(hidden_pool, %{assignment_label: "Hidden assignment"})
+
+      visible_job =
+        insert_listing_job(1,
+          inserted_at: ~U[2026-05-04 10:00:00Z],
+          args: %{
+            "pool_id" => visible_pool.id,
+            "pool_upstream_assignment_id" => visible_assignment.id
+          }
+        )
+
+      hidden_job =
+        insert_listing_job(2,
+          inserted_at: ~U[2026-05-04 10:01:00Z],
+          args: %{
+            "pool_id" => hidden_pool.id,
+            "pool_upstream_assignment_id" => hidden_assignment.id
+          }
+        )
+
+      rollup_job =
+        insert_listing_job(3,
+          inserted_at: ~U[2026-05-04 10:02:00Z],
+          args: %{"rollup_date" => "2026-05-03"}
+        )
+
+      visible_identity_job =
+        insert_listing_job(4,
+          worker: TokenRefreshWorker,
+          inserted_at: ~U[2026-05-04 10:03:00Z],
+          args: %{"upstream_identity_id" => visible_identity.id}
+        )
+
+      hidden_identity_job =
+        insert_listing_job(5,
+          worker: TokenRefreshWorker,
+          inserted_at: ~U[2026-05-04 10:04:00Z],
+          args: %{"upstream_identity_id" => hidden_identity.id}
+        )
+
+      assert Enum.map(Jobs.list_latest_jobs(:system), & &1.id) == [
+               hidden_identity_job.id,
+               visible_identity_job.id,
+               rollup_job.id,
+               hidden_job.id,
+               visible_job.id
              ]
     end
 
