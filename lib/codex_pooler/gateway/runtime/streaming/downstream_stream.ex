@@ -127,8 +127,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       String.contains?(data, "\n\n")
   end
 
-  defp codex_responses_sse_chunk?(_data), do: false
-
   defp public_openai_chat_stream?(%RequestOptions{
          openai_compatibility: %{public_openai_chat_stream: true}
        }),

@@ -226,7 +226,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     first_mode =
       FakeUpstream.timeout_mid_stream(
-        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_raw_partial_stall\"}",
+        "event: response.created\n" <>
+          ~S(data: {"type":"response.created","response":{"id":"resp_raw_partial_stall"}),
         notify: self(),
         release_ref: release_ref
       )
