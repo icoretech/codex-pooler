@@ -77,6 +77,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   @spec list_visible_accounts(term(), [term()]) :: [account_snapshot()]
   def list_visible_accounts(scope, pools) when is_list(pools) do
+    list_visible_accounts(scope, pools, %{})
+  end
+
+  @spec list_visible_accounts(term(), [term()], map()) :: [account_snapshot()]
+  def list_visible_accounts(scope, pools, filters) when is_list(pools) and is_map(filters) do
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
 
@@ -87,7 +92,56 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     token_burns = token_burn_summaries(identities)
 
-    Enum.map(identities, &account_snapshot(&1, assignments, token_burns))
+    identities
+    |> Enum.map(&account_snapshot(&1, assignments, token_burns))
+    |> apply_filters(filters)
+  end
+
+  defp apply_filters(accounts, filters) do
+    accounts
+    |> filter_by_status(Map.get(filters, "status"))
+    |> filter_by_query(Map.get(filters, "query"))
+  end
+
+  defp filter_by_status(accounts, status) when is_binary(status) and status != "" do
+    Enum.filter(accounts, &(&1.identity.status == status))
+  end
+
+  defp filter_by_status(accounts, _status), do: accounts
+
+  defp filter_by_query(accounts, query) when is_binary(query) do
+    query = String.downcase(String.trim(query))
+
+    if query == "" do
+      accounts
+    else
+      Enum.filter(accounts, &(search_haystack(&1) =~ query))
+    end
+  end
+
+  defp filter_by_query(accounts, _query), do: accounts
+
+  defp search_haystack(account) do
+    account
+    |> safe_search_terms()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map_join(" ", &to_string/1)
+    |> String.downcase()
+  end
+
+  defp safe_search_terms(account) do
+    [
+      account.label,
+      account.identity.chatgpt_account_id,
+      account.plan_label,
+      account.identity.plan_family,
+      account.identity.status
+      | assignment_search_terms(account.assignments)
+    ]
+  end
+
+  defp assignment_search_terms(assignments) do
+    Enum.flat_map(assignments, &[&1.assignment_label, &1.pool_label])
   end
 
   defp active_assignment_snapshots(pools, pool_lookup) do

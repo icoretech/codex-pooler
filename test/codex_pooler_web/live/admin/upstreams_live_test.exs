@@ -202,6 +202,264 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
   end
 
+  @tag :upstream_filters
+  test "renders URL-backed upstream filter controls without legacy select fallbacks", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "filter-controls", name: "Filter Controls"})
+
+    upstream_assignment_fixture(pool, %{
+      account_label: "Filter Controls Codex",
+      account_identifier: "filter-controls@example.com"
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-filter-form")
+    assert has_element?(view, "#filters_query[name='filters[query]'][value='']")
+    assert has_element?(view, "#upstream-filter-query-clear[aria-label='Clear upstream search']")
+
+    assert has_element?(
+             view,
+             "#filters_pool_id[name='filters[pool_id]'][type='hidden'][value='']"
+           )
+
+    assert has_element?(view, "#upstream-pool-filter")
+    assert has_element?(view, "#upstream-pool-filter [data-role='pool-filter-trigger']")
+    assert has_element?(view, "#upstream-pool-filter button[data-pool-id='']", "All Pools")
+
+    assert has_element?(
+             view,
+             "#upstream-pool-filter button[data-pool-id='#{pool.id}']",
+             "Filter Controls"
+           )
+
+    assert has_element?(view, "#filters_status[name='filters[status]'][type='hidden'][value='']")
+    assert has_element?(view, "#upstream-status-filter")
+    assert has_element?(view, "#upstream-status-filter [data-role='status-filter-trigger']")
+    assert has_element?(view, "#upstream-status-filter button[data-status='']", "Any status")
+    assert has_element?(view, "#upstream-status-filter button[data-status='active']", "Active")
+    assert has_element?(view, "#upstream-status-filter button[data-status='paused']", "Paused")
+    refute has_element?(view, "select#filters_pool_id")
+    refute has_element?(view, "select#filters_status")
+  end
+
+  @tag :upstream_filters
+  test "filters upstream cards through search submit, Pool dropdown, and status dropdown", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, primary_pool} =
+      Pools.create_pool(scope, %{slug: "filter-primary", name: "Filter Primary"})
+
+    {:ok, secondary_pool} =
+      Pools.create_pool(scope, %{slug: "filter-secondary", name: "Filter Secondary"})
+
+    %{identity: alpha_identity} =
+      upstream_assignment_fixture(primary_pool, %{
+        account_label: "Alpha Searchable Codex",
+        chatgpt_account_id: "acct_filter_alpha"
+      })
+
+    %{identity: beta_identity} =
+      upstream_assignment_fixture(secondary_pool, %{
+        account_label: "Beta Pool Codex",
+        chatgpt_account_id: "acct_filter_beta"
+      })
+
+    %{identity: paused_identity} =
+      upstream_assignment_fixture(secondary_pool, %{
+        account_label: "Paused Pool Codex",
+        chatgpt_account_id: "acct_filter_paused",
+        identity_status: "paused",
+        assignment_status: "paused",
+        eligibility_status: "ineligible"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    assert has_element?(view, "#upstream-account-#{beta_identity.id}")
+    assert has_element?(view, "#upstream-account-#{paused_identity.id}")
+
+    view
+    |> element("#upstream-filter-form")
+    |> render_change(%{
+      "filters" => %{"query" => "Alpha Searchable", "pool_id" => "", "status" => ""}
+    })
+
+    assert_patch(view, ~p"/admin/upstreams?query=Alpha+Searchable")
+    assert has_element?(view, "#filters_query[value='Alpha Searchable']")
+    assert has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    refute has_element?(view, "#upstream-account-#{beta_identity.id}")
+    refute has_element?(view, "#upstream-account-#{paused_identity.id}")
+
+    view
+    |> element("#upstream-filter-query-clear")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams")
+    assert has_element?(view, "#filters_query[value='']")
+    assert has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    assert has_element?(view, "#upstream-account-#{beta_identity.id}")
+    assert has_element?(view, "#upstream-account-#{paused_identity.id}")
+
+    view
+    |> element("#upstream-filter-form")
+    |> render_submit(%{"filters" => %{"query" => "", "pool_id" => "", "status" => ""}})
+
+    assert_patch(view, ~p"/admin/upstreams")
+    assert has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    assert has_element?(view, "#upstream-account-#{beta_identity.id}")
+    assert has_element?(view, "#upstream-account-#{paused_identity.id}")
+
+    view
+    |> element("#upstream-pool-filter button[data-pool-id='#{secondary_pool.id}']")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?pool_id=#{secondary_pool.id}")
+    assert has_element?(view, "#filters_pool_id[value='#{secondary_pool.id}']")
+    refute has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    assert has_element?(view, "#upstream-account-#{beta_identity.id}")
+    assert has_element?(view, "#upstream-account-#{paused_identity.id}")
+
+    view
+    |> element("#upstream-status-filter button[data-status='paused']")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?pool_id=#{secondary_pool.id}&status=paused")
+    assert has_element?(view, "#filters_status[value='paused']")
+    refute has_element?(view, "#upstream-account-#{alpha_identity.id}")
+    refute has_element?(view, "#upstream-account-#{beta_identity.id}")
+    assert has_element?(view, "#upstream-account-#{paused_identity.id}")
+  end
+
+  @tag :upstream_filters
+  test "search matches safe upstream metadata but not secret-bearing metadata", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "metadata-search", name: "Metadata Search Pool"})
+
+    {:ok, other_pool} =
+      Pools.create_pool(scope, %{slug: "metadata-search-other", name: "Other Metadata Pool"})
+
+    secret_marker = runtime_secret("metadata-search-marker")
+
+    %{identity: matched_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Safe Metadata Codex",
+        chatgpt_account_id: "acct_safe_metadata_search",
+        assignment_label: "Safe Metadata Assignment",
+        identity_status: "refresh_due",
+        plan_family: "team-enterprise",
+        plan_label: "Enterprise Team",
+        identity_metadata: %{
+          "auth_json_imported" => true,
+          "stored_account_id" => "acct_safe_metadata_search",
+          "token_refresh" => %{
+            "status" => "failed",
+            "secret_marker" => secret_marker
+          }
+        },
+        assignment_metadata: %{
+          "quota_priming" => %{"status" => "known"},
+          "secret_token_marker" => secret_marker
+        }
+      })
+
+    %{identity: other_identity} =
+      upstream_assignment_fixture(other_pool, %{
+        account_label: "Unmatched Metadata Codex",
+        chatgpt_account_id: "acct_unmatched_metadata_search"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    refute render(view) =~ secret_marker
+
+    for query <- [
+          "Safe Metadata Codex",
+          "acct_safe_metadata_search",
+          "Enterprise Team",
+          "team-enterprise",
+          "Safe Metadata Assignment",
+          "Metadata Search Pool",
+          "refresh_due"
+        ] do
+      view
+      |> element("#upstream-filter-form")
+      |> render_submit(%{"filters" => %{"query" => query, "pool_id" => "", "status" => ""}})
+
+      assert has_element?(view, "#upstream-account-#{matched_identity.id}")
+      refute has_element?(view, "#upstream-account-#{other_identity.id}")
+    end
+
+    view
+    |> element("#upstream-filter-form")
+    |> render_submit(%{"filters" => %{"query" => secret_marker, "pool_id" => "", "status" => ""}})
+
+    refute has_element?(view, "#upstream-account-#{matched_identity.id}")
+    refute has_element?(view, "#upstream-account-#{other_identity.id}")
+  end
+
+  @tag :upstream_filters
+  test "invalid Pool and deleted status URL params normalize to default visible accounts", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "invalid-filter", name: "Invalid Filter"})
+
+    %{identity: active_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Visible Filter Codex",
+        chatgpt_account_id: "acct_visible_filter"
+      })
+
+    %{identity: deleted_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Deleted Filter Codex",
+        chatgpt_account_id: "acct_deleted_filter",
+        identity_status: "deleted",
+        assignment_status: "deleted",
+        eligibility_status: "ineligible"
+      })
+
+    invalid_pool_id = Ecto.UUID.generate()
+
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/upstreams?pool_id=#{invalid_pool_id}&status=deleted")
+
+    assert has_element?(view, "#filters_pool_id[value='']")
+    assert has_element?(view, "#filters_status[value='']")
+    assert has_element?(view, "#upstream-account-#{active_identity.id}", "Visible Filter Codex")
+    refute has_element?(view, "#upstream-account-#{deleted_identity.id}")
+  end
+
+  @tag :upstream_filters
+  test "malformed nested URL params normalize to default filters without crashing", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "nested-filter", name: "Nested Filter"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Nested Filter Codex",
+        chatgpt_account_id: "acct_nested_filter"
+      })
+
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/upstreams?query[x]=boom&pool_id[x]=boom&status[x]=boom")
+
+    assert has_element?(view, "#filters_query[value='']")
+    assert has_element?(view, "#filters_pool_id[value='']")
+    assert has_element?(view, "#filters_status[value='']")
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Nested Filter Codex")
+  end
+
   test "renders required forms, account cards, limits, badges, and action selectors", %{
     conn: conn,
     scope: scope

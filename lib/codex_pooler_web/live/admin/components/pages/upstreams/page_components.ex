@@ -4,12 +4,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountCard
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonDialog
+  alias CodexPoolerWeb.Admin.UpstreamFilterForm
 
   attr :pools, :list, required: true
   attr :pool_options, :list, required: true
   attr :dialog_pool_options, :list, required: true
+  attr :filter_form, :any, required: true
+  attr :filter_values, :map, required: true
+  attr :pool_filter_options, :list, required: true
+  attr :status_options, :list, required: true
   attr :auth_json_form, :any, required: true
   attr :auth_json_upload_limit_label, :string, required: true
   attr :importing_auth_json, :boolean, required: true
@@ -51,6 +57,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       <.rename_account_dialog account={@renaming_account} form={@rename_account_form} />
 
       <section id="upstream-account-surface" class="grid min-w-0 gap-4">
+        <.upstream_filter_form
+          form={@filter_form}
+          filter_values={@filter_values}
+          pool_filter_options={@pool_filter_options}
+          status_options={@status_options}
+        />
+
         <AdminComponents.empty_state
           :if={@upstream_accounts == []}
           id="upstream-account-empty-state"
@@ -78,6 +91,128 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     </section>
     """
   end
+
+  attr :form, :any, required: true
+  attr :filter_values, :map, required: true
+  attr :pool_filter_options, :list, required: true
+  attr :status_options, :list, required: true
+
+  defp upstream_filter_form(assigns) do
+    ~H"""
+    <AdminComponents.filter_form
+      id="upstream-filter-form"
+      for={@form}
+      phx-change="filter"
+      phx-submit="filter"
+      autocomplete="off"
+    >
+      <.upstream_query_filter_input field={@form[:query]} />
+      <PoolFilterComponents.pool_filter_dropdown
+        id="upstream-pool-filter"
+        hidden_id="filters_pool_id"
+        selected_value={@filter_values["pool_id"]}
+        options={@pool_filter_options}
+      />
+      <.upstream_status_filter_dropdown
+        selected_value={@filter_values["status"]}
+        selected={UpstreamFilterForm.selected_status_option(@filter_values["status"])}
+        options={@status_options}
+      />
+    </AdminComponents.filter_form>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+
+  defp upstream_query_filter_input(assigns) do
+    assigns = assign(assigns, :value, assigns.field.value || "")
+
+    ~H"""
+    <div id="upstream-query-filter" class="grid gap-2">
+      <label for={@field.id} class="sr-only">Search</label>
+      <div class="input input-bordered flex min-h-10 w-full items-center gap-2">
+        <input
+          id={@field.id}
+          name={@field.name}
+          type="text"
+          value={@value}
+          placeholder="Search upstreams..."
+          class="peer grow text-sm font-normal"
+        />
+        <button
+          id="upstream-filter-query-clear"
+          type="button"
+          class="grid size-6 shrink-0 place-items-center rounded-full text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary peer-placeholder-shown:hidden"
+          phx-click="clear_upstream_query_filter"
+          aria-label="Clear upstream search"
+        >
+          <.icon name="hero-x-mark" class="size-4" />
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :selected_value, :string, required: true
+  attr :selected, :map, required: true
+  attr :options, :list, required: true
+
+  defp upstream_status_filter_dropdown(assigns) do
+    ~H"""
+    <div class="grid gap-2">
+      <input type="hidden" id="filters_status" name="filters[status]" value={@selected_value} />
+      <details
+        id="upstream-status-filter"
+        class="dropdown w-full"
+        phx-click-away={JS.remove_attribute("open", to: "#upstream-status-filter")}
+      >
+        <summary
+          data-role="status-filter-trigger"
+          aria-label="Status"
+          class="select select-bordered flex min-h-10 w-full cursor-pointer items-center gap-2 pr-8 text-left text-sm font-normal"
+        >
+          <.status_filter_icon option={@selected} />
+          <span class="truncate">{@selected.label}</span>
+        </summary>
+        <ul
+          data-role="status-filter-menu"
+          class="menu dropdown-content z-[60] mt-1 max-h-80 w-full flex-nowrap overflow-y-auto rounded-box border border-base-300 bg-base-100 p-1 !transition-none ![scale:100%] shadow-xl"
+        >
+          <li :for={option <- @options}>
+            <button
+              type="button"
+              phx-click="select_status_filter"
+              phx-value-status={option.value}
+              data-role="status-filter-option"
+              data-status={option.value}
+              class={["flex items-center gap-2 text-sm", option.value == @selected_value && "active"]}
+              aria-current={option.value == @selected_value && "true"}
+            >
+              <.status_filter_icon option={option} />
+              <span class="truncate">{option.label}</span>
+            </button>
+          </li>
+        </ul>
+      </details>
+    </div>
+    """
+  end
+
+  attr :option, :map, required: true
+
+  defp status_filter_icon(assigns) do
+    ~H"""
+    <span class={status_filter_icon_class(@option.tone)}>
+      <.icon name={@option.icon} class="size-4" />
+    </span>
+    """
+  end
+
+  defp status_filter_icon_class(:success), do: "shrink-0 text-success"
+  defp status_filter_icon_class(:warning), do: "shrink-0 text-warning"
+  defp status_filter_icon_class(:error), do: "shrink-0 text-error"
+  defp status_filter_icon_class(:primary), do: "shrink-0 text-primary"
+  defp status_filter_icon_class(_tone), do: "shrink-0 text-base-content/60"
 
   defp upstream_page_actions(assigns) do
     ~H"""

@@ -7,8 +7,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
+  alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
+  alias CodexPoolerWeb.Admin.UpstreamFilterForm
   alias CodexPoolerWeb.Admin.UpstreamPageComponents
 
   @impl true
@@ -20,6 +22,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         pools: [],
         pool_options: [],
         dialog_pool_options: [],
+        pool_filter_options: PoolFilterComponents.all_pool_filter_options(),
+        filter_form: UpstreamFilterForm.filter_form(),
+        filter_values: UpstreamFilterForm.filter_values(%{}, []),
+        status_options: UpstreamFilterForm.status_options(),
         upstream_accounts: [],
         auth_json_form: UpstreamAuthJsonImport.empty_form(),
         auth_json_upload_limit_label: UpstreamAuthJsonImport.upload_limit_label(),
@@ -41,18 +47,47 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, _uri, socket) do
     {:noreply,
-     socket |> close_auth_json_dialog() |> close_rename_account_dialog() |> load_upstreams()}
+     socket |> close_auth_json_dialog() |> close_rename_account_dialog() |> load_upstreams(params)}
   end
 
   @impl true
   def handle_info({Events, %{topics: topics}}, socket) do
     if "upstreams" in topics do
-      {:noreply, load_upstreams(socket)}
+      {:noreply, reload_upstreams(socket)}
     else
       {:noreply, socket}
     end
+  end
+
+  @impl true
+  def handle_event("filter", %{"filters" => filter_params}, socket) do
+    {:noreply,
+     push_patch(socket,
+       to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(filter_params)}"
+     )}
+  end
+
+  def handle_event("select_pool_filter", %{"pool-id" => pool_id}, socket) do
+    params = Map.put(socket.assigns.filter_values, "pool_id", pool_id)
+
+    {:noreply,
+     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+  end
+
+  def handle_event("clear_upstream_query_filter", _params, socket) do
+    params = Map.put(socket.assigns.filter_values, "query", "")
+
+    {:noreply,
+     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+  end
+
+  def handle_event("select_status_filter", %{"status" => status}, socket) do
+    params = Map.put(socket.assigns.filter_values, "status", status)
+
+    {:noreply,
+     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
   end
 
   @impl true
@@ -181,7 +216,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         {:noreply,
          socket
          |> put_flash(:info, message)
-         |> load_upstreams()}
+         |> reload_upstreams()}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, error_message(reason))}
@@ -199,7 +234,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          socket
          |> put_flash(:info, "Upstream account renamed")
          |> close_rename_account_dialog()
-         |> load_upstreams()}
+         |> reload_upstreams()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
@@ -221,7 +256,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          |> put_flash(:info, "Codex auth.json imported")
          |> assign(:auth_json_form, UpstreamAuthJsonImport.empty_form())
          |> assign(:importing_auth_json, false)
-         |> load_upstreams()}
+         |> reload_upstreams()}
 
       {:ok, %{status: :existing}} ->
         {:noreply,
@@ -229,7 +264,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          |> put_flash(:info, "Codex auth.json matched an existing account; tokens updated")
          |> assign(:auth_json_form, UpstreamAuthJsonImport.empty_form())
          |> assign(:importing_auth_json, false)
-         |> load_upstreams()}
+         |> reload_upstreams()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
@@ -258,6 +293,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         pools={@pools}
         pool_options={@pool_options}
         dialog_pool_options={@dialog_pool_options}
+        filter_form={@filter_form}
+        filter_values={@filter_values}
+        pool_filter_options={@pool_filter_options}
+        status_options={@status_options}
         auth_json_form={@auth_json_form}
         auth_json_upload_limit_label={@auth_json_upload_limit_label}
         importing_auth_json={@importing_auth_json}
@@ -276,18 +315,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         {:noreply,
          socket
          |> put_flash(:info, success_message)
-         |> load_upstreams()}
+         |> reload_upstreams()}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, error_message(reason))}
     end
   end
 
-  defp load_upstreams(socket) do
+  defp load_upstreams(socket, params) do
     pools = Pools.list_visible_pools(socket.assigns.current_scope)
+    filter_values = UpstreamFilterForm.filter_values(params, pools)
+    filtered_pools = filtered_pools(pools, filter_values)
 
     upstream_accounts =
-      UpstreamAccountsReadModel.list_visible_accounts(socket.assigns.current_scope, pools)
+      UpstreamAccountsReadModel.list_visible_accounts(
+        socket.assigns.current_scope,
+        filtered_pools,
+        filter_values
+      )
 
     socket = maybe_subscribe_pool_events(socket, pools)
 
@@ -295,9 +340,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       pools: pools,
       pool_options: pool_options(pools),
       dialog_pool_options: dialog_pool_options(pools),
+      pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
+      filter_values: filter_values,
+      filter_form: UpstreamFilterForm.filter_form(filter_values),
+      status_options: UpstreamFilterForm.status_options(),
       upstream_accounts: upstream_accounts
     )
   end
+
+  defp reload_upstreams(socket), do: load_upstreams(socket, socket.assigns.filter_values)
+
+  defp filtered_pools(pools, %{"pool_id" => pool_id}) when is_binary(pool_id) and pool_id != "" do
+    Enum.filter(pools, &(&1.id == pool_id))
+  end
+
+  defp filtered_pools(pools, _filter_values), do: pools
 
   defp maybe_subscribe_pool_events(socket, pools) do
     pools
