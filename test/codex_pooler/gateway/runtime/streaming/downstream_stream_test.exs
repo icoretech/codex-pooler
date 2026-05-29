@@ -46,5 +46,20 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert chunk =~ "\"object\":\"chat.completion.chunk\""
       assert chunk =~ "\"content\":\"split answer\""
     end
+
+    test "passes through non-SSE JSON bodies on backend codex responses stream relay" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      json_body = Jason.encode!(%{"id" => "resp_sparse_metadata", "object" => "response"})
+
+      assert {^json_body, ^state} =
+               DownstreamStream.normalize_data(
+                 json_body,
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+    end
   end
 end

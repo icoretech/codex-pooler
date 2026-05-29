@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   import Ecto.Query
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [stream_retry_setup: 2]
+    only: [deterministic_rotation_seed: 2, stream_retry_setup: 2]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.{Context, ResponseContext}
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
+  alias CodexPooler.Gateway.Service
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
@@ -199,6 +200,53 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     refute metadata_text =~ "auth.json"
   end
 
+  test "pre-first-event silent stream after headers finalizes idle timeout without retry" do
+    release_ref = make_ref()
+
+    first_mode =
+      FakeUpstream.timeout_after_sse_headers(notify: self(), release_ref: release_ref)
+
+    {setup, stalled_upstream, fallback_upstream} =
+      stream_retry_setup(first_mode, stream_success_sse("resp_silent_fallback_should_not_run"))
+
+    {:ok, stream_conn} = execute_backend_stream(setup, release_ref, "silent-after-headers")
+
+    refute stream_conn.resp_body =~ "response.created"
+    refute stream_conn.resp_body =~ "response.failed"
+    refute stream_conn.resp_body =~ "[DONE]"
+    refute stream_conn.resp_body =~ "resp_silent_fallback_should_not_run"
+
+    assert FakeUpstream.count(stalled_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert_pre_first_stall_finalized!(setup, "silent stream after headers")
+  end
+
+  test "pre-first-event partial frame stall finalizes idle timeout without retry or synthetic events" do
+    release_ref = make_ref()
+
+    first_mode =
+      FakeUpstream.timeout_mid_stream(
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_raw_partial_stall\"}",
+        notify: self(),
+        release_ref: release_ref
+      )
+
+    {setup, stalled_upstream, fallback_upstream} =
+      stream_retry_setup(first_mode, stream_success_sse("resp_partial_fallback_should_not_run"))
+
+    {:ok, stream_conn} = execute_backend_stream(setup, release_ref, "partial-frame-stall")
+
+    refute stream_conn.resp_body =~ "response.created"
+    refute stream_conn.resp_body =~ "response.failed"
+    refute stream_conn.resp_body =~ "[DONE]"
+    refute stream_conn.resp_body =~ "resp_raw_partial_stall"
+    refute stream_conn.resp_body =~ "resp_partial_fallback_should_not_run"
+
+    assert FakeUpstream.count(stalled_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert_pre_first_stall_finalized!(setup, "partial frame stall")
+  end
+
   defp retry_context(setup, auth, request_options, request, opts \\ []) do
     candidates =
       Keyword.get(opts, :candidates, [
@@ -240,6 +288,82 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       "input" => "stream lifecycle accounting regression",
       "stream" => true
     }
+  end
+
+  defp stream_success_sse(response_id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+         }
+       }}
+    ])
+  end
+
+  defp execute_backend_stream(setup, release_ref, _request_suffix, opts \\ []) do
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{stream: stream}} =
+             Service.execute(
+               auth,
+               @endpoint_path,
+               payload(setup),
+               RequestOptions.build(
+                 %{
+                   request_id: deterministic_rotation_seed(2, 0),
+                   upstream_endpoint: @endpoint_path,
+                   receive_timeout: 100
+                 },
+                 @endpoint_path,
+                 payload(setup)
+               )
+             )
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+
+    if Keyword.get(opts, :wait_for_barrier?, true) do
+      assert_receive {:fake_upstream_timeout_barrier, _stage, upstream_pid, ^release_ref}, 1_000
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+    end
+
+    {:ok, stream_conn}
+  end
+
+  defp assert_pre_first_stall_finalized!(setup, input) do
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.transport == "http_sse"
+    assert request.last_error_code == "stream_idle_timeout"
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "stream_idle_timeout"
+    assert attempt.error_message == "upstream stream idle timeout"
+    assert attempt.response_metadata["error_kind"] == "stream_interrupted"
+    refute Map.has_key?(attempt.response_metadata, "stream_failure_stage")
+    refute Map.has_key?(attempt.response_metadata, "stream_terminal_type")
+    refute Map.has_key?(attempt.response_metadata, "stream_error_code")
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ input
+    refute metadata_text =~ "data:"
+    refute metadata_text =~ "response.created"
+    refute metadata_text =~ "response.failed"
+    refute metadata_text =~ "resp_raw_partial_stall"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "Bearer "
+    refute metadata_text =~ "upstream-token"
+    refute metadata_text =~ "auth.json"
   end
 
   defp request_options(auth, payload, setup, opts \\ []) do

@@ -19,6 +19,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:reject_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
           | {:require_json_field, String.t(), non_neg_integer(), map(), non_neg_integer(), map()}
           | {:sse, [String.t()]}
+          | {:sse_headers, [String.t()], [{String.t(), String.t()}]}
           | {:delayed_sse, [String.t()], pos_integer(), pid() | nil}
           | {:websocket_text, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
@@ -28,6 +29,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:json_error, non_neg_integer(), map()}
           | {:non_json_error, non_neg_integer(), String.t()}
           | {:timeout_before_headers, pid() | nil, reference()}
+          | {:timeout_after_sse_headers, pid() | nil, reference()}
           | {:timeout_mid_stream, String.t(), pid() | nil, reference()}
           | {:websocket_upgrade_timeout, pid() | nil, reference()}
           | {:websocket_upgrade_error, non_neg_integer(), map(), [{String.t(), String.t()}]}
@@ -148,11 +150,16 @@ defmodule CodexPooler.FakeUpstream do
 
   def sse_stream(events, opts \\ []) do
     include_done? = Keyword.get(opts, :done, true)
+    headers = Keyword.get(opts, :headers, [])
 
     chunks = Enum.map(events, &sse_chunk/1)
     chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
 
-    {:sse, chunks}
+    if headers == [] do
+      {:sse, chunks}
+    else
+      {:sse_headers, chunks, headers}
+    end
   end
 
   def websocket_text_frames(messages) when is_list(messages), do: {:websocket_text, messages}
@@ -198,6 +205,11 @@ defmodule CodexPooler.FakeUpstream do
 
   def timeout_before_headers(opts \\ []) when is_list(opts) do
     {:timeout_before_headers, Keyword.get(opts, :notify),
+     Keyword.get(opts, :release_ref, make_ref())}
+  end
+
+  def timeout_after_sse_headers(opts \\ []) when is_list(opts) do
+    {:timeout_after_sse_headers, Keyword.get(opts, :notify),
      Keyword.get(opts, :release_ref, make_ref())}
   end
 
@@ -437,6 +449,15 @@ defmodule CodexPooler.FakeUpstream do
     end)
   end
 
+  defp respond(pid, conn, {:sse_headers, chunks, headers}, request) do
+    conn =
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        Plug.Conn.put_resp_header(conn, key, value)
+      end)
+
+    respond(pid, conn, {:sse, chunks}, request)
+  end
+
   defp respond(_pid, conn, {:delayed_sse, chunks, interval_ms, notify}, _request) do
     conn =
       conn
@@ -498,6 +519,17 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(200, Jason.encode!(%{"late" => true}))
+  end
+
+  defp respond(_pid, conn, {:timeout_after_sse_headers, notify, release_ref}, _request) do
+    conn =
+      conn
+      |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    wait_for_timeout_release(:after_sse_headers, notify, release_ref)
+    conn
   end
 
   defp respond(_pid, conn, {:timeout_mid_stream, first_chunk, notify, release_ref}, _request) do
@@ -847,6 +879,9 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp websocket_messages({:sse, chunks}, _request),
+      do: messages_from_sse_chunk(Enum.join(chunks))
+
+    defp websocket_messages({:sse_headers, chunks, _headers}, _request),
       do: messages_from_sse_chunk(Enum.join(chunks))
 
     defp websocket_messages({:delayed_sse, chunks, interval_ms, _notify}, _request),

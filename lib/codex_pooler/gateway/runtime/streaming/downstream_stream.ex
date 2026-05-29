@@ -50,6 +50,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       public_openai_responses_stream?(opts) ->
         normalize_public_openai_responses_stream_data(data, state)
 
+      codex_responses_stream_endpoint?(endpoint) ->
+        normalize_codex_responses_stream_data(data, state)
+
       true ->
         {normalize_endpoint_data(endpoint, data), state}
     end
@@ -77,6 +80,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp normalize_public_openai_responses_stream_data(data, state), do: {data, state}
 
+  defp normalize_codex_responses_stream_data(data, state) when is_binary(data) do
+    buffer = Map.get(state, :codex_responses_sse_buffer, "")
+
+    if buffer == "" and not codex_responses_sse_chunk?(data) do
+      {data, state}
+    else
+      {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffer <> data, bounded?: false)
+
+      data =
+        blocks
+        |> Enum.map(&StreamProtocol.normalize_codex_responses_sse_block/1)
+        |> IO.iodata_to_binary()
+
+      {data, Map.put(state, :codex_responses_sse_buffer, buffer)}
+    end
+  end
+
+  defp normalize_codex_responses_stream_data(data, state), do: {data, state}
+
   defp normalize_endpoint_data("/backend-api/codex/responses", data) when is_binary(data) do
     StreamProtocol.normalize_codex_responses_sse_data(data)
   end
@@ -88,12 +110,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp normalize_endpoint_data(_endpoint, data), do: data
 
+  defp codex_responses_stream_endpoint?("/backend-api/codex/responses"), do: true
+  defp codex_responses_stream_endpoint?("/backend-api/codex/responses/compact"), do: true
+  defp codex_responses_stream_endpoint?(_endpoint), do: false
+
   defp public_openai_responses_stream?(%RequestOptions{
          openai_compatibility: %{public_openai_responses_stream: true}
        }),
        do: true
 
   defp public_openai_responses_stream?(_opts), do: false
+
+  defp codex_responses_sse_chunk?(data) when is_binary(data) do
+    String.starts_with?(data, "event: ") or String.starts_with?(data, "data: ") or
+      String.contains?(data, "\nevent: ") or String.contains?(data, "\ndata: ") or
+      String.contains?(data, "\n\n")
+  end
+
+  defp codex_responses_sse_chunk?(_data), do: false
 
   defp public_openai_chat_stream?(%RequestOptions{
          openai_compatibility: %{public_openai_chat_stream: true}
