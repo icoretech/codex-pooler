@@ -209,7 +209,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       "previous_response_not_found",
       "unsupported_input_image_format",
       "unsupported_parameter",
-      "unsupported_value"
+      "unsupported_value",
+      "usage_limit_exceeded"
     ]
   end
 

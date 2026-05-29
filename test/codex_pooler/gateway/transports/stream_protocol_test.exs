@@ -163,6 +163,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "local usage-limit terminal stream regressions" do
+    test "keeps first-and-only usage-limit response.failed non-retryable before controller layers" do
+      frame = canonical_usage_limit_terminal_sse()
+
+      assert {:ok, event} = StreamProtocol.first_complete_event(frame)
+      assert event.event_type == "response.failed"
+      assert event.data_type == "response.failed"
+      assert event.error_code == "usage_limit_exceeded"
+      assert event.upstream_error_code == "usage_limit_exceeded"
+      assert StreamProtocol.retryable_first_terminal_failure(event) == :error
+
+      assert {:ok, failure} = StreamProtocol.terminal_failure(frame)
+      assert failure.code == "usage_limit_exceeded"
+      assert failure.upstream_code == "usage_limit_exceeded"
+      assert failure.event_type == "response.failed"
+    end
+  end
+
   describe "websocket_error_frame_headers/1" do
     test "extracts allowlisted scalar headers from status wrapped errors" do
       frame =
@@ -225,6 +243,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "x-codex-primary-reset-at" => "2026-05-25T13:00:00Z"
              }
     end
+  end
+
+  defp canonical_usage_limit_terminal_sse do
+    sse_event("response.failed", %{
+      "type" => "response.failed",
+      "response" => %{
+        "id" => "resp_usage_limit_terminal",
+        "status" => "failed",
+        "error" => %{"code" => "usage_limit_exceeded"},
+        "usage" => %{
+          "input_tokens" => 10,
+          "cached_input_tokens" => 4,
+          "output_tokens" => 2,
+          "reasoning_tokens" => 1,
+          "total_tokens" => 12
+        }
+      }
+    })
+  end
+
+  defp sse_event(event, payload) do
+    "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
   end
 
   defp websocket_error_frame_headers(frame) do

@@ -225,6 +225,36 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert state == %{classified?: true, buffer: ""}
     end
 
+    test "keeps local first-and-only usage-limit terminal event failed and non-retryable" do
+      state = StreamAttempt.first_event_state()
+
+      terminal =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_usage_limit_terminal",
+            "status" => "failed",
+            "error" => %{"code" => "usage_limit_exceeded"},
+            "usage" => %{
+              "input_tokens" => 10,
+              "cached_input_tokens" => 4,
+              "output_tokens" => 2,
+              "reasoning_tokens" => 1,
+              "total_tokens" => 12
+            }
+          }
+        })
+
+      assert {{:write_terminal_failure, ^terminal,
+               %{
+                 code: "usage_limit_exceeded",
+                 event_type: "response.failed",
+                 upstream_code: "usage_limit_exceeded"
+               }}, state} = StreamAttempt.classify_first_event(terminal, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
     test "detects terminal failures after the first event is classified" do
       state = StreamAttempt.first_event_state()
 
