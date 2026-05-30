@@ -6,11 +6,12 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
 
   import CodexPooler.AccountsFixtures
 
@@ -92,6 +93,13 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     active_pool = Enum.find(pools, &(&1.slug == "dev-primary"))
 
+    assert Repo.aggregate(
+             from(assignment in OperatorPoolAssignment,
+               where: assignment.pool_id == ^active_pool.id and assignment.status == "active"
+             ),
+             :count
+           ) == 3
+
     quota_charts = QuotaCharts.quota_remaining_charts_by_pool_ids([active_pool.id])
     primary_chart = get_in(quota_charts, [active_pool.id, :primary_5h])
     weekly_chart = get_in(quota_charts, [active_pool.id, :weekly])
@@ -113,12 +121,16 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert statuses_for(UpstreamIdentity) == [
              "active",
+             "active",
+             "active",
              "paused",
              "reauth_required",
              "refresh_due"
            ]
 
     assert statuses_for(PoolUpstreamAssignment) == [
+             "active",
+             "active",
              "active",
              "active",
              "paused",
@@ -135,7 +147,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert statuses_for(Invite) == ["accepted", "active", "expired", "revoked"]
 
-    assert Repo.aggregate(AccountQuotaWindow, :count) == 6
+    assert Repo.aggregate(AccountQuotaWindow, :count) == 10
 
     account_windows =
       Repo.all(
@@ -151,6 +163,40 @@ defmodule CodexPooler.Dev.SeedsTest do
     refute Repo.exists?(
              from window in AccountQuotaWindow, where: window.quota_key == "account_primary"
            )
+
+    ready_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Ready Quota")
+    exhausted_identity = Repo.get_by!(UpstreamIdentity, account_label: "Dev Exhausted Quota")
+
+    assert Repo.get_by!(PoolUpstreamAssignment,
+             upstream_identity_id: ready_identity.id,
+             assignment_label: "Dev Ready Assignment",
+             status: "active"
+           )
+
+    assert Repo.get_by!(PoolUpstreamAssignment,
+             upstream_identity_id: exhausted_identity.id,
+             assignment_label: "Dev Exhausted Assignment",
+             status: "active"
+           )
+
+    ready_windows = quota_windows_for(ready_identity)
+    exhausted_windows = quota_windows_for(exhausted_identity)
+
+    assert Enum.map(ready_windows, &{&1.window_kind, &1.window_minutes, &1.freshness_state}) == [
+             {"primary", 300, "fresh"},
+             {"secondary", 10_080, "fresh"}
+           ]
+
+    assert Enum.map(exhausted_windows, &{&1.window_kind, &1.window_minutes, &1.freshness_state}) ==
+             [
+               {"primary", 300, "fresh"},
+               {"secondary", 10_080, "fresh"}
+             ]
+
+    assert UpstreamQuotaReadiness.from_windows(ready_windows).label == "Quota ready"
+    assert UpstreamQuotaReadiness.from_windows(exhausted_windows).label == "Quota exhausted"
+
+    assert Enum.find(exhausted_windows, &(&1.window_kind == "secondary")).credits == 0
 
     seeded_jobs =
       Repo.all(from job in Oban.Job, where: job.meta["dev_seed"] == "codex_pooler_dev_seed")
@@ -171,5 +217,13 @@ defmodule CodexPooler.Dev.SeedsTest do
     |> Repo.all()
     |> Enum.map(& &1.status)
     |> Enum.sort()
+  end
+
+  defp quota_windows_for(identity) do
+    Repo.all(
+      from window in AccountQuotaWindow,
+        where: window.upstream_identity_id == ^identity.id and window.quota_scope == "account",
+        order_by: [asc: window.window_kind]
+    )
   end
 end

@@ -17,7 +17,7 @@ defmodule CodexPooler.Dev.Seeds do
   alias CodexPooler.Accounts.{PlatformBootstrapState, Scope, User}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
-  alias CodexPooler.Pools.{Membership, Pool}
+  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -85,6 +85,7 @@ defmodule CodexPooler.Dev.Seeds do
       })
 
     api_keys = seed_api_keys!(owner, pool_active)
+    seed_operator_pool_assignments!(owner, operators, pool_active)
     identities = seed_identities!(owner)
     assignments = seed_assignments!(owner, pool_active, identities)
     models = seed_models!(pool_active)
@@ -277,6 +278,25 @@ defmodule CodexPooler.Dev.Seeds do
     [active, limited, paused, revoked]
   end
 
+  defp seed_operator_pool_assignments!(owner, operators, pool) do
+    operators
+    |> Enum.filter(&(&1.status == "active"))
+    |> Enum.map(fn operator ->
+      timestamp = now()
+
+      %OperatorPoolAssignment{}
+      |> OperatorPoolAssignment.changeset(%{
+        user_id: operator.id,
+        pool_id: pool.id,
+        status: "active",
+        created_by_user_id: owner.id,
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+      |> Repo.insert!()
+    end)
+  end
+
   defp create_api_key!(scope, pool, display_name, metadata) do
     {:ok, %{api_key: api_key}} =
       CodexPooler.Access.create_api_key(scope, pool, %{
@@ -296,6 +316,15 @@ defmodule CodexPooler.Dev.Seeds do
   defp seed_identities!(owner) do
     [
       identity_attrs(owner, "dev-acct-active", "Dev Active Pro", "active", "pro", "Pro"),
+      identity_attrs(owner, "dev-acct-ready-quota", "Dev Ready Quota", "active", "pro", "Pro"),
+      identity_attrs(
+        owner,
+        "dev-acct-exhausted-quota",
+        "Dev Exhausted Quota",
+        "active",
+        "pro",
+        "Pro"
+      ),
       identity_attrs(
         owner,
         "dev-acct-plus",
@@ -319,13 +348,31 @@ defmodule CodexPooler.Dev.Seeds do
     end)
   end
 
-  defp seed_assignments!(owner, pool, [active, plus, reauth, paused]) do
+  defp seed_assignments!(owner, pool, [active, ready, exhausted, plus, reauth, paused]) do
     [
       assignment_attrs(
         owner,
         pool,
         active,
         "Dev Active Assignment",
+        "active",
+        "active",
+        "eligible"
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        ready,
+        "Dev Ready Assignment",
+        "active",
+        "active",
+        "eligible"
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        exhausted,
+        "Dev Exhausted Assignment",
         "active",
         "active",
         "eligible"
@@ -376,7 +423,7 @@ defmodule CodexPooler.Dev.Seeds do
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
   end
 
-  defp seed_quota_windows!([active, plus, reauth, paused]) do
+  defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused]) do
     windows = [
       quota_attrs(active, quota_window_spec("primary", 300, "account", 1000, 640, "36", "fresh")),
       quota_attrs(
@@ -388,6 +435,19 @@ defmodule CodexPooler.Dev.Seeds do
         quota_window_spec("secondary", 10_080, "gpt-5.4", 500, 95, "81", "fresh"),
         display_label: "GPT 5.4",
         model: "gpt-5.4"
+      ),
+      quota_attrs(ready, quota_window_spec("primary", 300, "account", 1000, 720, "28", "fresh")),
+      quota_attrs(
+        ready,
+        quota_window_spec("secondary", 10_080, "account", 1000, 460, "54", "fresh")
+      ),
+      quota_attrs(
+        exhausted,
+        quota_window_spec("primary", 300, "account", 1000, 820, "18", "fresh")
+      ),
+      quota_attrs(
+        exhausted,
+        quota_window_spec("secondary", 10_080, "account", 1000, 0, "100", "fresh")
       ),
       quota_attrs(plus, quota_window_spec("primary", 300, "account", 1000, 40, "96", "fresh")),
       quota_attrs(
