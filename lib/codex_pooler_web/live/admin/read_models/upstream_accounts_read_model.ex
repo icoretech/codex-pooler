@@ -7,8 +7,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
-  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
 
   @quota_priming_labels %{
     "unknown" => "Priming pending",

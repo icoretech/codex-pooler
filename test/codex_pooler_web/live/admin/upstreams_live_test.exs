@@ -19,10 +19,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.PrimingState
-  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountCard
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
 
   setup :register_and_log_in_user
 
