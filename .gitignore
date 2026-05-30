@@ -29,6 +29,10 @@ DESIGN.md
 PRODUCT.md
 RUNBOOK.md
 /docs/
+/scripts/restore.sh
+/scripts/*.dump
+/scripts/*.sql
+/scripts/*.sql.gz
 /scripts/dev/
 /scripts/smoke/
 /.agents/
