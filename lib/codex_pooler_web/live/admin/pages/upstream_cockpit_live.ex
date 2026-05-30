@@ -1400,6 +1400,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   defp quota_status_detail_label(%{state: "missing_evidence"}), do: "Quota missing"
+  defp quota_status_detail_label(%{state: "stale"}), do: "Quota refresh needed"
   defp quota_status_detail_label(%{state: state}), do: status_label("Quota", state)
 
   defp quota_summary_label(%{state: "missing_evidence"}), do: "Quota evidence is missing"
@@ -1687,6 +1688,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   defp quota_assignment_label(%{state: "missing_evidence"}), do: "Quota missing"
+  defp quota_assignment_label(%{state: "stale"}), do: "Quota refresh needed"
   defp quota_assignment_label(%{state: state}), do: status_label("Quota", state)
 
   defp status_badge_class("active"), do: "badge badge-success"

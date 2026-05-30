@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.PrimingState
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPooler.Upstreams.Schemas.{EncryptedSecret, PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountCard
@@ -706,7 +707,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id} footer[data-role='upstream-account-card-footer'] #upstream-account-#{identity.id}-routing-readiness",
-             "Routing candidate"
+             "Quota ready"
            )
 
     assert has_element?(
@@ -948,14 +949,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "quota-states", name: "Quota States"})
 
     cases = [
-      {"unknown", "Quota pending", "Priming pending"},
-      {"refreshing", "Quota reconciling", "Reconciling quota"},
-      {"known", "Routing candidate", "Quota known"},
+      {"unknown", "Quota missing", "Priming pending"},
+      {"refreshing", "Quota missing", "Reconciling quota"},
+      {"known", "Quota ready", "Quota known"},
       {"weekly_only_probe", "Weekly quota probe", "Weekly-only probe"},
-      {"stale", "Quota stale", "Quota stale"},
-      {"expired", "Quota expired", "Quota expired"},
-      {"failed", "Quota failed", "Quota failed"},
-      {"blocked", "Quota blocked", "Priming blocked"}
+      {"stale", "Quota missing", "Quota stale"},
+      {"expired", "Quota missing", "Quota expired"},
+      {"failed", "Quota missing", "Quota failed"},
+      {"blocked", "Quota missing", "Priming blocked"}
     ]
 
     for {status, readiness_label, assignment_label} <- cases do
@@ -992,14 +993,472 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                assignment_label
              )
 
-      if status in ["unknown", "refreshing", "stale", "expired", "failed", "blocked"] do
-        refute has_element?(
-                 view,
-                 "#upstream-account-#{identity.id}-routing-readiness",
-                 "Routing candidate"
-               )
-      end
+      refute has_element?(
+               view,
+               "#upstream-account-#{identity.id}-routing-readiness",
+               "Routing candidate"
+             )
     end
+  end
+
+  test "projects live quota readiness separately from auth and priming metadata", %{scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "quota-readiness", name: "Quota Readiness"})
+
+    %{identity: weekly_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Weekly probe Codex",
+        assignment_label: "Weekly probe assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "weekly_only_probe",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z",
+            "reason" => %{
+              "code" => "weekly_only_probe_reason",
+              "message" => "Synthetic weekly-only probe state"
+            }
+          }
+        }
+      })
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(weekly_identity, "weekly_only_probe")
+
+    %{identity: exhausted_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Exhausted Codex",
+        assignment_label: "Exhausted assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z",
+            "reason" => %{
+              "code" => "known_reason",
+              "message" => "Synthetic known state"
+            }
+          }
+        }
+      })
+
+    now = DateTime.utc_now()
+
+    assert {:ok, [_primary_window, _weekly_window]} =
+             QuotaWindows.upsert_quota_windows(exhausted_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("10"),
+                 reset_at: DateTime.add(now, 900, :second),
+                 source: "codex_usage",
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 900, :second),
+                 source: "codex_usage",
+                 freshness_state: "fresh",
+                 observed_at: now
+               }
+             ])
+
+    accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    accounts_by_identity = Map.new(accounts, &{&1.identity.id, &1})
+
+    assert_quota_readiness_snapshot(Map.fetch!(accounts_by_identity, weekly_identity.id),
+      state: "weekly_only_probe",
+      label: "Weekly quota probe",
+      tone: :warning,
+      border_class: "border-l-warning",
+      routing_ready_now?: true,
+      priming_status: "weekly_only_probe",
+      priming_label: "Weekly-only probe",
+      primary_window?: false,
+      weekly_window?: true
+    )
+
+    assert_quota_readiness_snapshot(Map.fetch!(accounts_by_identity, exhausted_identity.id),
+      state: "exhausted",
+      label: "Quota exhausted",
+      tone: :error,
+      border_class: "border-l-error",
+      routing_ready_now?: false,
+      priming_status: "known",
+      priming_label: "Quota known",
+      primary_window?: true,
+      weekly_window?: true
+    )
+  end
+
+  test "renders live quota readiness on upstream account cards", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "live-card-readiness", name: "Live Card Readiness"})
+
+    %{identity: exhausted_identity, assignment: exhausted_assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Exhausted card Codex",
+        assignment_label: "Exhausted card assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z"
+          }
+        }
+      })
+
+    now = DateTime.utc_now()
+
+    assert {:ok, [_primary_window, _weekly_window]} =
+             QuotaWindows.upsert_quota_windows(exhausted_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("10"),
+                 reset_at: DateTime.add(now, 900, :second),
+                 source: "codex_usage",
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 900, :second),
+                 source: "codex_usage",
+                 freshness_state: "fresh",
+                 observed_at: now
+               }
+             ])
+
+    %{identity: ready_identity, assignment: ready_assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Ready card Codex",
+        assignment_label: "Ready card assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z"
+          }
+        }
+      })
+
+    assert {:ok, [_ready_window]} = maybe_insert_quota_window(ready_identity, "known")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{exhausted_identity.id}.border-l-error")
+
+    refute has_element?(view, "#upstream-account-#{exhausted_identity.id}.border-l-success")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{exhausted_identity.id}-routing-readiness",
+             "Quota exhausted"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{exhausted_identity.id}-routing-readiness",
+             "Routing candidate"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{exhausted_identity.id}-assignment-#{exhausted_assignment.id}-quota-priming",
+             "Quota known"
+           )
+
+    assert has_element?(view, "#upstream-account-#{ready_identity.id}.border-l-success")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{ready_identity.id}-routing-readiness",
+             "Quota ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{ready_identity.id}-assignment-#{ready_assignment.id}-quota-priming",
+             "Quota known"
+           )
+  end
+
+  test "renders the upstream routing readiness matrix with stable selectors", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "routing-status-matrix", name: "Routing Status Matrix"})
+
+    cases = [
+      %{
+        readiness_state: "ready",
+        quota_state: "ready",
+        expected_label: "Quota ready",
+        border_class: "border-l-success",
+        priming_status: "known",
+        priming_label: "Quota known"
+      },
+      %{
+        readiness_state: "weekly_only_probe",
+        quota_state: "weekly_only_probe",
+        expected_label: "Weekly quota probe",
+        border_class: "border-l-warning",
+        priming_status: "weekly_only_probe",
+        priming_label: "Weekly-only probe"
+      },
+      %{
+        readiness_state: "exhausted",
+        quota_state: "exhausted",
+        expected_label: "Quota exhausted",
+        border_class: "border-l-error",
+        priming_status: "known",
+        priming_label: "Quota known"
+      },
+      %{
+        readiness_state: "stale",
+        quota_state: "stale",
+        expected_label: "Quota refresh needed",
+        border_class: "border-l-warning",
+        priming_status: "known",
+        priming_label: "Quota known"
+      },
+      %{
+        readiness_state: "missing",
+        quota_state: "missing",
+        expected_label: "Quota missing",
+        border_class: "border-l-warning",
+        priming_status: "unknown",
+        priming_label: "Priming pending"
+      }
+    ]
+
+    for routing_case <- cases do
+      %{identity: identity, assignment: assignment} =
+        upstream_assignment_fixture(pool, %{
+          account_label: "Routing #{routing_case.readiness_state} Codex",
+          assignment_label: "Routing #{routing_case.readiness_state} assignment",
+          assignment_metadata: %{
+            "quota_priming" => %{
+              "status" => routing_case.priming_status,
+              "trigger_kind" => "account_link",
+              "enqueued_at" => "2026-05-22T00:00:00Z",
+              "reason" => %{
+                "code" => "#{routing_case.priming_status}_reason",
+                "message" => "Synthetic #{routing_case.priming_label} state"
+              }
+            }
+          }
+        })
+
+      assert {:ok, _windows} = insert_routing_quota_windows(identity, routing_case.quota_state)
+
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+      assert has_element?(view, "#upstream-account-#{identity.id}.#{routing_case.border_class}"),
+             routing_case.readiness_state
+
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-routing-readiness",
+               routing_case.expected_label
+             )
+
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-assignment-#{assignment.id}-quota-priming",
+               routing_case.priming_label
+             )
+
+      refute has_element?(
+               view,
+               "#upstream-account-#{identity.id}-routing-readiness",
+               "Routing candidate"
+             )
+    end
+  end
+
+  test "keeps assignment priming visible while live readiness comes from quota windows", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "priming-separation", name: "Priming Separation"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Priming separated Codex",
+        assignment_label: "Priming separated assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z",
+            "reason" => %{
+              "code" => "known_reason",
+              "message" => "Synthetic known state"
+            }
+          }
+        }
+      })
+
+    assert {:ok, _windows} = insert_routing_quota_windows(identity, "stale")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}.border-l-warning")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness",
+             "Quota refresh needed"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-assignment-#{assignment.id}-quota-priming",
+             "Quota known"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness",
+             "Quota known"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness",
+             "Routing candidate"
+           )
+  end
+
+  test "renders blocked quota readiness on the account card selector contract" do
+    blocked_id = Ecto.UUID.generate()
+    blocked_assignment = recovery_component_assignment(Ecto.UUID.generate(), "Blocked Pool")
+
+    blocked_account =
+      recovery_component_account(blocked_id, "active", [blocked_assignment])
+      |> Map.put(:quota_readiness, %{
+        state: "blocked",
+        label: "Quota blocked",
+        tone: :warning,
+        border_class: "border-l-warning",
+        routing_ready_now?: false,
+        reason_codes: ["quota_window_unusable", "not_fresh"],
+        primary_window: nil,
+        weekly_window: nil
+      })
+
+    blocked_html =
+      render_component(&UpstreamAccountCard.account_card/1,
+        account: blocked_account,
+        account_index: 0
+      )
+
+    assert blocked_html =~ ~s(id="upstream-account-#{blocked_id}")
+    assert blocked_html =~ ~s(id="upstream-account-#{blocked_id}-routing-readiness")
+
+    assert blocked_html =~
+             ~s(class="min-w-0 rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors border-l-warning")
+
+    assert blocked_html =~ "Quota blocked"
+    refute blocked_html =~ "Routing candidate"
+  end
+
+  test "keeps status and auth diagnostics separate from quota readiness", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "card-auth-separation", name: "Card Auth Separation"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Auth separated Codex",
+        identity_status: "refresh_due",
+        identity_metadata: %{
+          "token_refresh" => %{
+            "status" => "failed",
+            "reason" => %{
+              "code" => "synthetic_refresh_failure",
+              "message" => "synthetic refresh failed"
+            }
+          }
+        },
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z"
+          }
+        }
+      })
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}.border-l-success")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness",
+             "Quota ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-limits-summary",
+             "Refresh due"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-refresh",
+             "token refresh failed: synthetic refresh failed (synthetic_refresh_failure)"
+           )
+  end
+
+  test "projects a happy-path account as quota ready", %{scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "quota-ready", name: "Quota Ready"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Ready Codex",
+        assignment_label: "Ready assignment",
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z",
+            "reason" => %{
+              "code" => "known_reason",
+              "message" => "Synthetic known state"
+            }
+          }
+        }
+      })
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+
+    assert_quota_readiness_snapshot(account,
+      state: "ready",
+      label: "Quota ready",
+      tone: :success,
+      border_class: "border-l-success",
+      routing_ready_now?: true,
+      priming_status: "known",
+      priming_label: "Quota known",
+      primary_window?: true,
+      weekly_window?: false
+    )
   end
 
   test "requires authentication for admin upstreams", %{} do
@@ -1179,7 +1638,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
   end
 
-  test "refreshes routing readiness when quota priming state completes outside the LiveView", %{
+  test "refreshes assignment priming metadata without driving card routing readiness", %{
     conn: conn,
     scope: scope
   } do
@@ -1204,7 +1663,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-routing-readiness",
-             "Quota reconciling"
+             "Quota missing"
            )
 
     assert {:ok, _assignment} =
@@ -1218,14 +1677,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
+             "#upstream-account-#{identity.id}-assignment-#{assignment.id}-quota-priming",
+             "Weekly-only probe"
+           )
+
+    assert has_element?(
+             view,
              "#upstream-account-#{identity.id}-routing-readiness",
-             "Weekly quota probe"
+             "Quota missing"
            )
 
     refute has_element?(
              view,
              "#upstream-account-#{identity.id}-routing-readiness",
-             "Quota reconciling"
+             "Weekly quota probe"
            )
   end
 
@@ -2219,6 +2684,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       reauth_reason_code: nil,
       reauth_reason_message: nil,
       assignments: assignments,
+      quota_readiness: %{
+        state: "missing_evidence",
+        label: "Quota missing",
+        tone: :warning,
+        border_class: "border-l-warning",
+        routing_ready_now?: false,
+        reason_codes: [],
+        primary_window: nil,
+        weekly_window: nil
+      },
       quota_limits: []
     }
   end
@@ -2252,6 +2727,82 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp maybe_insert_quota_window(_identity, _status), do: {:ok, []}
+
+  defp insert_routing_quota_windows(identity, "ready"),
+    do: maybe_insert_quota_window(identity, "known")
+
+  defp insert_routing_quota_windows(identity, "weekly_only_probe"),
+    do: maybe_insert_quota_window(identity, "weekly_only_probe")
+
+  defp insert_routing_quota_windows(_identity, "missing"), do: {:ok, []}
+
+  defp insert_routing_quota_windows(identity, "stale") do
+    now = DateTime.utc_now()
+
+    QuotaWindows.upsert_quota_windows(identity, [
+      %{
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("10"),
+        reset_at: DateTime.add(now, 900, :second),
+        source: "codex_usage",
+        freshness_state: "stale",
+        observed_at: now
+      }
+    ])
+  end
+
+  defp insert_routing_quota_windows(identity, "exhausted") do
+    now = DateTime.utc_now()
+
+    QuotaWindows.upsert_quota_windows(identity, [
+      %{
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("10"),
+        reset_at: DateTime.add(now, 900, :second),
+        source: "codex_usage",
+        freshness_state: "fresh",
+        observed_at: now
+      },
+      %{
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(now, 900, :second),
+        source: "codex_usage",
+        freshness_state: "fresh",
+        observed_at: now
+      }
+    ])
+  end
+
+  defp insert_routing_quota_windows(identity, status),
+    do: maybe_insert_quota_window(identity, status)
+
+  defp assert_quota_readiness_snapshot(account, opts) do
+    assert account.identity.status == "active"
+    assert account.quota_readiness.state == Keyword.fetch!(opts, :state)
+    assert account.quota_readiness.label == Keyword.fetch!(opts, :label)
+    assert account.quota_readiness.tone == Keyword.fetch!(opts, :tone)
+    assert account.quota_readiness.border_class == Keyword.fetch!(opts, :border_class)
+    assert account.quota_readiness.routing_ready_now? == Keyword.fetch!(opts, :routing_ready_now?)
+
+    case Keyword.fetch!(opts, :primary_window?) do
+      true -> assert match?(%AccountQuotaWindow{}, account.quota_readiness.primary_window)
+      false -> assert is_nil(account.quota_readiness.primary_window)
+    end
+
+    case Keyword.fetch!(opts, :weekly_window?) do
+      true -> assert match?(%AccountQuotaWindow{}, account.quota_readiness.weekly_window)
+      false -> assert is_nil(account.quota_readiness.weekly_window)
+    end
+
+    [assignment] = account.assignments
+    assert assignment.quota_priming_status == Keyword.fetch!(opts, :priming_status)
+    assert assignment.quota_priming_label == Keyword.fetch!(opts, :priming_label)
+    assert Enum.map(account.quota_limits, & &1.label) == ["5h", "Weekly"]
+  end
 
   defp runtime_secret(label),
     do: Enum.join(["admin", label, "secret", "do", "not", "render"], "-")

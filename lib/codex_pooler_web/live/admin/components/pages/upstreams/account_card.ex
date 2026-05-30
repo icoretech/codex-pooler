@@ -24,7 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       data-role="upstream-account-card"
       class={[
         "min-w-0 rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors",
-        status_border_class(@account)
+        @account.quota_readiness.border_class
       ]}
     >
       <header
@@ -109,7 +109,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
               Routing
             </dt>
-            <dd class="truncate text-base-content/60">{routing_signal_label(@account)}</dd>
+            <dd class="truncate text-base-content/60">{@account.quota_readiness.label}</dd>
           </div>
           <div class="min-w-0 pl-3" data-role="upstream-pool-count-cell">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
@@ -528,37 +528,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   end
 
   defp format_token_count(tokens), do: Integer.to_string(tokens)
-
-  defp routing_signal_label(%{reauth_required?: true}), do: "Needs reauth"
-  defp routing_signal_label(%{assignments: []}), do: "Not assigned"
-
-  defp routing_signal_label(%{identity: %{status: "active"}, assignments: assignments}),
-    do: quota_routing_signal_label(assignments)
-
-  defp routing_signal_label(%{identity: %{status: "refresh_due"}}), do: "Refresh due"
-  defp routing_signal_label(%{identity: %{status: "refresh_failed"}}), do: "Refresh failed"
-  defp routing_signal_label(_account), do: "Not routable"
-
-  defp quota_routing_signal_label(assignments) do
-    statuses = Enum.map(assignments, & &1.quota_priming_status)
-
-    cond do
-      "known" in statuses -> "Routing candidate"
-      "weekly_only_probe" in statuses -> "Weekly quota probe"
-      "refreshing" in statuses -> "Quota reconciling"
-      "blocked" in statuses -> "Quota blocked"
-      "failed" in statuses -> "Quota failed"
-      "expired" in statuses -> "Quota expired"
-      "stale" in statuses -> "Quota stale"
-      true -> "Quota pending"
-    end
-  end
-
-  defp status_border_class(%{reauth_required?: true}), do: "border-l-error"
-
-  defp status_border_class(%{identity: %{status: "active"}}), do: "border-l-success"
-
-  defp status_border_class(_account), do: "border-l-warning"
 
   @spec recovery_eligible?(map()) :: boolean()
   defp recovery_eligible?(%{identity: %{status: status}} = account) do

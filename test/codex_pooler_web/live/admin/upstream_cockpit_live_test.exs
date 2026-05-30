@@ -338,7 +338,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-status-summary", "access token expires")
     assert has_element?(view, "#upstream-status-summary", "token refresh succeeded")
     assert has_element?(view, "#upstream-status-summary", "Quota refresh 2026-05-27 08:15 UTC")
-    assert has_element?(view, "#upstream-status-summary", "Quota stale")
+    assert has_element?(view, "#upstream-status-summary", "Quota refresh needed")
 
     primary_selector = "#upstream-assignment-#{primary_assignment.id}"
     disabled_selector = "#upstream-assignment-#{disabled_assignment.id}"
@@ -350,7 +350,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, primary_selector, "Health active")
     assert has_element?(view, primary_selector, "Routing eligible")
     assert has_element?(view, primary_selector, "Quota known")
-    assert has_element?(view, primary_selector, "Quota stale")
+    assert has_element?(view, primary_selector, "Quota refresh needed")
     assert has_element?(view, primary_selector, "Active assignment")
 
     assert has_element?(view, disabled_selector, "Disabled failover assignment")
@@ -724,9 +724,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert fresh.charts.quota_health.state == "fresh"
     assert fresh.charts.quota_health.kpis.assignment_count == 1
     assert fresh.charts.quota_health.kpis.routing_usable_count == 1
+    assert fresh.charts.quota_health.kpis.fresh_count == 1
     assert fresh.charts.quota_health.kpis.stale_or_missing_count == 0
     assert fresh.charts.quota_health.kpis.exhausted_count == 0
     assert fresh.charts.quota_health.kpis.weekly_only_count == 0
+    assert fresh.charts.quota_health.kpis.missing_evidence_count == 0
     assert fresh.charts.quota_health.empty? == false
     assert fresh.charts.quota_health.degraded? == false
     assert fresh.flags.missing_quota? == false
@@ -734,11 +736,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert [%{state: "fresh", state_label: "Fresh", routing_usable?: true} = fresh_item] =
              fresh.charts.quota_health.items
 
+    assert fresh_item.state == fresh.charts.quota_health.state
     assert fresh_item.window_kind == "primary"
     assert fresh_item.pool_label =~ "Quota fresh"
     assert fresh_item.remaining_percent_value == 80.0
     assert fresh_item.used_percent_value == 20.0
     assert fresh_item.bar_value == 80.0
+    assert fresh_item.routing_usable? == true
+    assert fresh_item.reason_codes == []
+    assert fresh_item.primary_5h.routing_usable? == true
+    assert fresh_item.primary_5h.reason_codes == ["unknown_unusable"]
+    assert fresh_item.weekly == nil
 
     stale =
       quota_cockpit!(scope, "stale", [
@@ -755,13 +763,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert stale.charts.quota_health.state == "stale"
     assert stale.charts.quota_health.kpis.stale_count == 1
+    assert stale.charts.quota_health.kpis.routing_usable_count == 0
+    assert stale.charts.quota_health.kpis.fresh_count == 0
     assert stale.charts.quota_health.kpis.stale_or_missing_count == 1
+    assert stale.charts.quota_health.kpis.exhausted_count == 0
+    assert stale.charts.quota_health.kpis.weekly_only_count == 0
+    assert stale.charts.quota_health.kpis.missing_evidence_count == 0
 
     assert [%{state: "stale", state_label: "Stale", routing_usable?: false} = stale_item] =
              stale.charts.quota_health.items
 
+    assert stale_item.state == stale.charts.quota_health.state
     assert "not_fresh" in stale_item.reason_codes
+    assert stale_item.reason_codes == ["quota_window_unusable", "not_fresh"]
+    assert stale_item.routing_usable? == false
     assert stale_item.freshness_state == "stale"
+    assert stale_item.primary_5h.routing_usable? == false
+    assert stale_item.primary_5h.reason_codes == ["not_fresh"]
+    assert stale_item.weekly == nil
 
     exhausted =
       quota_cockpit!(scope, "exhausted", [
@@ -778,6 +797,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert exhausted.charts.quota_health.state == "exhausted"
     assert exhausted.charts.quota_health.kpis.exhausted_count == 1
+    assert exhausted.charts.quota_health.kpis.routing_usable_count == 0
+    assert exhausted.charts.quota_health.kpis.fresh_count == 0
+    assert exhausted.charts.quota_health.kpis.stale_count == 0
+    assert exhausted.charts.quota_health.kpis.weekly_only_count == 0
+    assert exhausted.charts.quota_health.kpis.missing_evidence_count == 0
 
     assert [
              %{state: "exhausted", state_label: "Exhausted", routing_usable?: false} =
@@ -785,8 +809,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            ] =
              exhausted.charts.quota_health.items
 
+    assert exhausted_item.state == exhausted.charts.quota_health.state
     assert "exhausted" in exhausted_item.reason_codes
+    assert exhausted_item.reason_codes == ["quota_window_unusable", "exhausted"]
+    assert exhausted_item.routing_usable? == false
     assert exhausted_item.bar_value == 0.0
+    assert exhausted_item.primary_5h.routing_usable? == false
+    assert exhausted_item.primary_5h.reason_codes == ["exhausted"]
+    assert exhausted_item.weekly == nil
 
     weekly_only =
       quota_cockpit!(scope, "weekly-only", [
@@ -804,6 +834,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert weekly_only.charts.quota_health.state == "weekly_only"
     assert weekly_only.charts.quota_health.kpis.weekly_only_count == 1
     assert weekly_only.charts.quota_health.kpis.routing_usable_count == 1
+    assert weekly_only.charts.quota_health.kpis.fresh_count == 0
+    assert weekly_only.charts.quota_health.kpis.stale_count == 0
+    assert weekly_only.charts.quota_health.kpis.exhausted_count == 0
+    assert weekly_only.charts.quota_health.kpis.missing_evidence_count == 0
 
     assert [
              %{state: "weekly_only", state_label: "Weekly-only", routing_usable?: true} =
@@ -811,8 +845,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            ] =
              weekly_only.charts.quota_health.items
 
+    assert weekly_item.state == weekly_only.charts.quota_health.state
     assert weekly_item.window_kind == "secondary"
     assert weekly_item.remaining_percent_value == 45.0
+    assert weekly_item.routing_usable? == true
+    assert weekly_item.reason_codes == ["quota_account_primary_unknown"]
+    assert weekly_item.weekly.routing_usable? == true
+    assert weekly_item.weekly.reason_codes == ["unknown_unusable"]
+    assert weekly_item.primary_5h == nil
 
     missing = quota_cockpit!(scope, "missing", [])
 
@@ -821,14 +861,79 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert missing.charts.quota_health.degraded? == true
     assert missing.charts.quota_health.kpis.missing_evidence_count == 1
     assert missing.charts.quota_health.kpis.stale_or_missing_count == 1
+    assert missing.charts.quota_health.kpis.routing_usable_count == 0
+    assert missing.charts.quota_health.kpis.fresh_count == 0
+    assert missing.charts.quota_health.kpis.stale_count == 0
+    assert missing.charts.quota_health.kpis.exhausted_count == 0
+    assert missing.charts.quota_health.kpis.weekly_only_count == 0
     assert missing.flags.missing_quota? == true
 
     assert [%{state: "missing_evidence", state_label: "Missing evidence"} = missing_item] =
              missing.charts.quota_health.items
 
+    assert missing_item.state == missing.charts.quota_health.state
+    assert missing_item.routing_usable? == false
+    assert missing_item.reason_codes == ["quota_evidence_missing"]
     assert missing_item.bar_value == 0.0
     assert missing_item.remaining_percent_value == nil
     assert missing_item.reset_at == nil
+    assert missing_item.primary_5h == nil
+    assert missing_item.weekly == nil
+  end
+
+  @tag :quota_health_blocked
+  test "read model keeps exhausted weekly quota authoritative over a fresh primary", %{
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    fresh_reset = DateTime.add(now, 4, :hour)
+    weekly_reset = DateTime.add(now, 7, :day)
+
+    contradiction =
+      quota_cockpit!(scope, "fresh-primary-exhausted-weekly", [
+        %{
+          window_kind: "primary",
+          window_minutes: 300,
+          active_limit: 100,
+          credits: 80,
+          used_percent: Decimal.new("20"),
+          reset_at: fresh_reset,
+          observed_at: now
+        },
+        %{
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          active_limit: 100,
+          credits: 0,
+          used_percent: Decimal.new("100"),
+          reset_at: weekly_reset,
+          observed_at: now
+        }
+      ])
+
+    assert contradiction.charts.quota_health.state == "exhausted"
+    assert contradiction.charts.quota_health.degraded? == true
+    assert contradiction.charts.quota_health.kpis.routing_usable_count == 0
+    assert contradiction.charts.quota_health.kpis.exhausted_count == 1
+    assert contradiction.charts.quota_health.kpis.fresh_count == 0
+    assert contradiction.charts.quota_health.kpis.weekly_only_count == 0
+    assert contradiction.flags.missing_quota? == false
+
+    assert [
+             %{state: "exhausted", state_label: "Exhausted", routing_usable?: false} =
+               contradiction_item
+           ] =
+             contradiction.charts.quota_health.items
+
+    assert contradiction_item.state == contradiction.charts.quota_health.state
+    assert "exhausted" in contradiction_item.reason_codes
+    assert contradiction_item.reason_codes == ["quota_window_unusable", "exhausted"]
+    assert contradiction_item.routing_usable? == false
+    assert contradiction_item.primary_5h.routing_usable? == true
+    assert contradiction_item.primary_5h.reason_codes == ["unknown_unusable"]
+    assert contradiction_item.weekly.routing_usable? == false
+    assert contradiction_item.weekly.reason_codes == ["exhausted"]
+    assert contradiction_item.weekly.remaining_percent_value == 0.0
   end
 
   @tag :quota_isolation
