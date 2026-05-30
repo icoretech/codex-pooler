@@ -7,13 +7,14 @@ POSTGRES_WAIT_ATTEMPTS ?= 30
 DEV_PID := tmp/dev-server.pid
 DEV_LOG := tmp/dev-server.log
 DEV_COMPOSE := docker compose -f docker-compose.dev.yml
+DEV_SECRET_ENV := set -a; [ ! -f .env ] || . <(grep -E '^(CODEX_POOLER_UPSTREAM_SECRET_KEY|CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION)=' .env); set +a;
 
 .PHONY: dev dev-db dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke
 
 dev: dev-db dev-migrate dev-pricing dev-stop
 	@mkdir -p tmp
 	@echo "starting Phoenix dev server on http://localhost:$(PORT)"
-	@PORT=$(PORT) POSTGRES_PORT=$(POSTGRES_PORT) mix phx.server > $(DEV_LOG) 2>&1 & echo $$! > $(DEV_PID)
+	@$(DEV_SECRET_ENV) PORT=$(PORT) POSTGRES_PORT=$(POSTGRES_PORT) mix phx.server > $(DEV_LOG) 2>&1 & echo $$! > $(DEV_PID)
 	@sleep 2
 	@$(MAKE) --no-print-directory dev-status
 
@@ -36,11 +37,11 @@ dev-db:
 	exit 1
 
 dev-migrate:
-	@POSTGRES_PORT=$(POSTGRES_PORT) mix ecto.create --quiet
-	@POSTGRES_PORT=$(POSTGRES_PORT) mix ecto.migrate
+	@$(DEV_SECRET_ENV) POSTGRES_PORT=$(POSTGRES_PORT) mix ecto.create --quiet
+	@$(DEV_SECRET_ENV) POSTGRES_PORT=$(POSTGRES_PORT) mix ecto.migrate
 
 dev-pricing:
-	@POSTGRES_PORT=$(POSTGRES_PORT) mix pricing.import_openai
+	@$(DEV_SECRET_ENV) POSTGRES_PORT=$(POSTGRES_PORT) mix pricing.import_openai
 
 dev-stop:
 	@if [ -f $(DEV_PID) ]; then \
