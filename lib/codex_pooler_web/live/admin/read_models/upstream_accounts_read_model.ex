@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @quota_priming_labels %{
@@ -48,6 +49,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
+  @type quota_readiness :: UpstreamQuotaReadiness.t()
   @type token_burn :: %{
           required(:level) => non_neg_integer(),
           required(:label) => String.t(),
@@ -72,6 +74,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reauth_reason_message) => String.t() | nil,
           required(:token_burn) => token_burn(),
           required(:assignments) => [assignment_snapshot()],
+          required(:quota_readiness) => quota_readiness(),
           required(:quota_limits) => [quota_limit_row()]
         }
 
@@ -135,7 +138,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       account.identity.chatgpt_account_id,
       account.plan_label,
       account.identity.plan_family,
-      account.identity.status
+      account.identity.status,
+      account.quota_readiness.label,
+      account.quota_readiness.state
       | assignment_search_terms(account.assignments)
     ]
   end
@@ -185,6 +190,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   end
 
   defp account_snapshot(identity, assignments, token_burns) do
+    quota_windows = QuotaWindows.list_quota_windows(identity)
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
     %{
@@ -204,7 +210,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       reauth_reason_message: reauth_reason_message(identity),
       token_burn: Map.fetch!(token_burns, identity.id),
       assignments: Map.get(assignments, identity.id, []),
-      quota_limits: quota_limit_rows(identity)
+      quota_readiness: quota_readiness(quota_windows),
+      quota_limits: quota_limit_rows(quota_windows)
     }
   end
 
@@ -268,9 +275,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     end
   end
 
-  defp quota_limit_rows(identity) do
-    windows = QuotaWindows.list_quota_windows(identity)
+  @spec quota_readiness([Quota.AccountQuotaWindow.t()]) :: UpstreamQuotaReadiness.t()
+  defp quota_readiness(windows) when is_list(windows) do
+    UpstreamQuotaReadiness.from_windows(windows)
+  end
 
+  defp quota_limit_rows(windows) when is_list(windows) do
     additional_limits =
       windows
       |> Enum.reject(&account_quota_window?/1)

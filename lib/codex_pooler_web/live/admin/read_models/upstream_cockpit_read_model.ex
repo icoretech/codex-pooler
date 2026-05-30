@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
 
   @reactivatable_statuses ~w(paused refresh_due refresh_failed)
   @recovery_statuses ~w(paused refresh_due refresh_failed reauth_required)
@@ -92,6 +93,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:routing_usable_count) => non_neg_integer(),
           required(:stale_or_missing_count) => non_neg_integer(),
           required(:exhausted_count) => non_neg_integer(),
+          required(:blocked_count) => non_neg_integer(),
           required(:weekly_only_count) => non_neg_integer(),
           required(:fresh_count) => non_neg_integer(),
           required(:stale_count) => non_neg_integer(),
@@ -539,10 +541,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   defp quota_health(%{identity: %UpstreamIdentity{} = identity}, %{items: assignments}) do
     as_of = now()
     windows = QuotaWindows.list_quota_windows(identity)
+    readiness = UpstreamQuotaReadiness.from_windows(windows, as_of)
 
     items =
       assignments
-      |> Enum.map(&quota_health_item(&1, windows, as_of))
+      |> Enum.map(&quota_health_item(&1, readiness, as_of))
       |> Enum.sort_by(&{&1.pool_label, &1.assignment_label, &1.assignment_id})
 
     kpis = quota_health_kpis(items)
@@ -560,10 +563,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp quota_health_item(assignment, windows, as_of) do
-    primary = select_account_window(windows, "primary", as_of)
-    weekly = select_account_window(windows, "secondary", as_of)
-    state = quota_assignment_state(primary, weekly, windows, as_of)
+  defp quota_health_item(assignment, readiness, as_of) do
+    primary = readiness.primary_window
+    weekly = readiness.weekly_window
+    state = quota_assignment_state(readiness)
     display_window = primary || weekly
     measurements = quota_measurements(display_window)
 
@@ -574,12 +577,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     |> Map.put(:assignment_id, assignment.id)
     |> Map.put(:state, state)
     |> Map.put(:state_label, quota_state_label(state))
-    |> Map.put(:routing_usable?, state in ["fresh", "weekly_only"])
+    |> Map.put(:routing_usable?, readiness.routing_ready_now?)
     |> Map.put(:window_kind, display_window && display_window.window_kind)
     |> Map.put(:window_minutes, display_window && display_window.window_minutes)
     |> Map.put(:reset_at, display_window && display_window.reset_at)
     |> Map.put(:freshness_state, quota_freshness_state(display_window, as_of))
-    |> Map.put(:reason_codes, quota_reason_codes(state, primary, weekly, windows, as_of))
+    |> Map.put(:reason_codes, readiness.reason_codes)
     |> Map.put(:remaining, measurements.remaining)
     |> Map.put(:capacity, measurements.capacity)
     |> Map.put(:used, measurements.used)
@@ -602,6 +605,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     |> Map.put(:stale_count, Map.get(counts, "stale", 0))
     |> Map.put(:missing_evidence_count, Map.get(counts, "missing_evidence", 0))
     |> Map.put(:exhausted_count, Map.get(counts, "exhausted", 0))
+    |> Map.put(:blocked_count, Map.get(counts, "blocked", 0))
     |> Map.put(:weekly_only_count, Map.get(counts, "weekly_only", 0))
     |> then(fn kpis ->
       Map.put(
@@ -613,93 +617,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp quota_health_degraded?(kpis) do
-    kpis.stale_or_missing_count > 0 or kpis.exhausted_count > 0
+    kpis.stale_or_missing_count > 0 or kpis.exhausted_count > 0 or kpis.blocked_count > 0
   end
 
   defp quota_health_state(%{assignment_count: 0}), do: "empty"
+
+  defp quota_health_state(%{blocked_count: blocked}) when blocked > 0, do: "blocked"
+
+  defp quota_health_state(%{exhausted_count: exhausted}) when exhausted > 0, do: "exhausted"
+
+  defp quota_health_state(%{stale_count: stale}) when stale > 0, do: "stale"
+
+  defp quota_health_state(%{missing_evidence_count: missing}) when missing > 0,
+    do: "missing_evidence"
 
   defp quota_health_state(%{assignment_count: count, fresh_count: count, weekly_only_count: 0}),
     do: "fresh"
 
   defp quota_health_state(%{assignment_count: count, weekly_only_count: count}), do: "weekly_only"
   defp quota_health_state(%{routing_usable_count: usable}) when usable > 0, do: "partial"
-  defp quota_health_state(%{exhausted_count: exhausted}) when exhausted > 0, do: "exhausted"
-  defp quota_health_state(%{stale_count: stale}) when stale > 0, do: "stale"
-
-  defp quota_health_state(%{missing_evidence_count: missing}) when missing > 0,
-    do: "missing_evidence"
 
   defp quota_health_state(_kpis), do: "unknown"
 
-  defp quota_assignment_state(primary, weekly, windows, as_of) do
-    cond do
-      windows == [] ->
-        "missing_evidence"
-
-      primary_usable?(primary, as_of) ->
-        "fresh"
-
-      weekly_only_state?(primary, weekly, windows, as_of) ->
-        "weekly_only"
-
-      quota_exhausted_state?(primary, weekly) ->
-        "exhausted"
-
-      stale_quota_state?(primary, weekly, as_of) ->
-        "stale"
-
-      true ->
-        "missing_evidence"
-    end
-  end
-
-  defp primary_usable?(%Quota.AccountQuotaWindow{} = primary, as_of),
-    do: QuotaWindows.usable_window?(primary, as_of)
-
-  defp primary_usable?(_primary, _as_of), do: false
-
-  defp weekly_only_state?(nil, %Quota.AccountQuotaWindow{} = weekly, windows, as_of),
-    do: weekly_only_usable?(weekly, windows, as_of)
-
-  defp weekly_only_state?(_primary, _weekly, _windows, _as_of), do: false
-
-  defp quota_exhausted_state?(primary, weekly),
-    do: quota_exhausted?(primary) or (is_nil(primary) and quota_exhausted?(weekly))
-
-  defp stale_quota_state?(primary, weekly, as_of),
-    do: stale_window?(primary, as_of) or (is_nil(primary) and stale_window?(weekly, as_of))
-
-  defp select_account_window(windows, window_kind, as_of) do
-    windows
-    |> Enum.filter(&account_window?(&1, window_kind))
-    |> Enum.min_by(&quota_window_sort_key(&1, as_of), fn -> nil end)
-  end
-
-  defp account_window?(%Quota.AccountQuotaWindow{} = window, "primary") do
-    window.quota_key == "account" and window.quota_scope == "account" and
-      window.window_kind == "primary" and window.window_minutes == 300
-  end
-
-  defp account_window?(%Quota.AccountQuotaWindow{} = window, "secondary") do
-    window.quota_key == "account" and window.quota_scope == "account" and
-      window.window_kind == "secondary"
-  end
-
-  defp quota_window_sort_key(%Quota.AccountQuotaWindow{} = window, as_of) do
-    {
-      if(QuotaWindows.usable_window?(window, as_of), do: 0, else: 1),
-      -(window.merge_precedence || 0),
-      -datetime_sort_value(window.observed_at),
-      -datetime_sort_value(window.updated_at),
-      -datetime_sort_value(window.reset_at)
-    }
-  end
-
-  defp weekly_only_usable?(%Quota.AccountQuotaWindow{} = weekly, windows, as_of) do
-    eligibility = QuotaWindows.routing_quota_eligibility_from_windows(windows, at: as_of)
-
-    eligibility.routing_state == :weekly_only_probe and QuotaWindows.usable_window?(weekly, as_of)
-  end
+  defp quota_assignment_state(%{state: "ready"}), do: "fresh"
+  defp quota_assignment_state(%{state: "weekly_only_probe"}), do: "weekly_only"
+  defp quota_assignment_state(%{state: state}), do: state
 
   defp quota_measurements(%Quota.AccountQuotaWindow{} = window),
     do: Measurements.for_window(window)
@@ -724,58 +666,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp quota_reason_codes("fresh", _primary, _weekly, _windows, _as_of), do: []
-
-  defp quota_reason_codes("weekly_only", _primary, _weekly, _windows, _as_of),
-    do: ["quota_account_primary_missing"]
-
-  defp quota_reason_codes("missing_evidence", _primary, _weekly, [], _as_of),
-    do: ["quota_evidence_missing"]
-
-  defp quota_reason_codes(
-         _state,
-         %Quota.AccountQuotaWindow{} = primary,
-         _weekly,
-         _windows,
-         as_of
-       ),
-       do: QuotaWindows.routing_window_reason_codes(primary, as_of)
-
-  defp quota_reason_codes(
-         _state,
-         _primary,
-         %Quota.AccountQuotaWindow{} = weekly,
-         _windows,
-         as_of
-       ),
-       do: QuotaWindows.routing_window_reason_codes(weekly, as_of)
-
-  defp quota_reason_codes(_state, _primary, _weekly, _windows, _as_of),
-    do: ["quota_evidence_missing"]
-
   defp quota_freshness_state(%Quota.AccountQuotaWindow{} = window, as_of),
     do: Evidence.current_freshness_state(window, as_of)
 
   defp quota_freshness_state(_window, _as_of), do: "missing"
 
-  defp stale_window?(%Quota.AccountQuotaWindow{} = window, as_of) do
-    Evidence.current_freshness_state(window, as_of) != "fresh" or
-      (not is_nil(window.reset_at) and DateTime.compare(window.reset_at, as_of) != :gt)
-  end
-
-  defp stale_window?(_window, _as_of), do: false
-
-  defp quota_exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
-    Decimal.compare(used_percent, Decimal.new(100)) != :lt
-  end
-
-  defp quota_exhausted?(%Quota.AccountQuotaWindow{active_limit: 0}), do: true
-  defp quota_exhausted?(%Quota.AccountQuotaWindow{credits: 0}), do: true
-  defp quota_exhausted?(_window), do: false
-
   defp quota_state_label("fresh"), do: "Fresh"
   defp quota_state_label("stale"), do: "Stale"
   defp quota_state_label("exhausted"), do: "Exhausted"
+  defp quota_state_label("blocked"), do: "Blocked"
   defp quota_state_label("weekly_only"), do: "Weekly-only"
   defp quota_state_label("missing_evidence"), do: "Missing evidence"
   defp quota_state_label(state), do: String.replace(state, "_", " ")
