@@ -27,6 +27,29 @@
   <img src=".github/assets/codex-pooler-readme-banner.png" alt="Codex Pooler gateway overview">
 </p>
 
+<table>
+  <tr>
+    <td align="center" valign="top" width="33%">
+      <a href=".github/assets/screen1.png">
+        <img src=".github/assets/screen1.png" alt="Codex Pooler upstream account readiness" width="100%">
+      </a><br>
+      <sub>Upstreams</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <a href=".github/assets/screen2.png">
+        <img src=".github/assets/screen2.png" alt="Codex Pooler Pool dashboard" width="100%">
+      </a><br>
+      <sub>Pools</sub>
+    </td>
+    <td align="center" valign="top" width="33%">
+      <a href=".github/assets/screen3.png">
+        <img src=".github/assets/screen3.png" alt="Codex Pooler request logs" width="100%">
+      </a><br>
+      <sub>Request logs</sub>
+    </td>
+  </tr>
+</table>
+
 Codex Pooler is a self-hosted gateway for sharing Codex account capacity across
 agents, tools, and teams.
 
