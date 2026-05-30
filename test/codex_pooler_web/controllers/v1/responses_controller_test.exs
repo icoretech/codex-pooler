@@ -16,20 +16,25 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
       put_model_source_assignments!: 2,
+      register_unboxed_pool_cleanup!: 1,
       assert_pre_first_stream_idle_timeout!: 1,
       start_public_endpoint!: 0,
       start_upstream: 1,
+      unboxed_run: 1,
       use_routing_strategy!: 3
     ]
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
+  alias CodexPooler.Accounting.{Attempt, DailyRollup, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Persistence.CodexSession
+
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
+
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
 
   @websocket_frame_timeout 1_000
   @ttfh_threshold_ms 9_500
@@ -1113,6 +1118,183 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.path == "/backend-api/codex/responses"
       assert_no_continuity_headers_forwarded!(captured)
     end
+  end
+
+  @tag :v1_post_session_start_race
+  test "POST /v1/responses recovers concurrent first starts for the same session key" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_session_start_race",
+               "status" => "completed",
+               "output" => [
+                 %{
+                   "type" => "message",
+                   "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+                 }
+               ],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = unboxed_run(fn -> gateway_setup(upstream) end)
+    unboxed_run(fn -> precreate_daily_rollups!(setup) end)
+    register_unboxed_pool_cleanup!(setup.pool)
+    parent = self()
+    barrier = make_ref()
+    session_key = "v1-session-start-race-#{System.unique_integer([:positive])}"
+
+    tasks =
+      for label <- [:first, :second] do
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          Process.put({SessionContinuity, :before_session_insert_barrier}, {parent, barrier})
+
+          conn =
+            unboxed_run(fn ->
+              build_conn()
+              |> auth(setup)
+              |> put_req_header("session-id", session_key)
+              |> post("/v1/responses", %{
+                "model" => setup.model.exposed_model_id,
+                "input" => "synthetic v1 session-start race #{label}"
+              })
+            end)
+
+          {label, conn.status, json_response(conn, conn.status)}
+        end)
+      end
+
+    ready_pids =
+      for _label <- [:first, :second] do
+        assert_receive {:session_insert_ready, ^barrier, pid}, 5_000
+        pid
+      end
+
+    assert Enum.uniq(ready_pids) == ready_pids
+
+    Enum.each(ready_pids, fn pid -> send(pid, {:session_insert_release, barrier}) end)
+
+    results = Task.await_many(tasks, 10_000)
+    statuses = Enum.map(results, fn {_label, status, _body} -> status end)
+
+    refute 500 in statuses
+    assert Enum.all?(statuses, &(&1 in [200, 409]))
+    assert Enum.any?(statuses, &(&1 == 200))
+
+    for {_label, status, body} <- results do
+      case status do
+        200 ->
+          assert %{"id" => "resp_v1_session_start_race", "object" => "response"} = body
+
+        409 ->
+          assert %{
+                   "error" => %{
+                     "type" => "invalid_request_error",
+                     "code" => "session_start_conflict",
+                     "message" => "Session start conflict",
+                     "param" => "session_id"
+                   }
+                 } = body
+      end
+    end
+
+    success_count = Enum.count(statuses, &(&1 == 200))
+
+    assert [session] =
+             unboxed_run(fn ->
+               Repo.all(
+                 from session in CodexSession,
+                   where:
+                     session.pool_id == ^setup.pool.id and
+                       fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
+                       session.status in ["active", "interrupted"]
+               )
+             end)
+
+    requests =
+      unboxed_run(fn ->
+        Repo.all(
+          from request in Request,
+            where: request.pool_id == ^setup.pool.id,
+            order_by: [asc: request.admitted_at]
+        )
+      end)
+
+    assert length(requests) == success_count
+    assert Enum.all?(requests, &(&1.status == "succeeded"))
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_id"] == session.id))
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_key"] == session_key))
+
+    attempts =
+      unboxed_run(fn ->
+        Repo.all(
+          from(attempt in Attempt, where: attempt.request_id in ^Enum.map(requests, & &1.id))
+        )
+      end)
+
+    assert length(attempts) == success_count
+    assert Enum.all?(attempts, &(&1.status == "succeeded"))
+
+    captured_requests = FakeUpstream.requests(upstream)
+    assert length(captured_requests) == success_count
+
+    for captured <- captured_requests do
+      assert captured.path == "/backend-api/codex/responses"
+      assert_no_continuity_headers_forwarded!(captured)
+    end
+
+    unboxed_run(fn ->
+      Repo.delete_all(from(turn in CodexTurn, where: turn.codex_session_id == ^session.id))
+    end)
+  end
+
+  defp precreate_daily_rollups!(setup) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    date = DateTime.to_date(now)
+
+    [
+      %{dimension_kind: "pool", pool_id: setup.pool.id},
+      %{dimension_kind: "api_key", pool_id: setup.pool.id, api_key_id: setup.api_key.id},
+      %{
+        dimension_kind: "pool_upstream_assignment",
+        pool_id: setup.pool.id,
+        pool_upstream_assignment_id: setup.assignment.id
+      },
+      %{
+        dimension_kind: "upstream_identity",
+        pool_id: setup.pool.id,
+        upstream_identity_id: setup.identity.id
+      },
+      %{dimension_kind: "model", pool_id: setup.pool.id, model_id: setup.model.id}
+    ]
+    |> Enum.each(fn attrs ->
+      attrs
+      |> Map.merge(%{
+        rollup_date: date,
+        request_count: 0,
+        success_count: 0,
+        failure_count: 0,
+        retry_count: 0,
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_micros: Decimal.new(0),
+        settled_cost_micros: Decimal.new(0),
+        created_at: now,
+        updated_at: now
+      })
+      |> then(&struct(DailyRollup, &1))
+      |> Repo.insert!()
+    end)
   end
 
   @tag :pinned_reauth

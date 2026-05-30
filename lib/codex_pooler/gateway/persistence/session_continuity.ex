@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
@@ -30,6 +32,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   @type request_ref :: Request.t() | Ecto.UUID.t()
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
+
+  @session_start_conflict_error %{
+    status: 409,
+    code: "session_start_conflict",
+    message: "Session start conflict",
+    param: "session_id"
+  }
+
+  @session_alias_conflict_target {:unsafe_fragment,
+                                  "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}
 
   @spec start_codex_session(auth(), opts()) :: session_result()
   def start_codex_session(auth, %RequestOptions{} = opts) do
@@ -176,8 +188,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     existing_session = existing_session_for_start!(auth, opts, session_key, now)
 
     case existing_session do
-      %CodexSession{} = session -> update_existing_session!(session, auth, opts, owner, now)
-      nil -> insert_new_session!(auth, opts, session_key, owner, now)
+      %CodexSession{} = session ->
+        update_existing_session!(session, auth, opts, owner, now)
+
+      nil ->
+        maybe_test_block_before_session_insert()
+        insert_new_session!(auth, opts, session_key, owner, now)
     end
   end
 
@@ -231,7 +247,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp insert_new_session!(auth, opts, session_key, owner, now) do
-    %CodexSession{
+    attrs = %{
       pool_id: auth.pool.id,
       api_key_id: auth.api_key.id,
       session_key: session_key,
@@ -244,7 +260,68 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       created_at: now,
       updated_at: now
     }
-    |> Repo.insert!()
+
+    %CodexSession{}
+    |> session_start_changeset(attrs)
+    |> Repo.insert(mode: :savepoint)
+    |> case do
+      {:ok, %CodexSession{} = session} ->
+        session
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        recover_session_start_conflict!(changeset, auth, opts, session_key, owner, now)
+    end
+  end
+
+  defp session_start_changeset(%CodexSession{} = session, attrs) do
+    session
+    |> Ecto.Changeset.change(attrs)
+    |> Ecto.Changeset.unique_constraint(:session_key,
+      name: :codex_sessions_pool_session_key_uq
+    )
+  end
+
+  defp recover_session_start_conflict!(changeset, auth, opts, session_key, owner, now) do
+    if session_key_unique_constraint?(changeset) do
+      case active_session_for_update(auth, opts, session_key, now) do
+        %CodexSession{} = session ->
+          Logger.info(
+            "session_start_conflict_recovered reason=codex_sessions_pool_session_key_uq outcome=reused_existing_session"
+          )
+
+          update_existing_session!(session, auth, opts, owner, now)
+
+        nil ->
+          Repo.rollback(@session_start_conflict_error)
+      end
+    else
+      Repo.rollback(changeset)
+    end
+  end
+
+  defp session_key_unique_constraint?(%Ecto.Changeset{} = changeset) do
+    Enum.any?(changeset.constraints, fn constraint ->
+      constraint.type == :unique and constraint.constraint == "codex_sessions_pool_session_key_uq"
+    end) and
+      Keyword.has_key?(changeset.errors, :session_key)
+  end
+
+  if Mix.env() == :test do
+    defp maybe_test_block_before_session_insert do
+      case Process.get({__MODULE__, :before_session_insert_barrier}) do
+        {owner_pid, ref} when is_pid(owner_pid) ->
+          send(owner_pid, {:session_insert_ready, ref, self()})
+
+          receive do
+            {:session_insert_release, ^ref} -> :ok
+          end
+
+        _value ->
+          :ok
+      end
+    end
+  else
+    defp maybe_test_block_before_session_insert, do: :ok
   end
 
   defp persist_session_lease!(%CodexSession{} = session, %BridgeOwnerLease{} = lease, now) do
@@ -573,17 +650,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     alias_hash = alias_hash(alias_value)
     expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
 
-    existing =
-      Repo.one(
-        from alias_record in BridgeSessionAlias,
-          where:
-            alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
-              alias_record.alias_kind == ^alias_kind and alias_record.alias_hash == ^alias_hash and
-              alias_record.status == "active",
-          limit: 1,
-          lock: "FOR UPDATE"
-      )
-
     attrs = %{
       codex_session_id: session.id,
       pool_id: auth.pool.id,
@@ -598,17 +664,29 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       updated_at: now
     }
 
-    case existing do
-      %BridgeSessionAlias{} = alias_record ->
-        alias_record
-        |> BridgeSessionAlias.changeset(Map.put(attrs, :created_at, alias_record.created_at))
-        |> Repo.update!()
+    on_conflict =
+      from alias_record in BridgeSessionAlias,
+        update: [
+          set: [
+            codex_session_id: ^session.id,
+            alias_preview: ^attrs.alias_preview,
+            expires_at: fragment("GREATEST(?, EXCLUDED.expires_at)", alias_record.expires_at),
+            last_seen_at:
+              fragment(
+                "GREATEST(COALESCE(?, EXCLUDED.last_seen_at), EXCLUDED.last_seen_at)",
+                alias_record.last_seen_at
+              ),
+            metadata: ^attrs.metadata,
+            updated_at: fragment("GREATEST(?, EXCLUDED.updated_at)", alias_record.updated_at)
+          ]
+        ]
 
-      nil ->
-        %BridgeSessionAlias{}
-        |> BridgeSessionAlias.changeset(Map.put(attrs, :created_at, now))
-        |> Repo.insert!()
-    end
+    %BridgeSessionAlias{}
+    |> BridgeSessionAlias.changeset(Map.put(attrs, :created_at, now))
+    |> Repo.insert!(
+      on_conflict: on_conflict,
+      conflict_target: @session_alias_conflict_target
+    )
   end
 
   defp alias_candidates(%RequestOptions{} = request_options, session_key) do
