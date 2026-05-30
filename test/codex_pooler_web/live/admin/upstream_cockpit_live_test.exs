@@ -913,8 +913,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         assignment_label: "Request health unrelated assignment"
       })
 
-    target_success_at = DateTime.add(now, -3, :hour)
-    target_failure_at = DateTime.add(now, -4, :hour)
+    target_success_at = DateTime.add(now, -30, :minute)
+    target_failure_at = target_success_at
     target_older_failure_at = DateTime.add(now, -2, :day)
 
     request_health_request_fixture(pool, target_assignment, %{
