@@ -369,6 +369,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_input_item(%{"type" => "message", "role" => "assistant"} = item, _payload),
     do: validate_assistant_replay_item(item)
 
+  defp validate_input_item(%{"phase" => _phase}, _payload),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
   defp validate_input_item(%{"type" => "reasoning"} = item, _payload),
     do: validate_reasoning_replay_item(item)
 
@@ -623,8 +626,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp previous_response_id?(_payload), do: false
 
   defp validate_assistant_replay_item(%{"role" => "assistant", "content" => content} = item) do
-    with :ok <- validate_exact_item_keys(item, ["type", "role", "content", "id"]),
-         :ok <- validate_optional_id(item) do
+    with :ok <- validate_exact_item_keys(item, ["type", "role", "content", "id", "phase"]),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_assistant_phase(item) do
       validate_assistant_replay_content(content)
     end
   end
@@ -652,11 +656,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_assistant_replay_content_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
+  defp validate_optional_assistant_phase(%{"phase" => phase})
+       when phase in ["commentary", "final_answer"],
+       do: :ok
+
+  defp validate_optional_assistant_phase(%{"phase" => nil}), do: :ok
+
+  defp validate_optional_assistant_phase(%{"phase" => _phase}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_assistant_phase(_item), do: :ok
+
   defp validate_reasoning_replay_item(%{"id" => id, "summary" => summary} = item)
        when is_binary(id) do
     with :ok <- validate_exact_item_keys(item, ["type", "id", "summary", "encrypted_content"]),
          :ok <- validate_nonblank(id),
          :ok <- validate_reasoning_replay_encrypted_content(Map.get(item, "encrypted_content")) do
+      validate_reasoning_replay_summary(summary)
+    end
+  end
+
+  defp validate_reasoning_replay_item(
+         %{"summary" => summary, "encrypted_content" => encrypted_content} = item
+       )
+       when is_binary(encrypted_content) do
+    with :ok <- validate_exact_item_keys(item, ["type", "summary", "encrypted_content"]),
+         :ok <- validate_nonblank(encrypted_content) do
       validate_reasoning_replay_summary(summary)
     end
   end

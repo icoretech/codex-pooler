@@ -475,6 +475,147 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :v1_websocket
+  @tag :tool_result_previous_response
+  test "GET /v1/responses websocket forwards the same safe continuation shape and rejects malformed item references" do
+    upstream =
+      start_upstream(public_websocket_completed_response("resp_v1_websocket_safe_continuation"))
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "v1-safe-continuation-ws-#{System.unique_integer([:positive])}"
+    previous_response_id = "resp_v1_ws_safe_previous_#{System.unique_integer([:positive])}"
+    tool_call_id = "call_v1_ws_safe_#{System.unique_integer([:positive])}"
+
+    {safe_conn, safe_websocket, safe_ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => previous_response_id,
+          "store" => false,
+          "generate" => true,
+          "input" => [
+            %{"type" => "item_reference", "id" => "msg_v1_ws_safe_reference"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => tool_call_id,
+              "output" => "{\"ok\":true}"
+            },
+            %{
+              "role" => "user",
+              "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+            }
+          ]
+        })
+
+      {safe_conn, safe_websocket} =
+        public_websocket_send_text!(safe_conn, safe_websocket, safe_ref, payload)
+
+      {safe_conn, _safe_websocket, frame} =
+        public_websocket_receive_text!(safe_conn, safe_websocket, safe_ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_v1_websocket_safe_continuation"}
+             } = Jason.decode!(frame)
+
+      assert_receive_finalized_request!()
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["type"] == "response.create"
+      assert captured.json["generate"] == true
+      assert captured.json["store"] == false
+      assert captured.json["previous_response_id"] == previous_response_id
+      assert captured.json["stream"] == true
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "item_reference",
+               "function_call_output",
+               "message"
+             ]
+
+      assert hd(captured.json["input"])["id"] == "msg_v1_ws_safe_reference"
+      assert Enum.at(captured.json["input"], 1)["call_id"] == tool_call_id
+      assert Enum.at(captured.json["input"], 2)["role"] == "user"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      invalid_turn_state = "v1-unsafe-continuation-ws-#{System.unique_integer([:positive])}"
+
+      invalid_previous_response_id =
+        "resp_v1_ws_unsafe_previous_#{System.unique_integer([:positive])}"
+
+      {invalid_conn, invalid_websocket, invalid_ref, _invalid_response_headers} =
+        public_v1_websocket_connect!(port, setup, invalid_turn_state, [
+          {"openai-beta", "responses_websockets=2026-02-06"}
+        ])
+
+      try do
+        invalid_payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "previous_response_id" => invalid_previous_response_id,
+            "generate" => true,
+            "input" => [
+              %{
+                "type" => "item_reference",
+                "id" => "msg_v1_ws_unsafe_reference",
+                "output" => "unsafe-inline-leak"
+              },
+              %{
+                "type" => "function_call_output",
+                "call_id" => tool_call_id,
+                "output" => "{\"ok\":true}"
+              }
+            ]
+          })
+
+        {invalid_conn, invalid_websocket} =
+          public_websocket_send_text!(
+            invalid_conn,
+            invalid_websocket,
+            invalid_ref,
+            invalid_payload
+          )
+
+        {_invalid_conn, _invalid_websocket, invalid_frame} =
+          public_websocket_receive_text!(invalid_conn, invalid_websocket, invalid_ref)
+
+        assert %{"type" => "error", "status" => 400, "error" => error} =
+                 Jason.decode!(invalid_frame)
+
+        assert error["code"] == "invalid_request"
+        assert error["param"] == "input"
+
+        refute invalid_frame =~ "unsafe-inline-leak"
+        refute invalid_frame =~ "msg_v1_ws_unsafe_reference"
+        refute invalid_frame =~ invalid_previous_response_id
+      after
+        Mint.HTTP.close(invalid_conn)
+      end
+
+      assert FakeUpstream.count(upstream) == 1
+      assert Repo.aggregate(Request, :count) == 1
+      assert Repo.aggregate(Attempt, :count) == 1
+
+      safe_conn
+    after
+      Mint.HTTP.close(safe_conn)
+    end
+  end
+
+  @tag :v1_websocket
   test "GET /v1/responses keeps opencode continuity headers local without forwarding" do
     upstream =
       start_upstream(public_websocket_completed_response("resp_v1_websocket_continuity"))
@@ -614,6 +755,219 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "/backend-api/codex/responses"
 
     refute inspect(request.request_metadata) =~ "synthetic v1 response"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
+  @tag :tool_result_previous_response
+  test "POST /v1/responses forwards safe continuation shape and rejects malformed item references without echoing payloads",
+       %{
+         conn: conn
+       } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_http_safe_continuation",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    previous_response_id = "resp_v1_http_safe_previous_#{System.unique_integer([:positive])}"
+    tool_call_id = "call_v1_http_safe_#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => previous_response_id,
+        "store" => false,
+        "input" => [
+          %{"type" => "item_reference", "id" => "msg_v1_http_safe_reference"},
+          %{
+            "type" => "function_call_output",
+            "call_id" => tool_call_id,
+            "output" => "{\"ok\":true}"
+          },
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_http_safe_continuation", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["previous_response_id"] == previous_response_id
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert Enum.map(captured.json["input"], & &1["type"]) == [
+             "item_reference",
+             "function_call_output",
+             "message"
+           ]
+
+    assert hd(captured.json["input"])["id"] == "msg_v1_http_safe_reference"
+    assert Enum.at(captured.json["input"], 1)["call_id"] == tool_call_id
+    assert Enum.at(captured.json["input"], 2)["role"] == "user"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    invalid_conn =
+      build_conn()
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => previous_response_id,
+        "input" => [
+          %{
+            "type" => "item_reference",
+            "id" => "msg_v1_http_unsafe_reference",
+            "output" => "unsafe-inline-leak"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => tool_call_id,
+            "output" => "{\"ok\":true}"
+          }
+        ]
+      })
+
+    invalid_response = json_response(invalid_conn, 400)
+    assert %{"error" => error} = invalid_response
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
+
+    invalid_text = inspect(invalid_response)
+    refute invalid_text =~ "unsafe-inline-leak"
+    refute invalid_text =~ "msg_v1_http_unsafe_reference"
+
+    assert FakeUpstream.count(upstream) == 1
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
+  end
+
+  @tag :tool_result_previous_response
+  test "POST /v1/responses forwards real opencode ordinary replay shape", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_http_opencode_ordinary_replay",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "include" => ["reasoning.encrypted_content"],
+        "prompt_cache_key" => "fixture-cache-key",
+        "reasoning" => %{"effort" => "xhigh", "summary" => "detailed"},
+        "store" => false,
+        "stream" => true,
+        "text" => %{"verbosity" => "medium"},
+        "tool_choice" => "auto",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "lookup_fixture",
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{},
+              "additionalProperties" => false
+            }
+          }
+        ],
+        "input" => [
+          %{"role" => "developer", "content" => "synthetic developer instruction"},
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic user request"}]
+          },
+          %{
+            "type" => "reasoning",
+            "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+            "encrypted_content" => "synthetic-encrypted-reasoning"
+          },
+          %{
+            "role" => "assistant",
+            "phase" => "commentary",
+            "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_v1_http_replay",
+            "name" => "lookup_fixture",
+            "arguments" => "{\"value\":\"sample\"}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_v1_http_replay",
+            "output" => "synthetic tool output"
+          }
+        ]
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "event: response.completed\n"
+    assert conn.resp_body =~ "resp_v1_http_opencode_ordinary_replay"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    refute Map.has_key?(captured.json, "previous_response_id")
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert Enum.map(captured.json["input"], & &1["type"]) == [
+             "message",
+             "message",
+             "reasoning",
+             "message",
+             "function_call",
+             "function_call_output"
+           ]
+
+    assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
+             Enum.at(captured.json["input"], 2)
+
+    refute Map.has_key?(Enum.at(captured.json["input"], 2), "id")
+    assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 3)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    metadata = inspect(request.request_metadata)
+    refute metadata =~ "synthetic developer instruction"
+    refute metadata =~ "synthetic user request"
+    refute metadata =~ "synthetic summary"
+    refute metadata =~ "synthetic assistant replay"
+    refute metadata =~ "synthetic tool output"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"

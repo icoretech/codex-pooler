@@ -551,6 +551,77 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert Enum.map(output, & &1["type"]) == ["input_text", "input_image"]
     end
 
+    test "opencode ordinary replay accepts idless encrypted reasoning and assistant phase" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "include" => ["reasoning.encrypted_content"],
+        "prompt_cache_key" => "fixture-cache-key",
+        "reasoning" => %{"effort" => "xhigh", "summary" => "detailed"},
+        "store" => false,
+        "stream" => true,
+        "text" => %{"verbosity" => "medium"},
+        "tool_choice" => "auto",
+        "tools" => [
+          flat_function_tool("lookup_fixture", %{
+            "type" => "object",
+            "properties" => %{},
+            "additionalProperties" => false
+          })
+        ],
+        "input" => [
+          %{"role" => "developer", "content" => "synthetic developer instruction"},
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic user request"},
+              %{"type" => "input_text", "text" => "synthetic extra context"}
+            ]
+          },
+          %{
+            "type" => "reasoning",
+            "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+            "encrypted_content" => "synthetic-encrypted-reasoning"
+          },
+          %{
+            "role" => "assistant",
+            "phase" => "commentary",
+            "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_fixture",
+            "name" => "lookup_fixture",
+            "arguments" => "{\"value\":\"sample\"}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_fixture",
+            "output" => "synthetic tool output"
+          }
+        ]
+      }
+
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+      refute Map.has_key?(coerced, "previous_response_id")
+
+      assert Enum.map(coerced["input"], & &1["type"]) == [
+               "message",
+               "message",
+               "reasoning",
+               "message",
+               "function_call",
+               "function_call_output"
+             ]
+
+      assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
+               Enum.at(coerced["input"], 2)
+
+      refute Map.has_key?(Enum.at(coerced["input"], 2), "id")
+
+      assert %{"role" => "assistant", "phase" => "commentary"} =
+               Enum.at(coerced["input"], 3)
+    end
+
     test "opencode native replay repairs paired blank tool call ids only" do
       payload = %{
         "model" => "gpt-fixture-text",
@@ -592,7 +663,34 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "content" => [%{"type" => "output_text", "text" => "bad"}],
           "status" => "completed"
         },
+        %{
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "bad"}],
+          "phase" => "progress"
+        },
+        %{
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "bad"}],
+          "phase" => "commentary",
+          "status" => "completed"
+        },
+        %{
+          "role" => "user",
+          "content" => "bad",
+          "phase" => "commentary"
+        },
         %{"type" => "reasoning", "id" => "", "summary" => []},
+        %{
+          "type" => "reasoning",
+          "summary" => [%{"type" => "summary_text", "text" => "bad"}],
+          "encrypted_content" => ""
+        },
+        %{
+          "type" => "reasoning",
+          "summary" => [%{"type" => "summary_text", "text" => "bad"}],
+          "encrypted_content" => "synthetic-encrypted-reasoning",
+          "status" => "completed"
+        },
         %{
           "type" => "reasoning",
           "id" => "rs_fixture",
@@ -732,6 +830,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
                  Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
       end)
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{"type" => "item_reference", "id" => "msg_existing_fixture"},
+                   %{
+                     "type" => "function_call_output",
+                     "call_id" => "call_fixture",
+                     "output" => "ok"
+                   }
+                 ]
+               })
 
       assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
                Responses.coerce(%{

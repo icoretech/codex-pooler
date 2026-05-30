@@ -294,6 +294,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
            ]
          }, "input"},
         {%{
+           "input" => [
+             %{"type" => "item_reference", "id" => "msg_existing_missing_previous"},
+             %{
+               "type" => "function_call_output",
+               "call_id" => "call_missing_previous",
+               "output" => "bad"
+             }
+           ]
+         }, "input"},
+        {%{
            "previous_response_id" => 123,
            "input" => [
              %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
