@@ -49,7 +49,7 @@ defmodule CodexPooler.MixProject do
       {:postgrex, "== 0.22.2"},
       {:phoenix_html, "== 4.3.0"},
       {:phoenix_live_reload, "== 1.6.2", only: :dev},
-      {:phoenix_live_view, "== 1.1.30"},
+      {:phoenix_live_view, "== 1.1.31"},
       {:lazy_html, "== 0.1.11", only: :test},
       {:oban, "== 2.23.0"},
       {:phoenix_live_dashboard, "== 0.8.7", only: :dev},
