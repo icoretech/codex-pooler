@@ -1,0 +1,68 @@
+---
+title: Codex Pooler
+description: Public overview for Codex Pooler operators and client integrators.
+---
+
+Codex Pooler gives teams one controlled gateway for many Codex accounts. Add accounts once, group them into Pools, and give agents or tools stable Pool API keys instead of spreading account secrets across every workstation, CI job, and desktop app.
+
+![Codex Pooler gateway overview](/codex-pooler-readme-banner.png)
+
+:::note[Work in Progress]
+Codex Pooler is under active development. No published release exists yet, so the application, docs, and deployment shape can change before the first release.
+:::
+
+## What Codex Pooler Helps With
+
+Codex Pooler is built for operators who need shared Codex capacity without losing control of accounts, keys, routing, and request evidence.
+
+- **Use many accounts through one gateway.** Assign upstream accounts to Pools and let clients authenticate with Pool API keys.
+- **Use Codex subscriptions from API-only harnesses.** Point tools that only support paid API-style Responses endpoints at shared Codex subscriptions without custom plugins, local hacks, or per-client credential juggling.
+- **Keep clients stable while capacity changes.** Rotate accounts, pause upstreams, or adjust Pool policy without reconfiguring every client.
+- **Route with operational context.** Account health, model support, quota evidence, policy, and session continuity all inform account selection.
+- **Inspect what happened without exposing payloads.** Request logs, audit logs, and MCP tools expose sanitized metadata, not prompts, files, tokens, cookies, or raw account secrets.
+- **Run it yourself.** Start locally with Docker Compose or deploy the Helm chart with separate app, worker, scheduler, and migration roles.
+
+## Who It Is For
+
+Codex Pooler fits small expert teams that already operate trusted Codex accounts and want a safer coordination layer around them.
+
+It is useful when you need to:
+
+- Give multiple agents and coding tools access to shared capacity
+- Use harnesses built for paid API Responses with shared Codex subscriptions
+- Avoid custom plugin or adapter setup when a standard OpenAI-style base URL is enough
+- Keep account credentials out of client configuration
+- See which Pool, model, route, and upstream handled a request
+- Keep resumable Codex sessions attached to the right upstream account
+- Give trusted operators read-only metadata access through MCP
+
+It is not a hosted provider, a general OpenAI API clone, or a way to bypass account terms and limits. Operate only accounts you are allowed to use, scope keys to trusted clients, and connect MCP only to hosts you trust with operator metadata.
+
+## How It Works
+
+1. **Create a Pool.** A Pool defines the boundary clients authenticate against.
+2. **Add upstream accounts.** Operators connect the Codex accounts the Pool can use.
+3. **Issue Pool API keys.** Clients use stable keys that represent the Pool, not a single account.
+4. **Point clients at the right runtime URL.** Codex backend clients use `/backend-api/codex`; selected SDK clients use `/v1`; operator MCP hosts use `/mcp`.
+5. **Watch sanitized operations data.** The admin UI and MCP endpoint show metadata for routing, usage, requests, audit events, and account readiness.
+
+For local setup examples, use `http://localhost:4000`. For deployed examples, use `https://pooler.example.com`.
+
+## Start Here
+
+- [Quick Start](./getting-started/quick-start/), run locally with Docker Compose, bootstrap the first owner, check health, and create your first Pool API key
+- [Configuration](./getting-started/configuration/), review release environment variables, runtime URLs, support boundaries, and responsible operation notes
+- [Runtime Routes](./reference/runtime-routes/), choose the right client-facing URL for Codex backend clients, selected SDK clients, or operator MCP hosts
+- [Routing Strategies](./reference/routing-strategies/), understand Pool policy, continuity, quota evidence, and account selection
+
+## Runtime URLs At A Glance
+
+```text
+Codex backend clients: http://localhost:4000/backend-api/codex
+Selected SDK clients:  http://localhost:4000/v1
+Operator MCP hosts:    http://localhost:4000/mcp
+```
+
+For a deployed instance, replace `http://localhost:4000` with your HTTPS host, for example `https://pooler.example.com`.
+
+The `/v1` surface is intentionally narrow. Supported requests are translated and routed through the same Pool rules as Codex backend traffic; unsupported routes return explicit errors instead of pretending full OpenAI API parity.

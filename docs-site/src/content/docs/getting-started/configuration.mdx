@@ -1,0 +1,163 @@
+---
+title: Configuration
+description: Configure release environment variables, runtime URLs, and public-safe operation boundaries.
+---
+
+Codex Pooler keeps boot-time release settings in environment variables and day-to-day operator settings in the database-backed admin UI.
+
+:::note[Work in Progress]
+Codex Pooler has no published release yet. Treat configuration examples as current project guidance, not a frozen release contract.
+:::
+
+## Local Defaults
+
+For Docker Compose, `scripts/self-host/generate-env.sh` writes a local `.env` file with generated secrets and local defaults. Keep that file private. Don't reuse generated values across public installs.
+
+The local web URL is `http://localhost:4000`.
+
+## Release Environment Variables
+
+Set release environment variables for values the app needs before it can read database settings.
+
+<table>
+  <thead>
+    <tr>
+      <th>Variable</th>
+      <th>Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>CODEX_POOLER_IMAGE</code></td>
+      <td>Release image name used by the Compose flow</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_IMAGE_TAG</code></td>
+      <td>Release image tag used by the Compose flow</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_HTTP_PORT</code></td>
+      <td>Local host port, default <code>4000</code></td>
+    </tr>
+    <tr>
+      <td><code>DATABASE_URL</code></td>
+      <td>Postgres connection URL</td>
+    </tr>
+    <tr>
+      <td><code>SECRET_KEY_BASE</code></td>
+      <td>Phoenix signing and encryption secret</td>
+    </tr>
+    <tr>
+      <td><code>PHX_HOST</code></td>
+      <td>Public host used by the Phoenix endpoint</td>
+    </tr>
+    <tr>
+      <td><code>PORT</code></td>
+      <td>HTTP port inside the release container</td>
+    </tr>
+    <tr>
+      <td><code>PHX_SERVER</code></td>
+      <td>Set to <code>true</code> so the release serves HTTP</td>
+    </tr>
+    <tr>
+      <td><code>OBAN_MODE</code></td>
+      <td>Release role, such as <code>web</code>, <code>worker</code>, <code>scheduler</code>, or <code>all</code></td>
+    </tr>
+    <tr>
+      <td><code>OBAN_JOBS_QUEUE_LIMIT</code></td>
+      <td>Job queue limit for the release role</td>
+    </tr>
+    <tr>
+      <td><code>DNS_CLUSTER_QUERY</code></td>
+      <td>DNS clustering query when clustering is enabled</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_TOTP_ENCRYPTION_KEY</code></td>
+      <td>TOTP encryption root key</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_TOTP_KEY_VERSION</code></td>
+      <td>TOTP key version</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_UPSTREAM_SECRET_KEY</code></td>
+      <td>Upstream secret encryption root key</td>
+    </tr>
+    <tr>
+      <td><code>CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION</code></td>
+      <td>Upstream secret key version</td>
+    </tr>
+  </tbody>
+</table>
+
+The upstream secret key must decode to 32 raw bytes. The TOTP and upstream key versions let operators rotate encrypted secret roots deliberately.
+
+## Admin-Managed Settings
+
+After the app boots, manage operational settings from the admin UI instead of editing code. Instance settings cover areas such as file limits, ingress trust, gateway diagnostics, route-class admission, circuit thresholds, metrics auth, operator email, model metadata, upstream timeouts, pricing catalog settings, and SMTP delivery.
+
+Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
+
+## Runtime URLs
+
+Use only the surface that matches your client.
+
+<table>
+  <thead>
+    <tr>
+      <th>Client type</th>
+      <th>Local URL</th>
+      <th>Deployed example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Codex backend client</td>
+      <td><code>http://localhost:4000/backend-api/codex</code></td>
+      <td><code>https://pooler.example.com/backend-api/codex</code></td>
+    </tr>
+    <tr>
+      <td>Narrow OpenAI-compatible SDK client</td>
+      <td><code>http://localhost:4000/v1</code></td>
+      <td><code>https://pooler.example.com/v1</code></td>
+    </tr>
+    <tr>
+      <td>Operator MCP host</td>
+      <td><code>http://localhost:4000/mcp</code></td>
+      <td><code>https://pooler.example.com/mcp</code></td>
+    </tr>
+  </tbody>
+</table>
+
+Use `Authorization: Bearer <pool-api-key>` for `/backend-api` and `/v1`. Use `Authorization: Bearer <operator-mcp-token>` for `/mcp`.
+
+The operator MCP endpoint is metadata-only and read-only. It doesn't accept Pool API keys, browser sessions, cookies, invite tokens, upstream tokens, or query tokens.
+
+## Health And Readiness
+
+Use these checks for a local instance:
+
+```bash
+curl -fsS http://localhost:4000/healthz
+curl -fsS http://localhost:4000/readyz
+```
+
+For a deployed instance, use the same paths on `https://pooler.example.com`.
+
+## Support And Responsible Operation
+
+The support boundary is intentionally narrow. Public docs can help you start the service, configure supported route surfaces, and understand metadata-only behavior. They can't decide whether your organization may use a provider account, share a Pool, or connect a given MCP host.
+
+For responsible operation:
+
+- Operate only accounts you are allowed to use
+- Keep Pool API keys separate from operator MCP tokens
+- Rotate exposed credentials immediately
+- Connect MCP only to hosts you trust with operator metadata
+- Don't send raw prompts, request bodies, response bodies, file bytes, audio, images, cookies, bearer tokens, Pool API keys, MCP tokens, upstream secrets, or `auth.json` material in support messages
+
+## Compatibility Notes
+
+The Codex backend compatibility route is rooted at `/backend-api/codex/*`. The `/v1` surface provides narrow OpenAI-compatible support for selected SDK routes, then routes supported requests through the same Pool policy and accounting path.
+
+It does not provide full OpenAI API parity. OpenAI Realtime SDK websocket and session routes are not supported. `GET /v1/responses` is narrow Responses websocket compatibility, not `/v1/realtime` support.

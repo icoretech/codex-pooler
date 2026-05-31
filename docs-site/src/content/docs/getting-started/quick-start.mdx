@@ -1,0 +1,110 @@
+---
+title: Quick Start
+description: Run Codex Pooler locally, create the first owner, and issue a first Pool API key.
+---
+
+This quick start runs Codex Pooler locally with Docker Compose and a local Postgres database. It is meant for first evaluation, local smoke checks, and small self-hosted trials.
+
+:::note[Work in Progress]
+No published release exists yet. Expect setup details and docs to change before the first release.
+:::
+
+## Prerequisites
+
+- Docker with Compose
+- `openssl`
+- A browser for the owner bootstrap and admin UI
+
+## Start The Local Stack
+
+Clone the repository, generate local secrets, and start the Compose stack.
+
+```bash
+git clone https://github.com/icoretech/codex-pooler.git
+cd codex-pooler
+
+scripts/self-host/generate-env.sh
+docker compose pull
+docker compose up -d
+```
+
+Open `http://localhost:4000`.
+
+Useful local commands:
+
+```bash
+docker compose ps
+docker compose logs -f app
+docker compose down
+```
+
+To remove the local database too, run:
+
+```bash
+docker compose down -v
+```
+
+## First Login
+
+On the first visit, create the owner account from the bootstrap flow. If the app redirects you to sign in, use the owner account you just created.
+
+After login, start from the admin UI:
+
+- `http://localhost:4000/admin/pools`
+- `http://localhost:4000/admin/upstreams`
+- `http://localhost:4000/admin/api-keys`
+
+The bootstrap account is the instance owner. Keep its credentials private and create separate operator accounts for day-to-day access.
+
+## Health Checks
+
+Check that the web process answers before creating runtime credentials.
+
+```bash
+curl -fsS http://localhost:4000/healthz
+curl -fsS http://localhost:4000/readyz
+```
+
+Both checks should return a successful response. If they don't, inspect the app logs with `docker compose logs -f app`.
+
+## Create Your First Pool And API Key
+
+1. Create a Pool in `/admin/pools`.
+2. Add or import an upstream account in `/admin/upstreams`.
+3. Create a Pool API key in `/admin/api-keys`.
+4. Copy the raw key once and store it in your client or secret manager.
+
+The Pool API key represents the Pool, not a single upstream account. Codex Pooler can then choose an eligible upstream for each request.
+
+Treat imported Codex account material as owned by Codex Pooler after import. Don't keep the same account credential active in other automation unless you accept that provider refresh-token rotation can force one copy to reauthenticate.
+
+## Point A Client At The Local Gateway
+
+For Codex backend clients, use the Codex backend compatibility route:
+
+```text
+Base URL: http://localhost:4000/backend-api/codex
+Authorization: Bearer <pool-api-key>
+```
+
+For selected OpenAI-style SDK clients, use the narrow OpenAI-compatible `/v1` surface:
+
+```text
+Base URL: http://localhost:4000/v1
+Authorization: Bearer <pool-api-key>
+```
+
+For trusted operator metadata tools, use the operator MCP endpoint with an operator MCP token, not a Pool API key:
+
+```text
+MCP URL: http://localhost:4000/mcp
+Authorization: Bearer <operator-mcp-token>
+```
+
+For deployed examples, replace the local host with `https://pooler.example.com`, such as `https://pooler.example.com/v1`.
+
+## Support Boundary
+
+The quick start checks that Codex Pooler starts, accepts owner setup, and can issue a Pool API key. It does not prove your upstream account is permitted for every model, that every SDK route is supported, or that your deployment is production-ready.
+
+For responsible operation, give Pool API keys only to trusted clients, keep MCP tokens separate from runtime credentials, and don't paste prompts, tokens, cookies, or account secrets into support requests.
