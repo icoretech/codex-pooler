@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
   import Phoenix.LiveViewTest
 
   alias CodexPooler.Accounts
+  alias CodexPooler.Alerts
   alias CodexPooler.Audit
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.InstanceSettings
@@ -505,6 +506,70 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
     assert has_element?(view, "#audit-event-detail-metadata", "configured")
     refute drawer_html =~ metrics_token
     refute drawer_html =~ smtp_password
+  end
+
+  test "alert audit rows render labels and sanitized channel details", %{
+    conn: conn,
+    scope: scope
+  } do
+    raw_endpoint = "https://hooks.example.com/audit/path-secret?token=query-secret"
+    signing_secret = "whsec_ui_audit_hidden"
+
+    assert {:ok, channel} =
+             Alerts.create_channel(scope, %{
+               channel_type: "webhook",
+               display_name: "Audit UI webhook",
+               state: "active",
+               endpoint_url: raw_endpoint,
+               webhook_signing_secret: signing_secret,
+               metadata: %{"authorization" => "Bearer audit-ui-token"}
+             })
+
+    event =
+      Repo.one!(
+        from audit in AuditEvent,
+          where: audit.action == "alert_channel.create" and audit.target_id == ^channel.id,
+          order_by: [desc: audit.occurred_at, desc: audit.id],
+          limit: 1
+      )
+
+    {:ok, view, html} = live(conn, ~p"/admin/audit-logs")
+
+    assert has_element?(view, "#audit-log-row-#{event.id}", "Alert channel created")
+
+    assert has_element?(
+             view,
+             "#audit-log-action-filter button[data-action='alert_channel.create']",
+             "Alert channel created"
+           )
+
+    assert has_element?(
+             view,
+             "#audit-log-action-filter button[data-action='alert_channel.create'] [data-role='action-filter-icon'].text-warning .hero-bell-alert"
+           )
+
+    refute html =~ raw_endpoint
+    refute html =~ "path-secret"
+    refute html =~ "query-secret"
+    refute html =~ signing_secret
+    refute html =~ "Bearer audit-ui-token"
+
+    view
+    |> element("#audit-log-time-#{event.id}")
+    |> render_click()
+
+    drawer_html = render(view)
+
+    assert has_element?(view, "#audit-event-details-title", "Alert channel created")
+    assert has_element?(view, "#audit-event-detail-summary", "alert_channel")
+    assert has_element?(view, "#audit-event-detail-metadata", "Endpoint host")
+    assert has_element?(view, "#audit-event-detail-metadata", "hooks.example.com")
+    assert has_element?(view, "#audit-event-detail-metadata", "Webhook signing secret configured")
+    refute drawer_html =~ raw_endpoint
+    refute drawer_html =~ "path-secret"
+    refute drawer_html =~ "query-secret"
+    refute drawer_html =~ signing_secret
+    refute drawer_html =~ "Bearer audit-ui-token"
   end
 
   test "scoped admins see only currently assigned pool audit rows and never nilified deleted-pool history",

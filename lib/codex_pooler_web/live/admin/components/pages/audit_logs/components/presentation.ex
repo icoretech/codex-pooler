@@ -55,6 +55,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
   def audit_action_icon("upstream_account." <> _suffix), do: "hero-cloud-arrow-up"
   def audit_action_icon("api_key." <> _suffix), do: "hero-key"
   def audit_action_icon("mcp." <> _suffix), do: "hero-command-line"
+  def audit_action_icon("alert_" <> _suffix), do: "hero-bell-alert"
   def audit_action_icon(action) when action in [nil, ""], do: "hero-squares-2x2"
   def audit_action_icon(_action), do: "hero-clipboard-document-list"
 
@@ -65,6 +66,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
   def audit_action_icon_class("upstream_account." <> _suffix), do: "text-primary"
   def audit_action_icon_class("api_key." <> _suffix), do: "text-warning"
   def audit_action_icon_class("mcp." <> _suffix), do: "text-info"
+  def audit_action_icon_class("alert_" <> _suffix), do: "text-warning"
   def audit_action_icon_class(_action), do: "text-base-content/60"
 
   def event_icon_class("success"), do: "mx-auto size-5 text-success"
