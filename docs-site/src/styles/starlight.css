@@ -1,0 +1,60 @@
+@font-face {
+  font-family: "Roboto Condensed";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/roboto-condensed/roboto-condensed-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Condensed";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/roboto-condensed/roboto-condensed-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Condensed";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/roboto-condensed/roboto-condensed-600.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Condensed";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/roboto-condensed/roboto-condensed-700.ttf") format("truetype");
+}
+
+:root {
+  --cp-font-sans: "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+  --cp-color-primary: #ff9900;
+
+  --sl-font: var(--cp-font-sans);
+  --sl-color-accent-low: var(--cp-color-primary);
+  --sl-color-accent: var(--cp-color-primary);
+  --sl-color-accent-high: var(--cp-color-primary);
+  --sl-color-text-accent: var(--cp-color-primary);
+  --sl-color-bg-accent: var(--cp-color-primary);
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: var(--cp-color-primary);
+  --sl-color-accent: var(--cp-color-primary);
+  --sl-color-accent-high: var(--cp-color-primary);
+  --sl-color-text-accent: var(--cp-color-primary);
+  --sl-color-bg-accent: var(--cp-color-primary);
+}
+
+.site-title,
+.site-title span,
+header a[href="/"][aria-current],
+header a[href="/"] {
+  font-family: var(--cp-font-sans);
+  font-weight: 700;
+  letter-spacing: 0;
+}
