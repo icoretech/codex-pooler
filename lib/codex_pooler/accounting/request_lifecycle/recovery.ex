@@ -5,7 +5,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.RequestLifecycle
-  alias CodexPooler.Gateway
+  alias CodexPooler.Gateway.Persistence.SessionReadModel
   alias CodexPooler.Repo
 
   @stale_after_seconds 6 * 60 * 60
@@ -48,7 +48,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
         limit: ^limit,
         select: request
     )
-    |> Enum.reject(&Gateway.active_runtime_request?(&1, now))
+    |> Enum.reject(&SessionReadModel.active_runtime_request?(&1, now))
   end
 
   defp recover_request(request, {:ok, summary}, now) do

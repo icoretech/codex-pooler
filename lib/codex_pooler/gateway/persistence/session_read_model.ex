@@ -18,6 +18,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
 
+  @owner_lease_active BridgeOwnerLease.active_status()
+  @session_alias_active BridgeSessionAlias.active_status()
+
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
   @type session_row :: %{
           required(:id) => Ecto.UUID.t(),
@@ -98,6 +101,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
 
   def list_codex_turns_for_sessions(_session_ids), do: []
 
+  @spec active_runtime_request?(Request.t() | Ecto.UUID.t(), DateTime.t()) :: boolean()
+  def active_runtime_request?(%Request{id: request_id}, %DateTime{} = now) do
+    active_runtime_request?(request_id, now)
+  end
+
+  def active_runtime_request?(request_id, %DateTime{} = now) when is_binary(request_id) do
+    Repo.exists?(
+      from turn in CodexTurn,
+        join: session in CodexSession,
+        on: session.id == turn.codex_session_id,
+        where:
+          turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
+            (is_nil(session.owner_lease_expires_at) or session.owner_lease_expires_at > ^now)
+    )
+  end
+
   # Reason: session row projection flattens persisted gateway state for admin reads.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp session_row({session, key, latest_turn, request, attempt}) do
@@ -135,7 +154,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   defp active_owner_lease_status(session_id) do
     Repo.one(
       from lease in BridgeOwnerLease,
-        where: lease.codex_session_id == ^session_id and lease.status == "active",
+        where: lease.codex_session_id == ^session_id and lease.status == ^@owner_lease_active,
         order_by: [desc: lease.renewed_at, desc: lease.created_at],
         limit: 1,
         select: lease.status
@@ -145,7 +164,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   defp active_session_alias_count(session_id) do
     Repo.aggregate(
       from(alias_record in BridgeSessionAlias,
-        where: alias_record.codex_session_id == ^session_id and alias_record.status == "active"
+        where:
+          alias_record.codex_session_id == ^session_id and
+            alias_record.status == ^@session_alias_active
       ),
       :count,
       :id

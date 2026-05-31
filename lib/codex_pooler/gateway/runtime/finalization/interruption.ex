@@ -17,6 +17,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @type opts :: RequestOptions.t()
   @type session_ref :: CodexSession.t() | Ecto.UUID.t()
 
+  @session_interrupted CodexSession.interrupted_status()
+  @session_closed CodexSession.closed_status()
+  @turn_in_progress CodexTurn.in_progress_status()
+  @turn_succeeded CodexTurn.succeeded_status()
+  @turn_failed CodexTurn.failed_status()
+  @turn_interrupted CodexTurn.interrupted_status()
+
   @spec interrupt_codex_session(session_ref(), opts()) :: {:ok, term()} | {:error, term()}
   def interrupt_codex_session(%CodexSession{id: id}, opts), do: interrupt_codex_session(id, opts)
 
@@ -62,7 +69,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp interrupt_session(session_id, %RequestOptions{} = opts, reason) do
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
-    next_status = if reconnect_window > 0, do: "interrupted", else: "closed"
+    next_status = if reconnect_window > 0, do: @session_interrupted, else: @session_closed
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
     Repo.transaction(fn ->
@@ -75,7 +82,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           |> Ecto.Changeset.change(%{
             status: next_status,
             disconnected_at: now,
-            closed_at: if(next_status == "closed", do: now, else: nil),
+            closed_at: if(next_status == @session_closed, do: now, else: nil),
             owner_lease_expires_at: lease_expires_at,
             last_heartbeat_at: now,
             updated_at: now
@@ -94,7 +101,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp interrupt_session_turn(session_id, request_id, %RequestOptions{} = opts, reason) do
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
-    next_status = if reconnect_window > 0, do: "interrupted", else: "closed"
+    next_status = if reconnect_window > 0, do: @session_interrupted, else: @session_closed
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
     Repo.transaction(fn ->
@@ -138,7 +145,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     |> Ecto.Changeset.change(%{
       status: next_status,
       disconnected_at: now,
-      closed_at: if(next_status == "closed", do: now, else: nil),
+      closed_at: if(next_status == @session_closed, do: now, else: nil),
       owner_lease_expires_at: lease_expires_at,
       last_heartbeat_at: now,
       updated_at: now
@@ -165,11 +172,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
     cond do
       request_completed_successfully?(request, attempt) ->
-        complete_interrupted_turn!(turn, attempt, "succeeded", nil, now)
+        complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
 
       request && request.status in ["accepted", "in_progress"] && active_attempt?(attempt) ->
         finalize_interrupted_request!(request, attempt, reason)
-        complete_interrupted_turn!(turn, attempt, "interrupted", reason, now)
+        complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
 
       request && request.status in ["accepted", "in_progress"] ->
         request
@@ -182,7 +189,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         })
         |> Repo.update!()
 
-        complete_interrupted_turn!(turn, attempt, "interrupted", reason, now)
+        complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
 
       true ->
         complete_interrupted_turn!(
@@ -215,7 +222,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp in_progress_turns_for_session(session_id) do
     Repo.all(
       from turn in CodexTurn,
-        where: turn.codex_session_id == ^session_id and turn.status == "in_progress",
+        where: turn.codex_session_id == ^session_id and turn.status == ^@turn_in_progress,
         order_by: [asc: turn.started_at]
     )
   end
@@ -226,7 +233,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         join: request in Request,
         on: request.id == turn.request_id,
         where:
-          turn.codex_session_id == ^session_id and turn.status == "in_progress" and
+          turn.codex_session_id == ^session_id and turn.status == ^@turn_in_progress and
             request.correlation_id == ^request_id,
         order_by: [desc: turn.started_at],
         limit: 1
@@ -250,17 +257,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   defp request_completed_successfully?(_request, %Attempt{status: "succeeded"}), do: true
   defp request_completed_successfully?(_request, _attempt), do: false
 
-  defp terminal_turn_status(%Request{status: "succeeded"}), do: "succeeded"
+  defp terminal_turn_status(%Request{status: "succeeded"}), do: @turn_succeeded
 
   defp terminal_turn_status(%Request{status: "failed", last_error_code: error_code})
        when error_code in ["client_disconnected", "owner_drained", "owner_unavailable"],
-       do: "interrupted"
+       do: @turn_interrupted
 
   defp terminal_turn_status(%Request{status: status})
        when status in ["failed", "rejected", "cancelled"],
-       do: "failed"
+       do: @turn_failed
 
-  defp terminal_turn_status(_request), do: "interrupted"
+  defp terminal_turn_status(_request), do: @turn_interrupted
 
   defp terminal_error_code(%Request{status: "succeeded"}), do: nil
   defp terminal_error_code(%Request{last_error_code: code}) when is_binary(code), do: code

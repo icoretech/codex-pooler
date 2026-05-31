@@ -20,7 +20,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   alias CodexPooler.Repo
 
-  @session_reconnectable_statuses ["active", "interrupted"]
+  @session_active CodexSession.active_status()
+  @session_closed CodexSession.closed_status()
+  @session_reconnectable_statuses CodexSession.reconnectable_statuses()
+  @lease_active BridgeOwnerLease.active_status()
+  @lease_expired BridgeOwnerLease.expired_status()
+  @lease_released BridgeOwnerLease.released_status()
+  @alias_active BridgeSessionAlias.active_status()
+  @alias_expired BridgeSessionAlias.expired_status()
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: RequestOptions.t()
   @type payload :: map()
@@ -234,7 +241,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     session
     |> Ecto.Changeset.change(%{
       api_key_id: auth.api_key.id,
-      status: "active",
+      status: @session_active,
       owner_instance_id: owner,
       owner_lease_token: session.owner_lease_token || Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
@@ -252,7 +259,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       api_key_id: auth.api_key.id,
       session_key: session_key,
       conversation_key: conversation_key(opts),
-      status: "active",
+      status: @session_active,
       owner_instance_id: owner,
       owner_lease_token: Ecto.UUID.generate(),
       owner_lease_expires_at: DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second),
@@ -387,7 +394,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
         where:
           alias_record.pool_id == ^pool_id and alias_record.api_key_id == ^api_key_id and
             alias_record.alias_kind == ^alias_kind and alias_record.alias_hash == ^alias_hash and
-            alias_record.status == "active" and alias_record.expires_at > ^now and
+            alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
             session.status in ^@session_reconnectable_statuses,
         order_by: [desc: alias_record.last_seen_at, desc: alias_record.updated_at],
         limit: 1,
@@ -410,10 +417,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     BridgeOwnerLease
     |> where(
       [lease],
-      lease.codex_session_id == ^session.id and lease.status == "active" and
+      lease.codex_session_id == ^session.id and lease.status == ^@lease_active and
         lease.expires_at <= ^now
     )
-    |> Repo.update_all(set: [status: "expired", released_at: now, updated_at: now])
+    |> Repo.update_all(set: [status: @lease_expired, released_at: now, updated_at: now])
 
     case active_bridge_owner_lease_for_update(session.id) do
       %BridgeOwnerLease{owner_instance_id: ^owner} = lease ->
@@ -438,7 +445,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
           pool_upstream_assignment_id: session.pool_upstream_assignment_id,
           owner_instance_id: owner,
           lease_token: Ecto.UUID.generate(),
-          status: "active",
+          status: @lease_active,
           acquired_at: now,
           renewed_at: now,
           expires_at: expires_at,
@@ -453,7 +460,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp active_bridge_owner_lease_for_update(session_id) do
     Repo.one(
       from lease in BridgeOwnerLease,
-        where: lease.codex_session_id == ^session_id and lease.status == "active",
+        where: lease.codex_session_id == ^session_id and lease.status == ^@lease_active,
         order_by: [desc: lease.renewed_at, desc: lease.created_at],
         limit: 1,
         lock: "FOR UPDATE"
@@ -470,7 +477,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     )
   end
 
-  defp release_owner_lease!(%BridgeOwnerLease{status: "released"}, _reason, _now), do: :ok
+  defp release_owner_lease!(%BridgeOwnerLease{status: @lease_released}, _reason, _now), do: :ok
 
   defp release_owner_lease!(%BridgeOwnerLease{} = lease, reason, now) do
     metadata =
@@ -480,7 +487,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
     lease
     |> Ecto.Changeset.change(%{
-      status: "released",
+      status: @lease_released,
       released_at: lease.released_at || now,
       metadata: metadata,
       updated_at: now
@@ -524,7 +531,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       pool_upstream_assignment_id: session.pool_upstream_assignment_id,
       owner_instance_id: owner,
       lease_token: Ecto.UUID.generate(),
-      status: "active",
+      status: @lease_active,
       acquired_at: now,
       renewed_at: now,
       expires_at: expires_at,
@@ -584,7 +591,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp active_bridge_owner_lease(session_id) do
     Repo.one(
       from lease in BridgeOwnerLease,
-        where: lease.codex_session_id == ^session_id and lease.status == "active",
+        where: lease.codex_session_id == ^session_id and lease.status == ^@lease_active,
         order_by: [desc: lease.renewed_at, desc: lease.created_at],
         limit: 1
     )
@@ -657,7 +664,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       alias_kind: alias_kind,
       alias_hash: alias_hash,
       alias_preview: alias_preview(alias_hash),
-      status: "active",
+      status: @alias_active,
       expires_at: expires_at,
       last_seen_at: now,
       metadata: %{"source" => "gateway_continuity"},
@@ -779,21 +786,21 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     BridgeOwnerLease
     |> where(
       [lease],
-      lease.codex_session_id in subquery(expired_sessions) and lease.status == "active"
+      lease.codex_session_id in subquery(expired_sessions) and lease.status == ^@lease_active
     )
-    |> Repo.update_all(set: [status: "expired", released_at: now, updated_at: now])
+    |> Repo.update_all(set: [status: @lease_expired, released_at: now, updated_at: now])
 
     BridgeSessionAlias
     |> where(
       [alias_record],
       alias_record.codex_session_id in subquery(expired_sessions) and
-        alias_record.status == "active"
+        alias_record.status == ^@alias_active
     )
-    |> Repo.update_all(set: [status: "expired", updated_at: now])
+    |> Repo.update_all(set: [status: @alias_expired, updated_at: now])
 
     CodexSession
     |> where([session], session.id in subquery(expired_sessions))
-    |> Repo.update_all(set: [status: "closed", closed_at: now, updated_at: now])
+    |> Repo.update_all(set: [status: @session_closed, closed_at: now, updated_at: now])
   end
 
   defp response_id_from_body(body) when is_binary(body) do

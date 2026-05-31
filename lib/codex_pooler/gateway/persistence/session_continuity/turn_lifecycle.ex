@@ -18,6 +18,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   @type request_ref :: Request.t() | Ecto.UUID.t()
   @type opts :: RequestOptions.t()
 
+  @turn_in_progress CodexTurn.in_progress_status()
+  @turn_succeeded CodexTurn.succeeded_status()
+  @turn_interrupted CodexTurn.interrupted_status()
+  @session_active CodexSession.active_status()
+  @owner_lease_active BridgeOwnerLease.active_status()
+
   @spec duplicate_codex_turn?(CodexSession.t(), Ecto.UUID.t() | String.t()) :: boolean()
   def duplicate_codex_turn?(%CodexSession{id: session_id}, request_id)
       when is_binary(request_id) do
@@ -60,7 +66,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
           request_id: request.id,
           turn_sequence: sequence + 1,
           transport_kind: codex_turn_transport_kind(request.transport),
-          status: "in_progress",
+          status: @turn_in_progress,
           started_at: now,
           created_at: now,
           updated_at: now
@@ -72,7 +78,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
           locked_session
           |> Ecto.Changeset.change(%{
             pool_upstream_assignment_id: assignment_id,
-            status: "active",
+            status: @session_active,
             last_heartbeat_at: now,
             updated_at: now
           })
@@ -157,18 +163,20 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   defp codex_turn_transport_kind(transport), do: transport
 
   defp finalize_codex_turn_state(
-         %CodexTurn{status: "in_progress"} = turn,
-         status,
+         %CodexTurn{status: current_status} = turn,
+         target_status,
          error_code,
          attempt,
          now
-       ) do
+       )
+       when current_status == @turn_in_progress do
     turn
     |> Ecto.Changeset.change(%{
-      status: status,
+      status: target_status,
       error_code: error_code && to_string(error_code),
       final_attempt_id: attempt && attempt.id,
-      first_visible_output_at: turn.first_visible_output_at || if(status == "succeeded", do: now),
+      first_visible_output_at:
+        turn.first_visible_output_at || if(target_status == @turn_succeeded, do: now),
       completed_at: now,
       updated_at: now
     })
@@ -178,15 +186,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   end
 
   defp finalize_codex_turn_state(
-         %CodexTurn{status: "interrupted"} = turn,
-         "succeeded",
+         %CodexTurn{status: status} = turn,
+         succeeded_status,
          _error_code,
          attempt,
          now
-       ) do
+       )
+       when status == @turn_interrupted and succeeded_status == @turn_succeeded do
     turn
     |> Ecto.Changeset.change(%{
-      status: "succeeded",
+      status: @turn_succeeded,
       error_code: nil,
       final_attempt_id: attempt && attempt.id,
       first_visible_output_at: turn.first_visible_output_at || now,
@@ -218,7 +227,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     )
 
     BridgeOwnerLease
-    |> where([lease], lease.codex_session_id == ^session_id and lease.status == "active")
+    |> where(
+      [lease],
+      lease.codex_session_id == ^session_id and lease.status == ^@owner_lease_active
+    )
     |> Repo.update_all(
       set: [
         pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,

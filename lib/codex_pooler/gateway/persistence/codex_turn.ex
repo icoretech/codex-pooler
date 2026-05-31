@@ -2,7 +2,10 @@ defmodule CodexPooler.Gateway.Persistence.CodexTurn do
   @moduledoc false
   use CodexPooler.Schema
 
+  @statuses ~w(in_progress succeeded failed interrupted)
+
   @type t :: %__MODULE__{}
+  @type status :: String.t()
 
   schema "codex_turns" do
     field :codex_session_id, :binary_id
@@ -18,4 +21,23 @@ defmodule CodexPooler.Gateway.Persistence.CodexTurn do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
+
+  @spec statuses() :: [status()]
+  def statuses, do: @statuses
+
+  @spec in_progress_status() :: status()
+  def in_progress_status, do: "in_progress"
+
+  @spec succeeded_status() :: status()
+  def succeeded_status, do: "succeeded"
+
+  @spec failed_status() :: status()
+  def failed_status, do: "failed"
+
+  @spec interrupted_status() :: status()
+  def interrupted_status, do: "interrupted"
+
+  @spec in_progress?(t() | status() | nil) :: boolean()
+  def in_progress?(%__MODULE__{status: status}), do: in_progress?(status)
+  def in_progress?(status), do: status == in_progress_status()
 end

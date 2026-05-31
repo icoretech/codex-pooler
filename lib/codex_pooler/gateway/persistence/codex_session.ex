@@ -2,7 +2,11 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
   @moduledoc false
   use CodexPooler.Schema
 
+  @statuses ~w(active interrupted closed)
+  @reconnectable_statuses ~w(active interrupted)
+
   @type t :: %__MODULE__{}
+  @type status :: String.t()
 
   schema "codex_sessions" do
     field :pool_id, :binary_id
@@ -20,4 +24,23 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
+
+  @spec statuses() :: [status()]
+  def statuses, do: @statuses
+
+  @spec active_status() :: status()
+  def active_status, do: "active"
+
+  @spec interrupted_status() :: status()
+  def interrupted_status, do: "interrupted"
+
+  @spec closed_status() :: status()
+  def closed_status, do: "closed"
+
+  @spec reconnectable_statuses() :: [status()]
+  def reconnectable_statuses, do: @reconnectable_statuses
+
+  @spec reconnectable?(t() | status() | nil) :: boolean()
+  def reconnectable?(%__MODULE__{status: status}), do: reconnectable?(status)
+  def reconnectable?(status), do: status in reconnectable_statuses()
 end

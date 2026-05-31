@@ -8,10 +8,22 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
     BridgeSessionAlias,
+    CodexSession,
+    CodexTurn,
     IdempotencyKey
   }
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
+
+  @spec cleanup_expired_runtime_state(DateTime.t()) :: {:ok, map()} | {:error, term()}
+  def cleanup_expired_runtime_state(now \\ now()) do
+    with {:ok, recovered_summary} <- recover_expired_owner_runtime_state(now),
+         {:ok, cleanup_summary} <- cleanup_expired(now) do
+      {:ok, Map.merge(cleanup_summary, recovered_summary)}
+    end
+  end
 
   @spec cleanup_expired(DateTime.t()) :: {:ok, map()} | {:error, term()}
   def cleanup_expired(now \\ now()) do
@@ -51,6 +63,46 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
         expired_idempotency_keys: expired_idempotency_keys
       }
     end)
+  end
+
+  defp recover_expired_owner_runtime_state(%DateTime{} = now) do
+    now = DateTime.truncate(now, :microsecond)
+
+    now
+    |> expired_owner_sessions_with_active_turns()
+    |> Enum.reduce_while({:ok, 0}, &recover_expired_owner_session/2)
+    |> case do
+      {:ok, recovered_count} -> {:ok, %{expired_owner_sessions_recovered: recovered_count}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp recover_expired_owner_session(session_id, {:ok, recovered_count}) do
+    case Interruption.recover_owner_lifecycle_leftovers(
+           session_id,
+           :owner_unavailable,
+           RequestOptions.for_websocket(%{})
+         ) do
+      {:ok, _result} -> {:cont, {:ok, recovered_count + 1}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp expired_owner_sessions_with_active_turns(%DateTime{} = now) do
+    Repo.all(
+      from session in CodexSession,
+        join: lease in BridgeOwnerLease,
+        on:
+          lease.codex_session_id == session.id and
+            lease.status == ^BridgeOwnerLease.active_status() and
+            lease.expires_at <= ^now,
+        join: turn in CodexTurn,
+        on:
+          turn.codex_session_id == session.id and
+            turn.status == ^CodexTurn.in_progress_status(),
+        distinct: session.id,
+        select: session.id
+    )
   end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)

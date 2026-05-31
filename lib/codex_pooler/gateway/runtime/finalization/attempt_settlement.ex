@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Persistence.SessionContinuity
 
   @type attrs :: %{optional(atom()) => term()}
@@ -21,7 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
   @spec finalize_success(Request.t(), Attempt.t(), usage(), attrs()) :: settlement_result()
   def finalize_success(request, attempt, usage, attrs) do
     Accounting.finalize_success(request, attempt, usage, attrs)
-    |> SessionContinuity.complete_codex_turn("succeeded", nil)
+    |> SessionContinuity.complete_codex_turn(CodexTurn.succeeded_status(), nil)
     |> accounting_result(:finalize_success, request, attempt)
   end
 
@@ -30,7 +31,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
     attrs = Map.new(attrs)
 
     Accounting.finalize_failure(request, attempt, attrs)
-    |> SessionContinuity.complete_codex_turn("failed", Map.get(attrs, :last_error_code))
+    |> SessionContinuity.complete_codex_turn(
+      CodexTurn.failed_status(),
+      Map.get(attrs, :last_error_code)
+    )
     |> accounting_result(:finalize_failure, request, attempt)
   end
 
@@ -57,7 +61,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
     attrs = Map.new(attrs)
 
     Accounting.finalize_reservation_failure(request, attrs)
-    |> SessionContinuity.complete_codex_turn("failed", Map.get(attrs, :last_error_code))
+    |> SessionContinuity.complete_codex_turn(
+      CodexTurn.failed_status(),
+      Map.get(attrs, :last_error_code)
+    )
     |> accounting_result(:finalize_reservation_failure, request)
   end
 
@@ -69,7 +76,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
     FailureResponse.accounting_failure(operation, request, attempt, reason)
   end
 
-  defp partial_stream_turn_status("client_disconnected"), do: "interrupted"
-  defp partial_stream_turn_status(:client_disconnected), do: "interrupted"
-  defp partial_stream_turn_status(_error_code), do: "failed"
+  defp partial_stream_turn_status("client_disconnected"), do: CodexTurn.interrupted_status()
+  defp partial_stream_turn_status(:client_disconnected), do: CodexTurn.interrupted_status()
+  defp partial_stream_turn_status(_error_code), do: CodexTurn.failed_status()
 end

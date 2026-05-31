@@ -6,7 +6,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
-  alias CodexPooler.Gateway
+  alias CodexPooler.Gateway.Persistence.RuntimeCleanup
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
@@ -59,7 +59,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     expired_key = idempotency_key_fixture(pool, api_key, expired_at)
     active_key = idempotency_key_fixture(pool, api_key, future_at)
 
-    assert {:ok, summary} = Gateway.cleanup_expired_runtime_state(now)
+    assert {:ok, summary} = RuntimeCleanup.cleanup_expired_runtime_state(now)
 
     assert summary == %{
              expired_aliases: 1,
@@ -123,7 +123,7 @@ defmodule CodexPooler.RuntimeStateCleanupTest do
     |> Ecto.Changeset.change(%{source_event_id: "request:#{request.id}:reservation"})
     |> Repo.update!()
 
-    assert {:ok, summary} = Gateway.cleanup_expired_runtime_state(now)
+    assert {:ok, summary} = RuntimeCleanup.cleanup_expired_runtime_state(now)
     assert summary.expired_owner_sessions_recovered == 1
     assert summary.expired_owner_leases == 1
 
