@@ -2,6 +2,8 @@ defmodule CodexPoolerWeb.Telemetry do
   use Supervisor
   import Telemetry.Metrics
 
+  alias CodexPooler.Dev.GatewayPerfProbe
+
   def start_link(arg) do
     Supervisor.start_link(__MODULE__, arg, name: __MODULE__)
   end
@@ -10,10 +12,13 @@ defmodule CodexPoolerWeb.Telemetry do
   def init(_arg) do
     CodexPoolerWeb.RequestLogger.attach()
 
-    children = [
-      {:telemetry_poller, period: 10_000},
-      {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()}
-    ]
+    children =
+      [
+        perf_probe_child(),
+        {:telemetry_poller, period: 10_000},
+        {TelemetryMetricsPrometheus.Core, metrics: prometheus_metrics()}
+      ]
+      |> Enum.reject(&is_nil/1)
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -115,5 +120,9 @@ defmodule CodexPoolerWeb.Telemetry do
         description: "Total BEAM scheduler run queue length."
       )
     ]
+  end
+
+  defp perf_probe_child do
+    if GatewayPerfProbe.enabled?(), do: GatewayPerfProbe
   end
 end

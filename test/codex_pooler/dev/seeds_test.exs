@@ -5,11 +5,13 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Dev.Seeds
+  alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
 
@@ -73,9 +75,178 @@ defmodule CodexPooler.Dev.SeedsTest do
       assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
         Seeds.full()
       end
+
+      assert_raise RuntimeError, "development seeds are disabled for this environment", fn ->
+        Seeds.perf()
+      end
     after
       Application.put_env(:codex_pooler, :dev_seeds_enabled, previous)
     end
+  end
+
+  test "perf seed recreates isolated local gateway performance rows and private bootstrap files" do
+    first = Seeds.perf()
+    result = Seeds.perf()
+
+    assert result.pool.slug == "dev-perf-pool"
+    assert first.pool.id != result.pool.id
+
+    assert Repo.aggregate(from(pool in Pool, where: pool.slug == "dev-perf-pool"), :count) == 1
+
+    assert Repo.aggregate(
+             from(identity in UpstreamIdentity,
+               where: fragment("?->>?", identity.metadata, "dev_seed") == "codex_pooler_perf_seed"
+             ),
+             :count
+           ) == 12
+
+    assert Enum.map(result.upstream_identities, & &1.account_label) ==
+             Enum.map(
+               1..12,
+               &"perf-upstream-#{String.pad_leading(Integer.to_string(&1), 2, "0")}"
+             )
+
+    assert Enum.all?(result.upstream_identities, &(Secrets.secret_status(&1) == :present))
+
+    assert Enum.all?(result.assignments, fn assignment ->
+             assignment.metadata["base_url"] == "http://127.0.0.1:4058" and
+               assignment.metadata["websocket_url"] == "ws://127.0.0.1:4058/ws" and
+               assignment.metadata["cluster_base_url"] ==
+                 "http://gateway-perf-fake-upstream.codex-pooler-perf.svc.cluster.local:4058"
+           end)
+
+    assert Enum.map(result.models, & &1.exposed_model_id) == [
+             "gpt-5.4-mini",
+             "gpt-5.4",
+             "gpt-5.5"
+           ]
+
+    assert Enum.all?(result.models, fn model ->
+             model.source_assignment_count == 12 and
+               get_in(model.metadata, ["source_assignment_ids"]) ==
+                 Enum.map(result.assignments, & &1.id)
+           end)
+
+    assert Repo.aggregate(AccountQuotaWindow, :count) == 12
+    assert Repo.aggregate(RoutingCircuitState, :count) == 12
+    assert Repo.aggregate(CodexSession, :count) == 3
+
+    assert Repo.aggregate(
+             from(state in RoutingCircuitState,
+               where:
+                 state.status == "closed" and is_nil(state.api_key_id) and
+                   state.model_identifier == "gpt-5.5"
+             ),
+             :count
+           ) == 12
+
+    circuit_route_classes =
+      Repo.all(
+        from(state in RoutingCircuitState,
+          group_by: state.route_class,
+          select: {state.route_class, count(state.id)},
+          order_by: state.route_class
+        )
+      )
+
+    assert circuit_route_classes == [
+             {"proxy_http", 4},
+             {"proxy_stream", 4},
+             {"proxy_websocket", 4}
+           ]
+
+    summary = Jason.decode!(File.read!("tmp/gateway-perf/bootstrap/seed-summary.json"))
+    env = File.read!("tmp/gateway-perf/bootstrap/perf.env")
+    env_stat = File.stat!("tmp/gateway-perf/bootstrap/perf.env")
+
+    assert summary["pool_slug"] == "dev-perf-pool"
+    assert summary["api_key_prefix"] == result.api_key.key_prefix
+    assert summary["upstream_count"] == 12
+
+    assert summary["http_hosts"] == [
+             "127.0.0.1",
+             "gateway-perf-fake-upstream.codex-pooler-perf.svc.cluster.local"
+           ]
+
+    assert summary["websocket_hosts"] == [
+             "127.0.0.1",
+             "gateway-perf-fake-upstream.codex-pooler-perf.svc.cluster.local"
+           ]
+
+    assert summary["metrics_token_present"] == true
+
+    assert summary["starter_rows"] == %{
+             "codex_sessions" => 3,
+             "quota_windows" => 12,
+             "routing_circuit_states" => 12
+           }
+
+    assert env =~ "CODEX_POOLER_PERF_API_KEY=sk-cxp-"
+    assert env =~ "CODEX_POOLER_PERF_POOL_SLUG=dev-perf-pool"
+    assert env =~ "CODEX_POOLER_PERF_METRICS_TOKEN=dev-perf-metrics-"
+    assert env =~ "CODEX_POOLER_PERF_ALLOW_HOSTS="
+
+    raw_api_key =
+      env
+      |> String.split("\n")
+      |> Enum.find(&String.starts_with?(&1, "CODEX_POOLER_PERF_API_KEY="))
+      |> String.replace_prefix("CODEX_POOLER_PERF_API_KEY=", "")
+
+    refute File.read!("tmp/gateway-perf/bootstrap/seed-summary.json") =~ raw_api_key
+    assert Bitwise.band(env_stat.mode, 0o777) == 0o600
+  end
+
+  test "gateway perf guard script accepts local and cluster env targets" do
+    {output, 0} =
+      System.cmd("bash", ["scripts/dev/gateway-perf-guard.sh", "--check"],
+        env: [
+          {"MIX_ENV", "test"},
+          {"CODEX_POOLER_PERF_GUARD_DB", "0"},
+          {"CODEX_POOLER_PERF_ENV", "/tmp/codex-pooler-missing-perf.env"},
+          {"CODEX_POOLER_PERF_HTTP_URL", "http://127.0.0.1:4058"},
+          {"CODEX_POOLER_PERF_WEBSOCKET_URL",
+           "ws://gateway-perf-fake-upstream.codex-pooler-perf.svc.cluster.local:4058/ws"}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert output =~ "gateway perf guard ok"
+  end
+
+  test "gateway perf guard script ignores non-target noise lines" do
+    {output, 0} =
+      System.cmd("bash", ["scripts/dev/gateway-perf-guard.sh", "--check"],
+        env: [
+          {"MIX_ENV", "test"},
+          {"CODEX_POOLER_PERF_GUARD_DB", "0"},
+          {"CODEX_POOLER_PERF_ENV", "/tmp/codex-pooler-missing-perf.env"},
+          {"CODEX_POOLER_PERF_HTTP_URL", "http://127.0.0.1:4058\n[debug] mix run noise"}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert output =~ "gateway perf guard ok: checked 1 target(s)"
+  end
+
+  test "gateway perf guard script rejects unsafe env targets" do
+    {output, exit_code} =
+      System.cmd("bash", ["scripts/dev/gateway-perf-guard.sh", "--check"],
+        env: [
+          {"MIX_ENV", "test"},
+          {"CODEX_POOLER_PERF_GUARD_DB", "0"},
+          {"CODEX_POOLER_PERF_ENV", "/tmp/codex-pooler-missing-perf.env"},
+          {"CODEX_POOLER_PERF_HTTP_URL", "https://example.com"},
+          {"CODEX_POOLER_PERF_WEBSOCKET_URL", "wss://example.com/ws"}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert exit_code == 1
+    assert output =~ "gateway perf guard failed: 2 unsafe target(s)"
+    assert output =~ "example.com"
+    assert output =~ "env:CODEX_POOLER_PERF_HTTP_URL"
+    assert output =~ "env:CODEX_POOLER_PERF_WEBSOCKET_URL"
+    refute output =~ "gateway perf guard ok"
   end
 
   test "full seed recreates representative fake UI states without accumulating rows" do
