@@ -2,11 +2,13 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import CodexPooler.AccountsFixtures
 
   alias CodexPooler.Alerts.Schemas.{
     AlertChannel,
     AlertDeliveryAttempt,
     AlertIncident,
+    AlertIncidentReceipt,
     AlertIncidentTarget,
     AlertRule
   }
@@ -191,6 +193,55 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
     assert %{attempt_number: ["has already been taken"]} = errors_on(attempt_changeset)
   end
 
+  test "incident receipts enforce one operator-local row per incident" do
+    %{user: operator} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    pool = pool_fixture()
+    now = now()
+    incident = insert_incident!(pool, now, "alert:receipt:unique")
+
+    attrs = valid_receipt_attrs(operator.id, incident.id, now)
+
+    assert {:ok, _receipt} =
+             %AlertIncidentReceipt{}
+             |> AlertIncidentReceipt.changeset(attrs)
+             |> Repo.insert()
+
+    assert {:error, duplicate_changeset} =
+             %AlertIncidentReceipt{}
+             |> AlertIncidentReceipt.changeset(attrs)
+             |> Repo.insert()
+
+    assert %{incident_id: ["has already been taken"]} = errors_on(duplicate_changeset)
+  end
+
+  test "incident receipts cascade when either operator or incident is deleted" do
+    %{user: operator} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: other_operator} = operator_fixture(operator, %{"email" => unique_user_email()})
+    pool = pool_fixture()
+    now = now()
+    incident = insert_incident!(pool, now, "alert:receipt:cascade-incident")
+    other_incident = insert_incident!(pool, now, "alert:receipt:cascade-operator")
+
+    receipt =
+      %AlertIncidentReceipt{}
+      |> AlertIncidentReceipt.changeset(valid_receipt_attrs(operator.id, incident.id, now))
+      |> Repo.insert!()
+
+    other_receipt =
+      %AlertIncidentReceipt{}
+      |> AlertIncidentReceipt.changeset(
+        valid_receipt_attrs(other_operator.id, other_incident.id, now)
+      )
+      |> Repo.insert!()
+
+    Repo.delete!(incident)
+    refute Repo.get(AlertIncidentReceipt, receipt.id)
+    assert Repo.get(AlertIncidentReceipt, other_receipt.id)
+
+    Repo.delete!(other_operator)
+    refute Repo.get(AlertIncidentReceipt, other_receipt.id)
+  end
+
   test "webhook signing material is encrypted-storage shaped and redacted from inspect" do
     now = now()
 
@@ -307,6 +358,17 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
       retryable: false,
       response_metadata: %{},
       failure_metadata: %{},
+      created_at: now,
+      updated_at: now
+    }
+  end
+
+  defp valid_receipt_attrs(operator_id, incident_id, now) do
+    %{
+      operator_id: operator_id,
+      incident_id: incident_id,
+      read_at: now,
+      dismissed_at: now,
       created_at: now,
       updated_at: now
     }

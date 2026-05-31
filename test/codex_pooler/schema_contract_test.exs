@@ -11,6 +11,7 @@ defmodule CodexPooler.SchemaContractTest do
     AlertChannel,
     AlertDeliveryAttempt,
     AlertIncident,
+    AlertIncidentReceipt,
     AlertIncidentTarget,
     AlertRule,
     AlertRuleChannel
@@ -27,8 +28,8 @@ defmodule CodexPooler.SchemaContractTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @expected_tables ~w(
-    account_quota_windows alert_channels alert_delivery_attempts alert_incident_targets alert_incidents alert_rule_channels
-    alert_rules api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
+    account_quota_windows alert_channels alert_delivery_attempts alert_incident_receipts alert_incident_targets alert_incidents
+    alert_rule_channels alert_rules api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
     bridge_session_aliases codex_files codex_sessions codex_turns daily_rollups
     encrypted_secrets gateway_idempotency_keys instance_settings invite_acceptances invites ledger_entries memberships
     models operator_pool_assignments platform_bootstrap_state pricing_snapshots recovery_codes requests routing_circuit_states
@@ -49,6 +50,7 @@ defmodule CodexPooler.SchemaContractTest do
     AlertChannel,
     AlertDeliveryAttempt,
     AlertIncident,
+    AlertIncidentReceipt,
     AlertIncidentTarget,
     AlertRule,
     AlertRuleChannel,
@@ -125,6 +127,9 @@ defmodule CodexPooler.SchemaContractTest do
           "codex_turns_session_sequence_uq",
           "invite_acceptances_invite_id_uq",
           "alert_incidents_unresolved_dedupe_key_uq",
+          "alert_incident_receipts_operator_incident_uq",
+          "alert_incident_receipts_incident_id_idx",
+          "alert_incident_receipts_operator_dismissed_idx",
           "alert_rule_channels_rule_channel_uq",
           "alert_incident_targets_incident_rule_pool_uq",
           "alert_delivery_attempts_incident_channel_attempt_uq",
@@ -158,6 +163,9 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert indexes["alert_incidents_unresolved_dedupe_key_uq"] =~
              "WHERE (state = ANY (ARRAY['open'::text, 'acknowledged'::text]))"
+
+    assert indexes["alert_incident_receipts_operator_incident_uq"] =~
+             "(operator_id, incident_id)"
 
     assert indexes["alert_delivery_attempts_retry_lookup_idx"] =~ "next_retry_at"
 
@@ -348,6 +356,8 @@ defmodule CodexPooler.SchemaContractTest do
     assert fk_action("alert_rule_channels_alert_channel_id_fkey") == {"c", "a"}
     assert fk_action("alert_incidents_pool_id_fkey") == {"c", "a"}
     assert fk_action("alert_incidents_upstream_identity_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incident_receipts_operator_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incident_receipts_incident_id_fkey") == {"c", "a"}
     assert fk_action("alert_incident_targets_incident_id_fkey") == {"c", "a"}
     assert fk_action("alert_incident_targets_rule_id_fkey") == {"c", "a"}
     assert fk_action("alert_incident_targets_pool_id_fkey") == {"c", "a"}
@@ -477,6 +487,26 @@ defmodule CodexPooler.SchemaContractTest do
              "resolved_at" => {"timestamp without time zone", "YES"}
            }
 
+    receipt_columns = table_columns("alert_incident_receipts")
+
+    assert Map.take(receipt_columns, [
+             "id",
+             "operator_id",
+             "incident_id",
+             "read_at",
+             "dismissed_at",
+             "created_at",
+             "updated_at"
+           ]) == %{
+             "id" => {"uuid", "NO"},
+             "operator_id" => {"uuid", "NO"},
+             "incident_id" => {"uuid", "NO"},
+             "read_at" => {"timestamp without time zone", "YES"},
+             "dismissed_at" => {"timestamp without time zone", "YES"},
+             "created_at" => {"timestamp without time zone", "NO"},
+             "updated_at" => {"timestamp without time zone", "NO"}
+           }
+
     attempt_columns = table_columns("alert_delivery_attempts")
 
     assert Map.take(attempt_columns, [
@@ -509,6 +539,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert AlertChannel.__schema__(:source) == "alert_channels"
     assert AlertRuleChannel.__schema__(:source) == "alert_rule_channels"
     assert AlertIncident.__schema__(:source) == "alert_incidents"
+    assert AlertIncidentReceipt.__schema__(:source) == "alert_incident_receipts"
     assert AlertIncidentTarget.__schema__(:source) == "alert_incident_targets"
     assert AlertDeliveryAttempt.__schema__(:source) == "alert_delivery_attempts"
 
@@ -516,6 +547,8 @@ defmodule CodexPooler.SchemaContractTest do
     assert AlertChannel.__schema__(:type, :endpoint_url_ciphertext) == :binary
     assert AlertChannel.__schema__(:type, :webhook_signing_secret_ciphertext) == :binary
     assert AlertIncident.__schema__(:type, :safe_evidence_snapshot) == :map
+    assert AlertIncidentReceipt.__schema__(:type, :read_at) == :utc_datetime_usec
+    assert AlertIncidentReceipt.__schema__(:type, :dismissed_at) == :utc_datetime_usec
     assert AlertIncidentTarget.__schema__(:type, :last_matched_at) == :utc_datetime_usec
     assert AlertDeliveryAttempt.__schema__(:type, :max_attempts) == :integer
   end
