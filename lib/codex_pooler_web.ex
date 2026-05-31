@@ -61,6 +61,16 @@ defmodule CodexPoolerWeb do
     end
   end
 
+  def admin_live_view do
+    quote do
+      use Phoenix.LiveView
+
+      on_mount CodexPoolerWeb.Live.AdminNotificationCenterHooks
+
+      unquote(html_helpers())
+    end
+  end
+
   def live_component do
     quote do
       use Phoenix.LiveComponent
