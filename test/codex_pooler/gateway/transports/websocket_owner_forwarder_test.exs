@@ -5,12 +5,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @frame "synthetic-frame"
 

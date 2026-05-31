@@ -14,9 +14,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Metadata
-
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
@@ -29,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   }
 
   alias CodexPooler.Gateway.Service
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams

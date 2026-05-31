@@ -3,13 +3,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @behaviour WebSock
 
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Websocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   require Logger
@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   def init(state) do
     started_at = System.monotonic_time(:millisecond)
 
-    case Gateway.prepare_websocket_session(state.auth, state.opts) do
+    case Websocket.prepare_websocket_session(state.auth, state.opts) do
       {:ok,
        %{
          codex_session: session,
@@ -225,7 +225,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp put_websocket_owner_monitor(state, session) do
-    case Gateway.monitor_websocket_owner(session) do
+    case Websocket.monitor_websocket_owner(session) do
       {:ok, owner_pid, owner_monitor} ->
         state
         |> Map.put(:websocket_owner_pid, owner_pid)
@@ -330,7 +330,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp release_owner_lease(state, reason) do
-    Gateway.release_websocket_owner_lease(
+    Websocket.release_websocket_owner_lease(
       Map.get(state, :codex_session),
       Map.get(state, :websocket_owner_lease_token),
       reason
@@ -490,7 +490,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp response_task_opts(state) do
     if Map.has_key?(state, :websocket_owner_downstream) do
-      Gateway.websocket_owner_response_options(
+      Websocket.websocket_owner_response_options(
         Map.get(state, :opts, %{}),
         Map.get(state, :codex_session),
         Map.get(state, :websocket_owner_lease_token),
@@ -502,7 +502,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp local_response_task_opts(state) do
-    Gateway.websocket_response_options(
+    Websocket.websocket_response_options(
       Map.get(state, :opts, %{}),
       Map.get(state, :codex_session),
       Map.get(state, :upstream_websocket_session),
@@ -514,7 +514,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        when is_map(downstream) do
     state
     |> Map.get(:codex_session)
-    |> Gateway.detach_websocket_owner_downstream(
+    |> Websocket.detach_websocket_owner_downstream(
       Map.get(state, :websocket_owner_lease_token),
       downstream,
       Map.get(state, :opts, %{})
@@ -525,7 +525,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp cleanup_websocket_session(state) do
     state
     |> Map.get(:codex_session)
-    |> Gateway.interrupt_codex_session(state.opts)
+    |> Websocket.interrupt_codex_session(state.opts)
     |> log_interrupt_failure(state)
   end
 
@@ -568,7 +568,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp interrupt_owner_downstream_turn(:ok, state) do
     state
     |> Map.get(:codex_session)
-    |> Gateway.interrupt_codex_turn(owner_downstream_interrupt_opts(state))
+    |> Websocket.interrupt_codex_turn(owner_downstream_interrupt_opts(state))
     |> log_interrupt_failure(state)
   end
 
@@ -578,7 +578,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        when reason in [:owner_unavailable, :owner_forward_timeout, :owner_crashed, :owner_drained] do
     state
     |> Map.get(:codex_session)
-    |> Gateway.recover_owner_lifecycle_leftovers(
+    |> Websocket.recover_owner_lifecycle_leftovers(
       reason,
       owner_lifecycle_recovery_opts(state, reason)
     )
@@ -649,7 +649,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp run_response(parent, auth, payload, opts) do
     with {:ok, payload, opts} <- maybe_coerce_public_v1_response_create(payload, opts) do
-      Gateway.run_websocket_response(auth, payload, opts, fn data ->
+      Websocket.run_websocket_response(auth, payload, opts, fn data ->
         send(parent, {:codex_response_chunk, data})
       end)
     end
@@ -982,6 +982,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp close_upstream_websocket_session(state) do
     state
     |> Map.get(:upstream_websocket_session)
-    |> Gateway.close_websocket_session()
+    |> Websocket.close_websocket_session()
   end
 end

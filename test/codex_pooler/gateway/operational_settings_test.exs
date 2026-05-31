@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
 
@@ -205,9 +206,9 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
         refute OperationalSettings.parse_websocket_owner_forwarding_env!()
         refute OperationalSettings.websocket_owner_forwarding_enabled?()
-        refute CodexPooler.Gateway.websocket_owner_forwarding_enabled?()
+        refute Gateway.websocket_owner_forwarding_enabled?()
 
-        assert CodexPooler.Gateway.require_websocket_owner_forwarding_enabled() ==
+        assert Gateway.require_websocket_owner_forwarding_enabled() ==
                  {:error, :owner_forwarding_disabled}
 
         assert {:ok, payload} =
@@ -229,8 +230,8 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
         with_websocket_owner_forwarding_app_env(true, fn ->
           assert OperationalSettings.websocket_owner_forwarding_enabled?()
-          assert CodexPooler.Gateway.websocket_owner_forwarding_enabled?()
-          assert CodexPooler.Gateway.require_websocket_owner_forwarding_enabled() == :ok
+          assert Gateway.websocket_owner_forwarding_enabled?()
+          assert Gateway.require_websocket_owner_forwarding_enabled() == :ok
         end)
       end
     end

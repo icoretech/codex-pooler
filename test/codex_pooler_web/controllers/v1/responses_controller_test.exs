@@ -28,11 +28,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Accounting.{Attempt, DailyRollup, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.OperationalSettings
 
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
 
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 

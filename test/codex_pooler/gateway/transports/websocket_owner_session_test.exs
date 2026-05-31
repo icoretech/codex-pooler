@@ -5,13 +5,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 

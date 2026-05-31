@@ -6,10 +6,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias Ecto.Adapters.SQL.Sandbox

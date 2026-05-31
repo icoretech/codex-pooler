@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.FailureResponse
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Finalization
@@ -13,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Transports.Streaming.WebSocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.Secrets
@@ -26,6 +26,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @dialyzer {:nowarn_function,
              [
                finalize_not_retryable_auth_refresh: 6,
+               retry_after_websocket_auth_refresh: 5,
                record_auth_refresh_first_attempt_failure: 4,
                refresh_websocket_auth: 1,
                record_auth_refresh_metadata: 2,
@@ -146,44 +147,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
     if attempted? do
       finalize_exhausted_auth_refresh(context, dispatch_request, response, failure, started)
     else
-      response_context = auth_refresh_websocket_response_context(context, response)
-
-      with {:ok, _recorded_failure} <-
-             record_auth_refresh_first_attempt_failure(
-               context,
-               response_context,
-               failure,
-               started
-             ),
-           {:ok, refresh_metadata, refreshed_identity} <- refresh_websocket_auth(context),
-           {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
-           {:ok, retry_context} <-
-             create_same_assignment_retry_context(%{
-               refreshed_context
-               | identity: refreshed_identity,
-                 auth_refresh_retry_attempted?: true
-             }),
-           {:ok, refreshed_token} <-
-             Secrets.decrypt_active_secret(refreshed_identity, @access_token_secret_kind) do
-        retry_prepared_context = %{
-          prepared_context
-          | context: retry_context,
-            token: refreshed_token
-        }
-
-        retry_dispatch_request =
-          dispatch_request(retry_prepared_context,
-            accounting_request: dispatch_request.accounting_request,
-            writer: dispatch_request.writer
+      case retry_after_websocket_auth_refresh(
+             prepared_context,
+             dispatch_request,
+             response,
+             failure,
+             started
+           ) do
+        {:ok, retry_prepared_context, retry_dispatch_request} ->
+          dispatch_websocket_result(
+            retry_prepared_context,
+            retry_dispatch_request,
+            callbacks,
+            System.monotonic_time(:millisecond)
           )
 
-        dispatch_websocket_result(
-          retry_prepared_context,
-          retry_dispatch_request,
-          callbacks,
-          System.monotonic_time(:millisecond)
-        )
-      else
         {:error, _reason} = error ->
           error
 
@@ -197,6 +175,48 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
             started
           )
       end
+    end
+  end
+
+  defp retry_after_websocket_auth_refresh(
+         %PreparedContext{context: context} = prepared_context,
+         dispatch_request,
+         response,
+         failure,
+         started
+       ) do
+    response_context = auth_refresh_websocket_response_context(context, response)
+
+    with {:ok, _recorded_failure} <-
+           record_auth_refresh_first_attempt_failure(
+             context,
+             response_context,
+             failure,
+             started
+           ),
+         {:ok, refresh_metadata, refreshed_identity} <- refresh_websocket_auth(context),
+         {:ok, refreshed_context} <- record_auth_refresh_metadata(context, refresh_metadata),
+         {:ok, retry_context} <-
+           create_same_assignment_retry_context(%{
+             refreshed_context
+             | identity: refreshed_identity,
+               auth_refresh_retry_attempted?: true
+           }),
+         {:ok, refreshed_token} <-
+           Secrets.decrypt_active_secret(refreshed_identity, @access_token_secret_kind) do
+      retry_prepared_context = %{
+        prepared_context
+        | context: retry_context,
+          token: refreshed_token
+      }
+
+      retry_dispatch_request =
+        dispatch_request(retry_prepared_context,
+          accounting_request: dispatch_request.accounting_request,
+          writer: dispatch_request.writer
+        )
+
+      {:ok, retry_prepared_context, retry_dispatch_request}
     end
   end
 
@@ -491,7 +511,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
     request_options = prepared_context.context.request_options
 
     if owner_forwarded_websocket_request?(request_options) do
-      case Gateway.recover_websocket_owner_response_options(request_options) do
+      case Websocket.recover_websocket_owner_response_options(request_options) do
         {:ok, recovered_options} ->
           recovered_context = %{prepared_context.context | request_options: recovered_options}
           recovered_prepared_context = %{prepared_context | context: recovered_context}
