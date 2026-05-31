@@ -55,6 +55,19 @@ jobs_schedule = [
     cadence: %{label: "Every minute", cron: "* * * * *"}
   },
   %{
+    key: :alert_evaluation,
+    id: "alert-evaluation",
+    title: "Alert evaluation",
+    description: "Persisted alert rule evaluation and incident lifecycle updates",
+    icon: "hero-bell-alert",
+    workers: [
+      CodexPooler.Jobs.AlertEvaluationWorker,
+      CodexPooler.Jobs.AlertEvaluationEnqueueWorker
+    ],
+    scheduled_worker: CodexPooler.Jobs.AlertEvaluationEnqueueWorker,
+    cadence: %{label: "Every 5 min", cron: "*/5 * * * *"}
+  },
+  %{
     key: :token_refresh,
     id: "token-refresh",
     title: "Token refresh",

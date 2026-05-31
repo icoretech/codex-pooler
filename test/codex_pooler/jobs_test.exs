@@ -11,6 +11,8 @@ defmodule CodexPooler.JobsTest do
   alias CodexPooler.Jobs.{
     AccountReconciliationEnqueueWorker,
     AccountReconciliationWorker,
+    AlertEvaluationEnqueueWorker,
+    AlertEvaluationWorker,
     CatalogSyncEnqueueWorker,
     CatalogSyncWorker,
     DailyRollupRebuildEnqueueWorker,
@@ -44,6 +46,7 @@ defmodule CodexPooler.JobsTest do
                {"*/30 * * * *", CatalogSyncEnqueueWorker},
                {"0 * * * *", PricingImportWorker},
                {"* * * * *", AccountReconciliationEnqueueWorker},
+               {"*/5 * * * *", AlertEvaluationEnqueueWorker},
                {"17 0 * * *", DailyRollupRebuildEnqueueWorker},
                {"*/15 * * * *", RuntimeStateCleanupWorker}
              ]
@@ -64,6 +67,11 @@ defmodule CodexPooler.JobsTest do
                label: "Hourly",
                cron: "0 * * * *"
              }
+
+      assert Enum.find(worker_groups, &(&1.key == :alert_evaluation)).cadence == %{
+               label: "Every 5 min",
+               cron: "*/5 * * * *"
+             }
     end
 
     test "bounds retries and execution time according to job cadence" do
@@ -75,6 +83,15 @@ defmodule CodexPooler.JobsTest do
       assert AccountReconciliationWorker.timeout(%Oban.Job{}) == :timer.minutes(20)
       assert worker_max_attempts(AccountReconciliationEnqueueWorker, %{}) == 1
       assert AccountReconciliationEnqueueWorker.timeout(%Oban.Job{}) == :timer.seconds(30)
+
+      assert worker_max_attempts(AlertEvaluationWorker, %{
+               "alert_rule_id" => Ecto.UUID.generate(),
+               "evaluation_window_started_at" => "2026-05-30T10:05:00Z"
+             }) == 1
+
+      assert AlertEvaluationWorker.timeout(%Oban.Job{}) == :timer.minutes(2)
+      assert worker_max_attempts(AlertEvaluationEnqueueWorker, %{}) == 1
+      assert AlertEvaluationEnqueueWorker.timeout(%Oban.Job{}) == :timer.seconds(30)
 
       assert worker_max_attempts(CatalogSyncWorker, %{"pool_id" => Ecto.UUID.generate()}) == 3
       assert CatalogSyncWorker.timeout(%Oban.Job{}) == :timer.minutes(15)

@@ -3,10 +3,14 @@ defmodule CodexPooler.Jobs do
   Durable job enqueue and orchestration APIs backed by Oban.
   """
 
+  alias CodexPooler.Alerts
+  alias CodexPooler.Alerts.Schemas.AlertRule
   alias CodexPooler.Events
 
   alias CodexPooler.Jobs.{
     AccountReconciliationWorker,
+    AlertDeliveryWorker,
+    AlertEvaluationWorker,
     CatalogSyncWorker,
     DailyRollupRebuildWorker,
     DevelopmentControls,
@@ -23,12 +27,20 @@ defmodule CodexPooler.Jobs do
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
+  @default_alert_evaluation_fanout_limit 500
+
   @type pool_ref :: Pool.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
+  @type alert_rule_ref :: AlertRule.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
+  @type alert_incident_ref :: %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
+  @type alert_channel_ref :: %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type assignment_ref ::
           PoolUpstreamAssignment.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type identity_ref :: UpstreamIdentity.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type missing_ref_error ::
           :pool_id_required
+          | :alert_rule_id_required
+          | :alert_incident_id_required
+          | :alert_channel_id_required
           | :pool_upstream_assignment_id_required
           | :upstream_identity_id_required
   @type job_insert_result ::
@@ -135,6 +147,55 @@ defmodule CodexPooler.Jobs do
     |> split_insert_results()
   end
 
+  @spec enqueue_alert_evaluation(alert_rule_ref(), keyword()) :: job_insert_result()
+  def enqueue_alert_evaluation(rule_or_id, opts \\ []) do
+    with {:ok, rule_id} <- alert_rule_id(rule_or_id) do
+      evaluation_window_started_at = evaluation_window_started_at(Keyword.get(opts, :now))
+
+      %{
+        "alert_rule_id" => rule_id,
+        "evaluation_window_started_at" => DateTime.to_iso8601(evaluation_window_started_at),
+        "trigger_kind" => trigger_kind(opts)
+      }
+      |> AlertEvaluationWorker.new(
+        Options.job_options(opts, unique_keys: [:alert_rule_id, :evaluation_window_started_at])
+      )
+      |> Oban.insert()
+    end
+  end
+
+  @spec enqueue_alert_evaluations_for_active_rules(keyword()) :: batch_insert_result()
+  def enqueue_alert_evaluations_for_active_rules(opts \\ []) do
+    opts =
+      opts
+      |> Keyword.put_new(:trigger_kind, "scheduled")
+      |> Keyword.put_new(:now, DateTime.utc_now())
+
+    limit = Keyword.get(opts, :limit, @default_alert_evaluation_fanout_limit)
+
+    [limit: limit]
+    |> Alerts.list_active_rules_for_evaluation()
+    |> Enum.map(&enqueue_alert_evaluation(&1, opts))
+    |> split_insert_results()
+  end
+
+  @spec enqueue_alert_delivery(alert_incident_ref(), alert_channel_ref(), keyword()) ::
+          job_insert_result()
+  def enqueue_alert_delivery(incident_or_id, channel_or_id, opts \\ []) do
+    with {:ok, incident_id} <- alert_incident_id(incident_or_id),
+         {:ok, channel_id} <- alert_channel_id(channel_or_id) do
+      %{
+        "alert_incident_id" => incident_id,
+        "alert_channel_id" => channel_id,
+        "trigger_kind" => trigger_kind(opts)
+      }
+      |> AlertDeliveryWorker.new(
+        Options.job_options(opts, unique_keys: [:alert_incident_id, :alert_channel_id])
+      )
+      |> Oban.insert()
+    end
+  end
+
   @spec list_recent_account_reconciliation_jobs(pool_ref(), keyword()) :: [job_summary()]
   defdelegate list_recent_account_reconciliation_jobs(pool_or_id, opts \\ []), to: ReadModel
 
@@ -188,8 +249,35 @@ defmodule CodexPooler.Jobs do
     end
   end
 
+  defp evaluation_window_started_at(%DateTime{} = now) do
+    now
+    |> DateTime.to_unix()
+    |> div(5 * 60)
+    |> Kernel.*(5 * 60)
+    |> DateTime.from_unix!()
+    |> DateTime.truncate(:microsecond)
+  end
+
+  defp evaluation_window_started_at(_now), do: evaluation_window_started_at(DateTime.utc_now())
+
+  defp trigger_kind(opts) do
+    case Keyword.get(opts, :trigger_kind, "manual") do
+      value when is_binary(value) -> value
+      _value -> "manual"
+    end
+  end
+
   defp yesterday_utc, do: Date.utc_today() |> Date.add(-1)
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+  defp alert_rule_id(%{id: id}) when is_binary(id), do: {:ok, id}
+  defp alert_rule_id(id) when is_binary(id), do: {:ok, id}
+  defp alert_rule_id(_rule_or_id), do: {:error, :alert_rule_id_required}
+  defp alert_incident_id(%{id: id}) when is_binary(id), do: {:ok, id}
+  defp alert_incident_id(id) when is_binary(id), do: {:ok, id}
+  defp alert_incident_id(_incident_or_id), do: {:error, :alert_incident_id_required}
+  defp alert_channel_id(%{id: id}) when is_binary(id), do: {:ok, id}
+  defp alert_channel_id(id) when is_binary(id), do: {:ok, id}
+  defp alert_channel_id(_channel_or_id), do: {:error, :alert_channel_id_required}
   defp pool_id(%{id: id}) when is_binary(id), do: {:ok, id}
   defp pool_id(id) when is_binary(id), do: {:ok, id}
   defp pool_id(_pool_or_id), do: {:error, :pool_id_required}
