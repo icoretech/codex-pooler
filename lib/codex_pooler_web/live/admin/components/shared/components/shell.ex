@@ -81,6 +81,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   @admin_footer_nav_items [
     %{
+      key: :alerts,
+      id: "admin-nav-alerts",
+      label: "Alerts",
+      path: "/admin/alerts",
+      icon: "hero-bell-alert"
+    },
+    %{
       key: :settings,
       id: "admin-nav-settings",
       label: "Settings",

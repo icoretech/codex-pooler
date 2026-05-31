@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:delete, "/v1/files/:file_id"},
                {:delete, "/v1/responses/:response_id"},
                {:get, "/"},
+               {:get, "/admin/alerts"},
                {:get, "/admin/api-keys"},
                {:get, "/admin/audit-logs"},
                {:get, "/admin/invites"},
@@ -102,6 +103,22 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
 
     refute Enum.any?(application_routes, fn {_verb, path} ->
              String.starts_with?(path, "/api/admin") or String.starts_with?(path, "/dashboard")
+           end)
+  end
+
+  test "Alerts admin route stays inside the authenticated admin LiveView surface" do
+    routes =
+      CodexPoolerWeb.Router
+      |> Phoenix.Router.routes()
+      |> Enum.map(&{&1.verb, &1.path, &1.plug, &1.plug_opts})
+
+    assert {:get, "/admin/alerts", Phoenix.LiveView.Plug, :index} =
+             Enum.find(routes, fn {verb, path, _plug, _opts} ->
+               verb == :get and path == "/admin/alerts"
+             end)
+
+    refute Enum.any?(routes, fn {_verb, path, _plug, _opts} ->
+             path in ["/api/admin/alerts", "/dashboard/alerts"]
            end)
   end
 

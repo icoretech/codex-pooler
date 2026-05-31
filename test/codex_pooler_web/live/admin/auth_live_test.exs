@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
   alias CodexPoolerWeb.Admin.PolicyEditorComponents
 
   @admin_routes [
+    {"/admin/alerts", "#admin-alerts-live"},
     {"/admin/request-logs", "#admin-request-logs-live"},
     {"/admin/pools", "#admin-pools-live"},
     {"/admin/stats", "#admin-stats"},
@@ -38,6 +39,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
   ]
 
   @admin_footer_nav_selectors [
+    "#admin-nav-alerts",
     "#admin-nav-settings",
     "#admin-sidebar-logout"
   ]
@@ -138,6 +140,7 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
                )
 
         assert has_element?(view, "#admin-sidebar-footer")
+        assert has_element?(view, "#admin-nav-alerts[href='/admin/alerts']")
         assert has_element?(view, "#admin-nav-settings[href='/admin/settings']")
         assert has_element?(view, "#admin-sidebar-logout[href='/logout']")
         refute has_element?(view, "#admin-sidebar-theme-toggle")
