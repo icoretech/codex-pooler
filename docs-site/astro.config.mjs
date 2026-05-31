@@ -1,5 +1,6 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import starlightPageActions from "starlight-page-actions";
 
 const autogenerateGroup = (label, directory) => ({
   label,
@@ -24,6 +25,20 @@ export default defineConfig({
       },
       lastUpdated: true,
       pagefind: true,
+      plugins: [
+        starlightPageActions({
+          actions: {
+            chatgpt: true,
+            claude: true,
+            t3chat: true,
+            v0: true,
+            cursor: true,
+            perplexity: true,
+            githubCopilot: true,
+            markdown: true,
+          },
+        }),
+      ],
       customCss: ["/src/styles/starlight.css"],
       sidebar: [
         {

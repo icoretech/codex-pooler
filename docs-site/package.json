@@ -11,6 +11,7 @@
     "@astrojs/check": "0.9.9",
     "@astrojs/starlight": "0.39.2",
     "astro": "6.4.2",
+    "starlight-page-actions": "0.6.0",
     "typescript": "6.0.3"
   }
 }
