@@ -52,6 +52,18 @@ defmodule CodexPooler.Audit do
     {"MCP token created", "mcp.token_create"},
     {"MCP token label updated", "mcp.token_update"},
     {"MCP token deleted", "mcp.token_delete"},
+    {"Alert rule created", "alert_rule.create"},
+    {"Alert rule updated", "alert_rule.update"},
+    {"Alert rule enabled", "alert_rule.enable"},
+    {"Alert rule disabled", "alert_rule.disable"},
+    {"Alert rule deleted", "alert_rule.delete"},
+    {"Alert channel created", "alert_channel.create"},
+    {"Alert channel updated", "alert_channel.update"},
+    {"Alert channel enabled", "alert_channel.enable"},
+    {"Alert channel disabled", "alert_channel.disable"},
+    {"Alert channel deleted", "alert_channel.delete"},
+    {"Alert incident acknowledged", "alert_incident.acknowledge"},
+    {"Alert incident resolved", "alert_incident.resolve"},
     {"Instance settings updated", "instance_settings.update"}
   ]
 

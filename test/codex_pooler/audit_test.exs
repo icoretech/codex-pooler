@@ -13,7 +13,7 @@ defmodule CodexPooler.AuditTest do
     :ok
   end
 
-  test "admin action options include pool, api key, and MCP management events" do
+  test "admin action options include pool, api key, MCP, and alert management events" do
     actions = Audit.supported_actions()
 
     assert "pool.create" in actions
@@ -39,6 +39,18 @@ defmodule CodexPooler.AuditTest do
     assert "mcp.token_create" in actions
     assert "mcp.token_update" in actions
     assert "mcp.token_delete" in actions
+    assert "alert_rule.create" in actions
+    assert "alert_rule.update" in actions
+    assert "alert_rule.enable" in actions
+    assert "alert_rule.disable" in actions
+    assert "alert_rule.delete" in actions
+    assert "alert_channel.create" in actions
+    assert "alert_channel.update" in actions
+    assert "alert_channel.enable" in actions
+    assert "alert_channel.disable" in actions
+    assert "alert_channel.delete" in actions
+    assert "alert_incident.acknowledge" in actions
+    assert "alert_incident.resolve" in actions
   end
 
   test "audit event details redact credentials and prompt content" do
