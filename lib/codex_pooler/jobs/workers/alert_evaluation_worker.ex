@@ -65,7 +65,7 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
   @spec record_candidate(Evaluator.candidate()) :: :ok | {:error, evaluation_error()}
   defp record_candidate(%{action: :match, match_attrs: attrs}) do
     case Alerts.record_incident_match(attrs) do
-      {:ok, %AlertIncident{}} -> :ok
+      {:ok, %AlertIncident{} = incident} -> enqueue_match_deliveries(incident)
       {:error, reason} -> {:error, candidate_error(:match, reason)}
     end
   end
@@ -79,6 +79,22 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
   end
 
   defp record_candidate(_candidate), do: {:error, :invalid_alert_evaluation_args}
+
+  defp enqueue_match_deliveries(%AlertIncident{} = incident) do
+    case CodexPooler.Jobs.enqueue_alert_deliveries_for_incident(incident,
+           trigger_kind: "incident_match",
+           now: incident.last_seen_at
+         ) do
+      {:ok, %{errors: []}} ->
+        :ok
+
+      {:ok, %{errors: errors}} when is_list(errors) ->
+        {:error, candidate_error(:match, %{code: :alert_delivery_enqueue_failed})}
+
+      {:error, reason} ->
+        {:error, candidate_error(:match, reason)}
+    end
+  end
 
   defp parse_evaluation_window(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do

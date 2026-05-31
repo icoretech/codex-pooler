@@ -4,7 +4,7 @@ defmodule CodexPooler.Jobs do
   """
 
   alias CodexPooler.Alerts
-  alias CodexPooler.Alerts.Schemas.AlertRule
+  alias CodexPooler.Alerts.Schemas.{AlertIncident, AlertRule}
   alias CodexPooler.Events
 
   alias CodexPooler.Jobs.{
@@ -31,7 +31,8 @@ defmodule CodexPooler.Jobs do
 
   @type pool_ref :: Pool.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type alert_rule_ref :: AlertRule.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
-  @type alert_incident_ref :: %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
+  @type alert_incident_ref ::
+          AlertIncident.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type alert_channel_ref :: %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type assignment_ref ::
           PoolUpstreamAssignment.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
@@ -193,6 +194,17 @@ defmodule CodexPooler.Jobs do
         Options.job_options(opts, unique_keys: [:alert_incident_id, :alert_channel_id])
       )
       |> Oban.insert()
+    end
+  end
+
+  @spec enqueue_alert_deliveries_for_incident(alert_incident_ref(), keyword()) ::
+          batch_insert_result() | {:error, missing_ref_error()}
+  def enqueue_alert_deliveries_for_incident(incident_or_id, opts \\ []) do
+    with {:ok, incident_id} <- alert_incident_id(incident_or_id) do
+      incident_id
+      |> Alerts.list_incident_delivery_channels_due(opts)
+      |> Enum.map(&enqueue_alert_delivery(incident_id, &1.channel_id, opts))
+      |> split_insert_results()
     end
   end
 

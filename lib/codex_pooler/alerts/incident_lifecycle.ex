@@ -4,6 +4,7 @@ defmodule CodexPooler.Alerts.IncidentLifecycle do
   import Ecto.Query
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Alerts.NotificationEvents
   alias CodexPooler.Alerts.Schemas.{AlertIncident, AlertIncidentTarget}
   alias CodexPooler.Repo
 
@@ -46,6 +47,7 @@ defmodule CodexPooler.Alerts.IncidentLifecycle do
       match
       |> record_incident_match_transaction()
       |> unwrap_transaction()
+      |> maybe_broadcast_incident_invalidation()
     end
   end
 
@@ -62,6 +64,7 @@ defmodule CodexPooler.Alerts.IncidentLifecycle do
       clear
       |> clear_incident_condition_transaction()
       |> unwrap_transaction()
+      |> maybe_broadcast_incident_invalidation()
     end
   end
 
@@ -354,5 +357,13 @@ defmodule CodexPooler.Alerts.IncidentLifecycle do
   defp lifecycle_error(code, message), do: %{code: code, message: message}
   defp unwrap_transaction({:ok, value}), do: {:ok, value}
   defp unwrap_transaction({:error, reason}), do: {:error, reason}
+
+  defp maybe_broadcast_incident_invalidation({:ok, %AlertIncident{} = incident} = result) do
+    _ = NotificationEvents.broadcast_incident_invalidation(incident)
+    result
+  end
+
+  defp maybe_broadcast_incident_invalidation(result), do: result
+
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

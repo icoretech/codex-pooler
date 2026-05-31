@@ -7,6 +7,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     only: [primary_quota_window_attrs: 1]
 
   alias CodexPooler.Alerts.Schemas.{
+    AlertDeliveryAttempt,
     AlertIncident,
     AlertIncidentTarget,
     AlertRule,
@@ -14,7 +15,13 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
   }
 
   alias CodexPooler.Jobs
-  alias CodexPooler.Jobs.{AlertEvaluationEnqueueWorker, AlertEvaluationWorker}
+
+  alias CodexPooler.Jobs.{
+    AlertDeliveryWorker,
+    AlertEvaluationEnqueueWorker,
+    AlertEvaluationWorker
+  }
+
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
@@ -24,6 +31,7 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
   )
 
   setup do
+    Repo.delete_all(AlertDeliveryAttempt)
     Repo.delete_all(Oban.Job)
     Repo.delete_all(AlertIncidentTarget)
     Repo.delete_all(AlertIncident)
@@ -119,16 +127,71 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     assert incident.safe_evidence_snapshot["assignment_count"] == 1
   end
 
+  test "per-rule worker enqueues delivery once for each linked active channel on incident match" do
+    timestamp = timestamp(~U[2026-05-30 11:30:00Z])
+    pool = pool_fixture()
+    upstream_assignment_fixture(pool)
+    rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments")
+    active_channel = alert_channel_fixture(%{display_name: "Active operations email"})
+
+    disabled_channel =
+      alert_channel_fixture(%{display_name: "Disabled operations email", state: "disabled"})
+
+    link_rule_channel!(rule, active_channel, timestamp)
+    link_rule_channel!(rule, disabled_channel, timestamp)
+
+    assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp))
+
+    assert %AlertIncident{} = incident_for_rule(rule)
+    assert [job] = all_enqueued(worker: AlertDeliveryWorker)
+    assert job.args["alert_channel_id"] == active_channel.id
+    assert job.args["trigger_kind"] == "incident_match"
+    assert_safe_job_args(job.args)
+
+    assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, timestamp))
+
+    assert [job] = all_enqueued(worker: AlertDeliveryWorker)
+    assert job.args["alert_channel_id"] == active_channel.id
+  end
+
+  test "per-rule worker enqueues recurrence delivery only after channel cooldown allows it" do
+    first_seen = timestamp(~U[2026-05-30 11:45:00Z])
+    within_cooldown = timestamp(~U[2026-05-30 11:49:00Z])
+    after_cooldown = timestamp(~U[2026-05-30 11:51:00Z])
+    pool = pool_fixture()
+    upstream_assignment_fixture(pool)
+    rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments", cooldown_minutes: 5)
+    channel = alert_channel_fixture(%{display_name: "Cooldown operations email"})
+    link_rule_channel!(rule, channel, first_seen)
+
+    assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen))
+    assert [first_job] = all_enqueued(worker: AlertDeliveryWorker)
+    incident = incident_for_rule(rule)
+    Repo.delete_all(Oban.Job)
+    insert_sent_attempt!(incident, channel, 1, first_seen)
+
+    assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, within_cooldown))
+    assert [] = all_enqueued(worker: AlertDeliveryWorker)
+
+    assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, after_cooldown))
+    assert [recurrence_job] = all_enqueued(worker: AlertDeliveryWorker)
+    assert recurrence_job.args == first_job.args
+  end
+
   test "per-rule worker clears resolved persisted conditions through the incident lifecycle" do
     first_seen = timestamp(~U[2026-05-30 12:00:00Z])
     cleared_at = timestamp(~U[2026-05-30 12:05:00Z])
     pool = pool_fixture()
     %{identity: identity} = upstream_assignment_fixture(pool)
     rule = alert_rule_fixture(pool, rule_kind: "pool_no_usable_assignments")
+    channel = alert_channel_fixture(%{display_name: "Clear path operations email"})
+    link_rule_channel!(rule, channel, first_seen)
 
     assert :ok = perform_job(AlertEvaluationWorker, alert_job_args(rule, first_seen))
     assert %AlertIncident{} = incident = incident_for_rule(rule)
     assert incident.state == "open"
+    assert [_first_delivery_job] = all_enqueued(worker: AlertDeliveryWorker)
+    Repo.delete_all(Oban.Job)
 
     assert {:ok, [_window]} =
              QuotaWindows.upsert_quota_windows(identity, [
@@ -144,6 +207,8 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
 
     assert %AlertIncident{state: "resolved", resolved_at: ^cleared_at} =
              Repo.get!(AlertIncident, incident.id)
+
+    assert [] = all_enqueued(worker: AlertDeliveryWorker)
   end
 
   test "disabled rules do not create repeated incident matches from queued jobs" do
@@ -171,6 +236,35 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
         order_by: [desc: incident.created_at, desc: incident.id],
         limit: 1
     )
+  end
+
+  defp insert_sent_attempt!(incident, channel, attempt_number, timestamp) do
+    %AlertDeliveryAttempt{}
+    |> AlertDeliveryAttempt.changeset(%{
+      incident_id: incident.id,
+      channel_id: channel.id,
+      attempt_number: attempt_number,
+      status: AlertDeliveryAttempt.sent_status(),
+      scheduled_at: timestamp,
+      attempted_at: timestamp,
+      completed_at: timestamp,
+      retryable: false,
+      response_metadata: %{"delivery_adapter" => "email"},
+      failure_metadata: %{},
+      created_at: timestamp,
+      updated_at: timestamp
+    })
+    |> Repo.insert!()
+  end
+
+  defp link_rule_channel!(rule, channel, timestamp) do
+    %AlertRuleChannel{}
+    |> AlertRuleChannel.changeset(%{
+      alert_rule_id: rule.id,
+      alert_channel_id: channel.id,
+      created_at: timestamp
+    })
+    |> Repo.insert!()
   end
 
   defp assert_safe_job_args(args) do

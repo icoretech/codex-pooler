@@ -143,6 +143,27 @@ defmodule CodexPooler.Jobs.AlertDeliveryJobTest do
     assert suppressed_attempt.failure_code == "alert_delivery_cooldown_suppressed"
   end
 
+  test "post-cooldown recurrence records the next persisted attempt number" do
+    %{incident: incident, channel: channel} = alert_delivery_fixture(rule_cooldown_minutes: 5)
+    args = delivery_args(incident, channel)
+
+    assert :ok = perform_job(AlertDeliveryWorker, args)
+
+    stale_completed_at =
+      DateTime.add(DateTime.utc_now(), -10, :minute) |> DateTime.truncate(:microsecond)
+
+    from(attempt in AlertDeliveryAttempt, where: attempt.incident_id == ^incident.id)
+    |> Repo.update_all(set: [attempted_at: stale_completed_at, completed_at: stale_completed_at])
+
+    assert :ok = AlertDeliveryWorker.perform(%Oban.Job{args: args, attempt: 1})
+
+    assert [first_attempt, recurrence_attempt] = attempts_for(incident, channel)
+    assert first_attempt.status == "sent"
+    assert first_attempt.attempt_number == 1
+    assert recurrence_attempt.status == "sent"
+    assert recurrence_attempt.attempt_number == 2
+  end
+
   test "successful webhook delivery records one signed metadata-only attempt" do
     signing_secret = "whsec_delivery_success"
     fake = start_fake_upstream(FakeUpstream.json_response(%{"ok" => true}, 202))
