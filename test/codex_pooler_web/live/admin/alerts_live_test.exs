@@ -445,7 +445,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(view, "#alerts-incident-rule-filter")
     assert has_element?(view, "#alerts-incident-channel-filter")
 
-    assert has_element?(view, "#alert-incident-row-#{incident.id}")
+    assert has_element?(view, "#alert-incident-#{incident.id}")
     assert has_element?(view, "#alert-incident-card-#{incident.id}")
 
     assert has_element?(
@@ -475,11 +475,11 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     refute html =~ raw_prompt
     refute html =~ raw_header
 
-    {:ok, filtered_view, filtered_html} =
+    {:ok, filtered_view, _filtered_html} =
       live(conn, ~p"/admin/alerts?tab=incidents&severity=warning")
 
     assert has_element?(filtered_view, "#alerts-incidents-empty-state")
-    refute filtered_html =~ incident.id
+    refute has_element?(filtered_view, "#alert-incident-#{incident.id}")
   end
 
   test "acknowledges and resolves incidents through scoped UI actions and audit events", %{
@@ -825,7 +825,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     admin_conn = log_in_user(build_conn(), admin, token)
     {:ok, view, html} = live(admin_conn, ~p"/admin/alerts?tab=incidents")
 
-    assert has_element?(view, "#alert-incident-row-#{incident.id}")
+    assert has_element?(view, "#alert-incident-#{incident.id}")
 
     assert has_element?(
              view,

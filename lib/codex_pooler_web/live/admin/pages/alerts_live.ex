@@ -1,5 +1,5 @@
 defmodule CodexPoolerWeb.Admin.AlertsLive do
-  use CodexPoolerWeb, :live_view
+  use CodexPoolerWeb, :admin_live_view
 
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Schemas.AlertChannel
@@ -367,7 +367,12 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <AdminComponents.admin_shell flash={@flash} current_scope={@current_scope} active_nav={:alerts}>
+    <AdminComponents.admin_shell
+      flash={@flash}
+      current_scope={@current_scope}
+      active_nav={:alerts}
+      alert_notification_center={@alert_notification_center}
+    >
       <section id="admin-alerts-live" class="grid min-w-0 gap-6">
         <AdminComponents.page_header
           id="alerts-page-header"
@@ -1086,8 +1091,10 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
                   <tbody>
                     <tr
                       :for={incident <- @incidents}
-                      id={"alert-incident-row-#{incident.id}"}
+                      id={"alert-incident-#{incident.id}"}
                       class="text-sm transition-colors hover:bg-base-200/80"
+                      data-role="alert-incident-row"
+                      data-alert-anchor-id={"alert-incident-#{incident.id}"}
                     >
                       <td class="min-w-72">
                         <div class="grid min-w-0 gap-1">
