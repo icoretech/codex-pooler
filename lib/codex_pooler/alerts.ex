@@ -11,12 +11,14 @@ defmodule CodexPooler.Alerts do
   alias CodexPooler.Alerts.EmailDelivery
   alias CodexPooler.Alerts.Evaluator
   alias CodexPooler.Alerts.IncidentLifecycle
+  alias CodexPooler.Alerts.NotificationEvents
   alias CodexPooler.Alerts.WebhookDelivery
 
   alias CodexPooler.Alerts.Schemas.{
     AlertChannel,
     AlertDeliveryAttempt,
     AlertIncident,
+    AlertIncidentReceipt,
     AlertIncidentTarget,
     AlertRule,
     AlertRuleChannel
@@ -78,6 +80,13 @@ defmodule CodexPooler.Alerts do
   @type incident_result ::
           {:ok, incident_projection()} | {:error, Ecto.Changeset.t() | access_error()}
   @type evaluation_rule_result :: {:ok, AlertRule.t()} | {:error, :alert_rule_not_found}
+  @type incident_ref :: AlertIncident.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
+  @type incident_delivery_channel :: %{
+          required(:channel_id) => Ecto.UUID.t(),
+          required(:cooldown_minutes) => pos_integer()
+        }
+  @type notification_receipt_result ::
+          {:ok, AlertIncidentReceipt.t()} | {:error, Ecto.Changeset.t() | access_error()}
 
   @spec list_manageable_pools(term()) :: {:ok, [Pool.t()]} | {:error, access_error()}
   def list_manageable_pools(%Scope{} = scope), do: Pools.list_pools(scope)
@@ -287,6 +296,76 @@ defmodule CodexPooler.Alerts do
   def resolve_incident(scope, incident_or_id),
     do: transition_incident(scope, incident_or_id, :resolve)
 
+  @spec bell_eligible_incidents_query(term()) :: {:ok, Ecto.Query.t()} | {:error, access_error()}
+  def bell_eligible_incidents_query(%Scope{} = scope) do
+    with {:ok, pool_ids} <- authorized_pool_filter(scope, nil) do
+      {:ok, bell_eligible_incidents_query_for_pool_ids(pool_ids)}
+    end
+  end
+
+  def bell_eligible_incidents_query(_scope),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec mark_incident_notification_read(term(), incident_ref()) :: notification_receipt_result()
+  def mark_incident_notification_read(scope, incident_or_id) do
+    scope
+    |> upsert_incident_notification_receipt(incident_or_id, :read)
+    |> maybe_broadcast_operator_notification_invalidation(scope)
+  end
+
+  @spec dismiss_incident_notification(term(), incident_ref()) :: notification_receipt_result()
+  def dismiss_incident_notification(scope, incident_or_id) do
+    scope
+    |> upsert_incident_notification_receipt(incident_or_id, :dismiss)
+    |> maybe_broadcast_operator_notification_invalidation(scope)
+  end
+
+  @spec dismiss_all_visible_incident_notifications(term()) ::
+          {:ok, non_neg_integer()} | {:error, Ecto.Changeset.t() | access_error()}
+  def dismiss_all_visible_incident_notifications(%Scope{} = scope) do
+    with {:ok, operator_id} <- scope_user_id(scope),
+         {:ok, pool_ids} <- authorized_pool_filter(scope, nil) do
+      timestamp = now()
+
+      Repo.transaction(fn ->
+        dismiss_all_visible_incident_notifications_in_transaction(
+          operator_id,
+          pool_ids,
+          timestamp
+        )
+      end)
+      |> maybe_broadcast_operator_notification_invalidation(scope)
+    end
+  end
+
+  def dismiss_all_visible_incident_notifications(_scope),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec incident_notification_read?(AlertIncident.t(), AlertIncidentReceipt.t() | nil) ::
+          boolean()
+  def incident_notification_read?(%AlertIncident{}, nil), do: false
+
+  def incident_notification_read?(%AlertIncident{} = incident, %AlertIncidentReceipt{
+        read_at: read_at
+      }) do
+    timestamp_covers_incident?(read_at, incident.last_seen_at)
+  end
+
+  @spec incident_notification_unread?(AlertIncident.t(), AlertIncidentReceipt.t() | nil) ::
+          boolean()
+  def incident_notification_unread?(%AlertIncident{} = incident, receipt),
+    do: not incident_notification_read?(incident, receipt)
+
+  @spec incident_notification_dismissed?(AlertIncident.t(), AlertIncidentReceipt.t() | nil) ::
+          boolean()
+  def incident_notification_dismissed?(%AlertIncident{}, nil), do: false
+
+  def incident_notification_dismissed?(%AlertIncident{} = incident, %AlertIncidentReceipt{
+        dismissed_at: dismissed_at
+      }) do
+    timestamp_covers_incident?(dismissed_at, incident.last_seen_at)
+  end
+
   @spec record_incident_match(IncidentLifecycle.match_attrs() | map()) ::
           IncidentLifecycle.record_result()
   defdelegate record_incident_match(attrs), to: IncidentLifecycle
@@ -339,6 +418,43 @@ defmodule CodexPooler.Alerts do
     end
   end
 
+  @spec list_incident_delivery_channels_due(incident_ref(), keyword()) :: [
+          incident_delivery_channel()
+        ]
+  def list_incident_delivery_channels_due(incident_or_id, opts \\ []) do
+    case incident_id(incident_or_id) do
+      {:ok, incident_id} ->
+        timestamp = timestamp(opts)
+
+        incident_id
+        |> linked_active_delivery_channels()
+        |> Enum.reject(&recent_sent_attempt_within_cooldown?(incident_id, &1, timestamp))
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  @spec next_delivery_attempt_number(Ecto.UUID.t(), Ecto.UUID.t(), pos_integer()) :: pos_integer()
+  def next_delivery_attempt_number(incident_id, channel_id, oban_attempt)
+      when is_binary(incident_id) and is_binary(channel_id) and is_integer(oban_attempt) and
+             oban_attempt > 0 do
+    last_attempt_number =
+      Repo.one(
+        from attempt in AlertDeliveryAttempt,
+          where: attempt.incident_id == ^incident_id and attempt.channel_id == ^channel_id,
+          select: max(attempt.attempt_number)
+      )
+
+    max(oban_attempt, (last_attempt_number || 0) + 1)
+  end
+
+  def next_delivery_attempt_number(_incident_id, _channel_id, oban_attempt)
+      when is_integer(oban_attempt) and oban_attempt > 0,
+      do: oban_attempt
+
+  def next_delivery_attempt_number(_incident_id, _channel_id, _oban_attempt), do: 1
+
   @spec access_error(atom(), String.t()) :: access_error()
   def access_error(code, message), do: %{code: code, message: message}
 
@@ -347,6 +463,54 @@ defmodule CodexPooler.Alerts do
   end
 
   defp normalize_evaluation_limit(_limit), do: 500
+
+  defp linked_active_delivery_channels(incident_id) do
+    Repo.all(
+      from target in AlertIncidentTarget,
+        join: rule in AlertRule,
+        on: rule.id == target.rule_id,
+        join: link in AlertRuleChannel,
+        on: link.alert_rule_id == rule.id,
+        join: channel in AlertChannel,
+        on: channel.id == link.alert_channel_id,
+        where:
+          target.incident_id == ^incident_id and rule.state == "active" and
+            channel.state == "active",
+        group_by: [channel.id, channel.created_at],
+        order_by: [asc: channel.created_at, asc: channel.id],
+        select: %{channel_id: channel.id, cooldown_minutes: max(rule.cooldown_minutes)}
+    )
+  end
+
+  defp recent_sent_attempt_within_cooldown?(incident_id, delivery_channel, timestamp) do
+    cooldown_minutes = delivery_channel.cooldown_minutes || AlertRule.default_cooldown_minutes()
+    since = DateTime.add(timestamp, -cooldown_minutes * 60, :second)
+
+    Repo.exists?(
+      from attempt in AlertDeliveryAttempt,
+        where:
+          attempt.incident_id == ^incident_id and
+            attempt.channel_id == ^delivery_channel.channel_id and
+            attempt.status == "sent" and
+            ((not is_nil(attempt.completed_at) and attempt.completed_at >= ^since) or
+               (is_nil(attempt.completed_at) and not is_nil(attempt.attempted_at) and
+                  attempt.attempted_at >= ^since))
+    )
+  end
+
+  defp timestamp(opts) when is_list(opts) do
+    case Keyword.get(opts, :now) do
+      %DateTime{} = timestamp -> DateTime.truncate(timestamp, :microsecond)
+      _value -> now()
+    end
+  end
+
+  defp timestamp(_opts), do: now()
+
+  defp incident_id(%AlertIncident{id: id}) when is_binary(id), do: {:ok, id}
+  defp incident_id(%{id: id}) when is_binary(id), do: {:ok, id}
+  defp incident_id(id) when is_binary(id), do: {:ok, id}
+  defp incident_id(_incident_or_id), do: {:error, :alert_incident_id_required}
 
   defp authorized_pool_filter(%Scope{} = scope, nil) do
     case list_manageable_pools(scope) do
@@ -653,6 +817,31 @@ defmodule CodexPooler.Alerts do
     |> order_by([incident], desc: incident.last_seen_at, desc: incident.id)
   end
 
+  defp bell_eligible_incidents_query_for_pool_ids(pool_ids) do
+    from(incident in AlertIncident, as: :incident)
+    |> where([incident], incident.state in ["open", "acknowledged"])
+    |> where(
+      [incident],
+      exists(
+        from target in AlertIncidentTarget,
+          where: target.incident_id == parent_as(:incident).id and target.pool_id in ^pool_ids,
+          select: 1
+      )
+    )
+    |> order_by([incident], desc: incident.last_seen_at, desc: incident.id)
+  end
+
+  defp visible_incident_notifications_query(operator_id, pool_ids) do
+    base_query = bell_eligible_incidents_query_for_pool_ids(pool_ids)
+
+    from incident in base_query,
+      left_join: receipt in AlertIncidentReceipt,
+      on: receipt.operator_id == ^operator_id and receipt.incident_id == incident.id,
+      where:
+        is_nil(receipt.id) or is_nil(receipt.dismissed_at) or
+          receipt.dismissed_at < incident.last_seen_at
+  end
+
   defp maybe_filter_incident_state(query, nil), do: query
 
   defp maybe_filter_incident_state(query, state),
@@ -673,6 +862,103 @@ defmodule CodexPooler.Alerts do
   defp transition_incident(_scope, _incident_or_id, _action),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
+  defp upsert_incident_notification_receipt(%Scope{} = scope, incident_or_id, action) do
+    with {:ok, operator_id} <- scope_user_id(scope),
+         %AlertIncident{} = incident <- load_incident(incident_or_id),
+         {:ok, pool_ids} <- authorized_pool_filter(scope, nil),
+         true <- bell_eligible_incident?(incident, pool_ids) do
+      timestamp = now()
+      attrs = receipt_attrs(operator_id, incident.id, action, timestamp)
+
+      %AlertIncidentReceipt{}
+      |> AlertIncidentReceipt.changeset(attrs)
+      |> Repo.insert(
+        on_conflict: [set: receipt_conflict_set(action, timestamp)],
+        conflict_target: [:operator_id, :incident_id],
+        returning: true
+      )
+    else
+      nil -> {:error, incident_not_found_error()}
+      false -> {:error, incident_not_found_error()}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp upsert_incident_notification_receipt(_scope, _incident_or_id, _action),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  defp dismiss_all_visible_incident_notifications_in_transaction(operator_id, pool_ids, timestamp) do
+    incident_ids =
+      Repo.all(
+        from incident in visible_incident_notifications_query(operator_id, pool_ids),
+          select: incident.id
+      )
+
+    Enum.reduce_while(incident_ids, 0, fn incident_id, count ->
+      attrs = receipt_attrs(operator_id, incident_id, :dismiss, timestamp)
+
+      result =
+        %AlertIncidentReceipt{}
+        |> AlertIncidentReceipt.changeset(attrs)
+        |> Repo.insert(
+          on_conflict: [set: receipt_conflict_set(:dismiss, timestamp)],
+          conflict_target: [:operator_id, :incident_id],
+          returning: true
+        )
+
+      case result do
+        {:ok, _receipt} -> {:cont, count + 1}
+        {:error, reason} -> {:halt, Repo.rollback(reason)}
+      end
+    end)
+  end
+
+  defp receipt_attrs(operator_id, incident_id, :read, timestamp) do
+    %{
+      operator_id: operator_id,
+      incident_id: incident_id,
+      read_at: timestamp,
+      created_at: timestamp,
+      updated_at: timestamp
+    }
+  end
+
+  defp receipt_attrs(operator_id, incident_id, :dismiss, timestamp) do
+    %{
+      operator_id: operator_id,
+      incident_id: incident_id,
+      read_at: timestamp,
+      dismissed_at: timestamp,
+      created_at: timestamp,
+      updated_at: timestamp
+    }
+  end
+
+  defp receipt_conflict_set(:read, timestamp), do: [read_at: timestamp, updated_at: timestamp]
+
+  defp receipt_conflict_set(:dismiss, timestamp),
+    do: [read_at: timestamp, dismissed_at: timestamp, updated_at: timestamp]
+
+  defp load_incident(incident_or_id) do
+    case incident_id(incident_or_id) do
+      {:ok, incident_id} -> Repo.get(AlertIncident, incident_id)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp bell_eligible_incident?(%AlertIncident{id: incident_id, state: state}, pool_ids)
+       when state in ["open", "acknowledged"] do
+    Repo.exists?(
+      from target in AlertIncidentTarget,
+        where: target.incident_id == ^incident_id and target.pool_id in ^pool_ids
+    )
+  end
+
+  defp bell_eligible_incident?(%AlertIncident{}, _pool_ids), do: false
+
+  defp incident_not_found_error,
+    do: access_error(:incident_not_found, "alert incident was not found")
+
   defp update_incident_transition(scope, incident, pool_ids, action) do
     attrs = incident_transition_attrs(action, now())
 
@@ -680,6 +966,7 @@ defmodule CodexPooler.Alerts do
       update_incident_transition_in_transaction(incident, attrs, pool_ids)
     end)
     |> AlertAudit.audit_incident_transition(scope, incident, action)
+    |> maybe_broadcast_incident_projection_invalidation()
   end
 
   defp update_incident_transition_in_transaction(incident, attrs, pool_ids) do
@@ -698,6 +985,13 @@ defmodule CodexPooler.Alerts do
 
   defp incident_transition_attrs(:resolve, timestamp),
     do: %{state: "resolved", resolved_at: timestamp, updated_at: timestamp}
+
+  defp timestamp_covers_incident?(nil, _last_seen_at), do: false
+
+  defp timestamp_covers_incident?(%DateTime{} = timestamp, %DateTime{} = last_seen_at),
+    do: DateTime.compare(timestamp, last_seen_at) in [:gt, :eq]
+
+  defp timestamp_covers_incident?(_timestamp, _last_seen_at), do: false
 
   defp incident_visible?(%AlertIncident{pool_id: pool_id}, pool_ids) when is_binary(pool_id),
     do: pool_id in pool_ids
@@ -756,6 +1050,25 @@ defmodule CodexPooler.Alerts do
 
   defp pool_target_projection(target),
     do: %{id: target.pool_id, slug: target.pool_slug, name: target.pool_name}
+
+  defp maybe_broadcast_operator_notification_invalidation(
+         {:ok, _value} = result,
+         %Scope{user: %{id: operator_id}}
+       )
+       when is_binary(operator_id) do
+    _ = NotificationEvents.broadcast_operator_invalidation(operator_id)
+    result
+  end
+
+  defp maybe_broadcast_operator_notification_invalidation(result, _scope), do: result
+
+  defp maybe_broadcast_incident_projection_invalidation({:ok, %{id: incident_id}} = result)
+       when is_binary(incident_id) do
+    _ = NotificationEvents.broadcast_incident_invalidation(incident_id)
+    result
+  end
+
+  defp maybe_broadcast_incident_projection_invalidation(result), do: result
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

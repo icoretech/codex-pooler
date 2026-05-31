@@ -6,7 +6,15 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Alerts
-  alias CodexPooler.Alerts.Schemas.{AlertChannel, AlertRule, AlertRuleChannel}
+
+  alias CodexPooler.Alerts.Schemas.{
+    AlertChannel,
+    AlertIncident,
+    AlertIncidentReceipt,
+    AlertRule,
+    AlertRuleChannel
+  }
+
   alias CodexPooler.Repo
 
   test "owner and assigned admins list manageable active pool targets" do
@@ -294,6 +302,177 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     refute hidden_error.message =~ hidden_pool.name
   end
 
+  test "operator notification receipts are idempotent and do not mutate global incident lifecycle" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin_scope = Scope.for_user(admin)
+    pool = pool_fixture(%{slug: "alerts-receipt-idempotent", name: "Alerts Receipt Idempotent"})
+    operator_pool_assignment_fixture(admin, pool, created_by_user_id: owner.id)
+    incident = bell_incident_fixture(pool, "alert:receipt:idempotent")
+
+    assert {:ok, read_receipt} = Alerts.mark_incident_notification_read(owner_scope, incident.id)
+
+    assert {:ok, reread_receipt} =
+             Alerts.mark_incident_notification_read(owner_scope, incident.id)
+
+    assert read_receipt.id == reread_receipt.id
+    assert reread_receipt.operator_id == owner.id
+    assert reread_receipt.incident_id == incident.id
+    assert DateTime.compare(reread_receipt.read_at, incident.last_seen_at) in [:gt, :eq]
+
+    assert {:ok, dismissed_receipt} =
+             Alerts.dismiss_incident_notification(admin_scope, incident.id)
+
+    assert {:ok, redismissed_receipt} =
+             Alerts.dismiss_incident_notification(admin_scope, incident.id)
+
+    assert dismissed_receipt.id == redismissed_receipt.id
+    assert redismissed_receipt.operator_id == admin.id
+    assert redismissed_receipt.dismissed_at
+    assert redismissed_receipt.read_at
+
+    assert 2 ==
+             Repo.aggregate(
+               from(receipt in AlertIncidentReceipt, where: receipt.incident_id == ^incident.id),
+               :count,
+               :id
+             )
+
+    persisted_incident = Repo.get!(AlertIncident, incident.id)
+    assert persisted_incident.state == incident.state
+    assert persisted_incident.acknowledged_at == incident.acknowledged_at
+    assert persisted_incident.resolved_at == incident.resolved_at
+  end
+
+  test "notification receipt writes do not reveal or mutate hidden incidents" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin_scope = Scope.for_user(admin)
+
+    assigned_pool =
+      pool_fixture(%{slug: "alerts-receipt-assigned", name: "Alerts Receipt Assigned"})
+
+    hidden_pool = pool_fixture(%{slug: "alerts-receipt-hidden", name: "Alerts Receipt Hidden"})
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+    hidden_incident = bell_incident_fixture(hidden_pool, "alert:receipt:hidden")
+
+    assert {:error, read_error} =
+             Alerts.mark_incident_notification_read(admin_scope, hidden_incident.id)
+
+    assert read_error.code == :incident_not_found
+    refute read_error.message =~ hidden_pool.id
+    refute read_error.message =~ hidden_pool.name
+
+    assert {:error, dismiss_error} =
+             Alerts.dismiss_incident_notification(admin_scope, hidden_incident.id)
+
+    assert dismiss_error.code == :incident_not_found
+    refute dismiss_error.message =~ hidden_pool.id
+    refute dismiss_error.message =~ hidden_pool.name
+
+    refute Repo.exists?(
+             from(receipt in AlertIncidentReceipt,
+               where: receipt.incident_id == ^hidden_incident.id
+             )
+           )
+
+    assert Repo.get!(AlertIncident, hidden_incident.id).state == hidden_incident.state
+  end
+
+  test "dismiss all recomputes visible bell-eligible incidents server-side" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin_scope = Scope.for_user(admin)
+
+    assigned_pool =
+      pool_fixture(%{slug: "alerts-dismiss-all-assigned", name: "Alerts Dismiss All Assigned"})
+
+    hidden_pool =
+      pool_fixture(%{slug: "alerts-dismiss-all-hidden", name: "Alerts Dismiss All Hidden"})
+
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+
+    visible_open = bell_incident_fixture(assigned_pool, "alert:dismiss-all:open")
+
+    visible_acknowledged =
+      bell_incident_fixture(assigned_pool, "alert:dismiss-all:ack", %{
+        state: "acknowledged",
+        acknowledged_at: now()
+      })
+
+    hidden = bell_incident_fixture(hidden_pool, "alert:dismiss-all:hidden")
+
+    no_target =
+      alert_incident_fixture(pool: assigned_pool, dedupe_key: "alert:dismiss-all:no-target")
+
+    resolved =
+      bell_incident_fixture(assigned_pool, "alert:dismiss-all:resolved", %{
+        state: "resolved",
+        resolved_at: now()
+      })
+
+    assert {:ok, query} = Alerts.bell_eligible_incidents_query(admin_scope)
+
+    assert Enum.sort(Repo.all(from(incident in query, select: incident.id))) ==
+             Enum.sort([visible_open.id, visible_acknowledged.id])
+
+    assert {:ok, 2} = Alerts.dismiss_all_visible_incident_notifications(admin_scope)
+
+    dismissed_ids =
+      Repo.all(
+        from receipt in AlertIncidentReceipt,
+          where: receipt.operator_id == ^admin.id,
+          select: receipt.incident_id
+      )
+
+    assert Enum.sort(dismissed_ids) == Enum.sort([visible_open.id, visible_acknowledged.id])
+    refute hidden.id in dismissed_ids
+    refute no_target.id in dismissed_ids
+    refute resolved.id in dismissed_ids
+  end
+
+  test "read and dismiss recurrence semantics follow incident last_seen_at" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+    pool = pool_fixture(%{slug: "alerts-receipt-recurrence", name: "Alerts Receipt Recurrence"})
+    first_seen_at = DateTime.add(now(), -120, :second)
+
+    incident =
+      bell_incident_fixture(pool, "alert:receipt:recurrence", %{
+        first_seen_at: first_seen_at,
+        last_seen_at: first_seen_at
+      })
+
+    assert {:ok, read_receipt} = Alerts.mark_incident_notification_read(owner_scope, incident.id)
+    assert Alerts.incident_notification_read?(incident, read_receipt)
+    refute Alerts.incident_notification_unread?(incident, read_receipt)
+
+    assert {:ok, dismissed_receipt} =
+             Alerts.dismiss_incident_notification(owner_scope, incident.id)
+
+    assert Alerts.incident_notification_dismissed?(incident, dismissed_receipt)
+
+    recurred_at = DateTime.add(dismissed_receipt.dismissed_at, 1, :microsecond)
+
+    recurred_incident =
+      incident
+      |> AlertIncident.changeset(%{
+        last_seen_at: recurred_at,
+        occurrence_count: incident.occurrence_count + 1,
+        updated_at: recurred_at
+      })
+      |> Repo.update!()
+
+    refute Alerts.incident_notification_read?(recurred_incident, dismissed_receipt)
+    assert Alerts.incident_notification_unread?(recurred_incident, dismissed_receipt)
+    refute Alerts.incident_notification_dismissed?(recurred_incident, dismissed_receipt)
+
+    assert {:ok, 1} = Alerts.dismiss_all_visible_incident_notifications(owner_scope)
+    updated_receipt = Repo.get!(AlertIncidentReceipt, dismissed_receipt.id)
+    assert Alerts.incident_notification_dismissed?(recurred_incident, updated_receipt)
+  end
+
   defp rule_attrs(pool, overrides) do
     overrides = Map.new(overrides)
 
@@ -309,4 +488,26 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     }
     |> Map.merge(overrides)
   end
+
+  defp bell_incident_fixture(pool, dedupe_key, incident_attrs \\ %{}) do
+    now = now()
+
+    rule =
+      alert_rule_fixture(pool, %{display_name: "Bell rule #{System.unique_integer([:positive])}"})
+
+    incident =
+      incident_attrs
+      |> Map.new()
+      |> Map.merge(%{pool: pool, dedupe_key: dedupe_key})
+      |> alert_incident_fixture()
+
+    alert_incident_target_fixture(incident, rule, pool, %{
+      first_matched_at: Map.get(incident_attrs, :first_seen_at, now),
+      last_matched_at: Map.get(incident_attrs, :last_seen_at, now)
+    })
+
+    incident
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
