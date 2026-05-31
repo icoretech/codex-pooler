@@ -6,6 +6,16 @@ defmodule CodexPooler.SchemaContractTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
+
+  alias CodexPooler.Alerts.Schemas.{
+    AlertChannel,
+    AlertDeliveryAttempt,
+    AlertIncident,
+    AlertIncidentTarget,
+    AlertRule,
+    AlertRuleChannel
+  }
+
   alias CodexPooler.Accounting.{DailyRollup, LedgerEntry}
   alias CodexPooler.Catalog.{Model, PricingSnapshot}
   alias CodexPooler.Files.FileRecord
@@ -17,7 +27,8 @@ defmodule CodexPooler.SchemaContractTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @expected_tables ~w(
-    account_quota_windows api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
+    account_quota_windows alert_channels alert_delivery_attempts alert_incident_targets alert_incidents alert_rule_channels
+    alert_rules api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
     bridge_session_aliases codex_files codex_sessions codex_turns daily_rollups
     encrypted_secrets gateway_idempotency_keys instance_settings invite_acceptances invites ledger_entries memberships
     models operator_pool_assignments platform_bootstrap_state pricing_snapshots recovery_codes requests routing_circuit_states
@@ -35,6 +46,12 @@ defmodule CodexPooler.SchemaContractTest do
     APIKeyPolicyBinding,
     CodexPooler.Access.Invite,
     CodexPooler.Access.InviteAcceptance,
+    AlertChannel,
+    AlertDeliveryAttempt,
+    AlertIncident,
+    AlertIncidentTarget,
+    AlertRule,
+    AlertRuleChannel,
     DailyRollup,
     LedgerEntry,
     CodexPooler.Audit.AuditEvent,
@@ -106,7 +123,13 @@ defmodule CodexPooler.SchemaContractTest do
           "daily_rollups_pool_uq",
           "codex_sessions_pool_session_key_uq",
           "codex_turns_session_sequence_uq",
-          "invite_acceptances_invite_id_uq"
+          "invite_acceptances_invite_id_uq",
+          "alert_incidents_unresolved_dedupe_key_uq",
+          "alert_rule_channels_rule_channel_uq",
+          "alert_incident_targets_incident_rule_pool_uq",
+          "alert_delivery_attempts_incident_channel_attempt_uq",
+          "alert_incident_targets_rule_pool_idx",
+          "alert_delivery_attempts_retry_lookup_idx"
         ] do
       assert Map.has_key?(indexes, name)
     end
@@ -131,6 +154,15 @@ defmodule CodexPooler.SchemaContractTest do
              "COALESCE(lower(model), ''::text)"
 
     assert indexes["account_quota_windows_evidence_identity_uq"] =~ "raw_metered_feature"
+    assert indexes["alert_incidents_unresolved_dedupe_key_uq"] =~ "dedupe_key"
+
+    assert indexes["alert_incidents_unresolved_dedupe_key_uq"] =~
+             "WHERE (state = ANY (ARRAY['open'::text, 'acknowledged'::text]))"
+
+    assert indexes["alert_delivery_attempts_retry_lookup_idx"] =~ "next_retry_at"
+
+    assert indexes["alert_delivery_attempts_retry_lookup_idx"] =~
+             "WHERE (status = ANY (ARRAY['pending'::text, 'retryable'::text]))"
   end
 
   test "preserves check constraints for statuses, endpoints, transports, and quota windows" do
@@ -198,6 +230,28 @@ defmodule CodexPooler.SchemaContractTest do
              "max_tokens_per_week > 0"
 
     assert constraints["instance_settings_singleton_true_check"] =~ "singleton = true"
+
+    assert constraints["alert_rules_scope_type_check"] =~ "'pool'"
+    assert constraints["alert_rules_scope_type_check"] =~ "'upstream_identity'"
+    assert constraints["alert_rules_rule_kind_check"] =~ "'pool_no_usable_assignments'"
+    assert constraints["alert_rules_rule_kind_check"] =~ "'upstream_auth_state'"
+    assert constraints["alert_rules_severity_check"] =~ "'info'"
+    assert constraints["alert_rules_severity_check"] =~ "'critical'"
+    assert constraints["alert_rules_cooldown_minutes_check"] =~ "cooldown_minutes >= 5"
+    assert constraints["alert_rules_cooldown_minutes_check"] =~ "cooldown_minutes <= 1440"
+    assert constraints["alert_rules_state_check"] =~ "'active'"
+    assert constraints["alert_rules_state_check"] =~ "'disabled'"
+    assert constraints["alert_rules_target_state_check"] =~ "'missing_evidence'"
+    assert constraints["alert_rules_window_selector_check"] =~ "'model_secondary'"
+    assert constraints["alert_channels_channel_type_check"] =~ "'email'"
+    assert constraints["alert_channels_channel_type_check"] =~ "'webhook'"
+    assert constraints["alert_channels_state_check"] =~ "'active'"
+    assert constraints["alert_incidents_state_check"] =~ "'open'"
+    assert constraints["alert_incidents_state_check"] =~ "'acknowledged'"
+    assert constraints["alert_incidents_state_check"] =~ "'resolved'"
+    assert constraints["alert_delivery_attempts_status_check"] =~ "'pending'"
+    assert constraints["alert_delivery_attempts_status_check"] =~ "'discarded'"
+    assert constraints["alert_delivery_attempts_max_attempts_check"] =~ "max_attempts = 5"
   end
 
   test "preserves JSONB, decimal-compatible money/rate fields, and integer token counters" do
@@ -256,6 +310,17 @@ defmodule CodexPooler.SchemaContractTest do
     assert column_type("instance_settings", "updated_by_user_id") == "uuid"
     assert column_type("instance_settings", "inserted_at") == "timestamp without time zone"
     assert column_type("instance_settings", "updated_at") == "timestamp without time zone"
+
+    assert column_type("alert_rules", "metadata") == "jsonb"
+    assert column_type("alert_rules", "threshold_used_percent") == "numeric(6,3)"
+    assert column_type("alert_channels", "webhook_signing_secret_ciphertext") == "bytea"
+    assert column_type("alert_channels", "webhook_signing_secret_aad") == "jsonb"
+    assert column_type("alert_incidents", "safe_evidence_snapshot") == "jsonb"
+    assert column_type("alert_incidents", "suppression_metadata") == "jsonb"
+    assert column_type("alert_incident_targets", "metadata") == "jsonb"
+    assert column_type("alert_delivery_attempts", "response_metadata") == "jsonb"
+    assert column_type("alert_delivery_attempts", "failure_metadata") == "jsonb"
+    assert column_type("alert_delivery_attempts", "retryable") == "boolean"
   end
 
   test "preserves final foreign key actions including cascades and set-null behavior" do
@@ -276,6 +341,183 @@ defmodule CodexPooler.SchemaContractTest do
     assert fk_action("operator_pool_assignments_pool_id_fkey") == {"c", "a"}
     assert fk_action("operator_pool_assignments_created_by_user_id_fkey") == {"a", "a"}
     assert fk_action("instance_settings_updated_by_user_id_fkey") == {"n", "a"}
+    assert fk_action("alert_rules_pool_id_fkey") == {"c", "a"}
+    assert fk_action("alert_rules_created_by_user_id_fkey") == {"n", "a"}
+    assert fk_action("alert_channels_created_by_user_id_fkey") == {"n", "a"}
+    assert fk_action("alert_rule_channels_alert_rule_id_fkey") == {"c", "a"}
+    assert fk_action("alert_rule_channels_alert_channel_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incidents_pool_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incidents_upstream_identity_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incident_targets_incident_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incident_targets_rule_id_fkey") == {"c", "a"}
+    assert fk_action("alert_incident_targets_pool_id_fkey") == {"c", "a"}
+    assert fk_action("alert_delivery_attempts_incident_id_fkey") == {"c", "a"}
+    assert fk_action("alert_delivery_attempts_channel_id_fkey") == {"c", "a"}
+  end
+
+  test "alert storage tables preserve the metadata-only alerting contract" do
+    rule_columns = table_columns("alert_rules")
+
+    assert Map.take(rule_columns, [
+             "id",
+             "pool_id",
+             "scope_type",
+             "rule_kind",
+             "severity",
+             "cooldown_minutes",
+             "state",
+             "target_state",
+             "window_selector",
+             "threshold_used_percent",
+             "metadata",
+             "created_at",
+             "updated_at"
+           ]) == %{
+             "id" => {"uuid", "NO"},
+             "pool_id" => {"uuid", "NO"},
+             "scope_type" => {"text", "NO"},
+             "rule_kind" => {"text", "NO"},
+             "severity" => {"text", "NO"},
+             "cooldown_minutes" => {"integer", "NO"},
+             "state" => {"text", "NO"},
+             "target_state" => {"text", "YES"},
+             "window_selector" => {"text", "YES"},
+             "threshold_used_percent" => {"numeric", "YES"},
+             "metadata" => {"jsonb", "NO"},
+             "created_at" => {"timestamp without time zone", "NO"},
+             "updated_at" => {"timestamp without time zone", "NO"}
+           }
+
+    channel_columns = table_columns("alert_channels")
+
+    assert Map.take(channel_columns, [
+             "channel_type",
+             "state",
+             "email_to",
+             "endpoint_scheme",
+             "endpoint_host",
+             "endpoint_path_prefix",
+             "endpoint_fingerprint",
+             "endpoint_url_ciphertext",
+             "endpoint_url_nonce",
+             "endpoint_url_aad",
+             "endpoint_url_key_version",
+             "webhook_signing_secret_ciphertext",
+             "webhook_signing_secret_nonce",
+             "webhook_signing_secret_aad",
+             "webhook_signing_secret_key_version",
+             "metadata"
+           ]) == %{
+             "channel_type" => {"text", "NO"},
+             "state" => {"text", "NO"},
+             "email_to" => {"text", "YES"},
+             "endpoint_scheme" => {"text", "YES"},
+             "endpoint_host" => {"text", "YES"},
+             "endpoint_path_prefix" => {"text", "YES"},
+             "endpoint_fingerprint" => {"text", "YES"},
+             "endpoint_url_ciphertext" => {"bytea", "YES"},
+             "endpoint_url_nonce" => {"bytea", "YES"},
+             "endpoint_url_aad" => {"jsonb", "NO"},
+             "endpoint_url_key_version" => {"text", "YES"},
+             "webhook_signing_secret_ciphertext" => {"bytea", "YES"},
+             "webhook_signing_secret_nonce" => {"bytea", "YES"},
+             "webhook_signing_secret_aad" => {"jsonb", "NO"},
+             "webhook_signing_secret_key_version" => {"text", "YES"},
+             "metadata" => {"jsonb", "NO"}
+           }
+
+    refute Map.has_key?(channel_columns, "webhook_signing_secret")
+    refute Map.has_key?(channel_columns, "webhook_secret")
+
+    incident_columns = table_columns("alert_incidents")
+
+    assert Map.take(incident_columns, [
+             "dedupe_key",
+             "scope_type",
+             "rule_kind",
+             "severity",
+             "state",
+             "pool_id",
+             "upstream_identity_id",
+             "occurrence_count",
+             "first_seen_at",
+             "last_seen_at",
+             "resolved_at",
+             "safe_evidence_snapshot"
+           ]) == %{
+             "dedupe_key" => {"text", "NO"},
+             "scope_type" => {"text", "NO"},
+             "rule_kind" => {"text", "NO"},
+             "severity" => {"text", "NO"},
+             "state" => {"text", "NO"},
+             "pool_id" => {"uuid", "YES"},
+             "upstream_identity_id" => {"uuid", "YES"},
+             "occurrence_count" => {"integer", "NO"},
+             "first_seen_at" => {"timestamp without time zone", "NO"},
+             "last_seen_at" => {"timestamp without time zone", "NO"},
+             "resolved_at" => {"timestamp without time zone", "YES"},
+             "safe_evidence_snapshot" => {"jsonb", "NO"}
+           }
+
+    target_columns = table_columns("alert_incident_targets")
+
+    assert Map.take(target_columns, [
+             "incident_id",
+             "rule_id",
+             "pool_id",
+             "first_matched_at",
+             "last_matched_at",
+             "resolved_at"
+           ]) == %{
+             "incident_id" => {"uuid", "NO"},
+             "rule_id" => {"uuid", "NO"},
+             "pool_id" => {"uuid", "NO"},
+             "first_matched_at" => {"timestamp without time zone", "NO"},
+             "last_matched_at" => {"timestamp without time zone", "NO"},
+             "resolved_at" => {"timestamp without time zone", "YES"}
+           }
+
+    attempt_columns = table_columns("alert_delivery_attempts")
+
+    assert Map.take(attempt_columns, [
+             "incident_id",
+             "channel_id",
+             "attempt_number",
+             "max_attempts",
+             "status",
+             "scheduled_at",
+             "next_retry_at",
+             "response_status_code",
+             "retryable",
+             "response_metadata",
+             "failure_metadata"
+           ]) == %{
+             "incident_id" => {"uuid", "NO"},
+             "channel_id" => {"uuid", "NO"},
+             "attempt_number" => {"integer", "NO"},
+             "max_attempts" => {"integer", "NO"},
+             "status" => {"text", "NO"},
+             "scheduled_at" => {"timestamp without time zone", "NO"},
+             "next_retry_at" => {"timestamp without time zone", "YES"},
+             "response_status_code" => {"integer", "YES"},
+             "retryable" => {"boolean", "NO"},
+             "response_metadata" => {"jsonb", "NO"},
+             "failure_metadata" => {"jsonb", "NO"}
+           }
+
+    assert AlertRule.__schema__(:source) == "alert_rules"
+    assert AlertChannel.__schema__(:source) == "alert_channels"
+    assert AlertRuleChannel.__schema__(:source) == "alert_rule_channels"
+    assert AlertIncident.__schema__(:source) == "alert_incidents"
+    assert AlertIncidentTarget.__schema__(:source) == "alert_incident_targets"
+    assert AlertDeliveryAttempt.__schema__(:source) == "alert_delivery_attempts"
+
+    assert AlertRule.__schema__(:type, :threshold_used_percent) == :decimal
+    assert AlertChannel.__schema__(:type, :endpoint_url_ciphertext) == :binary
+    assert AlertChannel.__schema__(:type, :webhook_signing_secret_ciphertext) == :binary
+    assert AlertIncident.__schema__(:type, :safe_evidence_snapshot) == :map
+    assert AlertIncidentTarget.__schema__(:type, :last_matched_at) == :utc_datetime_usec
+    assert AlertDeliveryAttempt.__schema__(:type, :max_attempts) == :integer
   end
 
   test "operator pool assignments preserve the scoped admin grant storage contract" do
