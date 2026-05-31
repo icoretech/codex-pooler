@@ -22,9 +22,8 @@ defmodule CodexPooler.Gateway.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.FileDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
-  alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
   alias CodexPooler.Gateway.Transports.Streaming.WebSocketCodec
-  alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
 
@@ -250,7 +249,7 @@ defmodule CodexPooler.Gateway.Service do
   defp execute_websocket_payload(auth, payload, opts, push_frame) do
     cond do
       WebSocketCodec.response_processed_payload?(payload) ->
-        handle_websocket_response_processed(auth, payload, opts)
+        ResponseProcessed.handle(auth, payload, opts)
 
       WebSocketCodec.warmup_payload?(payload) ->
         {:ok, WebSocketCodec.warmup_result()}
@@ -295,27 +294,6 @@ defmodule CodexPooler.Gateway.Service do
 
   defp coerce_websocket_response_payload(payload, opts) do
     {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
-  end
-
-  defp handle_websocket_response_processed(auth, payload, opts) do
-    request_options =
-      opts
-      |> request_options("/backend-api/codex/responses", payload)
-      |> RequestOptions.put_transport(
-        transport: "websocket",
-        upstream_endpoint: "/backend-api/codex/responses",
-        route_class: RouteClass.proxy_websocket()
-      )
-
-    case forward_websocket_response_processed(payload, request_options) do
-      :ok ->
-        with :ok <- record_websocket_response_processed(auth, payload, request_options) do
-          {:ok, WebSocketCodec.ack_result()}
-        end
-
-      {:error, reason} ->
-        {:error, response_processed_forward_error(reason)}
-    end
   end
 
   defp dispatch_candidates(auth, endpoint, payload, model, reserved, candidates, request_options) do
@@ -455,96 +433,6 @@ defmodule CodexPooler.Gateway.Service do
       {:error, :invalid_json} ->
         {:error, error(400, "invalid_request", "websocket message must be valid JSON")}
     end
-  end
-
-  defp forward_websocket_response_processed(payload, %RequestOptions{} = request_options) do
-    UpstreamDispatch.forward_response_processed(payload, request_options)
-  end
-
-  defp record_websocket_response_processed(auth, payload, %RequestOptions{} = request_options) do
-    attrs = %{
-      endpoint: "/backend-api/codex/responses",
-      transport: "websocket",
-      status: "succeeded",
-      correlation_id: websocket_processed_correlation_id(payload, request_options),
-      client_ip: request_options.request_metadata.client_ip,
-      user_agent: request_options.request_metadata.user_agent,
-      request_metadata: websocket_processed_metadata(auth, payload, request_options),
-      response_status_code: 200
-    }
-
-    case Accounting.record_metadata_request(auth, attrs) do
-      {:ok, %{request: _request}} -> :ok
-      {:error, reason} -> {:error, accounting_failure_error(reason)}
-    end
-  end
-
-  defp websocket_processed_metadata(auth, _payload, request_options) do
-    %{
-      "key_prefix" => auth.key_prefix,
-      "transport" => "websocket",
-      "requested_stream" => false,
-      "endpoint" => "/backend-api/codex/responses",
-      "request_bytes" => request_options.request_metadata.request_bytes,
-      "response_processed" => true
-    }
-    |> Map.merge(websocket_owner_forwarding_metadata(request_options))
-    |> maybe_put_codex_session_metadata(request_options)
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
-  end
-
-  defp websocket_owner_forwarding_metadata(%RequestOptions{
-         transport: %{
-           websocket_owner_forwarding_enabled?: true,
-           websocket_owner_downstream_epoch: downstream_epoch,
-           websocket_owner_proxy_instance_id: proxy_instance_id,
-           websocket_owner_instance_id: owner_instance_id
-         }
-       }) do
-    %{
-      "websocket_owner_forwarding" => %{
-        "enabled" => true,
-        "downstream_epoch" => downstream_epoch,
-        "proxy_instance_id" => proxy_instance_id,
-        "owner_instance_id" => owner_instance_id
-      }
-    }
-  end
-
-  defp websocket_owner_forwarding_metadata(_request_options), do: %{}
-
-  defp maybe_put_codex_session_metadata(metadata, %RequestOptions{
-         continuity: %{codex_session: %CodexSession{} = session}
-       }) do
-    metadata
-    |> Map.put("codex_session_id", session.id)
-    |> Map.put("codex_session_key", session.session_key)
-  end
-
-  defp maybe_put_codex_session_metadata(metadata, %RequestOptions{}), do: metadata
-
-  defp websocket_processed_correlation_id(payload, request_options) do
-    SessionContinuity.websocket_turn_id(payload) || request_options.request_metadata.request_id ||
-      Ecto.UUID.generate()
-  end
-
-  defp accounting_failure_error(reason) do
-    error(500, "gateway_accounting_failed", "gateway accounting failed", nil, %{
-      accounting_error: FinalizationMetadata.safe_reason(reason)
-    })
-  end
-
-  defp response_processed_forward_error(:missing_response_id) do
-    error(400, "invalid_request", "response.processed requires response_id")
-  end
-
-  defp response_processed_forward_error(reason) do
-    error(
-      502,
-      "upstream_websocket_forward_failed",
-      "response.processed could not be forwarded upstream: #{FinalizationMetadata.safe_reason(reason)}"
-    )
   end
 
   defp error(status, code, message, param \\ nil, metadata \\ %{}),
