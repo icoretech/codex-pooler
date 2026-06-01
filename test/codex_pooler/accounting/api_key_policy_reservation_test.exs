@@ -233,6 +233,52 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
       assert reserved.reservation.output_tokens == 768
     end
 
+    test "reservation window enforcement aggregates ledger usage in the database" do
+      setup = accounting_setup()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: 60,
+        max_tokens_per_day: 100_000,
+        max_tokens_per_week: 500_000
+      })
+
+      for index <- 1..5 do
+        setup.auth
+        |> request_fixture(%{
+          model_id: setup.model.id,
+          correlation_id: "corr-aggregate-window-existing-#{index}"
+        })
+        |> ledger_entry_fixture(%{
+          total_tokens: 100,
+          estimated_cost_micros: 100,
+          settled_cost_micros: 100,
+          occurred_at: DateTime.add(now, -index, :hour)
+        })
+      end
+
+      {{:ok, _reserved}, queries} =
+        capture_repo_queries(fn ->
+          Accounting.reserve(
+            setup.auth,
+            setup.model,
+            %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+            %{correlation_id: "corr-aggregate-window-reservation"}
+          )
+        end)
+
+      ledger_usage_queries =
+        queries
+        |> Enum.filter(fn query ->
+          query.command == "SELECT" and String.contains?(query.query, "ledger_entries") and
+            String.contains?(query.query, "amount_status")
+        end)
+
+      assert ledger_usage_queries != []
+      assert Enum.all?(ledger_usage_queries, &(String.downcase(&1.query) =~ "sum("))
+      refute Enum.any?(ledger_usage_queries, &String.contains?(&1.query, ~s(l0."id")))
+    end
+
     test "reservation snapshot inputs do not read policy bindings before reservation" do
       setup = accounting_setup()
       {:ok, policy} = Access.normalize_api_key_policy(setup.api_key)

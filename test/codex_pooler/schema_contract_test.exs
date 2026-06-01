@@ -122,6 +122,7 @@ defmodule CodexPooler.SchemaContractTest do
           "routing_circuit_states_active_assignment_uq",
           "models_pool_exposed_uq",
           "ledger_entries_settlement_request_uq",
+          "ledger_entries_api_key_recorded_occurred_idx",
           "daily_rollups_pool_uq",
           "codex_sessions_pool_session_key_uq",
           "codex_turns_session_sequence_uq",
@@ -150,6 +151,12 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert indexes["api_key_policy_model_active_uq"] =~ "lower(model_identifier)"
     assert indexes["ledger_entries_settlement_request_uq"] =~ "entry_kind = 'settlement'"
+    assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "api_key_id"
+    assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~ "occurred_at DESC"
+
+    assert indexes["ledger_entries_api_key_recorded_occurred_idx"] =~
+             "WHERE (amount_status = 'recorded'::text)"
+
     assert indexes["account_quota_windows_evidence_identity_uq"] =~ "quota_scope"
     assert indexes["requests_api_key_admitted_idx"] =~ "api_key_id"
     assert indexes["requests_api_key_admitted_idx"] =~ "admitted_at DESC"

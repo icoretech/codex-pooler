@@ -13,6 +13,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @entry_settlement "settlement"
   @amount_recorded "recorded"
   @usage_pending "usage_pending"
+  @usage_known "usage_known"
   @source_event_conflict_target {:unsafe_fragment,
                                  "(source_event_id) WHERE source_event_id IS NOT NULL"}
 
@@ -116,23 +117,65 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   def window_usages(api_key_id, windows) do
     windows = normalize_windows(windows)
 
-    case earliest_window_start(windows) do
-      nil ->
-        %{}
+    windows
+    |> Enum.reject(fn {_window, since} -> is_nil(since) end)
+    |> Map.new(fn {window, since} -> {window, window_usage(api_key_id, since)} end)
+  end
 
-      since ->
-        entries =
-          Repo.all(
-            from e in LedgerEntry,
-              where:
-                e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
-                  e.occurred_at >= ^since
-          )
-
-        Enum.reduce(entries, empty_window_usages(windows), fn entry, acc ->
-          add_entry_to_windows(acc, windows, entry)
-        end)
-    end
+  defp window_usage(api_key_id, since) do
+    Repo.one(
+      from e in LedgerEntry,
+        where:
+          e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
+            e.occurred_at >= ^since,
+        select: %{
+          effective_request_count:
+            type(
+              fragment(
+                "COALESCE(SUM(CASE WHEN ? = ? THEN -COALESCE(?, 0) ELSE COALESCE(?, 0) END), 0)::bigint",
+                e.entry_kind,
+                ^@entry_release,
+                e.request_count,
+                e.request_count
+              ),
+              :integer
+            ),
+          effective_total_tokens:
+            type(
+              fragment(
+                "COALESCE(SUM(CASE WHEN ? = ? THEN -COALESCE(?, 0) ELSE COALESCE(?, 0) END), 0)::bigint",
+                e.entry_kind,
+                ^@entry_release,
+                e.total_tokens,
+                e.total_tokens
+              ),
+              :integer
+            ),
+          effective_cost_micros:
+            fragment(
+              """
+              COALESCE(
+                SUM(
+                  CASE WHEN ? = ? THEN -1 ELSE 1 END *
+                  COALESCE(
+                    CASE WHEN ? = ? AND ? = ? THEN ? ELSE ? END,
+                    0
+                  )
+                ),
+                0
+              )
+              """,
+              e.entry_kind,
+              ^@entry_release,
+              e.entry_kind,
+              ^@entry_settlement,
+              e.usage_status,
+              ^@usage_known,
+              e.settled_cost_micros,
+              e.estimated_cost_micros
+            )
+        }
+    ) || empty_window_usage()
   end
 
   @spec reservation_attrs(
@@ -332,56 +375,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   defp normalize_windows(windows) when is_list(windows), do: Map.new(windows)
   defp normalize_windows(windows) when is_map(windows), do: windows
 
-  defp earliest_window_start(windows) do
-    windows
-    |> Map.values()
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce(nil, fn
-      timestamp, nil ->
-        timestamp
-
-      timestamp, earliest ->
-        if DateTime.compare(timestamp, earliest) == :lt, do: timestamp, else: earliest
-    end)
-  end
-
-  defp empty_window_usages(windows) do
-    Map.new(windows, fn {window, _since} ->
-      {window,
-       %{
-         effective_request_count: 0,
-         effective_total_tokens: 0,
-         effective_cost_micros: Decimal.new(0)
-       }}
-    end)
-  end
-
-  defp add_entry_to_windows(acc, windows, entry) do
-    Enum.reduce(windows, acc, fn {window, since}, acc ->
-      if DateTime.compare(entry.occurred_at, since) in [:eq, :gt] do
-        Map.update!(acc, window, &add_entry_to_usage(&1, entry))
-      else
-        acc
-      end
-    end)
-  end
-
-  defp add_entry_to_usage(usage, entry) do
-    sign = if entry.entry_kind == @entry_release, do: -1, else: 1
-
-    cost =
-      if entry.entry_kind == @entry_settlement and entry.usage_status == "usage_known",
-        do: entry.settled_cost_micros,
-        else: entry.estimated_cost_micros
-
+  defp empty_window_usage do
     %{
-      effective_request_count: usage.effective_request_count + sign * (entry.request_count || 0),
-      effective_total_tokens: usage.effective_total_tokens + sign * (entry.total_tokens || 0),
-      effective_cost_micros:
-        Decimal.add(
-          usage.effective_cost_micros,
-          Decimal.mult(cost || Decimal.new(0), Decimal.new(sign))
-        )
+      effective_request_count: 0,
+      effective_total_tokens: 0,
+      effective_cost_micros: Decimal.new(0)
     }
   end
 end
