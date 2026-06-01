@@ -709,6 +709,13 @@ For deployed instances, change `baseURL` to `https://pooler.example.com/v1`.
 
 </details>
 
+<details>
+<summary><img src=".github/assets/claude-code-favicon.png" alt="Claude Code logo" width="16" height="16"> Claude Code</summary>
+
+![Claude Code on Codex Pooler](.github/assets/codex-pooler-claude.png)
+
+</details>
+
 ## Quick Start With Docker Compose
 
 This runs the published release image with a local Postgres database. It is the
