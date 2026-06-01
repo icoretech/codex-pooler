@@ -58,6 +58,67 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert DateTime.compare(updated.updated_at, state.updated_at) == :gt
   end
 
+  test "open circuits reject selected attempts from request-local snapshots" do
+    {auth, model, assignment} = routing_fixture()
+    open_circuit!(auth, model, assignment, next_probe_at: DateTime.add(now(), 60, :second))
+
+    snapshot = circuit_snapshot(auth, model, assignment)
+
+    refute snapshot.eligible?
+
+    assert {:error, :routing_circuit_open} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
+  end
+
+  test "half-open selected attempts keep probe limits capped from locked snapshots" do
+    {auth, model, assignment} = routing_fixture()
+    half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+    snapshot = circuit_snapshot(auth, model, assignment)
+
+    refute snapshot.eligible?
+
+    assert {:error, :routing_circuit_probe_in_flight} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
+  end
+
+  test "stale half-open selected attempts recover through lock-time probe accounting" do
+    {auth, model, assignment} = routing_fixture()
+    stale_updated_at = DateTime.add(now(), -61, :second)
+
+    state =
+      half_open_circuit!(auth, model, assignment, updated_at: stale_updated_at, probe_count: 1)
+
+    snapshot = circuit_snapshot(auth, model, assignment)
+
+    assert snapshot.eligible?
+    assert snapshot.requires_lock?
+
+    assert {:ok, %RoutingCircuitState{} = updated} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
+
+    assert updated.id == state.id
+    assert updated.metadata["probe_in_flight_count"] == 1
+    assert DateTime.compare(updated.updated_at, state.updated_at) == :gt
+  end
+
+  test "closed selected attempts use request-local snapshots without circuit rereads" do
+    {auth, model, assignment} = routing_fixture()
+
+    snapshot = circuit_snapshot(auth, model, assignment)
+
+    assert snapshot.eligible?
+    refute snapshot.requires_lock?
+
+    {_result, commands} =
+      count_repo_commands(fn ->
+        assert {:ok, nil} =
+                 CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
+      end)
+
+    assert command_count(commands, "routing_circuit_states", "SELECT") == 0
+  end
+
   test "failure threshold updates affect the next failure without resetting persisted counts" do
     {auth, model, assignment} = routing_fixture()
 
@@ -113,6 +174,81 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert resumed.metadata["probe_in_flight_count"] == 1
     assert DateTime.compare(resumed.updated_at, state.updated_at) == :gt
   end
+
+  defp open_circuit!(auth, model, assignment, attrs) do
+    now = now()
+    next_probe_at = Keyword.fetch!(attrs, :next_probe_at)
+
+    %RoutingCircuitState{
+      pool_id: auth.pool.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      model_identifier: model.exposed_model_id,
+      route_class: "proxy_websocket",
+      status: "open",
+      reason_code: "test_open",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: now,
+      next_probe_at: next_probe_at,
+      metadata: %{"probe_in_flight_count" => 0},
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp circuit_snapshot(auth, model, assignment) do
+    auth
+    |> CircuitState.eligibility_snapshots(model, [{assignment, %{}}], "proxy_websocket")
+    |> Map.fetch!(assignment.id)
+  end
+
+  defp count_repo_commands(fun) do
+    parent = self()
+    handler_id = "routing-circuit-state-test-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(parent, {handler_id, metadata[:source], command_name(metadata[:query])})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_commands(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_commands(handler_id, commands) do
+    receive do
+      {^handler_id, source, command} ->
+        key = {source, command}
+        drain_repo_commands(handler_id, Map.update(commands, key, 1, &(&1 + 1)))
+    after
+      0 -> commands
+    end
+  end
+
+  defp command_count(commands, source, command), do: Map.get(commands, {source, command}, 0)
+
+  defp command_name(query) when is_binary(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> String.upcase()
+  end
+
+  defp command_name(_query), do: nil
 
   defp routing_fixture do
     pool = pool_fixture()

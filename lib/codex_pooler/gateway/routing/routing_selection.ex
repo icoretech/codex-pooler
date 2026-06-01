@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.{BridgeRing, CircuitState, RoutePlanInput}
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   defstruct [
@@ -31,7 +32,8 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
           required(:route_plan_input) => RoutePlanInput.t(),
           required(:endpoint) => String.t(),
           required(:payload) => map(),
-          required(:request_options) => RequestOptions.t()
+          required(:request_options) => RequestOptions.t(),
+          optional(:route_state) => RouteState.t()
         }
   @type t :: %__MODULE__{
           assignment: PoolUpstreamAssignment.t(),
@@ -46,18 +48,31 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
         }
 
   @spec select_and_begin_circuit(input()) :: {:ok, t()} | {:error, map()}
-  def select_and_begin_circuit(%{
-        auth: auth,
-        model: %Model{} = model,
-        candidates: candidates,
-        route_plan_input: %RoutePlanInput{} = route_plan_input,
-        endpoint: endpoint,
-        payload: payload,
-        request_options: %RequestOptions{} = request_options
-      })
+  def select_and_begin_circuit(
+        %{
+          auth: auth,
+          model: %Model{} = model,
+          candidates: candidates,
+          route_plan_input: %RoutePlanInput{} = route_plan_input,
+          endpoint: endpoint,
+          payload: payload,
+          request_options: %RequestOptions{} = request_options
+        } = input
+      )
       when is_list(candidates) and is_map(payload) do
     route_class = RequestOptions.route_class(request_options)
-    route_plan = BridgeRing.plan_route(auth, model, candidates, route_plan_input, request_options)
+
+    route_state = Map.get(input, :route_state)
+
+    route_plan =
+      BridgeRing.plan_route(
+        auth,
+        model,
+        candidates,
+        route_plan_input,
+        request_options,
+        route_state
+      )
 
     route_plan.candidates
     |> Enum.with_index()
@@ -72,7 +87,7 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
             route_class: route_class
           })
 
-        case begin_circuit(selection, auth, model) do
+        case begin_circuit(selection, auth, model, route_state) do
           {:ok, selection} ->
             {:halt, {:ok, selection}}
 
@@ -117,18 +132,27 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
     }
   end
 
-  @spec begin_circuit(t(), auth(), Model.t()) :: {:ok, t()} | {:error, term()}
-  def begin_circuit(%__MODULE__{} = selection, auth, %Model{} = model) do
+  @spec begin_circuit(t(), auth(), Model.t(), RouteState.t() | nil) ::
+          {:ok, t()} | {:error, term()}
+  def begin_circuit(%__MODULE__{} = selection, auth, %Model{} = model, route_state \\ nil) do
+    snapshot = circuit_snapshot(route_state, selection.assignment.id)
+
     case CircuitState.begin_attempt(
            auth,
            model,
            selection.assignment,
-           selection.route_class
+           selection.route_class,
+           snapshot
          ) do
       {:ok, circuit_state} -> {:ok, %{selection | circuit_state: circuit_state}}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp circuit_snapshot(%RouteState{} = route_state, assignment_id),
+    do: RouteState.circuit_snapshot(route_state, assignment_id)
+
+  defp circuit_snapshot(_route_state, _assignment_id), do: nil
 
   defp route_metadata(route_plan, selected_metadata, route_class) do
     route_plan.request_metadata

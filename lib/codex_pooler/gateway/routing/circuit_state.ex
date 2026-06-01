@@ -17,6 +17,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   @half_open_status RoutingCircuitState.half_open_status()
 
   @type auth :: CodexPooler.Access.auth_context()
+  @type eligibility_snapshot :: %{
+          required(:eligible?) => boolean(),
+          required(:requires_lock?) => boolean(),
+          required(:status) => String.t() | nil,
+          required(:state) => RoutingCircuitState.t() | nil
+        }
 
   @spec eligible?(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) :: boolean()
   def eligible?(
@@ -44,7 +50,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   end
 
   @spec eligibility_snapshots(auth(), Model.t(), [term()], String.t()) :: %{
-          optional(Ecto.UUID.t()) => boolean()
+          optional(Ecto.UUID.t()) => eligibility_snapshot()
         }
   def eligibility_snapshots(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
@@ -64,7 +70,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     now = now()
 
     Map.new(assignment_ids, fn assignment_id ->
-      {assignment_id, eligible_state?(Map.get(states, assignment_id), settings, now)}
+      state = Map.get(states, assignment_id)
+      {assignment_id, snapshot_for_state(state, settings, now)}
     end)
   end
 
@@ -79,7 +86,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     |> Enum.map(fn {assignment, _identity} -> assignment.id end)
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
-    |> Map.new(&{&1, true})
+    |> Map.new(&{&1, default_snapshot()})
   end
 
   @spec begin_attempt(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
@@ -91,17 +98,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         route_class
       )
       when is_binary(route_class) and route_class != "" do
-    now = now()
-    settings = OperationalSettings.current()
-
-    Repo.transaction(fn ->
-      state = latest_for_update(auth, model, assignment, route_class)
-      begin_state(state, settings, now)
-    end)
-    |> case do
-      {:ok, state} -> {:ok, state}
-      {:error, reason} -> {:error, reason}
-    end
+    begin_attempt(auth, model, assignment, route_class, nil)
   end
 
   def begin_attempt(
@@ -109,6 +106,45 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         %Model{},
         %PoolUpstreamAssignment{},
         _route_class
+      ),
+      do: {:error, :invalid_route_class}
+
+  @spec begin_attempt(
+          auth(),
+          Model.t(),
+          PoolUpstreamAssignment.t(),
+          String.t(),
+          eligibility_snapshot() | boolean() | nil
+        ) ::
+          {:ok, RoutingCircuitState.t() | nil} | {:error, term()}
+  def begin_attempt(
+        %{pool: %Pool{}, api_key: %APIKey{}} = auth,
+        %Model{} = model,
+        %PoolUpstreamAssignment{} = assignment,
+        route_class,
+        snapshot
+      )
+      when is_binary(route_class) and route_class != "" do
+    snapshot = normalize_snapshot(snapshot)
+
+    case snapshot do
+      %{eligible?: false, status: @half_open_status} ->
+        {:error, :routing_circuit_probe_in_flight}
+
+      %{eligible?: false} ->
+        {:error, :routing_circuit_open}
+
+      _snapshot ->
+        begin_attempt_with_snapshot(auth, model, assignment, route_class, snapshot)
+    end
+  end
+
+  def begin_attempt(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        %PoolUpstreamAssignment{},
+        _route_class,
+        _snapshot
       ),
       do: {:error, :invalid_route_class}
 
@@ -196,6 +232,29 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         _reason_code
       ),
       do: {:error, :invalid_route_class}
+
+  defp begin_attempt_with_snapshot(
+         _auth,
+         _model,
+         _assignment,
+         _route_class,
+         %{requires_lock?: false} = snapshot
+       ),
+       do: {:ok, snapshot.state}
+
+  defp begin_attempt_with_snapshot(auth, model, assignment, route_class, _snapshot) do
+    now = now()
+    settings = OperationalSettings.current()
+
+    Repo.transaction(fn ->
+      state = latest_for_update(auth, model, assignment, route_class)
+      begin_state(state, settings, now)
+    end)
+    |> case do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp begin_state(
          %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at} =
@@ -380,6 +439,34 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       order_by: [desc: state.updated_at, desc: state.created_at],
       limit: 1
   end
+
+  defp snapshot_for_state(%RoutingCircuitState{} = state, settings, now) do
+    %{
+      eligible?: eligible_state?(state, settings, now),
+      requires_lock?: active_state?(state),
+      status: state.status,
+      state: state
+    }
+  end
+
+  defp snapshot_for_state(_state, _settings, _now), do: default_snapshot()
+
+  defp default_snapshot do
+    %{eligible?: true, requires_lock?: false, status: nil, state: nil}
+  end
+
+  defp normalize_snapshot(%{eligible?: eligible?} = snapshot) when is_boolean(eligible?) do
+    Map.merge(default_snapshot(), snapshot)
+  end
+
+  defp normalize_snapshot(value) when is_boolean(value) do
+    %{default_snapshot() | eligible?: value, requires_lock?: not value}
+  end
+
+  defp normalize_snapshot(_snapshot), do: nil
+
+  defp active_state?(%RoutingCircuitState{status: status}),
+    do: status in [@open_status, @half_open_status]
 
   defp eligible_state?(
          %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at},

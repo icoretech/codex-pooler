@@ -1,13 +1,115 @@
 defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
-  use ExUnit.Case, async: true
+  use CodexPooler.DataCase, async: false
+
+  import CodexPooler.PoolerFixtures,
+    only: [
+      active_api_key_fixture: 1,
+      model_fixture: 2,
+      pool_fixture: 0,
+      upstream_assignment_fixture: 2
+    ]
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.{RoutePlanInput, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+
+  describe "hydrated model visibility" do
+    test "uses one hydrated assignment snapshot for visible models and routable candidates" do
+      pool = pool_fixture()
+      routed = upstream_assignment_fixture(pool, %{plan_family: "pro"})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-hydrated-visible"),
+          metadata: %{"source_assignment_ids" => [routed.assignment.id]}
+        })
+
+      {{context, candidates}, commands} =
+        count_repo_commands(fn ->
+          context = CandidateEligibility.visible_model_context(pool, model.exposed_model_id)
+          {:ok, candidates} = CandidateEligibility.routable_candidates(context, model)
+          {context, candidates}
+        end)
+
+      assert context.visible_model.id == model.id
+      assert Enum.map(context.visible_models, & &1.id) == [model.id]
+      assert candidate_ids(candidates) == [routed.assignment.id]
+      assert command_count(commands, "models", "SELECT") == 1
+      assert command_count(commands, "pool_upstream_assignments", "SELECT") == 1
+
+      {_candidates, reuse_commands} =
+        count_repo_commands(fn ->
+          assert {:ok, candidates} = CandidateEligibility.routable_candidates(context, model)
+          candidates
+        end)
+
+      assert command_count(reuse_commands, "models", "SELECT") == 0
+      assert command_count(reuse_commands, "pool_upstream_assignments", "SELECT") == 0
+    end
+
+    test "keeps hidden models hidden and rejects disabled assignments and stale identities" do
+      pool = pool_fixture()
+      active = upstream_assignment_fixture(pool, %{})
+      disabled = upstream_assignment_fixture(pool, %{assignment_status: "disabled"})
+      stale_identity = upstream_assignment_fixture(pool, %{identity_status: "refresh_due"})
+
+      visible_model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-visible"),
+          metadata: %{
+            "source_assignment_ids" => [
+              active.assignment.id,
+              disabled.assignment.id,
+              stale_identity.assignment.id
+            ]
+          }
+        })
+
+      hidden_model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-hidden"),
+          status: "suppressed",
+          metadata: %{"source_assignment_ids" => [active.assignment.id]}
+        })
+
+      context = CandidateEligibility.visible_model_context(pool, visible_model.exposed_model_id)
+
+      assert Enum.map(context.visible_models, & &1.id) == [visible_model.id]
+      refute Enum.any?(context.visible_models, &(&1.id == hidden_model.id))
+
+      assert {:ok, candidates} = CandidateEligibility.routable_candidates(context, visible_model)
+      assert candidate_ids(candidates) == [active.assignment.id]
+      refute disabled.assignment.id in candidate_ids(candidates)
+      refute stale_identity.assignment.id in candidate_ids(candidates)
+
+      assert CandidateEligibility.visible_model_context(pool, hidden_model.exposed_model_id) ==
+               nil
+    end
+
+    test "keeps degraded assignments visible but not routable" do
+      pool = pool_fixture()
+      degraded = upstream_assignment_fixture(pool, %{health_status: "degraded"})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-degraded-visible"),
+          metadata: %{"source_assignment_ids" => [degraded.assignment.id]}
+        })
+
+      assert %{visible_model: %{id: model_id}} =
+               context = CandidateEligibility.visible_model_context(pool, model.exposed_model_id)
+
+      assert model_id == model.id
+
+      assert {:error, %{code: "no_eligible_backend"}} =
+               CandidateEligibility.routable_candidates(context, model)
+    end
+  end
 
   describe "filter_runtime_compatible_candidates/1" do
     test "auto and default do not narrow the candidate set" do
@@ -181,6 +283,48 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                )
     end
 
+    test "selected route skips an open snapshot and admits a later eligible candidate" do
+      pool = pool_fixture()
+      %{api_key: api_key} = active_api_key_fixture(pool)
+      first = upstream_assignment_fixture(pool, %{})
+      second = upstream_assignment_fixture(pool, %{})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-circuit-selection"),
+          metadata: %{
+            "source_assignment_ids" => [first.assignment.id, second.assignment.id]
+          }
+        })
+
+      request_options = request_options()
+      candidates = [{first.assignment, first.identity}, {second.assignment, second.identity}]
+
+      route_state =
+        RouteState.new(%{
+          visible_model: model,
+          candidates: candidates,
+          circuit_snapshots: %{
+            first.assignment.id => false,
+            second.assignment.id => true
+          }
+        })
+
+      assert {:ok, %RoutingSelection{} = selection} =
+               RoutingSelection.select_and_begin_circuit(%{
+                 auth: %{pool: pool, api_key: api_key},
+                 model: model,
+                 candidates: candidates,
+                 route_plan_input: RoutePlanInput.from_request_opts(request_options),
+                 endpoint: "/backend-api/codex/responses",
+                 payload: %{"model" => model.exposed_model_id},
+                 request_options: request_options,
+                 route_state: route_state
+               })
+
+      assert selection.assignment.id == second.assignment.id
+    end
+
     test "circuit eligibility consumes route-state snapshots without live circuit reads" do
       open_identity = upstream_identity("open-identity")
       closed_identity = upstream_identity("closed-identity")
@@ -208,6 +352,54 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                )
     end
   end
+
+  defp unique_model_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
+
+  defp count_repo_commands(fun) do
+    parent = self()
+    handler_id = "candidate-eligibility-test-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(parent, {handler_id, metadata[:source], command_name(metadata[:query])})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_commands(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_commands(handler_id, commands) do
+    receive do
+      {^handler_id, source, command} ->
+        key = {source, command}
+        drain_repo_commands(handler_id, Map.update(commands, key, 1, &(&1 + 1)))
+    after
+      0 -> commands
+    end
+  end
+
+  defp command_count(commands, source, command), do: Map.get(commands, {source, command}, 0)
+
+  defp command_name(query) when is_binary(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> String.upcase()
+  end
+
+  defp command_name(_query), do: nil
 
   defp candidate(assignment_id) do
     {%{id: assignment_id, metadata: %{}}, %{id: "#{assignment_id}-identity", metadata: %{}}}
