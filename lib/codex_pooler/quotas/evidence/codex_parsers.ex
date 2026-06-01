@@ -250,7 +250,20 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
     end
   end
 
-  defp codex_usage_credits(%{"balance" => balance}) when is_binary(balance) do
+  defp codex_usage_credits(%{"balance" => balance}), do: codex_credit_balance(balance)
+  defp codex_usage_credits(_credits), do: nil
+
+  defp codex_credit_balance(balance) when is_integer(balance) and balance >= 0, do: balance
+
+  defp codex_credit_balance(balance) when is_float(balance) do
+    cond do
+      balance == 0 -> 0
+      balance > 0 -> round(balance)
+      true -> nil
+    end
+  end
+
+  defp codex_credit_balance(balance) when is_binary(balance) do
     balance = String.trim(balance)
 
     cond do
@@ -259,17 +272,18 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
       match?({_, ""}, Integer.parse(balance)) ->
         {value, ""} = Integer.parse(balance)
-        if value > 0, do: value
+        if value >= 0, do: value
 
       true ->
         case Float.parse(balance) do
+          {value, ""} when value == 0 -> 0
           {value, ""} when value > 0 -> round(value)
           _invalid -> nil
         end
     end
   end
 
-  defp codex_usage_credits(_credits), do: nil
+  defp codex_credit_balance(_balance), do: nil
 
   defp infer_active_limit(nil, _used_percent), do: nil
   defp infer_active_limit(credits, used_percent) when used_percent <= 0, do: credits

@@ -2436,30 +2436,67 @@ defmodule CodexPooler.UpstreamsTest do
       assert spark.reset_at == nil
     end
 
-    test "ignores zero credit balances when usage percent still has headroom" do
+    test "preserves explicit zero credit balances when usage percent still has headroom" do
       synced_at = ~U[2026-04-27 10:00:00Z]
 
-      assert {:ok, windows} =
-               QuotaWindows.codex_usage_quota_windows_from_payload(
-                 %{
-                   "credits" => %{"balance" => "0"},
-                   "rate_limit" => %{
-                     "primary_window" => %{
-                       "used_percent" => 10,
-                       "limit_window_seconds" => 18_000,
-                       "reset_after_seconds" => 900
+      for balance <- ["0", "0.0", 0, 0.0] do
+        assert {:ok, windows} =
+                 QuotaWindows.codex_usage_quota_windows_from_payload(
+                   %{
+                     "credits" => %{"balance" => balance},
+                     "rate_limit" => %{
+                       "primary_window" => %{
+                         "used_percent" => 10,
+                         "limit_window_seconds" => 18_000,
+                         "reset_after_seconds" => 900
+                       }
                      }
-                   }
-                 },
-                 synced_at
-               )
+                   },
+                   synced_at
+                 )
 
-      assert [account_primary] = windows
-      assert account_primary.quota_key == "account"
-      assert account_primary.window_kind == "primary"
-      assert account_primary.used_percent == Decimal.from_float(10.0)
-      assert account_primary.active_limit == nil
-      assert account_primary.credits == nil
+        assert [account_primary] = windows
+        assert account_primary.quota_key == "account"
+        assert account_primary.window_kind == "primary"
+        assert account_primary.used_percent == Decimal.from_float(10.0)
+        assert account_primary.active_limit == 0
+        assert account_primary.credits == 0
+      end
+    end
+
+    test "leaves missing and malformed credit balances unknown" do
+      synced_at = ~U[2026-04-27 10:00:00Z]
+
+      for credits <- [
+            nil,
+            %{},
+            %{"balance" => ""},
+            %{"balance" => "bad"},
+            %{"balance" => -1},
+            %{"balance" => -1.0},
+            %{"balance" => "-1"},
+            %{"balance" => "-0.5"}
+          ] do
+        payload =
+          %{
+            "rate_limit" => %{
+              "primary_window" => %{
+                "used_percent" => 10,
+                "limit_window_seconds" => 18_000,
+                "reset_after_seconds" => 900
+              }
+            }
+          }
+          |> then(fn payload ->
+            if is_nil(credits), do: payload, else: Map.put(payload, "credits", credits)
+          end)
+
+        assert {:ok, [account_primary]} =
+                 QuotaWindows.codex_usage_quota_windows_from_payload(payload, synced_at)
+
+        assert account_primary.active_limit == nil
+        assert account_primary.credits == nil
+      end
     end
 
     test "normalizes weekly-only usage as secondary display evidence only" do
@@ -4620,6 +4657,46 @@ defmodule CodexPooler.UpstreamsTest do
                    reset_at: "2026-05-11T02:55:14.000000Z"
                  }
                ]
+             } = QuotaWindows.routing_quota_eligibility(identity, at: now)
+    end
+
+    test "routing quota eligibility allows exhausted secondary weekly evidence with positive credits" do
+      identity = active_identity_fixture()
+      now = ~U[2026-04-27 12:00:00Z]
+      reset_at = ~U[2026-05-11 02:55:14Z]
+
+      assert {:ok, [_primary, _weekly]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("20"),
+                   reset_at: DateTime.add(now, 900, :second),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 },
+                 %{
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("100"),
+                   credits: 25,
+                   reset_at: reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      assert %{
+               eligible?: true,
+               routing_state: :credit_backed_probe,
+               exclusions: [],
+               selection: %{blocked_windows: [%{window_kind: "secondary", credits: 25}]}
              } = QuotaWindows.routing_quota_eligibility(identity, at: now)
     end
 
