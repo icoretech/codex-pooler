@@ -60,7 +60,10 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy do
   def build_request!(attrs), do: ProxyRequest.new(attrs)
 
   @spec execute(auth(), ProxyRequest.t()) :: {:ok, map()} | {:error, gateway_error()}
-  def execute(auth, %ProxyRequest{} = request) do
+  @spec execute(auth(), ProxyRequest.t(), keyword()) :: {:ok, map()} | {:error, gateway_error()}
+  def execute(auth, request, opts \\ [])
+
+  def execute(auth, %ProxyRequest{} = request, opts) when is_list(opts) do
     body = request.body
 
     request_options =
@@ -76,7 +79,8 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy do
            RouteLifecycle.select_and_begin_route(
              auth,
              request.local_endpoint,
-             request_options
+             request_options,
+             Keyword.get(opts, :routing_settings)
            ),
          {:ok, response, retry_count, refresh_metadata} <-
            Dispatch.run(auth, request, model, selection, request_options) do

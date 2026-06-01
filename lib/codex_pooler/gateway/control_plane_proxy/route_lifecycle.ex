@@ -2,10 +2,10 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
   @moduledoc false
 
   alias CodexPooler.Access
-  alias CodexPooler.Catalog
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.ControlPlaneProxy
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
   alias CodexPooler.Gateway.Routing.{
     CandidateEligibility,
@@ -22,14 +22,28 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
   @type auth :: ControlPlaneProxy.auth()
   @type gateway_error :: ControlPlaneProxy.gateway_error()
 
-  @spec select_and_begin_route(auth(), String.t(), RequestOptions.t()) ::
+  @spec select_and_begin_route(
+          auth(),
+          String.t(),
+          RequestOptions.t(),
+          CodexPooler.Pools.RoutingSettings.t() | nil
+        ) ::
           {:ok, Model.t(), RoutingSelection.t(), RequestOptions.t()} | {:error, gateway_error()}
-  def select_and_begin_route(auth, endpoint, %RequestOptions{} = request_options) do
-    with {:ok, model} <- control_plane_route_model(auth),
-         {:ok, candidates} <- CandidateEligibility.routable_candidates(model),
-         {:ok, candidates, request_options} <-
-           route_filter_input(auth, model, endpoint, request_options, candidates)
-           |> RouteFiltering.filter_candidates(quota_mode: :optional),
+  def select_and_begin_route(
+        auth,
+        endpoint,
+        %RequestOptions{} = request_options,
+        routing_settings \\ nil
+      ) do
+    with {:ok, model, visibility, routing_settings} <-
+           control_plane_route_model(auth, routing_settings),
+         {:ok, candidate_snapshots} <- CandidateEligibility.routable_candidates(visibility, model),
+         route_state =
+           control_plane_route_state(model, visibility, candidate_snapshots, routing_settings)
+           |> RouteState.preload_routing_snapshots(auth, model, request_options),
+         {:ok, candidates, request_options, route_state} <-
+           route_filter_input(auth, model, endpoint, request_options, candidate_snapshots)
+           |> RouteFiltering.filter_candidates(route_state, quota_mode: :optional),
          {:ok, selection} <-
            RoutingSelection.select_and_begin_circuit(%{
              auth: auth,
@@ -38,7 +52,8 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
              route_plan_input: RoutePlanInput.from_request_opts(request_options),
              endpoint: endpoint,
              payload: %{},
-             request_options: request_options
+             request_options: request_options,
+             route_state: route_state
            }) do
       {:ok, model, selection, request_options}
     else
@@ -95,17 +110,16 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
     )
   end
 
-  defp control_plane_route_model(auth) do
+  defp control_plane_route_model(auth, routing_settings) do
     case Access.normalize_api_key_policy(auth.api_key) do
       {:ok, policy} ->
-        models =
-          auth.pool
-          |> Catalog.list_visible_models()
-          |> Enum.filter(&model_visible_to_policy?(&1, policy))
+        routing_settings = routing_settings || Pools.routing_settings_with_defaults(auth.pool)
+        visibility = CandidateEligibility.hydrate_model_visibility(auth.pool)
+        models = CandidateEligibility.policy_visible_models(visibility, policy)
 
-        case configured_control_plane_model(auth.pool, models) do
-          {:ok, %Model{} = model} -> {:ok, model}
-          :default -> default_control_plane_model(auth.pool, models)
+        case configured_control_plane_model(auth.pool, models, routing_settings) do
+          {:ok, %Model{} = model} -> {:ok, model, visibility, routing_settings}
+          :default -> default_control_plane_model(auth.pool, models, visibility, routing_settings)
           {:error, reason} -> {:error, reason}
         end
 
@@ -115,8 +129,8 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
     end
   end
 
-  defp configured_control_plane_model(pool, models) do
-    case configured_control_plane_model_identifier(pool) do
+  defp configured_control_plane_model(_pool, models, routing_settings) do
+    case configured_control_plane_model_identifier(routing_settings) do
       nil -> :default
       identifier -> find_configured_control_plane_model(identifier, models)
     end
@@ -128,29 +142,21 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
     end)
   end
 
-  defp configured_control_plane_model_identifier(pool) do
-    case Pools.get_routing_settings(pool) do
-      %{metadata: metadata} when is_map(metadata) ->
-        metadata
-        |> Map.get("control_plane_model", Map.get(metadata, "control_plane_model_identifier"))
-        |> clean_string()
-
-      _settings ->
-        nil
-    end
+  defp configured_control_plane_model_identifier(%{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.get("control_plane_model", Map.get(metadata, "control_plane_model_identifier"))
+    |> clean_string()
   end
 
-  defp default_control_plane_model(pool, models) do
+  defp configured_control_plane_model_identifier(_settings), do: nil
+
+  defp default_control_plane_model(pool, models, visibility, routing_settings) do
     case models do
       [] ->
         {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
 
       models ->
-        source_assignment_ids =
-          models
-          |> Enum.flat_map(&source_assignment_ids/1)
-          |> Enum.filter(&is_binary/1)
-          |> Enum.uniq()
+        source_assignment_ids = visible_source_assignment_ids(models, visibility)
 
         {:ok,
          %Model{
@@ -168,15 +174,19 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
              "control_plane_route" => true,
              "source_assignment_ids" => source_assignment_ids
            }
-         }}
+         }, visibility, routing_settings}
     end
   end
 
-  defp source_assignment_ids(%Model{} = model) do
-    case get_in(model.metadata || %{}, ["source_assignment_ids"]) do
-      ids when is_list(ids) -> ids
-      _value -> []
-    end
+  defp control_plane_route_state(model, visibility, candidate_snapshots, routing_settings) do
+    RouteState.new(%{
+      visible_model_context: Map.put(visibility, :visible_model, model),
+      visible_model: model,
+      visible_models: [model],
+      candidate_snapshots: candidate_snapshots,
+      candidates: candidate_snapshots,
+      routing_settings: routing_settings
+    })
   end
 
   defp clean_string(value) when is_binary(value) do
@@ -192,17 +202,17 @@ defmodule CodexPooler.Gateway.ControlPlaneProxy.RouteLifecycle do
     error(400, "invalid_model", "control-plane model is not available for this pool", "model")
   end
 
-  defp model_visible_to_policy?(%Model{} = model, policy) do
-    model_allowed_by_policy?(policy, model.exposed_model_id)
-  end
+  defp visible_source_assignment_ids(models, visibility) do
+    visible_candidates = Map.get(visibility, :visible_candidates_by_model_id, %{})
 
-  defp model_allowed_by_policy?(%{allowed_model_identifiers: nil}, _model), do: true
-  defp model_allowed_by_policy?(%{allowed_model_identifiers: []}, _model), do: false
-
-  defp model_allowed_by_policy?(%{allowed_model_identifiers: allowed}, model)
-       when is_binary(model) do
-    normalized = model |> String.trim() |> String.downcase()
-    normalized in allowed
+    models
+    |> Enum.flat_map(fn model ->
+      visible_candidates
+      |> Map.get(model.id, [])
+      |> Enum.map(fn {assignment, _identity} -> assignment.id end)
+    end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
   end
 
   defp route_filter_input(auth, model, endpoint, request_options, candidates) do

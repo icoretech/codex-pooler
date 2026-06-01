@@ -615,7 +615,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     do: settings
 
   defp routing_settings(auth, _route_state),
-    do: Pools.get_routing_settings(auth.pool) || default_settings(auth.pool.id)
+    do: Pools.routing_settings_with_defaults(auth.pool) || default_settings(auth.pool.id)
 
   defp quota_scope_opts(%Model{} = model) do
     [

@@ -118,11 +118,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
           request_opts: GatewayHelpers.request_opts(conn)
         })
 
+      routing_settings = Pools.routing_settings_with_defaults(auth.pool)
+
       if endpoint == "/backend-api/codex/analytics-events/events" and
-           analytics_forwarding_disabled?(auth) do
+           analytics_forwarding_disabled?(routing_settings) do
         ControlPlaneProxy.record_disabled_analytics(auth, request)
       else
-        ControlPlaneProxy.execute(auth, request)
+        ControlPlaneProxy.execute(auth, request, routing_settings: routing_settings)
       end
     end)
   end
@@ -337,14 +339,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
 
   defp request_path(conn), do: "/" <> Enum.join(conn.path_info, "/")
 
-  defp analytics_forwarding_disabled?(auth) do
-    auth.pool
-    |> Pools.get_routing_settings()
-    |> case do
-      nil -> false
-      settings -> settings.control_plane_analytics_forwarding_enabled == false
-    end
-  end
+  defp analytics_forwarding_disabled?(%{control_plane_analytics_forwarding_enabled: false}),
+    do: true
+
+  defp analytics_forwarding_disabled?(_routing_settings), do: false
 
   defp read_control_plane_body(conn, :no_body), do: {:ok, "", conn}
 
