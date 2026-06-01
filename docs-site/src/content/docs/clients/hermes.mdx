@@ -3,6 +3,8 @@ title: Hermes Agent
 description: Configure Hermes Agent with Codex Pooler's narrow OpenAI-compatible /v1 surface and operator MCP endpoint.
 ---
 
+![Codex Pooler Hermes Agent integration](/codex-pooler-hermes.png)
+
 Hermes Agent should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface unless a Codex backend route is documented for the specific Hermes path you are testing.
 
 The recommended setup is the Hermes `openai-api` provider. It keeps Hermes on its OpenAI API path, sends model requests to `/v1`, and keeps the Pool API key separate from the operator MCP token.
