@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   Relays an async Req response into an HTTP or websocket writer.
   """
 
+  alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   @type relay_state :: term()
@@ -30,7 +31,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   @spec run(relay_state(), Req.Response.t(), handler_map()) :: stream_relay_result()
   def run(state, response, handlers) do
     handlers = validate_handlers!(handlers)
-    stream_upstream(state, response, [], handlers)
+    stream_upstream(state, response, RetainedBody.empty(), handlers)
   end
 
   defp validate_handlers!(%{first_event_retry: callback} = handlers)
@@ -85,10 +86,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   end
 
   defp finalize_stream_parse_error(state, chunks, reason, handlers) do
-    body = chunks |> Enum.reverse() |> IO.iodata_to_binary()
-
     stream_finalization_result(
-      handlers.finalize_failure.(body, stream_parse_error_reason(reason)),
+      handlers.finalize_failure.(chunks, stream_parse_error_reason(reason)),
       state
     )
   end
@@ -161,24 +160,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   end
 
   defp append_stream_chunk(chunks, ""), do: chunks
-  defp append_stream_chunk(chunks, data), do: [data | chunks]
+  defp append_stream_chunk(chunks, data), do: RetainedBody.append(chunks, data)
 
   defp finish_stream_parts({:cont, state, chunks}, response, handlers),
     do: stream_upstream(state, response, chunks, handlers)
 
   defp finish_stream_parts({:done, state, chunks}, _response, handlers) do
-    body = chunks |> Enum.reverse() |> IO.iodata_to_binary()
-    stream_finalization_result(handlers.finalize_success.(body), state)
+    stream_finalization_result(handlers.finalize_success.(chunks), state)
   end
 
   defp finish_stream_parts({:retry_first_event, state, chunks, failure}, _response, handlers) do
-    body = chunks |> Enum.reverse() |> IO.iodata_to_binary()
-    handlers.first_event_retry.(state, body, failure)
+    handlers.first_event_retry.(state, chunks, failure)
   end
 
   defp finish_stream_parts({:error, state, chunks, reason}, _response, handlers) do
-    body = chunks |> Enum.reverse() |> IO.iodata_to_binary()
-    stream_finalization_result(handlers.finalize_failure.(body, reason), state)
+    stream_finalization_result(handlers.finalize_failure.(chunks, reason), state)
   end
 
   defp stream_finalization_result({:ok, _finalized}, state), do: {:ok, state}
