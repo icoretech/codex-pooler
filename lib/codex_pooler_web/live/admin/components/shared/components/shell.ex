@@ -373,38 +373,42 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               data-role="admin-notification-row"
               data-alert-anchor-id={notification_anchor_id(row)}
             >
-              <div class="flex items-start justify-between gap-3">
-                <div class="grid min-w-0 gap-1">
-                  <div class="flex min-w-0 flex-wrap items-center gap-2">
-                    <span
-                      :if={notification_row_unread?(row)}
-                      data-role="admin-notification-unread-indicator"
-                      class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[0.65rem] font-semibold leading-none text-primary"
-                    >
-                      <span class="size-1.5 rounded-full bg-primary" aria-hidden="true"></span> Unread
-                    </span>
-                    <span
-                      id={"#{notification_row_id(row)}-severity"}
-                      data-role="admin-notification-severity"
-                      class={notification_severity_chip_class(row)}
-                    >
-                      {notification_severity_label(row)}
-                    </span>
-                    <span
-                      id={"#{notification_row_id(row)}-state"}
-                      data-role="admin-notification-state"
-                      class={AdminBadges.status_chip_class(notification_state(row))}
-                    >
-                      {notification_state_label(row)}
-                    </span>
-                  </div>
-                  <h2 class="truncate text-sm font-semibold text-base-content">
+              <div class="grid gap-2" data-role="admin-notification-heading">
+                <div class="flex items-start justify-between gap-3">
+                  <h2 class="min-w-0 text-sm font-semibold leading-5 text-base-content">
                     {notification_title(row)}
                   </h2>
+                  <p class="shrink-0 whitespace-nowrap text-right text-[0.68rem] font-mono leading-5 text-base-content/50">
+                    {notification_timestamp(row)}
+                  </p>
                 </div>
-                <p class="shrink-0 whitespace-nowrap text-right text-[0.68rem] font-mono text-base-content/50">
-                  {notification_timestamp(row)}
-                </p>
+
+                <div
+                  class="flex min-w-0 flex-wrap items-center gap-1.5"
+                  data-role="admin-notification-meta"
+                >
+                  <span
+                    :if={notification_row_unread?(row)}
+                    data-role="admin-notification-unread-indicator"
+                    class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[0.65rem] font-semibold leading-none text-primary"
+                  >
+                    <span class="size-1.5 rounded-full bg-primary" aria-hidden="true"></span> Unread
+                  </span>
+                  <span
+                    id={"#{notification_row_id(row)}-severity"}
+                    data-role="admin-notification-severity"
+                    class={notification_severity_chip_class(row)}
+                  >
+                    {notification_severity_label(row)}
+                  </span>
+                  <span
+                    id={"#{notification_row_id(row)}-state"}
+                    data-role="admin-notification-state"
+                    class={AdminBadges.status_chip_class(notification_state(row))}
+                  >
+                    {notification_state_label(row)}
+                  </span>
+                </div>
               </div>
 
               <div
@@ -421,11 +425,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 </span>
               </div>
 
-              <div class="mt-3 flex flex-wrap justify-end gap-2">
+              <div
+                class="mt-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2"
+                data-role="admin-notification-actions"
+              >
                 <button
                   id={"admin-notification-open-#{notification_row_value(row, :id)}"}
                   type="button"
-                  class="btn btn-primary btn-xs gap-1"
+                  class="btn btn-primary btn-xs min-w-0 justify-center gap-1 px-2"
                   data-role="admin-notification-primary-action"
                   phx-click="open_alert_notification_incident"
                   phx-value-id={notification_row_value(row, :id)}
@@ -437,7 +444,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   :if={notification_row_unread?(row)}
                   id={"admin-notification-mark-read-#{notification_row_value(row, :id)}"}
                   type="button"
-                  class="btn btn-secondary btn-xs gap-1"
+                  class="btn btn-secondary btn-xs shrink-0 gap-1 px-2"
                   data-role="admin-notification-mark-read"
                   phx-click="mark_alert_notification_read"
                   phx-value-id={notification_row_value(row, :id)}
@@ -448,13 +455,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 <button
                   id={"admin-notification-dismiss-#{notification_row_value(row, :id)}"}
                   type="button"
-                  class="btn btn-ghost btn-xs gap-1 text-base-content/60 hover:text-base-content"
+                  class="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/60 hover:text-base-content"
                   data-role="admin-notification-dismiss"
+                  aria-label="Dismiss notification"
                   phx-click="dismiss_alert_notification"
                   phx-value-id={notification_row_value(row, :id)}
                 >
                   <.icon name="hero-x-mark" class="size-3.5" />
-                  <span>Dismiss</span>
                 </button>
               </div>
             </article>

@@ -92,6 +92,31 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     end
   end
 
+  test "notification rows use a compact readable card structure", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("layout"), name: "Layout Visible"})
+    incident = shell_incident_fixture(pool, %{dedupe_key: unique_dedupe("layout")})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    row_selector = "#admin-notification-row-#{incident.id}"
+
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-heading']")
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-meta']")
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-actions'].grid")
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='admin-notification-primary-action'].justify-center"
+           )
+
+    assert has_element?(
+             view,
+             "#admin-notification-dismiss-#{incident.id}[aria-label='Dismiss notification']"
+           )
+
+    refute has_element?(view, "#admin-notification-dismiss-#{incident.id}", "Dismiss")
+  end
+
   test "caps the badge label at 99 plus while the scroll list stays bounded", %{
     conn: conn,
     scope: scope
