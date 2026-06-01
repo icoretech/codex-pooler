@@ -43,6 +43,45 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     end
   end
 
+  @spec eligibility_snapshots(auth(), Model.t(), [term()], String.t()) :: %{
+          optional(Ecto.UUID.t()) => boolean()
+        }
+  def eligibility_snapshots(
+        %{pool: %Pool{}, api_key: %APIKey{}} = auth,
+        %Model{} = model,
+        candidates,
+        route_class
+      )
+      when is_list(candidates) and is_binary(route_class) and route_class != "" do
+    assignment_ids =
+      candidates
+      |> Enum.map(fn {assignment, _identity} -> assignment.id end)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    states = latest_by_assignment(auth, model, assignment_ids, route_class)
+    settings = OperationalSettings.current()
+    now = now()
+
+    Map.new(assignment_ids, fn assignment_id ->
+      {assignment_id, eligible_state?(Map.get(states, assignment_id), settings, now)}
+    end)
+  end
+
+  def eligibility_snapshots(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        candidates,
+        _route_class
+      )
+      when is_list(candidates) do
+    candidates
+    |> Enum.map(fn {assignment, _identity} -> assignment.id end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Map.new(&{&1, true})
+  end
+
   @spec begin_attempt(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
           {:ok, RoutingCircuitState.t() | nil} | {:error, term()}
   def begin_attempt(
@@ -302,6 +341,27 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     Repo.one(query(auth, model, assignment, route_class))
   end
 
+  defp latest_by_assignment(_auth, _model, [], _route_class), do: %{}
+
+  defp latest_by_assignment(auth, model, assignment_ids, route_class) do
+    Repo.all(
+      from state in RoutingCircuitState,
+        where:
+          state.pool_id == ^auth.pool.id and
+            is_nil(state.api_key_id) and
+            state.pool_upstream_assignment_id in ^assignment_ids and
+            state.model_identifier == ^model.exposed_model_id and
+            state.route_class == ^route_class,
+        distinct: state.pool_upstream_assignment_id,
+        order_by: [
+          asc: state.pool_upstream_assignment_id,
+          desc: state.updated_at,
+          desc: state.created_at
+        ]
+    )
+    |> Map.new(&{&1.pool_upstream_assignment_id, &1})
+  end
+
   defp latest_for_update(auth, model, assignment, route_class) do
     auth
     |> query(model, assignment, route_class)
@@ -320,6 +380,21 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       order_by: [desc: state.updated_at, desc: state.created_at],
       limit: 1
   end
+
+  defp eligible_state?(
+         %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at},
+         _settings,
+         now
+       ) do
+    DateTime.compare(next_probe_at, now) != :gt
+  end
+
+  defp eligible_state?(%RoutingCircuitState{status: @open_status}, _settings, _now), do: false
+
+  defp eligible_state?(%RoutingCircuitState{status: @half_open_status} = state, settings, now),
+    do: probe_available?(state, settings, now)
+
+  defp eligible_state?(_state, _settings, _now), do: true
 
   defp probe_in_flight_count(%RoutingCircuitState{metadata: metadata}) when is_map(metadata) do
     case Map.get(metadata, @circuit_probe_in_flight_key) do
