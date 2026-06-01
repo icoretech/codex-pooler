@@ -26,6 +26,59 @@ defmodule CodexPoolerWeb.TelemetryTest do
     assert "vm.system_counts.port_count" in metric_names
   end
 
+  test "exports Ecto repo query count and latency Prometheus metrics by source" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    assert %Telemetry.Metrics.Counter{} =
+             metric_by_name(metrics, "codex_pooler.repo.query.count")
+
+    for name <- [
+          "codex_pooler.repo.query.total_time.seconds",
+          "codex_pooler.repo.query.query_time.seconds",
+          "codex_pooler.repo.query.queue_time.seconds",
+          "codex_pooler.repo.query.decode_time.seconds"
+        ] do
+      assert %Telemetry.Metrics.Distribution{
+               event_name: [:codex_pooler, :repo, :query],
+               tags: [:source],
+               reporter_options: reporter_options
+             } = metric_by_name(metrics, name)
+
+      assert Keyword.fetch!(reporter_options, :buckets) == [
+               0.001,
+               0.0025,
+               0.005,
+               0.01,
+               0.025,
+               0.05,
+               0.1,
+               0.25,
+               0.5,
+               1,
+               2,
+               5
+             ]
+    end
+  end
+
+  test "normalizes Ecto source tags without exposing SQL text" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.repo.query.count")
+
+    assert %{source: "requests"} = metric.tag_values.(%{source: "requests"})
+    assert %{source: "unknown"} = metric.tag_values.(%{})
+
+    assert %{source: source} =
+             metric.tag_values.(%{source: "SELECT * FROM requests WHERE secret = $1"})
+
+    assert source == "unknown"
+  end
+
+  defp metric_by_name(metrics, name) do
+    Enum.find(metrics, &(metric_name(&1) == name))
+  end
+
   defp metric_name(metric) do
     Enum.map_join(metric.name, ".", &to_string/1)
   end

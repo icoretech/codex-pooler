@@ -6,6 +6,9 @@ defmodule CodexPoolerWeb.Telemetry do
 
   @type metric :: Telemetry.Metrics.t()
 
+  @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+  @repo_source_pattern ~r/\A[a-zA-Z0-9_.-]+\z/
+
   def start_link(arg) do
     Supervisor.start_link(__MODULE__, arg, name: __MODULE__)
   end
@@ -112,6 +115,49 @@ defmodule CodexPoolerWeb.Telemetry do
         description: "Phoenix router dispatch duration by route.",
         reporter_options: [buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]]
       ),
+      counter("codex_pooler.repo.query.count",
+        event_name: [:codex_pooler, :repo, :query],
+        measurement: :total_time,
+        tags: [:source],
+        tag_values: &repo_query_tag_values/1,
+        description: "Total Ecto repository queries by source."
+      ),
+      distribution("codex_pooler.repo.query.total_time.seconds",
+        event_name: [:codex_pooler, :repo, :query],
+        measurement: :total_time,
+        unit: {:native, :second},
+        tags: [:source],
+        tag_values: &repo_query_tag_values/1,
+        description: "Total Ecto repository query time by source.",
+        reporter_options: [buckets: @repo_query_buckets]
+      ),
+      distribution("codex_pooler.repo.query.query_time.seconds",
+        event_name: [:codex_pooler, :repo, :query],
+        measurement: :query_time,
+        unit: {:native, :second},
+        tags: [:source],
+        tag_values: &repo_query_tag_values/1,
+        description: "Ecto repository database execution time by source.",
+        reporter_options: [buckets: @repo_query_buckets]
+      ),
+      distribution("codex_pooler.repo.query.queue_time.seconds",
+        event_name: [:codex_pooler, :repo, :query],
+        measurement: :queue_time,
+        unit: {:native, :second},
+        tags: [:source],
+        tag_values: &repo_query_tag_values/1,
+        description: "Ecto repository connection checkout queue time by source.",
+        reporter_options: [buckets: @repo_query_buckets]
+      ),
+      distribution("codex_pooler.repo.query.decode_time.seconds",
+        event_name: [:codex_pooler, :repo, :query],
+        measurement: :decode_time,
+        unit: {:native, :second},
+        tags: [:source],
+        tag_values: &repo_query_tag_values/1,
+        description: "Ecto repository decode time by source.",
+        reporter_options: [buckets: @repo_query_buckets]
+      ),
       last_value("vm.memory.total.bytes",
         event_name: [:vm, :memory],
         measurement: :total,
@@ -203,4 +249,28 @@ defmodule CodexPoolerWeb.Telemetry do
   defp perf_probe_child do
     if GatewayPerfProbe.enabled?(), do: GatewayPerfProbe
   end
+
+  defp repo_query_tag_values(metadata) do
+    %{source: repo_query_source(metadata[:source])}
+  end
+
+  defp repo_query_source(nil), do: "unknown"
+
+  defp repo_query_source(source) when is_atom(source) do
+    source
+    |> Atom.to_string()
+    |> repo_query_source()
+  end
+
+  defp repo_query_source(source) when is_binary(source) do
+    source = String.trim(source)
+
+    if String.length(source) <= 80 and Regex.match?(@repo_source_pattern, source) do
+      source
+    else
+      "unknown"
+    end
+  end
+
+  defp repo_query_source(_source), do: "unknown"
 end

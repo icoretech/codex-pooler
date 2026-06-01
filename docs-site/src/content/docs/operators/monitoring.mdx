@@ -33,6 +33,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 4. app restarts, OOM events, and last terminated reason
 5. request rate and p95 endpoint/router latency
 6. stream-buffer oversized and truncated events
+7. Ecto query rate, queries per request, hot query sources, and DB queue p95
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -61,6 +62,42 @@ increase(kube_pod_container_status_restarts_total{
 ```text
 rate(codex_pooler_gateway_stream_buffer_oversized_count_total[5m])
 rate(codex_pooler_gateway_stream_buffer_truncated_count_total[5m])
+```
+
+```text
+sum by (pod) (
+  rate(codex_pooler_repo_query_count{namespace="codex-pooler", job="codex-pooler-app"}[5m])
+)
+```
+
+```text
+topk(10,
+  sum by (source) (
+    rate(codex_pooler_repo_query_count{namespace="codex-pooler", job="codex-pooler-app"}[5m])
+  )
+)
+```
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source) (
+    rate(codex_pooler_repo_query_total_time_seconds_bucket{
+      namespace="codex-pooler",
+      job="codex-pooler-app"
+    }[5m])
+  )
+)
+```
+
+```text
+histogram_quantile(0.95,
+  sum by (le, pod) (
+    rate(codex_pooler_repo_query_queue_time_seconds_bucket{
+      namespace="codex-pooler",
+      job="codex-pooler-app"
+    }[5m])
+  )
+)
 ```
 
 ## Memory sampler logs
