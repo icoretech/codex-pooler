@@ -426,6 +426,68 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
   end
 
   @tag :upstream_file_create_bridge
+  test "file bridge quota filtering batches quota-window reads for all candidates", %{conn: conn} do
+    setup = active_api_key_fixture()
+    reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+    upstreams =
+      for index <- 1..3 do
+        upstream =
+          start_upstream(
+            FakeUpstream.file_protocol_success(
+              file_id: "file_batched_quota_#{index}",
+              file_name: "batched-quota-#{index}.txt",
+              mime_type: "text/plain"
+            )
+          )
+
+        assignment =
+          active_upstream_assignment_fixture(setup.pool, %{
+            chatgpt_account_id:
+              "acct_file_batched_quota_#{index}_#{System.unique_integer([:positive])}",
+            metadata: %{"base_url" => FakeUpstream.url(upstream)},
+            access_token: "file-batched-quota-token-#{index}"
+          })
+
+        used_percent = if index == 3, do: Decimal.new("1"), else: Decimal.new("100")
+
+        assert {:ok, [_window]} =
+                 QuotaWindows.upsert_quota_windows(assignment.identity, [
+                   %{
+                     window_kind: "primary",
+                     window_minutes: 300,
+                     used_percent: used_percent,
+                     reset_at: reset_at,
+                     source: "codex_response_headers",
+                     source_precision: "observed",
+                     freshness_state: "fresh"
+                   }
+                 ])
+
+        {index, upstream}
+      end
+
+    {conn, query_counts} =
+      count_repo_commands(fn ->
+        conn
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> post(~p"/backend-api/files", %{
+          "file_name" => "batched-quota.txt",
+          "file_size" => 12
+        })
+      end)
+
+    assert %{"file_id" => "file_batched_quota_3"} = json_response(conn, 200)
+    assert command_count(query_counts, "account_quota_windows", "SELECT") == 1
+
+    assert [{1, first_upstream}, {2, second_upstream}, {3, third_upstream}] = upstreams
+    assert FakeUpstream.requests(first_upstream) == []
+    assert FakeUpstream.requests(second_upstream) == []
+    assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(third_upstream)
+  end
+
+  @tag :upstream_file_create_bridge
   test "rejects file bridge create when all assignments are quota exhausted", %{conn: conn} do
     setup = active_api_key_fixture()
 
@@ -742,4 +804,50 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
             state.route_class == "file_upload"
     )
   end
+
+  defp count_repo_commands(fun) do
+    parent = self()
+    handler_id = "backend-file-routing-test-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(parent, {handler_id, metadata[:source], command_name(metadata[:query])})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_commands(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_commands(handler_id, commands) do
+    receive do
+      {^handler_id, source, command} ->
+        key = {source, command}
+        drain_repo_commands(handler_id, Map.update(commands, key, 1, &(&1 + 1)))
+    after
+      0 -> commands
+    end
+  end
+
+  defp command_count(commands, source, command), do: Map.get(commands, {source, command}, 0)
+
+  defp command_name(query) when is_binary(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> String.upcase()
+  end
+
+  defp command_name(_query), do: nil
 end

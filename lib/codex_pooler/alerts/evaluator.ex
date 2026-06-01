@@ -28,6 +28,9 @@ defmodule CodexPooler.Alerts.Evaluator do
         }
 
   @type evaluation_opts :: keyword() | map()
+  @type projection_cache :: %{
+          optional({Ecto.UUID.t() | nil, String.t() | nil}) => [map()]
+        }
 
   @spec evaluate_rule(AlertRule.t(), evaluation_opts()) :: [candidate()]
   def evaluate_rule(rule, opts \\ [])
@@ -95,15 +98,136 @@ defmodule CodexPooler.Alerts.Evaluator do
 
   @spec evaluate_active_rules(evaluation_opts()) :: [candidate()]
   def evaluate_active_rules(opts \\ []) do
-    AlertRule
-    |> where([rule], rule.state == "active")
-    |> order_by([rule], asc: rule.created_at, asc: rule.id)
-    |> Repo.all()
-    |> Enum.flat_map(&evaluate_rule(&1, opts))
+    timestamp = evaluation_timestamp(opts)
+
+    {candidate_groups, _projection_cache} =
+      AlertRule
+      |> where([rule], rule.state == "active")
+      |> order_by([rule], asc: rule.created_at, asc: rule.id)
+      |> Repo.all()
+      |> Enum.map_reduce(%{}, fn rule, projection_cache ->
+        evaluate_rule_with_projection_cache(rule, timestamp, projection_cache)
+      end)
+
+    List.flatten(candidate_groups)
+  end
+
+  defp evaluate_rule_with_projection_cache(
+         %AlertRule{state: "disabled"} = rule,
+         timestamp,
+         projection_cache
+       ) do
+    {[clear_candidate(rule, dedupe_key_for_rule(rule, nil), timestamp)], projection_cache}
+  end
+
+  defp evaluate_rule_with_projection_cache(
+         %AlertRule{rule_kind: "pool_no_usable_assignments"} = rule,
+         timestamp,
+         projection_cache
+       ) do
+    {projection, projection_cache} =
+      pool_projection_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+
+    dedupe_key = dedupe_key_for_rule(rule, nil)
+
+    candidates =
+      if projection.usable_assignment_count == 0 do
+        [pool_match_candidate(rule, dedupe_key, projection, "no_usable_assignments", timestamp)]
+      else
+        [clear_candidate(rule, dedupe_key, timestamp)]
+      end
+
+    {candidates, projection_cache}
+  end
+
+  defp evaluate_rule_with_projection_cache(
+         %AlertRule{rule_kind: "pool_low_usable_assignments"} = rule,
+         timestamp,
+         projection_cache
+       ) do
+    min_usable = rule.min_usable_assignments || 1
+
+    {projection, projection_cache} =
+      pool_projection_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+
+    dedupe_key = dedupe_key_for_rule(rule, nil)
+
+    candidates =
+      if projection.usable_assignment_count > 0 and
+           projection.usable_assignment_count < min_usable do
+        [pool_match_candidate(rule, dedupe_key, projection, "low_usable_assignments", timestamp)]
+      else
+        [clear_candidate(rule, dedupe_key, timestamp)]
+      end
+
+    {candidates, projection_cache}
+  end
+
+  defp evaluate_rule_with_projection_cache(
+         %AlertRule{rule_kind: "pool_all_assignments_in_state"} = rule,
+         timestamp,
+         projection_cache
+       ) do
+    {projection, projection_cache} =
+      pool_projection_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+
+    dedupe_key = dedupe_key_for_rule(rule, nil)
+    target_state = rule.target_state
+
+    candidates =
+      if (target_state && projection.enabled_assignment_count > 0) and
+           all_in_state?(projection, target_state) do
+        [pool_match_candidate(rule, dedupe_key, projection, target_state, timestamp)]
+      else
+        [clear_candidate(rule, dedupe_key, timestamp)]
+      end
+
+    {candidates, projection_cache}
+  end
+
+  defp evaluate_rule_with_projection_cache(
+         %AlertRule{rule_kind: rule_kind} = rule,
+         timestamp,
+         projection_cache
+       )
+       when rule_kind in ["upstream_quota_threshold", "upstream_auth_state"] do
+    {assignments, projection_cache} =
+      assigned_identity_projections_from_cache(
+        rule.pool_id,
+        rule.model,
+        timestamp,
+        projection_cache
+      )
+
+    candidates =
+      assignments
+      |> Enum.reject(&(&1.assignment_status in @disabled_assignment_states))
+      |> Enum.map(fn assignment ->
+        case rule.rule_kind do
+          "upstream_quota_threshold" -> threshold_candidate(rule, assignment, timestamp)
+          "upstream_auth_state" -> auth_state_candidate(rule, assignment, timestamp)
+        end
+      end)
+
+    {candidates, projection_cache}
   end
 
   defp pool_projection(pool_id, model, timestamp) do
-    assignments = assigned_identity_projections(pool_id, model, timestamp)
+    pool_projection_from_assignments(
+      pool_id,
+      model,
+      assigned_identity_projections(pool_id, model, timestamp)
+    )
+  end
+
+  defp pool_projection_from_cache(pool_id, model, timestamp, projection_cache) do
+    {assignments, projection_cache} =
+      assigned_identity_projections_from_cache(pool_id, model, timestamp, projection_cache)
+
+    {pool_projection_from_assignments(pool_id, model, assignments), projection_cache}
+  end
+
+  defp pool_projection_from_assignments(pool_id, model, assignments) do
     enabled = Enum.reject(assignments, &(&1.assignment_status in @disabled_assignment_states))
     usable = Enum.filter(enabled, & &1.usable_assignment?)
 
@@ -116,6 +240,25 @@ defmodule CodexPooler.Alerts.Evaluator do
       state_counts: Enum.frequencies_by(enabled, & &1.state),
       assignments: assignments
     }
+  end
+
+  @spec assigned_identity_projections_from_cache(
+          Ecto.UUID.t() | nil,
+          String.t() | nil,
+          DateTime.t(),
+          projection_cache()
+        ) :: {[map()], projection_cache()}
+  defp assigned_identity_projections_from_cache(pool_id, model, timestamp, projection_cache) do
+    cache_key = {pool_id, model}
+
+    case Map.fetch(projection_cache, cache_key) do
+      {:ok, assignments} ->
+        {assignments, projection_cache}
+
+      :error ->
+        assignments = assigned_identity_projections(pool_id, model, timestamp)
+        {assignments, Map.put(projection_cache, cache_key, assignments)}
+    end
   end
 
   defp assigned_identity_projections(pool_id, model, timestamp) do

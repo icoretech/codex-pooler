@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
     RoutingSelection
   }
 
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -55,9 +56,22 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
   defp route_selection(auth, candidates, payload, request_options, endpoint) do
     model = model()
 
+    route_state =
+      %{visible_model: model, candidates: candidates}
+      |> RouteState.new()
+      |> RouteState.preload_routing_snapshots(auth, model, request_options)
+
     with {:ok, candidates} <- require_file_candidates(candidates, request_options),
-         {:ok, candidates, request_options} <-
-           filter_file_candidates(auth, model, candidates, payload, request_options, endpoint),
+         {:ok, candidates, request_options, route_state} <-
+           filter_file_candidates(
+             auth,
+             model,
+             candidates,
+             payload,
+             request_options,
+             endpoint,
+             route_state
+           ),
          {:ok, selection} <-
            RoutingSelection.select_and_begin_circuit(%{
              auth: auth,
@@ -66,7 +80,8 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
              route_plan_input: RoutePlanInput.from_request_opts(request_options),
              endpoint: endpoint,
              payload: payload,
-             request_options: request_options
+             request_options: request_options,
+             route_state: route_state
            }) do
       {:ok, selection}
     else
@@ -88,7 +103,15 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
 
   defp require_file_candidates(candidates, _request_options), do: {:ok, candidates}
 
-  defp filter_file_candidates(auth, model, candidates, payload, request_options, endpoint) do
+  defp filter_file_candidates(
+         auth,
+         model,
+         candidates,
+         payload,
+         request_options,
+         endpoint,
+         route_state
+       ) do
     %{
       auth: auth,
       model: model,
@@ -98,7 +121,7 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
       candidates: candidates
     }
     |> CandidateEligibility.FilterInput.new()
-    |> RouteFiltering.filter_candidates(quota_mode: :optional)
+    |> RouteFiltering.filter_candidates(route_state, quota_mode: :optional)
   end
 
   defp route_selection_error(%{status: status, code: code, message: message} = reason, opts) do
