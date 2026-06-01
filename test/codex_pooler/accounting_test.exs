@@ -241,8 +241,9 @@ defmodule CodexPooler.AccountingTest do
           )
         end)
 
-      assert command_count(commands, "ledger_entries", "SELECT") <= 4
+      assert command_count(commands, "ledger_entries", "SELECT") <= 2
       assert command_count(commands, "ledger_entries", "INSERT") == 3
+      assert command_count(commands, "api_key_policy_bindings", "SELECT") == 1
     end
 
     test "repeated finalization reuses existing settlement without duplicate rollups" do

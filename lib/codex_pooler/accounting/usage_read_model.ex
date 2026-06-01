@@ -7,10 +7,10 @@ defmodule CodexPooler.Accounting.UsageReadModel do
 
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting.{DailyRollup, LedgerEntry, Request, UsageResponses}
+  alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Accounting.UsageReadModel.UpstreamUsage
   alias CodexPooler.Repo
 
-  @entry_release "release"
   @entry_settlement "settlement"
   @amount_recorded "recorded"
   @usage_known "usage_known"
@@ -60,8 +60,15 @@ defmodule CodexPooler.Accounting.UsageReadModel do
       rolling = rolling_api_key_summary(pool_id, api_key_id, as_of)
       cost_summary = rolling_api_key_cost_summary(pool_id, api_key_id, as_of)
       daily = daily_api_key_summary(pool_id, api_key_id, as_of)
-      weekly = ledger_window_usage(api_key_id, DateTime.add(as_of, -7, :day))
-      minute = ledger_window_usage(api_key_id, DateTime.add(as_of, -60, :second))
+
+      window_usages =
+        LedgerEntries.window_usages(api_key_id,
+          weekly: DateTime.add(as_of, -7, :day),
+          minute: DateTime.add(as_of, -60, :second)
+        )
+
+      weekly = window_usages.weekly
+      minute = window_usages.minute
 
       bindings =
         Repo.all(
@@ -259,44 +266,6 @@ defmodule CodexPooler.Accounting.UsageReadModel do
 
   defp v1_total_cost_usd(%{total_cost_usd: %Decimal{} = value}), do: Decimal.to_float(value)
   defp v1_total_cost_usd(_usage), do: 0.0
-
-  defp ledger_window_usage(api_key_id, since) do
-    entries =
-      Repo.all(
-        from e in LedgerEntry,
-          where:
-            e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
-              e.occurred_at >= ^since
-      )
-
-    Enum.reduce(
-      entries,
-      %{
-        effective_request_count: 0,
-        effective_total_tokens: 0,
-        effective_cost_micros: Decimal.new(0)
-      },
-      fn entry, acc ->
-        sign = if entry.entry_kind == @entry_release, do: -1, else: 1
-
-        cost =
-          if entry.entry_kind == @entry_settlement and entry.usage_status == @usage_known,
-            do: entry.settled_cost_micros,
-            else: entry.estimated_cost_micros
-
-        %{
-          effective_request_count:
-            acc.effective_request_count + sign * (entry.request_count || 0),
-          effective_total_tokens: acc.effective_total_tokens + sign * (entry.total_tokens || 0),
-          effective_cost_micros:
-            Decimal.add(
-              acc.effective_cost_micros,
-              Decimal.mult(cost || Decimal.new(0), Decimal.new(sign))
-            )
-        }
-      end
-    )
-  end
 
   defp rolling_api_key_cost_summary(pool_id, api_key_id, as_of) do
     start_date = as_of |> DateTime.add(-27, :day) |> DateTime.to_date()

@@ -1,6 +1,8 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.PricingResolution
@@ -72,6 +74,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           required(:timestamp) => DateTime.t()
         }
   @type create_status :: :inserted | :existing
+  @type usage_window :: atom()
+  @type window_usage :: %{
+          required(:effective_request_count) => integer(),
+          required(:effective_total_tokens) => integer(),
+          required(:effective_cost_micros) => Decimal.t()
+        }
 
   @spec create_or_get!(map()) :: LedgerEntry.t()
   def create_or_get!(attrs) do
@@ -98,6 +106,32 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
 
       {0, []} ->
         {Repo.get_by!(LedgerEntry, source_event_id: source_event_id), :existing}
+    end
+  end
+
+  @spec window_usages(Ecto.UUID.t(), keyword(DateTime.t()) | %{usage_window() => DateTime.t()}) ::
+          %{
+            usage_window() => window_usage()
+          }
+  def window_usages(api_key_id, windows) do
+    windows = normalize_windows(windows)
+
+    case earliest_window_start(windows) do
+      nil ->
+        %{}
+
+      since ->
+        entries =
+          Repo.all(
+            from e in LedgerEntry,
+              where:
+                e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
+                  e.occurred_at >= ^since
+          )
+
+        Enum.reduce(entries, empty_window_usages(windows), fn entry, acc ->
+          add_entry_to_windows(acc, windows, entry)
+        end)
     end
   end
 
@@ -294,4 +328,60 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   defp decimal_string_or_nil(nil), do: nil
   defp decimal_string_or_nil(%Decimal{} = value), do: Decimal.to_string(value)
   defp decimal_string_or_nil(value), do: to_string(value)
+
+  defp normalize_windows(windows) when is_list(windows), do: Map.new(windows)
+  defp normalize_windows(windows) when is_map(windows), do: windows
+
+  defp earliest_window_start(windows) do
+    windows
+    |> Map.values()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reduce(nil, fn
+      timestamp, nil ->
+        timestamp
+
+      timestamp, earliest ->
+        if DateTime.compare(timestamp, earliest) == :lt, do: timestamp, else: earliest
+    end)
+  end
+
+  defp empty_window_usages(windows) do
+    Map.new(windows, fn {window, _since} ->
+      {window,
+       %{
+         effective_request_count: 0,
+         effective_total_tokens: 0,
+         effective_cost_micros: Decimal.new(0)
+       }}
+    end)
+  end
+
+  defp add_entry_to_windows(acc, windows, entry) do
+    Enum.reduce(windows, acc, fn {window, since}, acc ->
+      if DateTime.compare(entry.occurred_at, since) in [:eq, :gt] do
+        Map.update!(acc, window, &add_entry_to_usage(&1, entry))
+      else
+        acc
+      end
+    end)
+  end
+
+  defp add_entry_to_usage(usage, entry) do
+    sign = if entry.entry_kind == @entry_release, do: -1, else: 1
+
+    cost =
+      if entry.entry_kind == @entry_settlement and entry.usage_status == "usage_known",
+        do: entry.settled_cost_micros,
+        else: entry.estimated_cost_micros
+
+    %{
+      effective_request_count: usage.effective_request_count + sign * (entry.request_count || 0),
+      effective_total_tokens: usage.effective_total_tokens + sign * (entry.total_tokens || 0),
+      effective_cost_micros:
+        Decimal.add(
+          usage.effective_cost_micros,
+          Decimal.mult(cost || Decimal.new(0), Decimal.new(sign))
+        )
+    }
+  end
 end
