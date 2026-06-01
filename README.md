@@ -114,6 +114,8 @@ for example `https://pooler.example.com`.
 <details>
 <summary><img src=".github/assets/opencode-favicon.png" alt="opencode logo" width="16" height="16"> OpenCode <code>~/.config/opencode/opencode.jsonc</code></summary>
 
+![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
+
 opencode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
 provider uses the Pool API key, and the optional remote MCP entry uses an
 operator-owned MCP token. Its websocket support is the narrow Responses
@@ -180,6 +182,8 @@ change `baseURL` to `https://pooler.example.com/v1` and the MCP `url` to
 
 <details>
 <summary><img src=".github/assets/codex-cli-favicon.png" alt="OpenAI logo" width="16" height="16"> Codex <code>~/.codex/config.toml</code></summary>
+
+![Codex Pooler Codex CLI integration](.github/assets/codex-pooler-codex.png)
 
 Codex should use the backend compatibility route, not the `/v1` SDK route.
 Keep the provider `name` as `OpenAI`; Codex uses that value for provider-family
@@ -289,6 +293,8 @@ Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
 <details>
 <summary><img src=".github/assets/openclaw-favicon.png" alt="OpenClaw logo" width="16" height="16"> OpenClaw <code>~/.openclaw/openclaw.json</code></summary>
 
+![Codex Pooler OpenClaw integration](.github/assets/codex-pooler-openclaw.png)
+
 OpenClaw uses `openai/*` as the canonical OpenAI route. To keep that model name
 while sending agent turns to Codex Pooler's OpenAI-compatible `/v1` surface, pin
 the OpenAI provider to the PI runtime and point `baseUrl` at Codex Pooler.
@@ -351,6 +357,8 @@ OpenAI.
 
 <details>
 <summary><img src=".github/assets/hermes-favicon.png" alt="Hermes Agent logo" width="16" height="16"> Hermes Agent <code>~/.hermes/config.yaml</code> + <code>auth.json</code></summary>
+
+![Codex Pooler Hermes Agent integration](.github/assets/codex-pooler-hermes.png)
 
 Hermes works best through its `openai-api` provider with the Responses transport
 forced explicitly. Keep the Pool API key and MCP token in `~/.hermes/.env`,
