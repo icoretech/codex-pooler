@@ -487,6 +487,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             },
             "prefer_websockets" => true,
             "reasoning_summary_format" => "json",
+            "tool_mode" => "code_mode_only",
             "source_assignment_ids" => ["upstream-source-id"],
             "source_assignment_models" => %{"upstream-source-id" => %{"id" => "provider"}},
             "raw_model_listing" => %{"id" => "provider"}
@@ -517,6 +518,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert model["prefer_websockets"] == true
     assert model["reasoning_summary_format"] == "json"
+    assert model["tool_mode"] == "code_mode_only"
     refute Map.has_key?(model, "upstream_model")
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
@@ -544,7 +546,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "minimal_client_version" => nil,
             "model_messages" => ["unexpected"],
             "prefer_websockets" => "true",
-            "reasoning_summary_format" => %{"format" => "json"}
+            "reasoning_summary_format" => %{"format" => "json"},
+            "tool_mode" => "future_mode"
           }
         }
       )
@@ -558,6 +561,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert is_nil(model["model_messages"])
     assert model["prefer_websockets"] == false
     assert is_nil(model["reasoning_summary_format"])
+    assert is_nil(model["tool_mode"])
     assert FakeUpstream.count(upstream) == 0
   end
 

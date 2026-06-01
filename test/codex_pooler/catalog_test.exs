@@ -222,6 +222,7 @@ defmodule CodexPooler.CatalogTest do
               %{
                 "id" => "gpt-shared",
                 "additional_speed_tiers" => ["fast"],
+                "tool_mode" => "code_mode_only",
                 "service_tiers" => [
                   %{
                     "id" => "priority",
@@ -275,6 +276,7 @@ defmodule CodexPooler.CatalogTest do
              ]
 
       assert shared.metadata["upstream_model"]["additional_speed_tiers"] == ["fast"]
+      assert shared.metadata["upstream_model"]["tool_mode"] == "code_mode_only"
 
       assert shared.metadata["upstream_model"]["service_tiers"] == [
                %{

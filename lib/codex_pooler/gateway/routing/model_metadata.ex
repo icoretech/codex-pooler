@@ -84,6 +84,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
       "experimental_supported_tools" => list_metadata(metadata, "experimental_supported_tools"),
       "input_modalities" => input_modalities(metadata),
       "supports_search_tool" => bool_metadata(metadata, "supports_search_tool"),
+      "tool_mode" => tool_mode_metadata(metadata),
       "upstream_model_id" => model.upstream_model_id,
       "exposed_model_id" => model.exposed_model_id,
       "status" => model.status,
@@ -119,6 +120,14 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   defp string_metadata(metadata, key) do
     case Map.get(metadata, key) do
       value when is_binary(value) -> value
+      _value -> nil
+    end
+  end
+
+  @spec tool_mode_metadata(metadata()) :: String.t() | nil
+  defp tool_mode_metadata(metadata) do
+    case string_metadata(metadata, "tool_mode") do
+      value when value in ["direct", "code_mode", "code_mode_only"] -> value
       _value -> nil
     end
   end
