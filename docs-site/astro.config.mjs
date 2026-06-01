@@ -9,6 +9,9 @@ const autogenerateGroup = (label, directory) => ({
 
 export default defineConfig({
   site: "https://docs.codex-pooler.com",
+  redirects: {
+    "/reference/endpoint-routing/": "/reference/runtime-routes/",
+  },
   integrations: [
     starlight({
       title: "Codex Pooler",
