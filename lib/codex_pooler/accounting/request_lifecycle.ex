@@ -212,8 +212,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     Repo.transaction(fn ->
       {request, attempt, reservation} = lock_finalization_rows(request, attempt)
 
-      {request, attempt} =
-        persist_final_attempt_and_request(request, attempt, usage, attrs, finalization)
+      attempt = persist_final_attempt(attempt, usage, attrs, finalization)
 
       pricing =
         PricingResolution.lookup_for_settlement(
@@ -225,7 +224,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           timestamp
         )
 
-      request = IdentitySnapshot.persist_finalized_request_snapshot!(request, attempt, pricing)
+      request = persist_final_request(request, usage, pricing, finalization)
 
       settlement_state =
         build_settlement_context(request, attempt, reservation, usage, pricing, finalization)
@@ -251,7 +250,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     {request, attempt, reservation}
   end
 
-  defp persist_final_attempt_and_request(request, attempt, usage, attrs, finalization) do
+  defp persist_final_attempt(attempt, usage, attrs, finalization) do
     attempt =
       attempt
       |> Ecto.Changeset.change(%{
@@ -267,19 +266,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       })
       |> Repo.update!()
 
-    request =
-      request
-      |> Ecto.Changeset.change(%{
+    attempt
+  end
+
+  defp persist_final_request(request, usage, pricing, finalization) do
+    request_attrs =
+      %{
         status: finalization.request_status,
         usage_status: usage.status,
         completed_at: finalization.timestamp,
         response_status_code: finalization.response_status_code,
         retry_count: finalization.retry_count,
         last_error_code: finalization.last_error_code
-      })
-      |> Repo.update!()
+      }
+      |> Map.merge(IdentitySnapshot.finalized_request_snapshot_attrs(request, pricing))
 
-    {request, attempt}
+    request
+    |> Ecto.Changeset.change(request_attrs)
+    |> Repo.update!()
   end
 
   defp build_settlement_context(_request, _attempt, reservation, usage, pricing, finalization) do

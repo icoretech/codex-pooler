@@ -3,8 +3,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounting.PricingResolution
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -44,22 +44,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
     :ok
   end
 
-  @spec persist_finalized_request_snapshot!(Request.t(), Attempt.t(), map()) :: Request.t()
-  def persist_finalized_request_snapshot!(%Request{} = request, %Attempt{} = attempt, pricing) do
+  @spec finalized_request_snapshot_attrs(Request.t(), map()) :: map()
+  def finalized_request_snapshot_attrs(%Request{} = request, pricing) do
     request_metadata =
       PricingResolution.update_request_metadata(request.request_metadata, pricing)
 
-    request
-    |> Ecto.Changeset.change(
-      Map.merge(
-        %{request_metadata: request_metadata},
-        request_snapshot_updates(request, attempt, request_metadata, pricing)
-      )
+    Map.merge(
+      %{request_metadata: request_metadata},
+      request_snapshot_updates(request, request_metadata, pricing)
     )
-    |> Repo.update!()
   end
 
-  defp request_snapshot_updates(request, _attempt, request_metadata, pricing) do
+  defp request_snapshot_updates(request, request_metadata, pricing) do
     settings_snapshot =
       PricingResolution.request_settings_snapshot(%{}, request_metadata, pricing)
 

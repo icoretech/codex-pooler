@@ -242,7 +242,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     assert routing["selected_bridge_candidate_id"] == setup.assignment.id
     assert routing["selected_bridge_candidate_rank"] == 1
 
-    assert request_update_count(query_events) <= 4
+    assert request_update_count(query_events) <= 3
 
     metadata_text = inspect(request.request_metadata)
     refute metadata_text =~ input
