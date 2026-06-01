@@ -1981,7 +1981,7 @@
                       "kind": "DataQuery",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "clamp_min(max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}) - on (pod) vm_memory_total_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}, 0)",
+                        "expr": "clamp_min(max by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"${pod:regex}\", container=\"app\", image!=\"\"}) - on (pod) max by (pod) (vm_memory_total_bytes{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}), 0)",
                         "interval": "$resolution",
                         "legendFormat": "{{pod}} cgroup - beam"
                       },
