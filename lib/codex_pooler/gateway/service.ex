@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.FileDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
   alias CodexPooler.Gateway.Transports.Streaming.WebSocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
@@ -123,9 +124,16 @@ defmodule CodexPooler.Gateway.Service do
         request_options =
           policy_request_opts(request_options, policy, model_name, effective_model_name)
 
-        case visible_model(auth.pool, effective_model_name) do
-          %Model{} = model ->
-            execute_visible_model(auth, endpoint, payload, request_options, model)
+        case visible_model_context(auth.pool, effective_model_name) do
+          %{visible_model: %Model{} = model} = visible_model_data ->
+            execute_visible_model(
+              auth,
+              endpoint,
+              payload,
+              request_options,
+              model,
+              visible_model_data
+            )
 
           nil ->
             reason = error(400, "invalid_model", "model is not available for this pool", "model")
@@ -140,8 +148,8 @@ defmodule CodexPooler.Gateway.Service do
     end
   end
 
-  defp execute_visible_model(auth, endpoint, payload, request_options, model) do
-    case PreDispatch.prepare(auth, endpoint, payload, request_options, model) do
+  defp execute_visible_model(auth, endpoint, payload, request_options, model, visible_model_data) do
+    case PreDispatch.prepare(auth, endpoint, payload, request_options, model, visible_model_data) do
       {:ok, prepared} ->
         execute_session_routable_model(
           auth,
@@ -149,7 +157,8 @@ defmodule CodexPooler.Gateway.Service do
           payload,
           prepared.request_options,
           model,
-          prepared.candidates
+          prepared.candidates,
+          prepared.route_state
         )
 
       {:error, %{code: "duplicate_turn"} = reason} ->
@@ -168,9 +177,10 @@ defmodule CodexPooler.Gateway.Service do
          payload,
          request_options,
          model,
-         candidates
+         candidates,
+         %RouteState{} = route_state
        ) do
-    with {:ok, candidates, request_options} <-
+    with {:ok, candidates, request_options, route_state} <-
            route_filter_input(
              auth,
              model,
@@ -179,11 +189,20 @@ defmodule CodexPooler.Gateway.Service do
              request_options,
              candidates
            )
-           |> RouteFiltering.filter_candidates(),
+           |> RouteFiltering.filter_candidates(route_state),
          :ok <- SessionContinuity.ensure_unique_turn(request_options),
          {:ok, reserved} <-
            reserve_and_start_turn(auth, model, payload, endpoint, request_options) do
-      dispatch_candidates(auth, endpoint, payload, model, reserved, candidates, request_options)
+      dispatch_candidates(
+        auth,
+        endpoint,
+        payload,
+        model,
+        reserved,
+        candidates,
+        request_options,
+        route_state
+      )
     else
       {:error, %{code: "duplicate_turn"} = reason} ->
         {:error, reason}
@@ -296,7 +315,16 @@ defmodule CodexPooler.Gateway.Service do
     {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
   end
 
-  defp dispatch_candidates(auth, endpoint, payload, model, reserved, candidates, request_options) do
+  defp dispatch_candidates(
+         auth,
+         endpoint,
+         payload,
+         model,
+         reserved,
+         candidates,
+         request_options,
+         %RouteState{} = route_state
+       ) do
     CandidateDispatch.dispatch(
       %{
         auth: auth,
@@ -305,7 +333,8 @@ defmodule CodexPooler.Gateway.Service do
         model: model,
         reserved: reserved,
         candidates: candidates,
-        request_options: request_options
+        request_options: request_options,
+        route_state: route_state
       },
       &dispatch_decrypted_candidate/1
     )
@@ -385,12 +414,16 @@ defmodule CodexPooler.Gateway.Service do
     )
   end
 
-  defp visible_model(pool, requested_model) do
+  defp visible_model_context(pool, requested_model) do
     requested = String.downcase(String.trim(requested_model))
+    visible_models = Catalog.list_visible_models(pool)
 
-    Enum.find(Catalog.list_visible_models(pool), fn model ->
-      String.downcase(model.exposed_model_id) == requested
-    end)
+    case Enum.find(visible_models, fn model ->
+           String.downcase(model.exposed_model_id) == requested
+         end) do
+      %Model{} = model -> %{visible_model: model, visible_models: visible_models}
+      nil -> nil
+    end
   end
 
   defp requested_model(payload) do

@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
 
   @type dispatch_input :: %{
@@ -19,7 +20,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
           required(:model) => CodexPooler.Catalog.Model.t(),
           required(:reserved) => Accounting.request_result_row(),
           required(:candidates) => [BridgeRing.candidate()],
-          required(:request_options) => RequestOptions.t()
+          required(:request_options) => RequestOptions.t(),
+          required(:route_state) => RouteState.t()
         }
 
   @type dispatch_callback ::
@@ -93,10 +95,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
         input.model,
         input.candidates,
         RoutePlanInput.from_reserved(input.reserved),
-        request_options
+        request_options,
+        input.route_state
       )
 
-    case Accounting.merge_request_metadata(input.reserved.request, %{
+    case Accounting.accumulate_request_metadata(input.reserved.request, %{
            "routing" => route_plan.request_metadata
          }) do
       {:ok, request} ->
@@ -109,6 +112,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
            reserved: %{input.reserved | request: request},
            candidates: input.candidates,
            request_options: request_options,
+           route_state: input.route_state,
            route_plan: route_plan,
            route_class: request_options.transport.route_class
          }}
@@ -151,6 +155,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
       })
 
     with {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
+         {:ok, context} <- persist_route_metadata(context),
          {:ok, context} <- begin_candidate_circuit(context, selection),
          {:ok, context} <- start_dispatch_attempt(context) do
       transport_dispatch.(context)
@@ -177,7 +182,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   end
 
   defp apply_route_selection(context, %RoutingSelection{} = selection, allow_retry?) do
-    case Accounting.merge_request_metadata(
+    case Accounting.accumulate_request_metadata(
            context.reserved.request,
            selection.selected_metadata
          ) do
@@ -224,8 +229,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
   defp put_routing_circuit_state(%Context{} = context, nil), do: context
 
+  defp persist_route_metadata(%Context{} = context) do
+    case Accounting.persist_request_metadata(context.reserved.request,
+           reload?: route_metadata_reload?(context)
+         ) do
+      {:ok, request} ->
+        {:ok, %{context | reserved: %{context.reserved | request: request}}}
+
+      {:error, reason} ->
+        FailureResponse.accounting_failure(
+          :merge_route_selection_metadata,
+          context.reserved.request,
+          nil,
+          reason
+        )
+    end
+  end
+
+  defp route_metadata_reload?(%Context{index: index}), do: index != 0
+
   defp start_dispatch_attempt(%Context{} = context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
+           model: context.model,
+           pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
+           upstream_identity: context.identity,
            response_metadata:
              Map.merge(context.request_options.routing.routing_attempt_metadata || %{}, %{
                "pool_upstream_assignment_id" => context.assignment.id,

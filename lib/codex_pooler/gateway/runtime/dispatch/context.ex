@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.BridgeRing
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   defstruct [
@@ -17,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
     :reserved,
     :candidates,
     :request_options,
+    :route_state,
     :route_plan,
     :assignment,
     :identity,
@@ -39,6 +41,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
           reserved: Accounting.request_result_row(),
           candidates: [BridgeRing.candidate()],
           request_options: RequestOptions.t(),
+          route_state: RouteState.t(),
           route_plan: BridgeRing.route_plan(),
           assignment: PoolUpstreamAssignment.t() | nil,
           identity: UpstreamIdentity.t() | nil,

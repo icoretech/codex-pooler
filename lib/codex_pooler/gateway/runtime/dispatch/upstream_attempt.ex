@@ -450,6 +450,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   defp create_same_assignment_retry_context(context) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
+           model: context.model,
+           pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
+           upstream_identity: context.identity,
            response_metadata:
              Map.merge(context.request_options.routing.routing_attempt_metadata || %{}, %{
                "pool_upstream_assignment_id" => context.assignment.id,

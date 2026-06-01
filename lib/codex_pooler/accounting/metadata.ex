@@ -93,17 +93,44 @@ defmodule CodexPooler.Accounting.Metadata do
   def record_upstream_identity_metadata_request(_identity, _attrs),
     do: {:error, accounting_error(:invalid_request, "upstream identity is required")}
 
-  @spec merge_request_metadata(Request.t(), map()) :: {:ok, Request.t()} | {:error, term()}
-  def merge_request_metadata(%Request{} = request, metadata) when is_map(metadata) do
-    persisted = Repo.get(Request, request.id) || request
-    merged = deep_merge(persisted.request_metadata || %{}, sanitize_metadata(metadata))
+  @spec accumulate_request_metadata(Request.t(), map()) :: {:ok, Request.t()} | {:error, term()}
+  def accumulate_request_metadata(%Request{} = request, metadata) when is_map(metadata) do
+    {:ok, put_sanitized_request_metadata(request, metadata)}
+  end
+
+  def accumulate_request_metadata(_request, _metadata), do: {:error, :invalid_request}
+
+  @spec persist_request_metadata(Request.t(), keyword()) :: {:ok, Request.t()} | {:error, term()}
+  def persist_request_metadata(request, opts \\ [])
+
+  def persist_request_metadata(%Request{} = request, opts) when is_list(opts) do
+    persisted = persisted_request(request, opts)
+
+    merged =
+      deep_merge(
+        persisted.request_metadata || %{},
+        sanitize_metadata(request.request_metadata || %{})
+      )
 
     persisted
     |> Ecto.Changeset.change(%{request_metadata: merged})
     |> Repo.update()
   end
 
-  def merge_request_metadata(_request, _metadata), do: {:error, :invalid_request}
+  def persist_request_metadata(_request, _opts), do: {:error, :invalid_request}
+
+  @spec merge_request_metadata(Request.t(), map(), keyword()) ::
+          {:ok, Request.t()} | {:error, term()}
+  def merge_request_metadata(request, metadata, opts \\ [])
+
+  def merge_request_metadata(%Request{} = request, metadata, opts)
+      when is_map(metadata) and is_list(opts) do
+    request
+    |> put_sanitized_request_metadata(metadata)
+    |> persist_request_metadata(opts)
+  end
+
+  def merge_request_metadata(_request, _metadata, _opts), do: {:error, :invalid_request}
 
   @spec sanitize_metadata(term()) :: term()
   def sanitize_metadata(value), do: sanitize_value(value, nil)
@@ -149,6 +176,21 @@ defmodule CodexPooler.Accounting.Metadata do
     end)
     |> unwrap_transaction()
     |> tap_request_log_event("request_log_created")
+  end
+
+  defp put_sanitized_request_metadata(%Request{} = request, metadata) do
+    %{
+      request
+      | request_metadata: deep_merge(request.request_metadata || %{}, sanitize_metadata(metadata))
+    }
+  end
+
+  defp persisted_request(%Request{} = request, opts) do
+    if Keyword.get(opts, :reload?, true) do
+      Repo.get(Request, request.id) || request
+    else
+      request
+    end
   end
 
   defp metadata_request_metadata(auth, metadata) do

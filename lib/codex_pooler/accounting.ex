@@ -41,8 +41,15 @@ defmodule CodexPooler.Accounting do
   defdelegate record_upstream_identity_metadata_request(identity, attrs \\ %{}),
     to: Metadata
 
-  @spec merge_request_metadata(Request.t(), map()) :: {:ok, Request.t()} | {:error, term()}
-  defdelegate merge_request_metadata(request, metadata), to: Metadata
+  @spec accumulate_request_metadata(Request.t(), map()) :: {:ok, Request.t()} | {:error, term()}
+  defdelegate accumulate_request_metadata(request, metadata), to: Metadata
+
+  @spec persist_request_metadata(Request.t(), keyword()) :: {:ok, Request.t()} | {:error, term()}
+  defdelegate persist_request_metadata(request, opts \\ []), to: Metadata
+
+  @spec merge_request_metadata(Request.t(), map(), keyword()) ::
+          {:ok, Request.t()} | {:error, term()}
+  defdelegate merge_request_metadata(request, metadata, opts \\ []), to: Metadata
 
   @spec latest_success_by_assignment_ids([Ecto.UUID.t()]) :: %{
           optional(Ecto.UUID.t()) => DateTime.t() | nil

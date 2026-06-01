@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 1, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
@@ -207,6 +207,48 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
+  test "healthy backend response coalesces routing request metadata writes", %{conn: conn} do
+    input = "metadata coalescing input #{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_metadata_coalesced",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    {conn, query_events} =
+      collect_repo_query_events(fn ->
+        conn
+        |> put_req_header("x-request-id", Ecto.UUID.generate())
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => input
+        })
+      end)
+
+    assert %{"id" => "resp_metadata_coalesced"} = json_response(conn, 200)
+
+    assert [request] =
+             Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+    routing = request.request_metadata["routing"]
+    assert routing["strategy"]
+    assert routing["selected_bridge_candidate_id"] == setup.assignment.id
+    assert routing["selected_bridge_candidate_rank"] == 1
+
+    assert request_update_count(query_events) <= 4
+
+    metadata_text = inspect(request.request_metadata)
+    refute metadata_text =~ input
+    refute metadata_text =~ setup.authorization
+  end
+
   defp setup_trusted_proxies(trusted_proxies) do
     previous = Application.get_env(:codex_pooler, OperationalSettings, [])
 
@@ -232,6 +274,54 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
       fun
     )
   end
+
+  defp collect_repo_query_events(fun) when is_function(fun, 0) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        &__MODULE__.handle_repo_query_event/4,
+        {handler_id, self()}
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  def handle_repo_query_event(_event, _measurements, metadata, {handler_id, test_pid}) do
+    if metadata[:repo] == Repo do
+      send(test_pid, {handler_id, metadata[:source], query_command(metadata[:query])})
+    end
+  end
+
+  defp drain_repo_query_events(handler_id, events) do
+    receive do
+      {^handler_id, source, command} ->
+        drain_repo_query_events(handler_id, [{source, command} | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp request_update_count(events) do
+    Enum.count(events, fn {source, command} -> source == "requests" and command == "UPDATE" end)
+  end
+
+  defp query_command(query) when is_binary(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> String.upcase()
+  end
+
+  defp query_command(_query), do: "UNKNOWN"
 
   defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do
     lifecycle_lines =

@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
   @endpoint_path "/backend-api/codex/responses"
 
@@ -22,14 +23,17 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
     request_options = request_options(auth, payload, setup)
     parent = self()
 
+    candidates = [{setup.assignment, setup.identity}]
+
     input = %{
       auth: auth,
       endpoint: @endpoint_path,
       payload: payload,
       model: setup.model,
       reserved: %{request: invalid_request()},
-      candidates: [{setup.assignment, setup.identity}],
-      request_options: request_options
+      candidates: candidates,
+      request_options: request_options,
+      route_state: RouteState.new(%{visible_model: setup.model, candidates: candidates})
     }
 
     log =
@@ -65,6 +69,7 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
       reserved: %{request: request},
       candidates: candidates,
       request_options: request_options,
+      route_state: RouteState.new(%{visible_model: setup.model, candidates: candidates}),
       route_plan:
         BridgeRing.plan_route(
           auth,
