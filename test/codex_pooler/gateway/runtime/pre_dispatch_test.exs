@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import CodexPooler.PoolerFixtures, only: [active_upstream_assignment_fixture: 2]
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 1, start_upstream: 1, strict_text_format_payload: 1]
 
@@ -10,6 +12,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Pools
+  alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
@@ -39,7 +44,98 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert identity.id == setup.identity.id
     assert prepared.request_options.routing.requested_model == setup.model.exposed_model_id
     assert %CodexSession{} = prepared.request_options.continuity.codex_session
+    assert %RouteState{} = route_state = prepared.route_state
+    assert route_state.candidates == prepared.candidates
+    assert route_state.visible_model.id == setup.model.id
+    assert Enum.map(route_state.visible_models, & &1.id) == [setup.model.id]
+    assert [_window] = Map.fetch!(route_state.quota_window_snapshots, identity.id)
+    assert Map.fetch!(route_state.circuit_eligibility_snapshots, assignment.id) == true
+    assert route_state.extensions == %{}
     assert Repo.all(Request) == []
+  end
+
+  test "prepare attaches routing settings to the request-local route state" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    settings = Pools.ensure_routing_settings(setup.pool)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "prepare this route with routing settings"
+    }
+
+    request_options =
+      request_options(auth, payload,
+        request_id: "pre-dispatch-route-state-settings-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
+
+    assert %RoutingSettings{} = prepared.route_state.routing_settings
+    assert prepared.route_state.routing_settings.pool_id == settings.pool_id
+  end
+
+  test "prepare builds fresh route state for each request" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "prepare fresh route state"
+    }
+
+    first_options =
+      request_options(auth, payload,
+        request_id: "pre-dispatch-route-state-first-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:ok, first_prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, first_options, setup.model)
+
+    %{assignment: second_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Synthetic route state second upstream"
+      })
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 2,
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_ids" => [setup.assignment.id, second_assignment.id]
+        }
+      })
+      |> Repo.update!()
+
+    second_options =
+      request_options(auth, payload,
+        request_id: "pre-dispatch-route-state-second-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:ok, second_prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, second_options, model)
+
+    assert length(first_prepared.route_state.candidates) == 1
+    assert length(second_prepared.route_state.candidates) == 2
+
+    assert Enum.map(first_prepared.route_state.candidates, fn {assignment, _identity} ->
+             assignment.id
+           end) == [
+             setup.assignment.id
+           ]
+
+    assert second_assignment.id in Enum.map(
+             second_prepared.route_state.candidates,
+             fn {assignment, _identity} -> assignment.id end
+           )
   end
 
   test "prepare propagates strict schema failures before reservation" do
