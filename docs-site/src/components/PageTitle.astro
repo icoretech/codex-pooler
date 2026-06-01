@@ -1,0 +1,244 @@
+---
+import DefaultPageTitle from "@astrojs/starlight/components/PageTitle.astro";
+import { Icon } from "@astrojs/starlight/components";
+import config from "virtual:config";
+import Dropdown from "./page-actions/Dropdown.astro";
+import Button from "./page-actions/Button.astro";
+
+type DefaultActionId =
+  | "chatgpt"
+  | "claude"
+  | "markdown"
+  | "v0"
+  | "t3chat"
+  | "cursor"
+  | "perplexity"
+  | "githubCopilot";
+
+interface OptionsProps {
+  label: string;
+  href: string;
+  id: string;
+}
+
+const currentPath = Astro.url.pathname.replace(/\/$/, "");
+const currentMarkdownPath = currentPath === "" ? "/index" : currentPath;
+const currentUrl = Astro.url.href;
+const currentLocale = Astro.currentLocale;
+const { actions, share } = config;
+const { title, pageActions } = (Astro.locals as any).starlightRoute.entry.data;
+
+const localeConfig = currentLocale ? config.locales?.[currentLocale] : undefined;
+const userPrompt = localeConfig?.prompt ?? config.prompt;
+const localeActions = localeConfig?.actions ?? config.actions;
+const localeCustomActions = localeActions?.custom;
+
+const prompt = userPrompt?.includes("{url}")
+  ? userPrompt?.replace("{url}", currentUrl)
+  : `${userPrompt} ${currentUrl}`;
+const encodedPrompt = encodeURIComponent(prompt as string);
+const encodedCurrentUrl = encodeURIComponent(currentUrl);
+const encodedTitle = encodeURIComponent(title as string);
+
+const defaultOptions: Array<OptionsProps & { id: DefaultActionId }> = [
+  {
+    label: Astro.locals.t("open.chatgpt"),
+    href: `https://chatgpt.com/?q=${encodedPrompt}`,
+    id: "chatgpt",
+  },
+  {
+    label: Astro.locals.t("open.claude"),
+    href: `https://claude.ai/new?q=${encodedPrompt}`,
+    id: "claude",
+  },
+  {
+    label: Astro.locals.t("open.t3chat"),
+    href: `https://t3.chat/new?q=${encodedPrompt}`,
+    id: "t3chat",
+  },
+  {
+    label: Astro.locals.t("open.v0"),
+    href: `https://v0.app/?q=${encodedPrompt}`,
+    id: "v0",
+  },
+  {
+    label: Astro.locals.t("open.cursor"),
+    href: `https://cursor.com/link/prompt?${encodedPrompt}`,
+    id: "cursor",
+  },
+  {
+    label: Astro.locals.t("open.perplexity"),
+    href: `https://perplexity.ai/?q=${encodedPrompt}`,
+    id: "perplexity",
+  },
+  {
+    label: Astro.locals.t("open.githubCopilot"),
+    href: `https://github.com/copilot/?prompt=${encodedPrompt}`,
+    id: "githubCopilot",
+  },
+  {
+    label: Astro.locals.t("view.markdown"),
+    href: `${currentMarkdownPath}.md`,
+    id: "markdown",
+  },
+];
+
+const filteredDefaultOptions = defaultOptions.filter((option) => {
+  const id = option.id;
+
+  if (actions && actions[id]) {
+    return option;
+  }
+
+  return;
+});
+
+const customOptions: OptionsProps[] = actions?.custom
+  ? Object.entries(actions.custom).map(([key, value]) => {
+      const localeCustomAction = localeCustomActions?.[key];
+
+      return {
+        label: localeCustomAction?.label ?? value.label,
+        href: `${localeCustomAction?.href ?? value.href}${encodedPrompt}`,
+        id: key,
+      };
+    })
+  : [];
+
+const actionOptions = [...filteredDefaultOptions, ...customOptions];
+const shareOptions = [
+  {
+    label: Astro.locals.t("share.linkedin"),
+    href: `https://www.linkedin.com/sharing/share-offsite/?url=${encodedCurrentUrl}`,
+  },
+  {
+    label: Astro.locals.t("share.x"),
+    href: `https://x.com/intent/tweet?url=${encodedCurrentUrl}&text=${encodedTitle}`,
+  },
+  {
+    label: Astro.locals.t("share.threads"),
+    href: `https://threads.net/intent/post?url=${encodedCurrentUrl}&text=${encodedTitle}`,
+  },
+  {
+    label: Astro.locals.t("share.bluesky"),
+    href: `https://bsky.app/intent/compose?text=${encodedTitle}%20${encodedCurrentUrl}`,
+  },
+  {
+    label: Astro.locals.t("share.facebook"),
+    href: `https://www.facebook.com/sharer/sharer.php?u=${encodedCurrentUrl}`,
+  },
+  {
+    label: Astro.locals.t("share.reddit"),
+    href: `https://reddit.com/submit?url=${encodedCurrentUrl}&title=${encodedTitle}`,
+  },
+  {
+    label: Astro.locals.t("share.hackernews"),
+    href: `https://news.ycombinator.com/submitlink?u=${encodedCurrentUrl}&t=${encodedTitle}`,
+  },
+  {
+    label: Astro.locals.t("share.email"),
+    href: `mailto:?subject=${encodedTitle}&body=${encodedCurrentUrl}`,
+  },
+  {
+    label: Astro.locals.t("share.whatsapp"),
+    href: `https://wa.me/?text=${encodedTitle}%20${encodedCurrentUrl}`,
+  },
+  {
+    label: Astro.locals.t("share.telegram"),
+    href: `https://t.me/share/url?url=${encodedCurrentUrl}&text=${encodedTitle}`,
+  },
+];
+---
+
+{
+  pageActions || typeof pageActions === "undefined" ? (
+    <DefaultPageTitle />
+    <div class="actions-container">
+      <Button id="copy-markdown" dataPath={currentMarkdownPath}>
+        <Icon name="mdx" size="1rem" class="icon-default" />
+        <Icon name="approve-check" size="1rem" class="icon-success" />
+        <Icon name="error" size="1rem" class="icon-error" />
+        <span>{Astro.locals.t("copy.markdown")}</span>
+      </Button>
+
+      <div class="dropdown-container">
+        {actionOptions.length !== 0 && (
+          <Dropdown label={Astro.locals.t("open")} options={actionOptions} id="0" />
+        )}
+        {share && <Dropdown label={Astro.locals.t("share")} options={shareOptions} id="1" />}
+      </div>
+    </div>
+  ) : (
+    <DefaultPageTitle />
+  )
+}
+
+<style>
+  .actions-container,
+  .dropdown-container {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .actions-container {
+    flex-direction: column;
+  }
+
+  #copy-markdown:disabled {
+    opacity: 0.7;
+  }
+
+  :global(.icon-success),
+  :global(.icon-error) {
+    display: none;
+  }
+
+  :global(#copy-markdown.copied .icon-default),
+  :global(#copy-markdown.error .icon-default) {
+    display: none;
+  }
+
+  :global(#copy-markdown.copied .icon-success) {
+    display: block;
+  }
+
+  :global(#copy-markdown.error .icon-error) {
+    display: block;
+  }
+
+  @media (min-width: 425px) {
+    .actions-container {
+      flex-direction: row;
+    }
+  }
+</style>
+
+<script>
+  const copyButton = document.querySelector("#copy-markdown") as HTMLButtonElement;
+
+  copyButton?.addEventListener("click", async () => {
+    let copyButtonClass: "copied" | "error" = "copied";
+
+    try {
+      copyButton.disabled = true;
+
+      const currentPath = copyButton.dataset.path;
+      const mdPath = `${currentPath}.md`;
+
+      const response = await fetch(mdPath);
+      const contentForClipboard = await response.text();
+
+      await navigator.clipboard.writeText(contentForClipboard);
+    } catch (error) {
+      console.error(error);
+      copyButtonClass = "error";
+    } finally {
+      copyButton.classList.add(copyButtonClass);
+      copyButton.disabled = false;
+
+      setTimeout(() => {
+        copyButton.classList.remove(copyButtonClass);
+      }, 3000);
+    }
+  });
+</script>

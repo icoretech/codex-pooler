@@ -6,6 +6,8 @@ This private planning file is for docs authors. Keep it under an underscore-pref
 
 Write public docs for operators and client integrators who are setting up Codex Pooler. The public docs may explain setup, runtime surfaces, compatibility limits, and privacy boundaries. They must not become an operator runbook, incident log, internal architecture dump, or exhaustive Phoenix route listing.
 
+Root static files in `docs-site/public`, such as `llms.txt`, `answers.md`, `pricing.md`, and `robots.txt`, are public docs too. Keep them short, extractable, public-safe, and consistent with the same route, credential, host, and privacy boundaries as the Starlight pages.
+
 ## Allowed Hosts
 
 Use only these hosts in public examples:

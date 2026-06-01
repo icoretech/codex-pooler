@@ -1,0 +1,122 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+import Button from "./Button.astro";
+
+interface Props {
+  label: string;
+  options: {
+    label: string;
+    href: string;
+  }[];
+  id?: "0" | "1";
+}
+
+const { label, options, id } = Astro.props;
+const dropdownId = id ? `dropdown-${id}` : "dropdown-0";
+---
+
+<div class="dropdown" id={dropdownId}>
+  <Button id="dropdown-toggle">
+    <span>{label}</span>
+    <Icon name="down-caret" size="1rem" />
+  </Button>
+
+  <div id="dropdown-menu">
+    {
+      options.map((option) => (
+        <a href={option.href} class="dropdown-item" target="_blank">
+          <span>{option.label}</span>
+          <Icon name="external" size="1rem" class="external-icon" />
+        </a>
+      ))
+    }
+  </div>
+</div>
+
+<style>
+  .dropdown {
+    position: relative;
+  }
+
+  #dropdown-menu {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    left: 0;
+    right: auto;
+    background-color: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.25rem;
+    padding: 0.25rem;
+    min-width: 208px;
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.3),
+      0 2px 4px -1px rgba(0, 0, 0, 0.2);
+    display: none;
+    z-index: 10;
+  }
+
+  #dropdown-menu.show {
+    display: block;
+  }
+
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    color: var(--sl-color-white);
+    text-decoration: none;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    transition: background-color 0.15s ease;
+    cursor: pointer;
+  }
+
+  .dropdown-item:hover {
+    background-color: var(--sl-color-gray-5);
+  }
+
+  .dropdown-item span {
+    flex: 1;
+  }
+
+  .dropdown-item .external-icon {
+    margin-left: auto;
+  }
+
+  @media (min-width: 425px) {
+    #dropdown-menu {
+      right: 0;
+      left: auto;
+    }
+  }
+</style>
+
+<script>
+  const allDropdownIds = ["dropdown-0", "dropdown-1"];
+
+  const handleDropdownToggle = (dropdownId: string) => {
+    const dropdownToggle = document.querySelector(
+      `#${dropdownId} > #dropdown-toggle`,
+    ) as HTMLButtonElement;
+    const dropdownMenu = document.querySelector(`#${dropdownId} > #dropdown-menu`) as HTMLElement;
+
+    dropdownToggle?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      allDropdownIds.map((id) =>
+        document.querySelector(`#${id} > #dropdown-menu`)?.classList.remove("show"),
+      );
+      dropdownMenu.classList.toggle("show");
+    });
+
+    document.addEventListener("click", () => {
+      dropdownMenu?.classList.remove("show");
+    });
+
+    dropdownMenu?.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+  };
+
+  allDropdownIds.map((id) => handleDropdownToggle(id));
+</script>

@@ -1,9 +1,11 @@
 ---
 title: Codex Pooler
-description: Public overview for Codex Pooler operators and client integrators.
+description: Self-hosted Codex account pooling docs covering Pool API keys, backend compatibility, narrow /v1 SDK routes, MCP metadata, routing, and deployment.
 ---
 
-Codex Pooler gives teams one controlled gateway for many Codex accounts. Add accounts once, group them into Pools, and give agents or tools stable Pool API keys instead of spreading account secrets across every workstation, CI job, and desktop app.
+## What Is Codex Pooler?
+
+Codex Pooler is a self-hosted gateway for sharing Codex account capacity across trusted agents, tools, and teams. Operators add upstream Codex accounts to Pools, issue stable Pool API keys to clients, and let Codex Pooler route supported Codex backend or narrow `/v1` requests without exposing raw account secrets to every workstation or automation host.
 
 ![Codex Pooler gateway overview](/codex-pooler-readme-banner.png)
 
@@ -38,6 +40,16 @@ It is useful when you need to:
 
 It is not a hosted provider, a general OpenAI API clone, or a way to bypass account terms and limits. Operate only accounts you are allowed to use, scope keys to trusted clients, and connect MCP only to hosts you trust with operator metadata.
 
+## Codex Pooler Vs Direct Account Credentials
+
+| Question | Direct account credentials | Codex Pooler |
+| --- | --- | --- |
+| Client configuration | Each client needs account-specific material | Clients use stable Pool API keys |
+| Capacity changes | Every client may need reconfiguration | Operators adjust Pool assignments and policy centrally |
+| Routing decisions | Usually fixed by client setup | Pool policy, account health, quota evidence, model support, and continuity decide |
+| Operator visibility | Spread across clients and local logs | Admin UI and MCP expose sanitized metadata |
+| Secret exposure | More places can hold account secrets | Upstream secrets stay inside Codex Pooler secret storage |
+
 ## How It Works
 
 1. **Create a Pool.** A Pool defines the boundary clients authenticate against.
@@ -66,3 +78,21 @@ Operator MCP hosts:    http://localhost:4000/mcp
 For a deployed instance, replace `http://localhost:4000` with your HTTPS host, for example `https://pooler.example.com`.
 
 The `/v1` surface is intentionally narrow. Supported requests are translated and routed through the same Pool rules as Codex backend traffic; unsupported routes return explicit errors instead of pretending full OpenAI API parity.
+
+## Frequently Asked Questions
+
+### Is Codex Pooler a hosted service?
+
+No. The public docs describe a self-hosted application that can run with Docker Compose or the Helm chart. It is not documented as a hosted provider, and no published release exists yet. Operators are responsible for their own deployment, credentials, infrastructure, and authorized use of upstream accounts.
+
+### Does Codex Pooler provide full OpenAI API compatibility?
+
+No. Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes, then translates supported work into Codex-compatible requests. Unsupported `/v1` routes may return deterministic OpenAI-shaped unsupported endpoint errors, and OpenAI Realtime SDK websocket or session routes are not supported.
+
+### Which base URL should an AI coding client use?
+
+Codex backend-compatible clients should use `https://pooler.example.com/backend-api/codex`. Selected OpenAI SDK-compatible clients should use `https://pooler.example.com/v1`. Operator metadata tools should use `https://pooler.example.com/mcp` with an operator MCP token, not a Pool API key.
+
+### What data is safe to cite from Codex Pooler?
+
+Safe public examples can cite route family, endpoint path, method, status class, Pool label, upstream label, model name, retry count, duration, token count, safe error code, and timestamp. Raw prompts, completions, bodies, file bytes, media bytes, websocket frames, bearer tokens, cookies, Pool API keys, MCP tokens, upstream secrets, and `auth.json` material are not safe to include.

@@ -1,0 +1,32 @@
+---
+interface Props {
+  id?: string;
+  dataPath?: string;
+}
+
+const { id, dataPath } = Astro.props;
+---
+
+<button class="action-button" id={id} data-path={dataPath}>
+  <slot />
+</button>
+
+<style>
+  .action-button {
+    background-color: var(--sl-color-gray-6);
+    color: var(--sl-color-white);
+    border: 1px solid var(--sl-color-gray-5);
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: opacity 0.2s ease;
+    height: 2rem;
+    line-height: 1;
+    width: fit-content;
+  }
+</style>

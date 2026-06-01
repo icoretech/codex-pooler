@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://docs.codex-pooler.com/sitemap-index.xml
+Sitemap: https://docs.codex-pooler.com/sitemap-static.xml
+
+# Agent-readable context files
+# https://docs.codex-pooler.com/llms.txt
+# https://docs.codex-pooler.com/answers.md
+# https://docs.codex-pooler.com/pricing.md

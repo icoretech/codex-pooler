@@ -1,11 +1,15 @@
 ---
 title: Routing Strategies
-description: How Codex Pooler admits, classifies, matches, and routes requests through a Pool to an eligible upstream account.
+description: How Codex Pooler authenticates Pool API keys, applies eligibility checks, preserves continuity, uses quota evidence, and chooses upstream accounts.
 ---
 
 Routing is the path from a client request to one upstream account. Codex Pooler uses a Pool API key to identify the Pool, checks whether the request can run there, then chooses an eligible upstream account for that turn.
 
 A Pool API key represents a Pool. It doesn't represent one upstream account. That is the main difference from direct account credentials: clients stay configured with one stable key, while Codex Pooler can choose among the Pool's active upstream assignments for each supported request.
+
+## How Does Codex Pooler Choose An Upstream?
+
+Codex Pooler first removes upstream accounts that fail hard eligibility checks, then orders the remaining accounts with the Pool's routing strategy. Eligibility covers assignment state, upstream lifecycle, model support, capability support, quota evidence, route health, file affinity, and session continuity. Strategy only ranks accounts that are already allowed.
 
 Use this page with [Runtime Routes](/reference/runtime-routes/) and [Operator admin UI](/operators/admin-ui/) when you need to understand why a request did, or didn't, choose a specific account.
 
@@ -209,3 +213,21 @@ Operators configure routing from the admin UI. The exact visibility depends on r
 </table>
 
 The admin UI doesn't expose raw prompts, completions, request bodies, response bodies, file bytes, audio bytes, image bytes, websocket frames, bearer tokens, raw Pool API keys after creation, upstream tokens, or Codex `auth.json` contents.
+
+## Frequently Asked Questions
+
+### Can a routing strategy bypass eligibility checks?
+
+No. Routing strategies only order upstream accounts that already passed hard eligibility checks. A strategy cannot choose a paused upstream, an unassigned upstream, an account without the requested model, an account with unusable quota evidence, or an account that conflicts with session or file continuity.
+
+### Why does session continuity override stateless routing?
+
+Session continuity protects resumable Codex work. If a request belongs to an existing Codex session, websocket session, previous response chain, or file affinity, Codex Pooler keeps it with the upstream assignment that owns that state instead of treating it as a new stateless request.
+
+### What happens when the preferred upstream fails?
+
+For stateless work, Codex Pooler can try the next eligible upstream in the prepared ring when the first attempt fails in a retryable way. Fallback does not bypass hard checks, and session-bound work is intentionally stricter because moving state to another upstream can break the conversation.
+
+### Does prompt-cache locality store prompts?
+
+No. Prompt-cache locality uses the transient `prompt_cache_key` as a routing input when Pool policy allows it and no stronger continuity rule applies. The raw prompt-cache key is not stored as request evidence, and raw prompts or responses are not persisted.

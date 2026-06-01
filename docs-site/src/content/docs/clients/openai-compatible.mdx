@@ -1,11 +1,15 @@
 ---
 title: OpenAI-Compatible SDKs
-description: Use selected OpenAI SDK routes through Codex Pooler's narrow /v1 compatibility surface without implying full OpenAI API parity.
+description: Configure selected OpenAI SDK-compatible clients through Codex Pooler's narrow /v1 surface, Pool API keys, supported routes, and unsupported boundaries.
 ---
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. It translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path used by Codex backend clients.
 
 It doesn't provide full OpenAI API parity.
+
+## What OpenAI-Compatible Means Here
+
+OpenAI-compatible means selected SDK request shapes can use a `/v1` base URL and a Pool API key. Codex Pooler still routes the request through Codex account Pools, not through a separate OpenAI engine. Unsupported OpenAI API areas remain unsupported, including embeddings, batches, fine-tuning, moderation, response retrieve/cancel/delete, image variations, and OpenAI Realtime SDK routes.
 
 ## Base URL and authentication
 
@@ -128,3 +132,21 @@ Bearer <operator-mcp-token>
 ```
 
 Don't use Pool API keys, browser sessions, cookies, query tokens, invite tokens, upstream tokens, or custom headers as MCP authentication.
+
+## Frequently Asked Questions
+
+### Can I use the official OpenAI SDK with Codex Pooler?
+
+Yes, for selected SDK routes. Set the SDK `base_url` or `baseURL` to `https://pooler.example.com/v1`, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits.
+
+### Should Codex backend clients use `/v1`?
+
+No. Codex backend-compatible clients should use `/backend-api/codex`. The `/v1` surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work.
+
+### Does `/v1` support OpenAI Realtime?
+
+No. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsupported. `GET /v1/responses` is narrow Responses websocket compatibility only, not OpenAI Realtime support.
+
+### Can I use the same key for `/v1` and `/mcp`?
+
+No. `/v1` uses Pool API keys for runtime work. `/mcp` uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage.

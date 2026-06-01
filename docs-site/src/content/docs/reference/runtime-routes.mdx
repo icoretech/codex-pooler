@@ -1,6 +1,6 @@
 ---
 title: Runtime Routes
-description: Route families, exact endpoints, upstream destinations, translation behavior, and unsupported OpenAI-compatible routes.
+description: Codex Pooler runtime route map for /backend-api/codex, backend bridges, narrow /v1 SDK compatibility, usage routes, MCP metadata, and unsupported boundaries.
 ---
 
 Codex Pooler exposes a deliberately narrow runtime surface. It is not a wildcard proxy and it does not claim full OpenAI API parity. Each route below is either a Codex backend compatibility route, a backend bridge route, a translated `/v1` compatibility route, an operator metadata route, or an explicit unsupported boundary.
@@ -12,6 +12,10 @@ Use this page when you need to answer three questions before wiring a client:
 - Is the request passed through as Codex backend traffic, translated into Codex work, partially supported, or blocked?
 
 All runtime endpoints require Pool API key bearer auth unless noted otherwise. A Pool API key represents a Pool, not one upstream account. Codex Pooler still applies Pool policy, model support, limits, account health, route class admission, session continuity, and accounting before dispatching supported work upstream.
+
+## Which Runtime Route Should I Use?
+
+Use `/backend-api/codex` for Codex backend-compatible clients, `/v1` for selected OpenAI SDK-compatible clients, and `/mcp` only for operator metadata tools. Runtime work on `/backend-api` and `/v1` uses Pool API key bearer auth. MCP uses operator-owned MCP tokens and does not accept Pool API keys.
 
 ## Quick map
 
@@ -603,3 +607,21 @@ Continuity headers are also local routing inputs. Codex Pooler chooses them in t
 ## Related references
 
 - [Routing Strategies](/reference/routing-strategies/) explains Pool routing policy, account selection, and prompt-cache locality.
+
+## Frequently Asked Questions
+
+### Is `/v1` the same as the OpenAI API?
+
+No. `/v1` is narrow OpenAI-compatible support for selected SDK routes. Supported requests are translated into Codex-compatible work and routed through Pool policy. Unsupported routes are either intentionally absent or return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed.
+
+### Is `GET /v1/responses` OpenAI Realtime support?
+
+No. `GET /v1/responses` is narrow Responses websocket compatibility. It is not `/v1/realtime` support, and OpenAI Realtime SDK websocket or session routes are outside the Codex Pooler route surface.
+
+### Can a Pool API key call `/mcp`?
+
+No. Pool API keys authenticate runtime clients for `/backend-api` and `/v1`. The root `/mcp` endpoint is for operator metadata only and requires an operator-owned MCP bearer token.
+
+### Does Codex Pooler store uploaded file bytes?
+
+No. The backend file bridge stores file metadata and uses upstream-backed upload or download URLs. Raw file bytes, upload URLs, prompts, response bodies, media bodies, credentials, and websocket frames are not stored or exposed as public docs evidence.
