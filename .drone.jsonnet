@@ -52,7 +52,7 @@ local nodeImage = 'node:26.2.0-slim';
         depends_on: ['assets-deps'],
         commands: [
           'apt-get update',
-          'apt-get install -y --no-install-recommends build-essential ca-certificates curl git tar',
+          'apt-get install -y --no-install-recommends build-essential ca-certificates curl git python3 ripgrep tar',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
           'sha256sum -c helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
