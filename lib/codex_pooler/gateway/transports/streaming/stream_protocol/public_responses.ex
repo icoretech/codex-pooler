@@ -7,37 +7,71 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @type state :: %{
           required(:buffer) => binary(),
           required(:created?) => boolean(),
-          required(:text_delta?) => boolean()
+          required(:text_delta?) => boolean(),
+          required(:passthrough?) => boolean()
         }
 
   @spec new_state() :: state()
-  def new_state, do: %{buffer: "", created?: false, text_delta?: false}
+  def new_state, do: %{buffer: "", created?: false, text_delta?: false, passthrough?: false}
 
   @spec normalize_data(binary(), state()) :: {binary(), state()}
+  def normalize_data(data, %{passthrough?: true} = state) when is_binary(data) do
+    normalize_passthrough_data(data, state)
+  end
+
   def normalize_data(data, state) when is_binary(data) do
     buffered_data = state.buffer <> data
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: true)
+    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
 
-    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_data) do
-      BufferTelemetry.record_oversized_incomplete(
-        "public_openai_responses_sse",
-        byte_size(buffered_data),
-        StreamProtocol.max_incomplete_sse_block_bytes()
-      )
+    cond do
+      blocks == [] and StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
+        record_oversized_incomplete(byte_size(buffered_data))
+        {buffered_data, %{state | buffer: "", passthrough?: true}}
 
-      {buffered_data, %{state | buffer: ""}}
-    else
-      normalize_blocks(blocks, buffer, state)
+      StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
+        record_oversized_incomplete(byte_size(buffered_data))
+        {iodata, state} = normalize_complete_blocks(blocks, state)
+        {[iodata, buffer] |> IO.iodata_to_binary(), %{state | buffer: "", passthrough?: true}}
+
+      true ->
+        normalize_blocks(blocks, buffer, state)
     end
   end
 
   def normalize_data(data, state), do: {data, state}
 
+  defp normalize_passthrough_data(data, state) do
+    case sse_block_separator(data) do
+      {index, separator_size} ->
+        passthrough_size = index + separator_size
+        <<passthrough::binary-size(passthrough_size), rest::binary>> = data
+
+        state = %{state | passthrough?: false, buffer: ""}
+        {normalized_rest, state} = normalize_data(rest, state)
+
+        {[passthrough, normalized_rest] |> IO.iodata_to_binary(), state}
+
+      nil ->
+        {data, state}
+    end
+  end
+
+  defp record_oversized_incomplete(bytes) do
+    BufferTelemetry.record_oversized_incomplete(
+      "public_openai_responses_sse",
+      bytes,
+      StreamProtocol.max_incomplete_sse_block_bytes()
+    )
+  end
+
+  defp normalize_complete_blocks(blocks, state) do
+    Enum.map_reduce(blocks, state, fn block, stream_state ->
+      normalize_block(block, stream_state)
+    end)
+  end
+
   defp normalize_blocks(blocks, buffer, state) do
-    {iodata, state} =
-      Enum.map_reduce(blocks, %{state | buffer: buffer}, fn block, stream_state ->
-        normalize_block(block, stream_state)
-      end)
+    {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: buffer})
 
     state = if stream_terminal?(blocks), do: new_state(), else: state
 
@@ -71,11 +105,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         {[], state}
     end
   end
-
-  defp oversized_incomplete_sse_prefix?([], "", data),
-    do: StreamProtocol.oversized_incomplete_sse_block?(data)
-
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _data), do: false
 
   defp terminal_prefix(decoded, state) do
     {created_prefix, state} =
@@ -160,6 +189,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp codex_public_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
   defp codex_public_event?(_type), do: false
+
+  defp sse_block_separator(data) do
+    ["\n\n", "\r\n\r\n"]
+    |> Enum.map(fn separator -> {separator, :binary.match(data, separator)} end)
+    |> Enum.flat_map(fn
+      {separator, {index, _size}} -> [{index, byte_size(separator)}]
+      {_separator, :nomatch} -> []
+    end)
+    |> Enum.min_by(fn {index, _size} -> index end, fn -> nil end)
+  end
 
   defp stream_block_event(block) do
     data = StreamProtocol.sse_field(block, "data")

@@ -37,7 +37,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @type public_openai_responses_stream_state :: %{
           required(:buffer) => binary(),
           required(:created?) => boolean(),
-          required(:text_delta?) => boolean()
+          required(:text_delta?) => boolean(),
+          required(:passthrough?) => boolean()
         }
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
 

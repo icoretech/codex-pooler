@@ -12,6 +12,43 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "normalize_public_openai_responses_sse_data/2" do
+    test "preserves oversized split reasoning events until the SSE block is complete" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      event =
+        sse_event("response.output_item.added", %{
+          "type" => "response.output_item.added",
+          "output_index" => 0,
+          "sequence_number" => 2,
+          "item" => %{
+            "id" => "rs_oversized_reasoning",
+            "type" => "reasoning",
+            "summary" => [],
+            "encrypted_content" => String.duplicate("synthetic-obfuscated-content", 4_000)
+          }
+        })
+
+      split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
+      <<first::binary-size(split_at), second::binary>> = event
+
+      {first_out, state} =
+        StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
+
+      {second_out, _state} =
+        StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
+
+      combined = first_out <> second_out
+
+      assert combined == event
+      assert [block] = StreamProtocol.complete_sse_blocks(combined, bounded?: false) |> elem(0)
+      assert "response.output_item.added" == StreamProtocol.sse_field(block, "event")
+
+      assert %{"item" => %{"type" => "reasoning"}} =
+               block
+               |> StreamProtocol.sse_field("data")
+               |> StreamProtocol.decode_sse_data()
+    end
+
     test "carries incomplete response stream state explicitly" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
