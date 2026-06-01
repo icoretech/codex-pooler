@@ -112,11 +112,29 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
        do: :precise
 
   defp routing_quota_state(selection, timestamp) do
-    if weekly_only_probe_selection?(selection, timestamp), do: :weekly_only_probe, else: :blocked
+    cond do
+      credit_backed_probe_selection?(selection, timestamp) -> :credit_backed_probe
+      weekly_only_probe_selection?(selection, timestamp) -> :weekly_only_probe
+      true -> :blocked
+    end
   end
 
-  defp routing_quota_eligible?(state) when state in [:precise, :weekly_only_probe], do: true
+  defp routing_quota_eligible?(state)
+       when state in [:precise, :credit_backed_probe, :weekly_only_probe],
+       do: true
+
   defp routing_quota_eligible?(_state), do: false
+
+  defp credit_backed_probe_selection?(
+         %{secondary: %Quota.AccountQuotaWindow{} = secondary, blocked_windows: blocked_windows},
+         timestamp
+       ) do
+    credit_backed_secondary_window?(secondary, timestamp) and
+      Enum.any?(blocked_windows, &credit_backed_secondary_window?(&1, timestamp)) and
+      Enum.all?(blocked_windows, &credit_backed_secondary_window?(&1, timestamp))
+  end
+
+  defp credit_backed_probe_selection?(_selection, _timestamp), do: false
 
   defp weekly_only_probe_selection?(
          %{primary: nil, secondary: %Quota.AccountQuotaWindow{} = secondary} = selection,
@@ -157,6 +175,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   defp weekly_probe_usable_window?(%Quota.AccountQuotaWindow{} = window, timestamp),
     do: usable_window?(window, timestamp)
+
+  defp credit_backed_secondary_window?(%Quota.AccountQuotaWindow{} = window, timestamp) do
+    account_weekly_window?(window) and fresh_window?(window, timestamp) and
+      Evidence.reset_bearing?(window) and not Evidence.expired?(window, timestamp) and
+      exhausted_by_used_percent?(window) and positive_credits?(window)
+  end
 
   defp account_primary_window?(%Quota.AccountQuotaWindow{} = window) do
     quota_scope = window.quota_scope || "account"
@@ -316,8 +340,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   defp normalize_optional_quota_scope_value(_value), do: nil
 
-  defp exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}) do
+  defp exhausted_by_used_percent?(%Quota.AccountQuotaWindow{
+         used_percent: %Decimal{} = used_percent
+       }) do
     Decimal.compare(used_percent, Decimal.new(100)) != :lt
+  end
+
+  defp exhausted_by_used_percent?(_window), do: false
+
+  defp positive_credits?(%Quota.AccountQuotaWindow{credits: credits}) when is_integer(credits),
+    do: credits > 0
+
+  defp positive_credits?(_window), do: false
+
+  defp exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{}} = window) do
+    exhausted_by_used_percent?(window)
   end
 
   defp exhausted?(%Quota.AccountQuotaWindow{active_limit: 0}), do: true

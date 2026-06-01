@@ -68,31 +68,41 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   end
 
   defp classify_quota_candidates(%Model{} = model, candidates, route_state) do
-    {precise_candidates, probe_candidates, exclusions, refreshable_candidates} =
-      Enum.reduce(candidates, {[], [], [], []}, fn {assignment, identity} = candidate,
-                                                   {precise, probes, excluded, refreshable} ->
+    {precise_candidates, credit_backed_probe_candidates, weekly_probe_candidates, exclusions,
+     refreshable_candidates} =
+      Enum.reduce(candidates, {[], [], [], [], []}, fn {assignment, identity} = candidate,
+                                                       {precise, credit_backed, weekly_probes,
+                                                        excluded, refreshable} ->
         identity
         |> routing_quota_eligibility(model, route_state)
         |> add_classified_quota_candidate(
           candidate,
           assignment,
           precise,
-          probes,
+          credit_backed,
+          weekly_probes,
           excluded,
           refreshable
         )
       end)
 
     precise_candidates = Enum.reverse(precise_candidates)
-    probe_candidates = Enum.reverse(probe_candidates)
-    candidates = precise_candidates ++ probe_candidates
+    credit_backed_probe_candidates = Enum.reverse(credit_backed_probe_candidates)
+    weekly_probe_candidates = Enum.reverse(weekly_probe_candidates)
+    candidates = precise_candidates ++ credit_backed_probe_candidates ++ weekly_probe_candidates
 
     case candidates do
       [] ->
         {:error, Enum.reverse(exclusions), Enum.reverse(refreshable_candidates)}
 
       candidates ->
-        {:ok, candidates, quota_decision(candidates, precise_candidates, probe_candidates)}
+        {:ok, candidates,
+         quota_decision(
+           candidates,
+           precise_candidates,
+           credit_backed_probe_candidates,
+           weekly_probe_candidates
+         )}
     end
   end
 
@@ -111,11 +121,25 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          candidate,
          _assignment,
          precise,
-         probes,
+         credit_backed,
+         weekly_probes,
          excluded,
          refreshable
        ) do
-    {[candidate | precise], probes, excluded, refreshable}
+    {[candidate | precise], credit_backed, weekly_probes, excluded, refreshable}
+  end
+
+  defp add_classified_quota_candidate(
+         %{routing_state: :credit_backed_probe},
+         candidate,
+         _assignment,
+         precise,
+         credit_backed,
+         weekly_probes,
+         excluded,
+         refreshable
+       ) do
+    {precise, [candidate | credit_backed], weekly_probes, excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -123,11 +147,12 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          candidate,
          _assignment,
          precise,
-         probes,
+         credit_backed,
+         weekly_probes,
          excluded,
          refreshable
        ) do
-    {precise, [candidate | probes], excluded, refreshable}
+    {precise, credit_backed, [candidate | weekly_probes], excluded, refreshable}
   end
 
   defp add_classified_quota_candidate(
@@ -135,14 +160,15 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
          {_, identity} = candidate,
          assignment,
          precise,
-         probes,
+         credit_backed,
+         weekly_probes,
          excluded,
          refreshable
        ) do
     exclusion = quota_candidate_exclusion(assignment, identity, reasons)
     refreshable = maybe_add_refreshable_quota_candidate(refreshable, candidate, reasons)
 
-    {precise, probes, [exclusion | excluded], refreshable}
+    {precise, credit_backed, weekly_probes, [exclusion | excluded], refreshable}
   end
 
   defp maybe_add_refreshable_quota_candidate(refreshable, candidate, reasons) do
@@ -216,26 +242,57 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
 
   defp quota_exhaustion_reason?(_reason), do: false
 
-  defp quota_decision(candidates, precise_candidates, probe_candidates) do
+  defp quota_decision(
+         candidates,
+         precise_candidates,
+         credit_backed_probe_candidates,
+         weekly_probe_candidates
+       ) do
     %{
       "allowed" => true,
-      "summary" => quota_decision_summary(precise_candidates, probe_candidates),
-      "routing_state" => quota_decision_state(precise_candidates, probe_candidates),
+      "summary" =>
+        quota_decision_summary(
+          precise_candidates,
+          credit_backed_probe_candidates,
+          weekly_probe_candidates
+        ),
+      "routing_state" =>
+        quota_decision_state(
+          precise_candidates,
+          credit_backed_probe_candidates,
+          weekly_probe_candidates
+        ),
       "precise_candidate_count" => length(precise_candidates),
-      "weekly_probe_candidate_count" => length(probe_candidates),
+      "credit_backed_probe_candidate_count" => length(credit_backed_probe_candidates),
+      "weekly_probe_candidate_count" => length(weekly_probe_candidates),
       "eligible_candidate_count" => length(candidates)
     }
   end
 
-  defp quota_decision_state([], [_ | _]), do: "weekly_only_probe"
-  defp quota_decision_state([_ | _], _probe_candidates), do: "precise"
+  defp quota_decision_state([_ | _], _credit_backed_candidates, _weekly_probe_candidates),
+    do: "precise"
 
-  defp quota_decision_summary([], [_ | _]), do: "allowed by weekly quota evidence"
+  defp quota_decision_state([], [_ | _], _weekly_probe_candidates), do: "credit_backed_probe"
+  defp quota_decision_state([], [], [_ | _]), do: "weekly_only_probe"
 
-  defp quota_decision_summary([_ | _], [_ | _]),
+  defp quota_decision_summary([], [], [_ | _]), do: "allowed by weekly quota evidence"
+
+  defp quota_decision_summary([], [_ | _], []),
+    do: "allowed by credit-backed secondary quota evidence"
+
+  defp quota_decision_summary([], [_ | _], [_ | _]),
+    do: "allowed by credit-backed secondary and weekly quota evidence"
+
+  defp quota_decision_summary([_ | _], [], []), do: "allowed by fresh quota"
+
+  defp quota_decision_summary([_ | _], [_ | _], []),
+    do: "allowed by fresh and credit-backed secondary quota evidence"
+
+  defp quota_decision_summary([_ | _], [], [_ | _]),
     do: "allowed by fresh and weekly quota evidence"
 
-  defp quota_decision_summary([_ | _], []), do: "allowed by fresh quota"
+  defp quota_decision_summary([_ | _], [_ | _], [_ | _]),
+    do: "allowed by fresh, credit-backed secondary, and weekly quota evidence"
 
   defp sanitize_quota_exclusion(%{} = exclusion) do
     exclusion

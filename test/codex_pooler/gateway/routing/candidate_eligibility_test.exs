@@ -283,6 +283,52 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                )
     end
 
+    test "quota classification orders precise credit-backed and weekly probe candidates" do
+      precise_identity = upstream_identity("precise-identity")
+      credit_identity = upstream_identity("credit-identity")
+      weekly_identity = upstream_identity("weekly-identity")
+
+      precise_candidate = {assignment("precise-assignment", precise_identity), precise_identity}
+      credit_candidate = {assignment("credit-assignment", credit_identity), credit_identity}
+      weekly_candidate = {assignment("weekly-assignment", weekly_identity), weekly_identity}
+
+      route_state =
+        RouteState.new(%{
+          visible_model: quota_model(),
+          candidates: [weekly_candidate, credit_candidate, precise_candidate]
+        })
+        |> RouteState.put_quota_window_snapshots(%{
+          precise_identity.id => [account_window(Decimal.new("15"))],
+          credit_identity.id => [credit_backed_secondary_window()],
+          weekly_identity.id => [weekly_probe_window()]
+        })
+
+      assert {:ok, candidates, decision} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input(quota_model(), %{"model" => "sample-model"}, request_options(), [
+                   weekly_candidate,
+                   credit_candidate,
+                   precise_candidate
+                 ]),
+                 route_state
+               )
+
+      assert candidate_ids(candidates) == [
+               "precise-assignment",
+               "credit-assignment",
+               "weekly-assignment"
+             ]
+
+      assert decision["routing_state"] == "precise"
+      assert decision["precise_candidate_count"] == 1
+      assert decision["credit_backed_probe_candidate_count"] == 1
+      assert decision["weekly_probe_candidate_count"] == 1
+      assert decision["eligible_candidate_count"] == 3
+
+      assert decision["summary"] ==
+               "allowed by fresh, credit-backed secondary, and weekly quota evidence"
+    end
+
     test "selected route skips an open snapshot and admits a later eligible candidate" do
       pool = pool_fixture()
       %{api_key: api_key} = active_api_key_fixture(pool)
@@ -430,6 +476,43 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       window_minutes: 300,
       used_percent: used_percent,
       reset_at: DateTime.add(observed_at, 900, :second),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh",
+      observed_at: observed_at
+    }
+  end
+
+  defp credit_backed_secondary_window do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    %AccountQuotaWindow{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      credits: 25,
+      reset_at: DateTime.add(observed_at, 604_800, :second),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh",
+      observed_at: observed_at
+    }
+  end
+
+  defp weekly_probe_window do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    %AccountQuotaWindow{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("12"),
+      reset_at: DateTime.add(observed_at, 604_800, :second),
       source: "codex_usage_api",
       source_precision: "observed",
       quota_scope: "account",
