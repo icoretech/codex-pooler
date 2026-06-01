@@ -1,47 +1,45 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounting.PricingResolution
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  @spec persist_request_identity_snapshot(Request.t(), PoolUpstreamAssignment.t()) :: :ok
+  @spec persist_request_identity_snapshot(Request.t(), PoolUpstreamAssignment.t(), map()) :: :ok
   def persist_request_identity_snapshot(
         %Request{} = request,
-        %PoolUpstreamAssignment{} = assignment
+        %PoolUpstreamAssignment{} = assignment,
+        attrs \\ %{}
       ) do
-    snapshot = upstream_identity_snapshot(assignment.upstream_identity_id)
-    persisted = Repo.get(Request, request.id)
+    snapshot = upstream_identity_snapshot(assignment, attrs)
 
     attrs =
       %{}
       |> maybe_put_snapshot_attr(
         :upstream_account_label,
-        persisted && persisted.upstream_account_label,
+        request.upstream_account_label,
         snapshot.upstream_account_label
       )
       |> maybe_put_snapshot_attr(
         :upstream_account_email,
-        persisted && persisted.upstream_account_email,
+        request.upstream_account_email,
         snapshot.upstream_account_email
       )
       |> maybe_put_snapshot_attr(
         :upstream_account_plan_label,
-        persisted && persisted.upstream_account_plan_label,
+        request.upstream_account_plan_label,
         snapshot.upstream_account_plan_label
       )
       |> maybe_put_snapshot_attr(
         :upstream_account_plan_family,
-        persisted && persisted.upstream_account_plan_family,
+        request.upstream_account_plan_family,
         snapshot.upstream_account_plan_family
       )
 
-    if persisted && attrs != %{} do
-      persisted
-      |> Ecto.Changeset.change(attrs)
-      |> Repo.update!()
-    end
+    if attrs != %{}, do: persist_missing_snapshot_attrs!(request, attrs)
 
     :ok
   end
@@ -81,21 +79,75 @@ defmodule CodexPooler.Accounting.RequestLifecycle.IdentitySnapshot do
     }
   end
 
+  defp upstream_identity_snapshot(_assignment, %{
+         upstream_identity: %UpstreamIdentity{} = identity
+       }) do
+    upstream_identity_snapshot(identity)
+  end
+
+  defp upstream_identity_snapshot(
+         %PoolUpstreamAssignment{upstream_identity_id: upstream_identity_id},
+         _attrs
+       ) do
+    upstream_identity_snapshot(upstream_identity_id)
+  end
+
+  defp upstream_identity_snapshot(%UpstreamIdentity{} = identity) do
+    %{
+      upstream_account_label: normalize_snapshot_value(identity.account_label),
+      upstream_account_email: normalize_snapshot_email(identity.account_email),
+      upstream_account_plan_label: normalize_snapshot_value(identity.plan_label),
+      upstream_account_plan_family: normalize_snapshot_value(identity.plan_family)
+    }
+  end
+
   defp upstream_identity_snapshot(nil), do: %{}
 
   defp upstream_identity_snapshot(upstream_identity_id) do
     case Repo.get(UpstreamIdentity, upstream_identity_id) do
       %UpstreamIdentity{} = identity ->
-        %{
-          upstream_account_label: normalize_snapshot_value(identity.account_label),
-          upstream_account_email: normalize_snapshot_email(identity.account_email),
-          upstream_account_plan_label: normalize_snapshot_value(identity.plan_label),
-          upstream_account_plan_family: normalize_snapshot_value(identity.plan_family)
-        }
+        upstream_identity_snapshot(identity)
 
       nil ->
         %{}
     end
+  end
+
+  defp persist_missing_snapshot_attrs!(%Request{id: request_id}, attrs) do
+    Repo.update_all(
+      from(request in Request,
+        where: request.id == ^request_id,
+        update: [
+          set: [
+            upstream_account_label:
+              fragment(
+                "COALESCE(?, ?)",
+                request.upstream_account_label,
+                ^Map.get(attrs, :upstream_account_label)
+              ),
+            upstream_account_email:
+              fragment(
+                "COALESCE(?, ?)",
+                request.upstream_account_email,
+                ^Map.get(attrs, :upstream_account_email)
+              ),
+            upstream_account_plan_label:
+              fragment(
+                "COALESCE(?, ?)",
+                request.upstream_account_plan_label,
+                ^Map.get(attrs, :upstream_account_plan_label)
+              ),
+            upstream_account_plan_family:
+              fragment(
+                "COALESCE(?, ?)",
+                request.upstream_account_plan_family,
+                ^Map.get(attrs, :upstream_account_plan_family)
+              )
+          ]
+        ]
+      ),
+      []
+    )
   end
 
   defp normalize_snapshot_email(email) when is_binary(email) do
