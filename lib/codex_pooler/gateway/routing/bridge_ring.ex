@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Gateway.Routing.BridgeRing.{Metadata, Status}
   alias CodexPooler.Gateway.Routing.RoutePlanInput
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{Pool, RoutingSettings}
   alias CodexPooler.Repo
@@ -75,7 +76,21 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           route_plan()
   def plan_route(auth, %Model{} = model, candidates, %RoutePlanInput{} = input, opts)
       when is_list(candidates) do
-    settings = Pools.get_routing_settings(auth.pool) || default_settings(auth.pool.id)
+    plan_route(auth, model, candidates, input, opts, nil)
+  end
+
+  @spec plan_route(
+          routing_auth(),
+          Model.t(),
+          list(),
+          RoutePlanInput.t(),
+          RequestOptions.t(),
+          RouteState.t() | nil
+        ) ::
+          route_plan()
+  def plan_route(auth, %Model{} = model, candidates, %RoutePlanInput{} = input, opts, route_state)
+      when is_list(candidates) do
+    settings = routing_settings(auth, route_state)
     affinity = affinity_context(auth, model, input, opts, settings)
     demotions = active_demotions(auth, model, candidates)
 
@@ -84,7 +99,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     ordered =
       settings.routing_strategy
-      |> strategy_order(candidates, model, affinity.seed || input.correlation_id)
+      |> strategy_order(candidates, model, affinity.seed || input.correlation_id, route_state)
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
       |> apply_demotions(demotions)
@@ -157,31 +172,31 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   @spec routing_status(Pool.t() | Ecto.UUID.t() | term()) :: routing_status()
   defdelegate routing_status(pool_or_id), to: Status
 
-  defp strategy_order("deterministic_rotation", candidates, _model, seed) do
+  defp strategy_order("deterministic_rotation", candidates, _model, seed, _route_state) do
     rotate_candidates(candidates, seed)
   end
 
-  defp strategy_order("least_recent_success", candidates, _model, seed) do
+  defp strategy_order("least_recent_success", candidates, _model, seed, _route_state) do
     latest_success = latest_success_by_assignment(candidates)
 
     Enum.sort_by(candidates, fn {assignment, _identity} ->
       {
-        Map.get(latest_success, assignment.id) || ~U[1970-01-01 00:00:00Z],
+        latest_success_sort_key(Map.get(latest_success, assignment.id)),
         -rendezvous_score(seed, assignment.id)
       }
     end)
   end
 
-  defp strategy_order("quota_first", candidates, %Model{} = model, seed) do
+  defp strategy_order("quota_first", candidates, %Model{} = model, seed, route_state) do
     Enum.sort_by(candidates, fn {assignment, identity} ->
       {
-        -quota_headroom_score(identity, model),
+        -quota_headroom_score(identity, model, route_state),
         -rendezvous_score(seed, assignment.id)
       }
     end)
   end
 
-  defp strategy_order(_strategy, candidates, _model, seed) do
+  defp strategy_order(_strategy, candidates, _model, seed, _route_state) do
     Enum.sort_by(candidates, fn {assignment, _identity} ->
       -rendezvous_score(seed, assignment.id)
     end)
@@ -560,6 +575,11 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     Accounting.latest_success_by_assignment_ids(assignment_ids)
   end
 
+  defp latest_success_sort_key(nil), do: 0
+
+  defp latest_success_sort_key(%DateTime{} = timestamp),
+    do: DateTime.to_unix(timestamp, :microsecond)
+
   defp rotate_candidates(candidates, _seed) when length(candidates) <= 1, do: candidates
 
   defp rotate_candidates(candidates, seed) do
@@ -576,6 +596,26 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Enum.reject(&is_nil/1)
     |> Enum.min(fn -> 0 end)
   end
+
+  defp quota_headroom_score(identity, %Model{} = model, %RouteState{} = route_state) do
+    route_state
+    |> RouteState.quota_windows_for_identity(identity)
+    |> QuotaWindows.quota_window_selection_data_from_windows(quota_scope_opts(model))
+    |> Map.get(:routing_windows, [])
+    |> Enum.filter(&QuotaWindows.usable_window?/1)
+    |> Enum.map(&remaining_percent/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(fn -> 0 end)
+  end
+
+  defp quota_headroom_score(identity, %Model{} = model, _route_state),
+    do: quota_headroom_score(identity, model)
+
+  defp routing_settings(_auth, %RouteState{routing_settings: %RoutingSettings{} = settings}),
+    do: settings
+
+  defp routing_settings(auth, _route_state),
+    do: Pools.get_routing_settings(auth.pool) || default_settings(auth.pool.id)
 
   defp quota_scope_opts(%Model{} = model) do
     [

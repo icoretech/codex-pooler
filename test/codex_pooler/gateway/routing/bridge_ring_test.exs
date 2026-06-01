@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion}
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
@@ -147,6 +148,33 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       assert candidate_ids(plan.candidates) == [first.id, fourth.id, second.id, third.id]
       assert plan.selected_assignment_id == first.id
+    end
+
+    test "least_recent_success sorts timestamps chronologically across dates" do
+      setup = routing_setup(2)
+      [newest, oldest] = setup.assignments
+      seed = seed_preferring_assignment([newest.id, oldest.id], newest.id)
+
+      newest_request =
+        request_fixture(setup.auth, %{model_id: setup.model.id, correlation_id: "newest-date"})
+
+      oldest_request =
+        request_fixture(setup.auth, %{model_id: setup.model.id, correlation_id: "oldest-date"})
+
+      attempt_fixture(newest_request, newest, %{
+        attempt_number: 1,
+        completed_at: ~U[2026-06-01 00:00:00.000000Z]
+      })
+
+      attempt_fixture(oldest_request, oldest, %{
+        attempt_number: 1,
+        completed_at: ~U[2026-05-12 10:01:00.000000Z]
+      })
+
+      plan = plan_for(setup, "least_recent_success", seed)
+
+      assert candidate_ids(plan.candidates) == [oldest.id, newest.id]
+      assert plan.selected_assignment_id == oldest.id
     end
 
     test "least_recent_success breaks equal recency ties with rendezvous order" do
@@ -455,6 +483,52 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
              ]
 
       assert quota_first_plan.selected_assignment_id == requested_model_headroom.id
+    end
+
+    test "quota_first and routing settings consume the request-local route-state snapshot" do
+      setup = routing_setup(2)
+      [snapshot_best, snapshot_worst] = setup.assignments
+      seed = seed_preferring_assignment([snapshot_best.id, snapshot_worst.id], snapshot_worst.id)
+
+      prime_account_quota!(setup, snapshot_best, Decimal.new("10"))
+      prime_account_quota!(setup, snapshot_worst, Decimal.new("90"))
+      update_routing_settings!(setup.pool, "quota_first", 2)
+
+      request_options =
+        RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+
+      route_state =
+        RouteState.new(%{
+          visible_model: setup.model,
+          candidates: setup.candidates,
+          routing_settings: Pools.get_routing_settings(setup.pool)
+        })
+        |> RouteState.preload_routing_snapshots(setup.auth, setup.model, request_options)
+
+      prime_account_quota!(setup, snapshot_best, Decimal.new("95"))
+      prime_account_quota!(setup, snapshot_worst, Decimal.new("5"))
+      update_routing_settings!(setup.pool, "bridge_ring", 2)
+
+      request =
+        request_fixture(setup.auth, %{
+          model_id: setup.model.id,
+          requested_model: setup.model.exposed_model_id,
+          correlation_id: "#{seed}-snapshot"
+        })
+
+      plan =
+        BridgeRing.plan_route(
+          setup.auth,
+          setup.model,
+          setup.candidates,
+          RoutePlanInput.from_reserved(%{request: request}),
+          request_options,
+          route_state
+        )
+
+      assert plan.strategy == "quota_first"
+      assert plan.selected_assignment_id == snapshot_best.id
+      assert hd(candidate_ids(plan.candidates)) == snapshot_best.id
     end
   end
 
