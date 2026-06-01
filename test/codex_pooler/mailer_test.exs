@@ -103,20 +103,20 @@ defmodule CodexPooler.MailerTest do
   end
 
   test "send_smtp_test_email/2 sanitizes SMTP delivery failures" do
-    port = free_port()
+    port = start_closing_tcp_server!()
 
     assert {:error, %{code: :smtp_test_email_connection_failed, message: message} = error} =
              Mailer.send_smtp_test_email("recipient@example.com", %{
                from: "instance-sender@example.com",
                adapter_config: [
                  adapter: Swoosh.Adapters.SMTP,
-                 relay: "localhost",
+                 relay: "127.0.0.1",
                  port: port,
                  username: "username",
                  password: "wrong-password",
                  ssl: false,
                  tls: :never,
-                 retries: 2
+                 retries: 0
                ]
              })
 
@@ -134,6 +134,32 @@ defmodule CodexPooler.MailerTest do
     on_exit(fn ->
       :ok = :gen_smtp_server.stop(server_name)
     end)
+  end
+
+  defp start_closing_tcp_server! do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listener)
+    test_pid = self()
+
+    pid =
+      spawn_link(fn ->
+        send(test_pid, {:closing_tcp_server_ready, self()})
+
+        with {:ok, socket} <- :gen_tcp.accept(listener) do
+          :gen_tcp.close(socket)
+        end
+
+        :gen_tcp.close(listener)
+      end)
+
+    assert_receive {:closing_tcp_server_ready, ^pid}
+
+    on_exit(fn ->
+      Process.exit(pid, :shutdown)
+      :gen_tcp.close(listener)
+    end)
+
+    port
   end
 
   defp free_port do
