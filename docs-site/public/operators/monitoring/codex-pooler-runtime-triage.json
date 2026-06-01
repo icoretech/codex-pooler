@@ -2,7 +2,7 @@
   "apiVersion": "dashboard.grafana.app/v2beta1",
   "kind": "Dashboard",
   "metadata": {
-    "name": "codex_pooler_memory_triage",
+    "name": "codex_pooler_runtime_triage",
     "generation": 5,
     "creationTimestamp": "2026-06-01T13:36:25Z",
     "labels": {},
@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "Production triage view for Codex Pooler memory spikes, BEAM memory attribution, pod restarts, and stream-buffer pressure",
+    "description": "Production triage view for Codex Pooler runtime health, memory pressure, gateway admission, HTTP traffic, database query pressure, and restart evidence.",
     "editable": true,
     "elements": {
       "panel-10": {
@@ -3213,7 +3213,7 @@
               "transformations": []
             }
           },
-          "description": "Source-less queries that could not be mapped to a safe Ecto source or table identifier. This should shrink after the richer telemetry deploy.",
+          "description": "Source-less queries that could not be mapped to a safe Ecto source or table identifier. Use this to spot unclassified raw SQL or telemetry source-attribution gaps.",
           "id": 36,
           "links": [],
           "title": "Unknown Query Rate",
@@ -4242,7 +4242,7 @@
       "timezone": "browser",
       "to": "now"
     },
-    "title": "Codex Pooler / Memory Triage",
+    "title": "Codex Pooler / Runtime Triage",
     "variables": [
       {
         "kind": "DatasourceVariable",

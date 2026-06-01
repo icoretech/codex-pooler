@@ -1,6 +1,6 @@
 ---
-title: Monitoring and memory triage
-description: Collect Prometheus metrics, use Grafana dashboards, and investigate Codex Pooler production memory spikes without exposing request content.
+title: Monitoring and runtime triage
+description: Collect Prometheus metrics, use Grafana dashboards, and investigate Codex Pooler production runtime pressure without exposing request content.
 ---
 
 Codex Pooler exposes Prometheus metrics at `/metrics`. Metrics auth is managed from `/admin/system`; if a bearer token is configured, Prometheus must scrape with the matching Kubernetes Secret reference instead of putting the raw token in Helm values.
@@ -23,9 +23,9 @@ monitoring:
 
 The `release` label and scrape interval should match your own Prometheus Operator selectors and scrape budget. For fast OOM investigations, prefer a short interval for the app ServiceMonitor and keep broader Kubernetes collectors at their normal cadence.
 
-## Memory dashboard
+## Runtime triage dashboard
 
-Build your Grafana or Prometheus dashboard around the signals needed to correlate a fast memory spike:
+Build your Grafana or Prometheus dashboard around the signals needed to correlate runtime pressure across memory, request handling, gateway admission, database access, and restarts:
 
 1. Kubernetes cgroup working set versus pod memory limit, RSS/cache split, and cgroup memory not explained by BEAM total
 2. BEAM memory total, processes, binary, ETS, code, atom, atom used, and system memory by pod
@@ -38,9 +38,9 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
-![Codex Pooler Grafana memory triage dashboard](/codex-pooler-grafana.png)
+![Codex Pooler Grafana runtime triage dashboard](/codex-pooler-grafana.png)
 
-[Download the starter Grafana dashboard JSON](/operators/monitoring/codex-pooler-memory-triage.json)
+[Download the starter Grafana dashboard JSON](/operators/monitoring/codex-pooler-runtime-triage.json)
 
 ## Useful PromQL
 
@@ -68,7 +68,9 @@ clamp_min(
     }
   )
   - on (pod)
-  vm_memory_total_bytes{namespace="codex-pooler", job="codex-pooler-app"},
+  max by (pod) (
+    vm_memory_total_bytes{namespace="codex-pooler", job="codex-pooler-app"}
+  ),
   0
 )
 ```

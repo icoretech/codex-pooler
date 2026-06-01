@@ -166,7 +166,7 @@ topk(10, sum by (source, command) (rate(codex_pooler_repo_query_count{namespace=
 
 For memory incidents, also collect Kubernetes cgroup metrics such as `container_memory_working_set_bytes`, `container_memory_rss`, restart counters, and OOM counters from your cluster collectors. The app metrics explain BEAM and gateway behavior; cgroup and kube-state-metrics data explain container limits, restarts, and killed pods.
 
-The [monitoring and memory triage guide](/operators/monitoring/) includes a starter Grafana dashboard JSON and PromQL examples.
+The [monitoring and runtime triage guide](/operators/monitoring/) includes a starter Grafana dashboard JSON and PromQL examples.
 
 ## Websocket replica caveat
 
