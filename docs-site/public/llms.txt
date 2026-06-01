@@ -12,6 +12,7 @@ Primary public docs:
 - https://docs.codex-pooler.com/getting-started/quick-start/
 - https://docs.codex-pooler.com/getting-started/configuration/
 - https://docs.codex-pooler.com/clients/codex-cli/
+- https://docs.codex-pooler.com/clients/claude-code/
 - https://docs.codex-pooler.com/clients/openai-compatible/
 - https://docs.codex-pooler.com/clients/opencode/
 - https://docs.codex-pooler.com/clients/openclaw/
@@ -64,6 +65,7 @@ Privacy boundaries:
 Agent guidance:
 - Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex backend clients.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
+- Claude Code is intentionally documented as unsupported at https://docs.codex-pooler.com/clients/claude-code/.
 - Use https://docs.codex-pooler.com/reference/routing-strategies/ when configuring Pools and routing behavior.
 - Use https://docs.codex-pooler.com/answers.md for short, citable answers about scope, routes, credentials, privacy, setup, and deployment.
 - Keep examples on http://localhost:4000 for local setup or https://pooler.example.com for deployed product examples.
