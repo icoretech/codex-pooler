@@ -22,7 +22,11 @@ defmodule CodexPooler.Accounting.Metadata do
                           "trace",
                           "websocket_frame"
                         ])
-  @safe_sensitive_exact_keys MapSet.new(["token_refresh_reason_code_preview"])
+  @safe_sensitive_exact_keys MapSet.new([
+                               "api_key_id",
+                               "reservation_snapshot_inputs",
+                               "token_refresh_reason_code_preview"
+                             ])
   @safe_control_plane_keys MapSet.new(["analytics_forwarding"])
 
   @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}

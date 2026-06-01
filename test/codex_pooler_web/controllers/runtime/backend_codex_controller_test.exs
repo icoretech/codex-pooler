@@ -4583,6 +4583,109 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(100))
   end
 
+  test "POST /backend-api/codex/responses records per-request RouteState snapshot inputs" do
+    first_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_route_state_snapshot_first",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_route_state_snapshot_second",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup = gateway_setup(first_upstream)
+
+    alternate =
+      gateway_upstream(
+        setup.pool,
+        second_upstream,
+        "upstream-token-route-state-snapshot",
+        compact?: false
+      )
+
+    prime_routing_quota!(alternate.identity)
+
+    setup = %{
+      setup
+      | model:
+          put_model_source_assignments!(setup.model, [setup.assignment, alternate.assignment])
+    }
+
+    use_routing_strategy!(setup.pool, "bridge_ring", 1)
+
+    first_conn =
+      post_backend_response(setup, [], %{
+        "input" => "route state snapshot first request"
+      })
+
+    assert %{"id" => first_id} = json_response(first_conn, 200)
+    assert first_id in ["resp_route_state_snapshot_first", "resp_route_state_snapshot_second"]
+
+    [first_request] =
+      Repo.all(
+        from request in Request,
+          where: request.pool_id == ^setup.pool.id,
+          order_by: [asc: request.admitted_at, asc: request.id]
+      )
+
+    assert first_request.request_metadata["routing"]["strategy"] == "bridge_ring"
+    assert first_request.request_metadata["routing"]["bridge_ring_size"] == 1
+
+    assert %{
+             "pool_id" => pool_id,
+             "api_key_id" => api_key_id,
+             "effective_model" => effective_model,
+             "route_class" => "proxy_http",
+             "request_class" => "http_json",
+             "estimated_input_tokens" => input_tokens,
+             "estimated_output_tokens" => output_tokens,
+             "estimated_total_tokens" => total_tokens,
+             "quota_window_dimension_keys" => quota_window_dimension_keys
+           } = first_request.request_metadata["reservation_snapshot_inputs"]
+
+    assert pool_id == setup.pool.id
+    assert api_key_id == setup.api_key.id
+    assert effective_model == setup.model.exposed_model_id
+    assert total_tokens == input_tokens + output_tokens
+
+    assert Enum.map(quota_window_dimension_keys, & &1["policy_field"]) == [
+             "max_requests_per_minute",
+             "max_tokens_per_day",
+             "max_tokens_per_week"
+           ]
+
+    use_routing_strategy!(setup.pool, "deterministic_rotation", 2)
+
+    second_conn =
+      post_backend_response(setup, [], %{
+        "input" => "route state snapshot second request"
+      })
+
+    assert %{"id" => second_id} = json_response(second_conn, 200)
+    assert second_id in ["resp_route_state_snapshot_first", "resp_route_state_snapshot_second"]
+
+    [first_request, second_request] =
+      Repo.all(
+        from request in Request,
+          where: request.pool_id == ^setup.pool.id,
+          order_by: [asc: request.admitted_at, asc: request.id]
+      )
+
+    assert first_request.request_metadata["routing"]["strategy"] == "bridge_ring"
+    assert first_request.request_metadata["routing"]["bridge_ring_size"] == 1
+    assert second_request.request_metadata["routing"]["strategy"] == "deterministic_rotation"
+    assert second_request.request_metadata["routing"]["bridge_ring_size"] == 2
+  end
+
   test "POST /backend-api/codex/responses bridge_ring retries only within the default shortlist",
        %{
          conn: conn

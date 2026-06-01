@@ -12,37 +12,62 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
   defstruct [
     :visible_model,
-    candidates: [],
-    quota_window_snapshots: %{},
-    circuit_eligibility_snapshots: %{},
-    routing_settings: nil,
+    visible_model_context: %{},
     visible_models: [],
+    candidate_snapshots: [],
+    candidates: [],
+    routing_settings: nil,
+    quota_window_snapshots: %{},
+    circuit_snapshots: %{},
+    circuit_eligibility_snapshots: %{},
+    reservation_snapshot_inputs: nil,
     extensions: %{}
   ]
 
   @type candidate :: CandidateEligibility.candidate()
   @type auth :: CodexPooler.Access.auth_context()
+  @type visible_model_context :: %{optional(atom()) => term()}
   @type quota_window_snapshots :: %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]}
-  @type circuit_eligibility_snapshots :: %{optional(Ecto.UUID.t()) => boolean()}
+  @type circuit_snapshot :: CircuitState.eligibility_snapshot() | boolean()
+  @type circuit_snapshots :: %{optional(Ecto.UUID.t()) => circuit_snapshot()}
+  @type reservation_snapshot_inputs :: %{
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:api_key_id) => Ecto.UUID.t(),
+          required(:effective_model) => String.t(),
+          required(:route_class) => String.t(),
+          required(:request_class) => String.t(),
+          required(:estimated_input_tokens) => non_neg_integer(),
+          required(:estimated_output_tokens) => non_neg_integer(),
+          required(:estimated_total_tokens) => non_neg_integer(),
+          required(:quota_window_dimension_keys) => [map()]
+        }
   @type extensions :: %{optional(atom() | String.t()) => term()}
 
   @type t :: %__MODULE__{
           visible_model: Model.t(),
-          candidates: [candidate()],
-          quota_window_snapshots: quota_window_snapshots(),
-          circuit_eligibility_snapshots: circuit_eligibility_snapshots(),
-          routing_settings: RoutingSettings.t() | nil,
+          visible_model_context: visible_model_context(),
           visible_models: [Model.t()],
+          candidate_snapshots: [candidate()],
+          candidates: [candidate()],
+          routing_settings: RoutingSettings.t() | nil,
+          quota_window_snapshots: quota_window_snapshots(),
+          circuit_snapshots: circuit_snapshots(),
+          circuit_eligibility_snapshots: circuit_snapshots(),
+          reservation_snapshot_inputs: reservation_snapshot_inputs() | nil,
           extensions: extensions()
         }
 
   @type attrs :: %{
           required(:visible_model) => Model.t(),
           required(:candidates) => [candidate()],
-          optional(:quota_window_snapshots) => quota_window_snapshots(),
-          optional(:circuit_eligibility_snapshots) => circuit_eligibility_snapshots(),
-          optional(:routing_settings) => RoutingSettings.t() | nil,
+          optional(:visible_model_context) => visible_model_context(),
           optional(:visible_models) => [Model.t()],
+          optional(:candidate_snapshots) => [candidate()],
+          optional(:routing_settings) => RoutingSettings.t() | nil,
+          optional(:quota_window_snapshots) => quota_window_snapshots(),
+          optional(:circuit_snapshots) => circuit_snapshots(),
+          optional(:circuit_eligibility_snapshots) => circuit_snapshots(),
+          optional(:reservation_snapshot_inputs) => reservation_snapshot_inputs() | nil,
           optional(:extensions) => extensions()
         }
 
@@ -51,11 +76,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       when is_list(candidates) do
     %__MODULE__{
       visible_model: visible_model,
-      candidates: candidates,
-      quota_window_snapshots: Map.get(attrs, :quota_window_snapshots, %{}),
-      circuit_eligibility_snapshots: Map.get(attrs, :circuit_eligibility_snapshots, %{}),
-      routing_settings: Map.get(attrs, :routing_settings),
+      visible_model_context:
+        Map.get(attrs, :visible_model_context, %{visible_model: visible_model}),
       visible_models: Map.get(attrs, :visible_models, [visible_model]),
+      candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
+      candidates: candidates,
+      routing_settings: Map.get(attrs, :routing_settings),
+      quota_window_snapshots: Map.get(attrs, :quota_window_snapshots, %{}),
+      circuit_snapshots: circuit_snapshots(attrs),
+      circuit_eligibility_snapshots: circuit_snapshots(attrs),
+      reservation_snapshot_inputs: Map.get(attrs, :reservation_snapshot_inputs),
       extensions: Map.get(attrs, :extensions, %{})
     }
   end
@@ -64,14 +94,23 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   def put_candidates(%__MODULE__{} = route_state, candidates) when is_list(candidates),
     do: %{route_state | candidates: candidates}
 
+  @spec put_reservation_snapshot_inputs(t(), reservation_snapshot_inputs()) :: t()
+  def put_reservation_snapshot_inputs(%__MODULE__{} = route_state, snapshot_inputs)
+      when is_map(snapshot_inputs),
+      do: %{route_state | reservation_snapshot_inputs: snapshot_inputs}
+
   @spec put_quota_window_snapshots(t(), quota_window_snapshots()) :: t()
   def put_quota_window_snapshots(%__MODULE__{} = route_state, snapshots) when is_map(snapshots),
     do: %{route_state | quota_window_snapshots: snapshots}
 
-  @spec put_circuit_eligibility_snapshots(t(), circuit_eligibility_snapshots()) :: t()
+  @spec put_circuit_snapshots(t(), circuit_snapshots()) :: t()
+  def put_circuit_snapshots(%__MODULE__{} = route_state, snapshots) when is_map(snapshots),
+    do: %{route_state | circuit_snapshots: snapshots, circuit_eligibility_snapshots: snapshots}
+
+  @spec put_circuit_eligibility_snapshots(t(), circuit_snapshots()) :: t()
   def put_circuit_eligibility_snapshots(%__MODULE__{} = route_state, snapshots)
       when is_map(snapshots),
-      do: %{route_state | circuit_eligibility_snapshots: snapshots}
+      do: put_circuit_snapshots(route_state, snapshots)
 
   @spec preload_routing_snapshots(t(), auth(), Model.t(), RequestOptions.t()) :: t()
   def preload_routing_snapshots(
@@ -84,7 +123,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
     route_state
     |> put_quota_window_snapshots(preload_quota_window_snapshots(candidates))
-    |> put_circuit_eligibility_snapshots(
+    |> put_circuit_snapshots(
       CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
     )
   end
@@ -99,10 +138,24 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     Map.get(route_state.quota_window_snapshots, identity_id, [])
   end
 
+  @spec circuit_snapshot(t(), Ecto.UUID.t()) :: circuit_snapshot() | nil
+  def circuit_snapshot(%__MODULE__{} = route_state, assignment_id)
+      when is_binary(assignment_id) do
+    Map.get(route_state.circuit_snapshots, assignment_id)
+  end
+
   @spec circuit_eligible?(t(), Ecto.UUID.t()) :: boolean()
   def circuit_eligible?(%__MODULE__{} = route_state, assignment_id)
       when is_binary(assignment_id) do
-    Map.get(route_state.circuit_eligibility_snapshots, assignment_id, true)
+    case circuit_snapshot(route_state, assignment_id) do
+      %{eligible?: eligible?} when is_boolean(eligible?) -> eligible?
+      value when is_boolean(value) -> value
+      _snapshot -> true
+    end
+  end
+
+  defp circuit_snapshots(attrs) do
+    Map.get(attrs, :circuit_snapshots, Map.get(attrs, :circuit_eligibility_snapshots, %{}))
   end
 
   defp preload_quota_window_snapshots(candidates) do

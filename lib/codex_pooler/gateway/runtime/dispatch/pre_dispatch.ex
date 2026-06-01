@@ -11,15 +11,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Routing.SessionContinuity
+  alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
   alias CodexPooler.RouteClass
 
   @type candidate :: CandidateEligibility.FilterInput.candidate()
-  @type visible_model_data :: %{
-          required(:visible_model) => Model.t(),
-          required(:visible_models) => [Model.t()]
-        }
+  @type visible_model_context :: CandidateEligibility.visible_model_context()
   @type prepared :: %{
           required(:request_options) => RequestOptions.t(),
           required(:candidates) => [candidate()],
@@ -34,10 +32,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           Model.t()
         ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
   def prepare(auth, endpoint, payload, %RequestOptions{} = request_options, %Model{} = model) do
-    prepare(auth, endpoint, payload, request_options, model, %{
-      visible_model: model,
-      visible_models: [model]
-    })
+    hydration = CandidateEligibility.hydrate_model_visibility(model, models: [model])
+
+    prepare(
+      auth,
+      endpoint,
+      payload,
+      request_options,
+      model,
+      Map.merge(hydration, %{
+        requested_model: request_options.routing.requested_model || model.exposed_model_id,
+        effective_model: request_options.routing.effective_model || model.exposed_model_id,
+        visible_model: model,
+        visible_models: [model],
+        candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
+      })
+    )
   end
 
   @spec prepare(
@@ -46,7 +56,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           map(),
           RequestOptions.t(),
           Model.t(),
-          visible_model_data()
+          visible_model_context()
         ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
   def prepare(
         auth,
@@ -54,7 +64,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         payload,
         %RequestOptions{} = request_options,
         %Model{} = model,
-        %{visible_model: %Model{} = visible_model, visible_models: visible_models}
+        %{visible_model: %Model{} = visible_model, visible_models: visible_models} =
+          visible_model_context
       )
       when is_list(visible_models) do
     with :ok <- authorize_model_policy(auth, model, endpoint, payload, request_options),
@@ -63,7 +74,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          :ok <- ensure_model_supports(model, endpoint, payload),
          :ok <- StrictSchema.validate(payload),
          :ok <- InputShape.validate(payload),
-         {:ok, candidates} <- CandidateEligibility.routable_candidates(model),
+         {:ok, candidate_snapshots} <-
+           CandidateEligibility.routable_candidates(visible_model_context, model),
+         route_state =
+           RouteState.new(%{
+             visible_model_context: visible_model_context,
+             visible_model: visible_model,
+             visible_models: visible_models,
+             candidate_snapshots: candidate_snapshots,
+             candidates: candidate_snapshots,
+             routing_settings: Pools.routing_settings_with_defaults(auth.pool)
+           }),
          {:ok, candidates} <-
            CandidateEligibility.filter_runtime_compatible_candidates(
              CandidateEligibility.FilterInput.new(%{
@@ -72,7 +93,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
                endpoint: endpoint,
                payload: payload,
                request_options: request_options,
-               candidates: candidates
+               candidates: candidate_snapshots
              })
            ),
          {:ok, candidates} <- SessionContinuity.filter_file_affinity(candidates, request_options),
@@ -82,13 +103,18 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          {:ok, candidates} <-
            SessionContinuity.filter_codex_session_assignment(candidates, request_options) do
       route_state =
-        RouteState.new(%{
-          visible_model: visible_model,
-          visible_models: visible_models,
-          candidates: candidates,
-          routing_settings: Pools.get_routing_settings(auth.pool)
-        })
+        route_state
+        |> RouteState.put_candidates(candidates)
         |> RouteState.preload_routing_snapshots(auth, model, request_options)
+        |> RouteState.put_reservation_snapshot_inputs(
+          AccountingReservation.reservation_snapshot_inputs(
+            auth,
+            model,
+            payload,
+            endpoint,
+            request_options
+          )
+        )
 
       {:ok, %{request_options: request_options, candidates: candidates, route_state: route_state}}
     end
