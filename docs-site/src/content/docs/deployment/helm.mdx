@@ -94,6 +94,80 @@ migrations:
 
 The migration hook runs database migrations and imports the vendored OpenAI pricing feed. The scheduler keeps scheduled background work separate from request-serving pods.
 
+## Metrics collection
+
+The app role exposes Prometheus metrics on `/metrics` through the same HTTP service as `/healthz` and `/readyz`. Worker, scheduler, and migration pods don't expose the Phoenix endpoint, so app-level metrics such as BEAM memory, request rate, route latency, gateway admission, stream-buffer pressure, and Ecto query pressure are scraped from app pods only.
+
+If you run Prometheus Operator, enable the chart `ServiceMonitor`:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    interval: 10s
+    scrapeTimeout: 5s
+    path: /metrics
+```
+
+Set `labels` to match your Prometheus Operator selector. The common `release: kube-prometheus-stack` label is only an example; use the label your Prometheus installation selects.
+
+If you configure a metrics bearer token from `/admin/system`, create a Kubernetes Secret containing the same raw token and point the `ServiceMonitor` at it:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: codex-pooler-metrics
+      key: token
+```
+
+Don't put the raw metrics token in Helm values. The app stores only a keyed digest, so the token must be saved separately at creation time if Prometheus will authenticate with it.
+
+Render the monitoring resource before installing:
+
+```bash
+helm template codex-pooler ./charts/codex-pooler \
+  --namespace codex-pooler \
+  --set monitoring.serviceMonitor.enabled=true \
+  --set monitoring.serviceMonitor.labels.release=kube-prometheus-stack \
+  --set monitoring.serviceMonitor.interval=10s \
+  --set monitoring.serviceMonitor.scrapeTimeout=5s \
+  --show-only templates/servicemonitor.yaml
+```
+
+After installation, verify that Kubernetes rendered the ServiceMonitor and that Prometheus has active targets:
+
+```bash
+kubectl -n codex-pooler get servicemonitor codex-pooler-app
+kubectl -n codex-pooler get endpoints codex-pooler-app
+```
+
+When you can reach the Prometheus HTTP API, check scrape health:
+
+```bash
+# If Prometheus is only reachable inside the cluster, port-forward your Prometheus service first.
+kubectl -n monitoring port-forward svc/prometheus-operated 9090:9090
+
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=up{namespace="codex-pooler",job="codex-pooler-app"}'
+```
+
+Useful first queries:
+
+```text
+vm_memory_total_bytes{namespace="codex-pooler", job="codex-pooler-app"}
+sum by (pod) (rate(phoenix_endpoint_stop_count{namespace="codex-pooler", job="codex-pooler-app"}[5m]))
+sum by (method, status_class) (rate(codex_pooler_http_request_count{namespace="codex-pooler", job="codex-pooler-app"}[5m]))
+topk(10, sum by (source, command) (rate(codex_pooler_repo_query_count{namespace="codex-pooler", job="codex-pooler-app"}[5m])))
+```
+
+For memory incidents, also collect Kubernetes cgroup metrics such as `container_memory_working_set_bytes`, `container_memory_rss`, restart counters, and OOM counters from your cluster collectors. The app metrics explain BEAM and gateway behavior; cgroup and kube-state-metrics data explain container limits, restarts, and killed pods.
+
+The [monitoring and memory triage guide](/operators/monitoring/) includes a starter Grafana dashboard JSON and PromQL examples.
+
 ## Websocket replica caveat
 
 Keep the web app at one replica unless you intentionally configure the multi-replica websocket topology.
