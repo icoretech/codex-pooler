@@ -20,6 +20,18 @@ defmodule CodexPooler.Dev.GatewayPerfProbe do
   @default_phase "measured"
   @budget_phase "measured"
   @unknown "unknown"
+  @default_budget_target_qpr 20.0
+  @route_family_keys ["backend", "v1"]
+  @tracked_tables [
+    "account_quota_windows",
+    "routing_circuit_states",
+    "api_keys",
+    "requests",
+    "ledger_entries",
+    "pool_upstream_assignments",
+    "models",
+    "pool_routing_settings"
+  ]
 
   @type context :: %{
           required(:run_id) => String.t(),
@@ -368,7 +380,11 @@ defmodule CodexPooler.Dev.GatewayPerfProbe do
       all_phase_request_count: length(requests),
       all_phase_query_count_total: length(queries),
       query_count_total: query_count,
-      query_count_per_request: ratio(query_count, request_count),
+      query_count_per_request: rounded(ratio(query_count, request_count)),
+      budget_status: budget_status(query_count, request_count),
+      route_families: route_families(budget_queries, measured_successful_requests),
+      table_shares: table_shares(budget_queries),
+      table_commands: table_commands(budget_queries),
       query_time_ms_total: rounded(query_total),
       query_time_ms_per_request: rounded(ratio(query_total, request_count)),
       max_checkout_ms: rounded(max_value(checkouts)),
@@ -412,6 +428,96 @@ defmodule CodexPooler.Dev.GatewayPerfProbe do
       profile: common_value(requests, :profile, @unknown),
       phase: common_value(requests, :phase, @default_phase)
     }
+  end
+
+  defp budget_status(query_count, request_count) do
+    actual_qpr = rounded(ratio(query_count, request_count))
+    target_qpr = budget_target_qpr()
+
+    %{
+      target_qpr: target_qpr,
+      actual_qpr: actual_qpr,
+      pass: actual_qpr < target_qpr
+    }
+  end
+
+  defp route_families(queries, requests) do
+    query_counts =
+      queries
+      |> Enum.group_by(&summary_route_family(&1.route_family))
+      |> Map.new(fn {family, entries} -> {family, length(entries)} end)
+
+    success_counts =
+      requests
+      |> Enum.group_by(&summary_route_family(&1.route_family))
+      |> Map.new(fn {family, entries} -> {family, length(entries)} end)
+
+    Map.new(@route_family_keys, fn family ->
+      success_count = Map.get(success_counts, family, 0)
+      query_count = Map.get(query_counts, family, 0)
+
+      {
+        family,
+        %{
+          success_request_count: success_count,
+          query_count_total: query_count,
+          query_count_per_request: rounded(ratio(query_count, success_count))
+        }
+      }
+    end)
+  end
+
+  defp table_shares(queries) do
+    total = length(queries)
+    grouped = Enum.group_by(queries, & &1.source_table)
+
+    Map.new(@tracked_tables, fn table ->
+      count = grouped |> Map.get(table, []) |> length()
+      {table, rounded(ratio(count, total))}
+    end)
+  end
+
+  defp table_commands(queries) do
+    grouped = Enum.group_by(queries, & &1.source_table)
+
+    Map.new(@tracked_tables, fn table ->
+      entries = Map.get(grouped, table, [])
+
+      {
+        table,
+        %{
+          select_count: command_count(entries, "SELECT"),
+          insert_count: command_count(entries, "INSERT"),
+          update_count: command_count(entries, "UPDATE"),
+          delete_count: command_count(entries, "DELETE"),
+          total_count: length(entries)
+        }
+      }
+    end)
+  end
+
+  defp command_count(entries, command), do: Enum.count(entries, &(&1.command == command))
+
+  defp summary_route_family(route_family) when route_family in ["backend", "backend_codex"],
+    do: "backend"
+
+  defp summary_route_family(route_family) when is_binary(route_family) do
+    if String.starts_with?(route_family, "v1"), do: "v1", else: "other"
+  end
+
+  defp summary_route_family(_route_family), do: "other"
+
+  defp budget_target_qpr do
+    case System.get_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR") do
+      value when is_binary(value) ->
+        case Float.parse(value) do
+          {target, ""} when target > 0 -> rounded(target)
+          _other -> @default_budget_target_qpr
+        end
+
+      _other ->
+        @default_budget_target_qpr
+    end
   end
 
   defp request_json(request) do

@@ -15,10 +15,18 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
       )
 
     File.rm_rf!(root)
+    previous_budget_target = System.get_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR")
+    System.delete_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR")
 
     on_exit(fn ->
       :telemetry.detach({GatewayPerfProbe, :telemetry})
       File.rm_rf!(root)
+
+      if previous_budget_target do
+        System.put_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR", previous_budget_target)
+      else
+        System.delete_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR")
+      end
     end)
 
     {:ok, root: root}
@@ -85,6 +93,12 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     assert query_summary["query_count_total"] == 1
     assert query_summary["query_count_per_request"] == 1.0
     assert is_number(query_summary["query_count_per_request"])
+
+    assert query_summary["budget_status"] == %{
+             "actual_qpr" => 1.0,
+             "pass" => true,
+             "target_qpr" => 20.0
+           }
 
     assert [%{"command" => "SELECT", "source_table" => "requests"}] =
              query_summary["fingerprints"]
@@ -174,6 +188,12 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     assert query_summary["query_count_per_request"] == 1.5
     assert is_number(query_summary["query_count_per_request"])
     assert query_summary["query_time_ms_total"] > 0
+    assert query_summary["route_families"]["backend"]["success_request_count"] == 1
+    assert query_summary["route_families"]["backend"]["query_count_per_request"] == 2.0
+    assert query_summary["route_families"]["v1"]["success_request_count"] == 1
+    assert query_summary["route_families"]["v1"]["query_count_per_request"] == 1.0
+    assert query_summary["table_shares"]["requests"] == 0.667
+    assert query_summary["table_commands"]["api_keys"]["update_count"] == 0
 
     assert query_summary["fingerprints"] == [
              %{
@@ -215,6 +235,98 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     refute all_artifacts =~ "WHERE prompt"
     refute all_artifacts =~ "WHERE raw_body"
     refute all_artifacts =~ "VALUES ($1, $2)"
+  end
+
+  test "query budget report exposes target status, route families, table shares, and table commands",
+       %{
+         root: root
+       } do
+    previous_target = System.get_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR")
+    System.put_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR", "3")
+
+    on_exit(fn ->
+      if previous_target do
+        System.put_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR", previous_target)
+      else
+        System.delete_env("CODEX_POOLER_PERF_BUDGET_TARGET_QPR")
+      end
+    end)
+
+    pid = start_supervised!({GatewayPerfProbe, root: root, name: :gateway_perf_probe_budget_test})
+
+    emit_successful_probe_request(%{
+      path: "/backend-api/codex/responses",
+      run_id: "probe-budget-test",
+      scenario: "short-25c",
+      profile: "short-ok",
+      request_id: "req_backend_probe_budget",
+      request_index: "1",
+      queries: [
+        query_for("account_quota_windows"),
+        query_for("routing_circuit_states"),
+        query_for("pool_upstream_assignments"),
+        query_for("models")
+      ]
+    })
+
+    emit_successful_probe_request(%{
+      path: "/v1/responses",
+      run_id: "probe-budget-test",
+      scenario: "short-25c",
+      profile: "short-ok",
+      request_id: "req_v1_probe_budget",
+      request_index: "2",
+      queries: [
+        %{query: ~s(UPDATE "api_keys" SET last_used_at = $1), params: [], source: "api_keys"},
+        query_for("requests"),
+        query_for("ledger_entries"),
+        query_for("pool_routing_settings")
+      ]
+    })
+
+    assert :ok = GatewayPerfProbe.flush(pid, "probe-budget-test")
+
+    query_summary =
+      root
+      |> Path.join("probe-budget-test/probe/query-summary.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert query_summary["budget_status"] == %{
+             "actual_qpr" => 4.0,
+             "pass" => false,
+             "target_qpr" => 3.0
+           }
+
+    assert query_summary["route_families"]["backend"] == %{
+             "query_count_per_request" => 4.0,
+             "query_count_total" => 4,
+             "success_request_count" => 1
+           }
+
+    assert query_summary["route_families"]["v1"] == %{
+             "query_count_per_request" => 4.0,
+             "query_count_total" => 4,
+             "success_request_count" => 1
+           }
+
+    for table <- [
+          "account_quota_windows",
+          "routing_circuit_states",
+          "api_keys",
+          "requests",
+          "ledger_entries",
+          "pool_upstream_assignments",
+          "models",
+          "pool_routing_settings"
+        ] do
+      assert is_number(query_summary["table_shares"][table])
+      assert is_integer(query_summary["table_commands"][table]["total_count"])
+    end
+
+    assert query_summary["table_shares"]["account_quota_windows"] == 0.125
+    assert query_summary["table_shares"]["routing_circuit_states"] == 0.125
+    assert query_summary["table_commands"]["api_keys"]["update_count"] == 1
   end
 
   test "query budget uses successful measured requests and excludes warmup and cooldown", %{
@@ -293,6 +405,8 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
     assert query_summary["query_count_total"] == 2
     assert query_summary["query_count_per_request"] == 2.0
     assert is_number(query_summary["query_count_per_request"])
+    assert query_summary["budget_status"]["actual_qpr"] == 2.0
+    assert query_summary["budget_status"]["pass"] == true
 
     assert [fingerprint] = query_summary["fingerprints"]
     assert fingerprint["count"] == 2
@@ -442,6 +556,14 @@ defmodule CodexPooler.Dev.GatewayPerfProbeTest do
       %{duration: System.convert_time_unit(25, :millisecond, :native)},
       %{conn: conn}
     )
+  end
+
+  defp query_for(source) do
+    %{
+      query: ~s(SELECT * FROM "#{source}"),
+      params: [],
+      source: source
+    }
   end
 
   defp repeated_queries(count, source) do
