@@ -11,6 +11,9 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   @stats_reload_debounce_ms 1_000
   @stats_event_topics ~w(request_logs usage upstreams job_status model_sync)
+  @reload_telemetry_event [:codex_pooler, :admin, :stats_live, :reload]
+  @dashboard_build_telemetry_event [:codex_pooler, :admin, :stats, :dashboard, :build]
+  @telemetry_windows ~w(1h 5h 24h 7d)
 
   @window_options [
     {"Last 1 hour", "1h"},
@@ -64,7 +67,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   end
 
   def handle_info(:reload_stats_dashboard, socket) do
-    notify_stats_reload(:reloaded)
+    notify_stats_reload(:executed, socket.assigns.current_params)
 
     {:noreply,
      socket
@@ -179,9 +182,10 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp load_dashboard(socket, params) do
     filters = stats_filters(params)
 
-    case Stats.build_dashboard(socket.assigns.current_scope, filters) do
+    case build_dashboard_with_telemetry(socket.assigns.current_scope, filters) do
       {:ok, dashboard} ->
         socket
+        |> assign(:current_params, params)
         |> reconcile_pool_subscriptions(dashboard)
         |> assign(
           dashboard: dashboard,
@@ -193,6 +197,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
       {:error, error} ->
         socket
+        |> assign(:current_params, params)
         |> reconcile_pool_subscriptions(nil)
         |> assign(
           dashboard: nil,
@@ -202,6 +207,16 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           current_params: params
         )
     end
+  end
+
+  defp build_dashboard_with_telemetry(scope, filters) do
+    started_at = System.monotonic_time()
+    result = Stats.build_dashboard(scope, filters)
+    duration = System.monotonic_time() - started_at
+
+    emit_dashboard_build_telemetry(result, filters, duration)
+
+    result
   end
 
   defp reconcile_pool_subscriptions(socket, dashboard) do
@@ -232,6 +247,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   defp schedule_stats_reload(socket) do
     if is_reference(socket.assigns[:stats_reload_timer]) do
+      notify_stats_reload(:coalesced, socket.assigns.current_params)
       socket
     else
       schedule_new_stats_reload(socket)
@@ -240,13 +256,14 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   defp schedule_new_stats_reload(socket) do
     timer = Process.send_after(self(), :reload_stats_dashboard, @stats_reload_debounce_ms)
-    notify_stats_reload(:scheduled)
+    notify_stats_reload(:scheduled, socket.assigns.current_params)
     assign(socket, :stats_reload_timer, timer)
   end
 
   defp cancel_stats_reload_timer(socket) do
     if is_reference(socket.assigns[:stats_reload_timer]) do
       Process.cancel_timer(socket.assigns.stats_reload_timer, async: false, info: false)
+      notify_stats_reload(:cancelled, socket.assigns.current_params)
     end
 
     assign(socket, :stats_reload_timer, nil)
@@ -257,13 +274,49 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   defp stats_event?(_topics), do: false
 
-  defp notify_stats_reload(stage) do
+  defp notify_stats_reload(stage, params) do
+    filters = stats_filters(params || %{})
+
     :telemetry.execute(
-      [:codex_pooler, :admin, :stats_live, :reload],
-      %{},
-      %{stage: stage, pid: self()}
+      @reload_telemetry_event,
+      %{count: 1},
+      %{stage: stage, window: telemetry_window(filters), scope: telemetry_scope(filters)}
     )
   end
+
+  defp emit_dashboard_build_telemetry({:ok, _dashboard}, filters, duration) do
+    :telemetry.execute(
+      @dashboard_build_telemetry_event,
+      %{count: 1, duration: duration},
+      %{outcome: :ok, window: telemetry_window(filters), scope: telemetry_scope(filters)}
+    )
+  end
+
+  defp emit_dashboard_build_telemetry({:error, error}, filters, duration) do
+    :telemetry.execute(
+      @dashboard_build_telemetry_event,
+      %{count: 1, duration: duration},
+      %{
+        outcome: :error,
+        window: telemetry_window(filters),
+        scope: telemetry_scope(filters),
+        error_code: telemetry_error_code(error)
+      }
+    )
+  end
+
+  defp telemetry_window(%{"window" => window}), do: telemetry_window(window)
+  defp telemetry_window(%{window: window}), do: telemetry_window(window)
+  defp telemetry_window(window) when window in @telemetry_windows, do: window
+  defp telemetry_window(_window), do: "unknown"
+
+  defp telemetry_scope(%{"pool_id" => pool_id}), do: telemetry_scope(pool_id)
+  defp telemetry_scope(%{pool_id: pool_id}), do: telemetry_scope(pool_id)
+  defp telemetry_scope(nil), do: "all_visible_pools"
+  defp telemetry_scope(pool_id) when is_binary(pool_id) and pool_id != "", do: "selected_pool"
+  defp telemetry_scope(_pool_id), do: "unknown"
+
+  defp telemetry_error_code(%{code: code}), do: code
 
   defp stats_filters(params) do
     params = Map.new(params)

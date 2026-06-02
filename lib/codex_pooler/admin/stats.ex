@@ -157,19 +157,15 @@ defmodule CodexPooler.Admin.Stats do
     turns =
       GatewayReadModel.turns_for_pool_ids(pool_ids, normalized.started_at, normalized.ended_at)
 
-    recent_activity =
-      ActivityReadModel.recent_activity_for_pool_ids(
+    activity_summary =
+      ActivityReadModel.activity_summary_for_pool_ids(
         pool_ids,
         normalized.started_at,
         normalized.ended_at
       )
 
-    activity_counts =
-      ActivityReadModel.activity_source_counts(
-        pool_ids,
-        normalized.started_at,
-        normalized.ended_at
-      )
+    recent_activity = activity_summary.recent_activity
+    activity_counts = activity_summary.source_counts
 
     quota_accounts =
       Quota.ReadModel.account_summaries_for_pool_ids(pool_ids, normalized.ended_at)

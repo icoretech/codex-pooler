@@ -15,6 +15,11 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
+  @reload_telemetry_event [:codex_pooler, :admin, :stats_live, :reload]
+  @dashboard_build_telemetry_event [:codex_pooler, :admin, :stats, :dashboard, :build]
+  @telemetry_windows ~w(1h 5h 24h 7d unknown)
+  @telemetry_scopes ~w(selected_pool all_visible_pools unknown)
+
   test "redirects unauthenticated operators to login" do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), ~p"/admin/stats")
   end
@@ -27,11 +32,15 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       handler_id = {__MODULE__, test_pid, make_ref()}
 
       :ok =
-        :telemetry.attach(
+        :telemetry.attach_many(
           handler_id,
-          [:codex_pooler, :admin, :stats_live, :reload],
-          fn _event, _measurements, metadata, _config ->
-            send(test_pid, {:admin_stats_live, metadata.stage, metadata.pid})
+          [@reload_telemetry_event, @dashboard_build_telemetry_event],
+          fn
+            @reload_telemetry_event, measurements, metadata, _config ->
+              send(test_pid, {:admin_stats_live_reload, measurements, metadata})
+
+            @dashboard_build_telemetry_event, measurements, metadata, _config ->
+              send(test_pid, {:admin_stats_dashboard_build, measurements, metadata})
           end,
           nil
         )
@@ -390,6 +399,47 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       refute render(view) =~ hidden.raw_key
     end
 
+    test "dashboard build telemetry records success and sanitized error outcomes", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "stats-build-telemetry", name: "Stats Build Telemetry"})
+
+      {:ok, _view, _html} = live(conn, ~p"/admin/stats?window=7d")
+
+      assert_build_telemetry(:ok, window: "7d", scope: "all_visible_pools")
+      drain_build_telemetry()
+
+      admin_conn = log_in_scoped_admin(conn, scope, [])
+
+      {:ok, blocked_view, _html} =
+        live(admin_conn, ~p"/admin/stats?pool_id=#{pool.id}&window=5h")
+
+      error_metadata =
+        assert_build_telemetry(:error,
+          window: "5h",
+          scope: "selected_pool",
+          error_code: :pool_not_found
+        )
+
+      assert Map.keys(error_metadata) |> Enum.sort() == [:error_code, :outcome, :scope, :window]
+      refute Map.has_key?(error_metadata, :message)
+      refute Map.has_key?(error_metadata, :error)
+      refute inspect(error_metadata) =~ "pool filter is not available"
+
+      state = :sys.get_state(blocked_view.pid)
+      assert state.socket.assigns.dashboard == nil
+
+      assert %{code: :pool_not_found, message: "pool filter is not available"} =
+               state.socket.assigns.filter_error
+
+      assert state.socket.assigns.pool_filter_options == []
+      assert state.socket.assigns.current_params == %{"pool_id" => pool.id, "window" => "5h"}
+      assert has_element?(blocked_view, "#stats-filter-error", "pool filter is not available")
+      refute has_element?(blocked_view, "#stats-kpis")
+    end
+
     test "selected Pool usage event reloads stats after the debounce", %{
       conn: conn,
       scope: scope
@@ -413,13 +463,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(pool, %{total_tokens: 42, correlation_id: "stats-selected-realtime"})
       assert {:ok, _event} = Events.broadcast_usage(pool.id, "usage_updated", %{rows: 1})
 
-      assert_receive {:admin_stats_live, :scheduled, _pid}
+      assert_reload_telemetry(:scheduled, window: "24h", scope: "selected_pool")
       _ = :sys.get_state(view.pid)
       assert has_element?(view, "#stats-kpi-tokens", "0")
       refute has_element?(view, "#stats-traffic-chart", "42 tokens")
 
-      send(view.pid, :reload_stats_dashboard)
-      assert_receive {:admin_stats_live, :reloaded, _pid}
+      execute_scheduled_reload(view)
+      assert_reload_telemetry(:executed, window: "24h", scope: "selected_pool")
       assert has_element?(view, "#stats-kpi-tokens", "42")
       assert has_element?(view, "#stats-traffic-chart", "42 tokens")
       assert has_element?(view, "#stats-api-key-table", "Stats usage key")
@@ -460,7 +510,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert {:ok, _event} = Events.broadcast_usage(other_pool.id, "usage_updated", %{rows: 1})
       _ = :sys.get_state(view.pid)
-      refute_received {:admin_stats_live, :scheduled, _pid}
+      refute_reload_telemetry(:scheduled)
       assert has_element?(view, "#stats-kpi-tokens", "11")
       refute has_element?(view, "#stats-traffic-chart", "77 tokens")
       refute has_element?(view, "#stats-api-key-table", other.api_key.display_name)
@@ -481,15 +531,18 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
         assert {:ok, _event} = Events.broadcast_usage(pool.id, reason, %{rows: 1})
       end
 
-      assert_receive {:admin_stats_live, :scheduled, _pid}
+      assert_reload_telemetry(:scheduled, window: "24h", scope: "selected_pool")
+      assert_reload_telemetry(:coalesced, window: "24h", scope: "selected_pool")
+      assert_reload_telemetry(:coalesced, window: "24h", scope: "selected_pool")
       _ = :sys.get_state(view.pid)
-      refute_received {:admin_stats_live, :scheduled, _pid}
+      refute_reload_telemetry(:scheduled)
+      refute_reload_telemetry(:coalesced)
       assert has_element?(view, "#stats-kpi-tokens", "0")
 
-      send(view.pid, :reload_stats_dashboard)
-      assert_receive {:admin_stats_live, :reloaded, _pid}
+      execute_scheduled_reload(view)
+      assert_reload_telemetry(:executed, window: "24h", scope: "selected_pool")
       _ = :sys.get_state(view.pid)
-      refute_received {:admin_stats_live, :reloaded, _pid}
+      refute_reload_telemetry(:executed)
       assert has_element?(view, "#stats-kpi-tokens", "64")
       assert has_element?(view, "#stats-traffic-chart", "64 tokens")
     end
@@ -531,18 +584,61 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(first_pool, %{total_tokens: 88, correlation_id: "stats-sub-first-late"})
       assert {:ok, _event} = Events.broadcast_usage(first_pool.id, "usage_updated", %{rows: 1})
       _ = :sys.get_state(view.pid)
-      refute_received {:admin_stats_live, :scheduled, _pid}
+      refute_reload_telemetry(:scheduled)
       refute has_element?(view, "#stats-traffic-chart", "100 tokens")
 
       stats_usage_fixture(second_pool, %{total_tokens: 9, correlation_id: "stats-sub-second-late"})
 
       assert {:ok, _event} = Events.broadcast_usage(second_pool.id, "usage_updated", %{rows: 1})
-      assert_receive {:admin_stats_live, :scheduled, _pid}
+      assert_reload_telemetry(:scheduled, window: "24h", scope: "selected_pool")
 
-      send(view.pid, :reload_stats_dashboard)
-      assert_receive {:admin_stats_live, :reloaded, _pid}
+      execute_scheduled_reload(view)
+      assert_reload_telemetry(:executed, window: "24h", scope: "selected_pool")
       assert has_element?(view, "#stats-kpi-tokens", "30")
       assert has_element?(view, "#stats-traffic-chart", "30 tokens")
+    end
+
+    test "stale timer after filter patch reloads the latest selected scope", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, first_pool} =
+        Pools.create_pool(scope, %{slug: "stats-stale-first", name: "Stats Stale First"})
+
+      {:ok, second_pool} =
+        Pools.create_pool(scope, %{slug: "stats-stale-second", name: "Stats Stale Second"})
+
+      stats_usage_fixture(first_pool, %{total_tokens: 12, correlation_id: "stats-stale-first"})
+      stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-stale-second"})
+
+      {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
+
+      assert has_element?(view, "#stats-kpi-tokens", "12")
+
+      stats_usage_fixture(first_pool, %{
+        total_tokens: 88,
+        correlation_id: "stats-stale-first-late"
+      })
+
+      assert {:ok, _event} = Events.broadcast_usage(first_pool.id, "usage_updated", %{rows: 1})
+      assert_reload_telemetry(:scheduled, window: "24h", scope: "selected_pool")
+
+      view
+      |> element("#stats-filter-form")
+      |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "window" => "1h"}})
+
+      assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}&window=1h")
+      assert_reload_telemetry(:cancelled, window: "1h", scope: "selected_pool")
+      assert has_element?(view, "#stats-pool-filter[value='#{second_pool.id}']")
+      assert has_element?(view, "#stats-time-filter[value='1h']")
+      assert has_element?(view, "#stats-kpi-tokens", "21")
+
+      send(view.pid, :reload_stats_dashboard)
+      assert_reload_telemetry(:executed, window: "1h", scope: "selected_pool")
+      assert has_element?(view, "#stats-pool-filter[value='#{second_pool.id}']")
+      assert has_element?(view, "#stats-time-filter[value='1h']")
+      assert has_element?(view, "#stats-kpi-tokens", "21")
+      refute has_element?(view, "#stats-traffic-chart", "100 tokens")
     end
 
     test "empty selected period shows operational no-data copy without fake trends", %{
@@ -596,6 +692,62 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       refute has_element?(view, "#stats-quota-table", "Exhausted")
       refute has_element?(view, "#stats-kpi-quota-health", "0")
     end
+  end
+
+  defp assert_reload_telemetry(stage, expected) do
+    assert_receive {:admin_stats_live_reload, %{count: 1}, metadata}
+    assert metadata.stage == stage
+    assert metadata.window in @telemetry_windows
+    assert metadata.scope in @telemetry_scopes
+    refute Map.has_key?(metadata, :pid)
+
+    Enum.each(expected, fn {key, value} ->
+      assert Map.fetch!(metadata, key) == value
+    end)
+
+    metadata
+  end
+
+  defp refute_reload_telemetry(stage) do
+    refute_received {:admin_stats_live_reload, %{count: 1}, %{stage: ^stage}}
+  end
+
+  defp assert_build_telemetry(outcome, expected) do
+    assert_receive {:admin_stats_dashboard_build, %{count: 1, duration: duration}, metadata}
+    assert is_integer(duration)
+    assert duration >= 0
+    assert metadata.outcome == outcome
+    assert metadata.window in @telemetry_windows
+    assert metadata.scope in @telemetry_scopes
+
+    Enum.each(expected, fn {key, value} ->
+      assert Map.fetch!(metadata, key) == value
+    end)
+
+    if outcome == :ok do
+      refute Map.has_key?(metadata, :error_code)
+    end
+
+    metadata
+  end
+
+  defp drain_build_telemetry do
+    receive do
+      {:admin_stats_dashboard_build, _measurements, _metadata} -> drain_build_telemetry()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp execute_scheduled_reload(view) do
+    state = :sys.get_state(view.pid)
+    timer = state.socket.assigns[:stats_reload_timer]
+
+    if is_reference(timer) do
+      Process.cancel_timer(timer, async: false, info: false)
+    end
+
+    send(view.pid, :reload_stats_dashboard)
   end
 
   defp required_selectors do

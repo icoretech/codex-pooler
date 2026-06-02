@@ -167,6 +167,99 @@ defmodule CodexPoolerWeb.TelemetryTest do
              metric.tag_values.(%{route_class: "unsafe class", transport: nil})
   end
 
+  test "exports admin stats Prometheus metrics with exact names and bounded tags" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    admin_metric_names =
+      metrics
+      |> Enum.map(&metric_name/1)
+      |> Enum.filter(&String.starts_with?(&1, "codex_pooler.admin.stats."))
+      |> Enum.sort()
+
+    assert admin_metric_names == [
+             "codex_pooler.admin.stats.dashboard.build.count",
+             "codex_pooler.admin.stats.dashboard.build.duration.seconds",
+             "codex_pooler.admin.stats.reload.count"
+           ]
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :admin, :stats_live, :reload],
+             measurement: :count,
+             tags: [:stage, :window, :scope]
+           } = reload_metric = metric_by_name(metrics, "codex_pooler.admin.stats.reload.count")
+
+    assert %{stage: "scheduled", window: "1h", scope: "selected_pool"} =
+             reload_metric.tag_values.(%{
+               stage: :scheduled,
+               window: "1h",
+               scope: :selected_pool,
+               pid: self()
+             })
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :admin, :stats, :dashboard, :build],
+             measurement: :count,
+             tags: [:outcome, :window, :scope]
+           } =
+             build_count_metric =
+             metric_by_name(metrics, "codex_pooler.admin.stats.dashboard.build.count")
+
+    assert %{outcome: "ok", window: "7d", scope: "all_visible_pools"} =
+             build_count_metric.tag_values.(%{
+               outcome: :ok,
+               window: "7d",
+               scope: "all_visible_pools"
+             })
+
+    assert %Telemetry.Metrics.Distribution{
+             event_name: [:codex_pooler, :admin, :stats, :dashboard, :build],
+             measurement: measurement,
+             unit: :second,
+             tags: [:outcome, :window, :scope],
+             reporter_options: reporter_options
+           } =
+             metric_by_name(metrics, "codex_pooler.admin.stats.dashboard.build.duration.seconds")
+
+    assert measurement.(%{duration: 1_000_000_000}) == 1.0
+
+    assert Keyword.fetch!(reporter_options, :buckets) == [
+             0.005,
+             0.01,
+             0.025,
+             0.05,
+             0.1,
+             0.25,
+             0.5,
+             1,
+             2,
+             5
+           ]
+  end
+
+  @tag :admin_stats_invalid
+  test "normalizes invalid admin stats metric tags to unknown" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+    reload_metric = metric_by_name(metrics, "codex_pooler.admin.stats.reload.count")
+    build_metric = metric_by_name(metrics, "codex_pooler.admin.stats.dashboard.build.count")
+
+    assert %{stage: "unknown", window: "unknown", scope: "unknown"} =
+             reload_metric.tag_values.(%{
+               stage: "reloaded",
+               window: "30d",
+               scope: "pool-123",
+               pid: self(),
+               request_id: "request-123"
+             })
+
+    assert %{outcome: "unknown", window: "unknown", scope: "unknown"} =
+             build_metric.tag_values.(%{
+               outcome: "timeout",
+               window: nil,
+               scope: "",
+               error: "database timeout"
+             })
+  end
+
   defp metric_by_name(metrics, name) do
     Enum.find(metrics, &(metric_name(&1) == name))
   end

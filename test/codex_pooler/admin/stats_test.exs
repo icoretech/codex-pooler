@@ -12,6 +12,7 @@ defmodule CodexPooler.Admin.StatsTest do
   alias CodexPooler.Audit
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Jobs
+  alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Repo
 
   test "build_dashboard/2 returns pool-scoped KPI, table, chart, session, and quota aggregates" do
@@ -157,6 +158,29 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.map(dashboard.empty_states, & &1.code) == [:no_requests, :no_usage]
     assert [%{requests: 0, succeeded: 0, failed: 0}] = dashboard.charts.requests
     assert [%{total_tokens: 0}] = dashboard.charts.tokens
+  end
+
+  test "dashboard activity sources use full-window counts while recent activity remains capped" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-activity-counts", name: "Stats Activity Counts"})
+    started_at = ~U[2026-06-02 10:00:00.000000Z]
+    ended_at = ~U[2026-06-02 11:00:00.000000Z]
+
+    for index <- 1..12 do
+      insert_activity_audit_event!(pool, DateTime.add(started_at, index, :minute))
+    end
+
+    for index <- 1..11 do
+      insert_activity_job!(pool, DateTime.add(started_at, 20 + index, :minute))
+    end
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "1h", as_of: ended_at})
+
+    assert dashboard.sources.audit_events == 12
+    assert dashboard.sources.jobs == 11
+    assert length(dashboard.tables.recent_activity) == 10
+    assert Enum.all?(dashboard.tables.recent_activity, &(&1.type in [:audit_event, :job]))
   end
 
   test "missing daily rollups still falls back to raw request and ledger data" do
@@ -431,6 +455,39 @@ defmodule CodexPooler.Admin.StatsTest do
       updated_at: now
     }
     |> Repo.insert!()
+  end
+
+  defp insert_activity_audit_event!(pool, occurred_at) do
+    assert {:ok, audit_event} =
+             Audit.record_system_event(%{
+               pool_id: pool.id,
+               action: "stats.activity_count",
+               target_type: "pool",
+               target_id: pool.id,
+               outcome: "success",
+               occurred_at: occurred_at,
+               details: %{"safe" => "stats-dashboard-test"}
+             })
+
+    audit_event
+  end
+
+  defp insert_activity_job!(pool, inserted_at) do
+    index = System.unique_integer([:positive])
+
+    assert {:ok, job} =
+             %{"pool_id" => pool.id, "index" => index}
+             |> RuntimeStateCleanupWorker.new(
+               meta: %{"source" => "stats-dashboard-test"},
+               unique: false
+             )
+             |> Oban.insert()
+
+    {1, _rows} =
+      from(job in Oban.Job, where: job.id == ^job.id)
+      |> Repo.update_all(set: [inserted_at: inserted_at, scheduled_at: inserted_at])
+
+    Repo.get!(Oban.Job, job.id)
   end
 
   defp insert_timed_usage!(pool, api_key, assignment, identity, timestamp, tokens) do

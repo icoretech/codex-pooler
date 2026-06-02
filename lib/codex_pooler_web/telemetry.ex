@@ -9,9 +9,16 @@ defmodule CodexPoolerWeb.Telemetry do
   @type http_tags :: %{method: String.t(), status_class: String.t()}
   @type http_route_tags :: %{method: String.t(), route: String.t(), status_class: String.t()}
   @type admission_tags :: %{route_class: String.t(), transport: String.t()}
+  @type admin_stats_reload_tags :: %{stage: String.t(), window: String.t(), scope: String.t()}
+  @type admin_stats_build_tags :: %{outcome: String.t(), window: String.t(), scope: String.t()}
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
   @admission_queue_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+  @admin_stats_duration_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+  @admin_stats_windows ~w(1h 5h 24h 7d)
+  @admin_stats_scopes ~w(selected_pool all_visible_pools)
+  @admin_stats_reload_stages ~w(scheduled coalesced cancelled executed)
+  @admin_stats_build_outcomes ~w(ok error)
   @repo_source_pattern ~r/\A[a-zA-Z0-9_.-]+\z/
   @safe_route_pattern ~r/\A[a-zA-Z0-9_.*:\/{}-]+\z/
   @safe_tag_pattern ~r/\A[a-zA-Z0-9_.:-]+\z/
@@ -148,6 +155,29 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:source, :command],
         tag_values: &repo_query_tag_values/1,
         description: "Total Ecto repository queries by source and SQL command."
+      ),
+      counter("codex_pooler.admin.stats.reload.count",
+        event_name: [:codex_pooler, :admin, :stats_live, :reload],
+        measurement: :count,
+        tags: [:stage, :window, :scope],
+        tag_values: &admin_stats_reload_tag_values/1,
+        description: "Total admin stats dashboard reload events by stage, window, and scope."
+      ),
+      counter("codex_pooler.admin.stats.dashboard.build.count",
+        event_name: [:codex_pooler, :admin, :stats, :dashboard, :build],
+        measurement: :count,
+        tags: [:outcome, :window, :scope],
+        tag_values: &admin_stats_build_tag_values/1,
+        description: "Total admin stats dashboard builds by outcome, window, and scope."
+      ),
+      distribution("codex_pooler.admin.stats.dashboard.build.duration.seconds",
+        event_name: [:codex_pooler, :admin, :stats, :dashboard, :build],
+        measurement: :duration,
+        unit: {:native, :second},
+        tags: [:outcome, :window, :scope],
+        tag_values: &admin_stats_build_tag_values/1,
+        description: "Admin stats dashboard build duration by outcome, window, and scope.",
+        reporter_options: [buckets: @admin_stats_duration_buckets]
       ),
       distribution("codex_pooler.repo.query.total_time.seconds",
         event_name: [:codex_pooler, :repo, :query],
@@ -445,6 +475,57 @@ defmodule CodexPoolerWeb.Telemetry do
       transport: safe_tag_value(metadata[:transport], "unknown")
     }
   end
+
+  @spec admin_stats_reload_tag_values(map()) :: admin_stats_reload_tags()
+  defp admin_stats_reload_tag_values(metadata) do
+    %{
+      stage: admin_stats_reload_stage(metadata[:stage]),
+      window: admin_stats_window(metadata[:window]),
+      scope: admin_stats_scope(metadata[:scope])
+    }
+  end
+
+  @spec admin_stats_build_tag_values(map()) :: admin_stats_build_tags()
+  defp admin_stats_build_tag_values(metadata) do
+    %{
+      outcome: admin_stats_build_outcome(metadata[:outcome]),
+      window: admin_stats_window(metadata[:window]),
+      scope: admin_stats_scope(metadata[:scope])
+    }
+  end
+
+  @spec admin_stats_window(term()) :: String.t()
+  defp admin_stats_window(value), do: admin_stats_enum_value(value, @admin_stats_windows)
+
+  @spec admin_stats_scope(term()) :: String.t()
+  defp admin_stats_scope(value), do: admin_stats_enum_value(value, @admin_stats_scopes)
+
+  @spec admin_stats_reload_stage(term()) :: String.t()
+  defp admin_stats_reload_stage(value),
+    do: admin_stats_enum_value(value, @admin_stats_reload_stages)
+
+  @spec admin_stats_build_outcome(term()) :: String.t()
+  defp admin_stats_build_outcome(value),
+    do: admin_stats_enum_value(value, @admin_stats_build_outcomes)
+
+  @spec admin_stats_enum_value(term(), [String.t()]) :: String.t()
+  defp admin_stats_enum_value(value, allowed_values) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> admin_stats_enum_value(allowed_values)
+  end
+
+  defp admin_stats_enum_value(value, allowed_values) when is_binary(value) do
+    value = String.trim(value)
+
+    if value in allowed_values do
+      value
+    else
+      "unknown"
+    end
+  end
+
+  defp admin_stats_enum_value(_value, _allowed_values), do: "unknown"
 
   @spec conn_value(term(), atom()) :: term()
   defp conn_value(%{method: method}, :method), do: method

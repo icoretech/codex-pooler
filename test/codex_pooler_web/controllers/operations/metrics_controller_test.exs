@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import CodexPooler.AccountsFixtures, only: [bootstrap_owner_fixture: 1]
+  import CodexPooler.PoolerFixtures, only: [pool_fixture: 1]
   import ExUnit.CaptureLog
 
   alias CodexPooler.InstanceSettings
@@ -84,6 +86,66 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     assert metrics_content_type?(conn)
   end
 
+  test "exposes admin stats metrics through an authorized scrape without unsafe labels", %{
+    conn: conn
+  } do
+    %{user: user} =
+      bootstrap_owner_fixture(%{
+        "email" => "metrics-owner-#{System.unique_integer([:positive])}@example.com"
+      })
+
+    pool = pool_fixture(%{created_by_user_id: user.id})
+    duration = System.convert_time_unit(15, :millisecond, :native)
+
+    :telemetry.execute(
+      [:codex_pooler, :admin, :stats_live, :reload],
+      %{count: 1},
+      %{stage: :scheduled, window: "24h", scope: "selected_pool", pid: self(), pool_id: pool.id}
+    )
+
+    :telemetry.execute(
+      [:codex_pooler, :admin, :stats, :dashboard, :build],
+      %{count: 1, duration: duration},
+      %{outcome: :ok, window: "24h", scope: "selected_pool", user_id: user.id}
+    )
+
+    conn = get(conn, ~p"/metrics")
+
+    assert conn.status == 200
+    assert metrics_content_type?(conn)
+
+    admin_stats_lines = admin_stats_metric_lines(conn.resp_body)
+
+    assert Enum.any?(
+             admin_stats_lines,
+             &String.contains?(&1, "codex_pooler_admin_stats_reload_count")
+           )
+
+    assert Enum.any?(
+             admin_stats_lines,
+             &String.contains?(&1, "codex_pooler_admin_stats_dashboard_build_count")
+           )
+
+    assert Enum.any?(
+             admin_stats_lines,
+             &String.contains?(
+               &1,
+               "codex_pooler_admin_stats_dashboard_build_duration_seconds_bucket"
+             )
+           )
+
+    assert Enum.any?(admin_stats_lines, &String.contains?(&1, ~s(stage="scheduled")))
+    assert Enum.any?(admin_stats_lines, &String.contains?(&1, ~s(outcome="ok")))
+    assert Enum.any?(admin_stats_lines, &String.contains?(&1, ~s(window="24h")))
+    assert Enum.any?(admin_stats_lines, &String.contains?(&1, ~s(scope="selected_pool")))
+
+    for line <- admin_stats_lines do
+      refute line =~ "pid="
+      refute line =~ pool.id
+      refute line =~ user.id
+    end
+  end
+
   test "rotating the metrics bearer token invalidates the old bearer", %{conn: conn} do
     configure_metrics_token!("metrics-secret-v1")
     configure_metrics_token!("metrics-secret-v2")
@@ -127,6 +189,12 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert_received {^ref, result}
     {result, log}
+  end
+
+  defp admin_stats_metric_lines(body) do
+    body
+    |> String.split("\n", trim: true)
+    |> Enum.filter(&String.contains?(&1, "codex_pooler_admin_stats_"))
   end
 
   defp metrics_content_type?(conn) do
