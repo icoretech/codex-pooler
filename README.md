@@ -116,7 +116,7 @@ for example `https://pooler.example.com`.
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 
-opencode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
+OpenCode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
 provider uses the Pool API key, and the optional remote MCP entry uses an
 operator-owned MCP token. Its websocket support is the narrow Responses
 websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
