@@ -53,7 +53,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                   message: "gateway accounting finalization failed"
                 }} =
                  handler.(%{relay: :state}, "", %{
-                   code: "server_error",
+                   code: "upstream_request_timeout",
                    event_type: "response.failed",
                    upstream_code: nil
                  })
@@ -109,7 +109,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
                   message: "gateway accounting finalization failed"
                 }} =
                  handler.(%{relay: :state}, "", %{
-                   code: "server_error",
+                   code: "upstream_request_timeout",
                    event_type: "response.failed",
                    upstream_code: nil
                  })

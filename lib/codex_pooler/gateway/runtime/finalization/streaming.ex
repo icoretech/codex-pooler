@@ -207,6 +207,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       "invalid_previous_response_id",
       "missing_required_parameter",
       "previous_response_not_found",
+      "server_error",
       "unsupported_input_image_format",
       "unsupported_parameter",
       "unsupported_value",

@@ -6285,6 +6285,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(failing_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
     assert_stream_terminal_failure!(setup, "server_error")
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
   test "SSE streams inject keepalive comments during upstream idle gaps" do
