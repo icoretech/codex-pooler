@@ -164,7 +164,7 @@ histogram_quantile(0.95,
 
 ## Memory sampler logs
 
-The in-process memory sampler is enabled by default. When BEAM total memory or cgroup usage crosses the configured threshold, it logs a sanitized snapshot with memory categories, process and port counts, top processes by memory, and top processes by message queue length.
+The in-process memory sampler is enabled by default in every release role. When BEAM total memory or cgroup usage crosses the configured threshold, it logs a sanitized snapshot with role metadata, memory categories, cgroup memory stats, process and port counts, top processes by memory, top processes by message queue length, and top ETS tables by memory. It never logs ETS table contents, messages, request bodies, prompts, bearer tokens, websocket frames, or upstream payloads.
 
 Emergency tuning environment variables:
 
@@ -173,7 +173,8 @@ CODEX_POOLER_MEMORY_SAMPLER_ENABLED=true
 CODEX_POOLER_MEMORY_SAMPLER_THRESHOLD_RATIO=0.70
 CODEX_POOLER_MEMORY_SAMPLER_MIN_INTERVAL_MS=60000
 CODEX_POOLER_MEMORY_SAMPLER_TOP_PROCESSES=20
+CODEX_POOLER_MEMORY_SAMPLER_TOP_ETS_TABLES=20
 CODEX_POOLER_MEMORY_SAMPLER_LIMIT_BYTES=1073741824
 ```
 
-Use a lower threshold or shorter interval only during active investigation, because logs are the only signal likely to capture a spike that reaches OOM before the next Prometheus scrape.
+Use a lower threshold or shorter interval only during active investigation, because logs are the only signal likely to capture a worker or scheduler spike that reaches OOM before the next Prometheus scrape. Worker and scheduler pods do not expose the app `/metrics` endpoint, so combine their sampler logs with Kubernetes cgroup memory, restart, OOM, and memory-limit metrics.

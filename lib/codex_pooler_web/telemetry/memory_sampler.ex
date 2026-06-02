@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
   @default_threshold_ratio 0.70
   @default_min_interval_ms 60_000
   @default_top_processes 20
+  @default_top_ets_tables 20
   @cgroup_limit_paths [
     "/sys/fs/cgroup/memory.max",
     "/sys/fs/cgroup/memory/memory.limit_in_bytes"
@@ -17,6 +18,23 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
     "/sys/fs/cgroup/memory.current",
     "/sys/fs/cgroup/memory/memory.usage_in_bytes"
   ]
+  @cgroup_stat_paths [
+    "/sys/fs/cgroup/memory.stat",
+    "/sys/fs/cgroup/memory/memory.stat"
+  ]
+  @cgroup_stat_keys ~w(
+    anon
+    file
+    kernel_stack
+    slab
+    inactive_file
+    active_file
+    rss
+    cache
+    total_rss
+    total_cache
+  )a
+  @cgroup_stat_key_map Map.new(@cgroup_stat_keys, &{Atom.to_string(&1), &1})
   @unbounded_cgroup_limit 1_000_000_000_000_000
 
   @type config :: %{
@@ -26,7 +44,10 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
           threshold_ratio: float(),
           min_interval_ms: non_neg_integer(),
           top_processes: pos_integer(),
-          cgroup_usage_reader: (-> non_neg_integer() | nil)
+          top_ets_tables: pos_integer(),
+          cgroup_usage_reader: (-> non_neg_integer() | nil),
+          cgroup_stat_reader: (-> map()),
+          env_reader: (String.t() -> String.t() | nil)
         }
 
   @type state :: %{
@@ -112,8 +133,11 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
 
   defp log_snapshot(measurements, cgroup_usage_bytes, config) do
     memory = sanitized_memory_measurements(measurements)
+    role = role_metadata(config.env_reader)
+    cgroup_memory_stat = sanitized_cgroup_memory_stat(config.cgroup_stat_reader.())
     top_processes = top_processes(config.top_processes, :memory)
     top_message_queues = top_processes(config.top_processes, :message_queue_len)
+    top_ets_tables = top_ets_tables(config.top_ets_tables)
 
     Logger.warning(fn ->
       [
@@ -122,11 +146,14 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
         "cgroup_usage_bytes=#{cgroup_usage_bytes || "unknown"}",
         "limit_bytes=#{config.limit_bytes}",
         "threshold_ratio=#{config.threshold_ratio}",
+        "role=#{json!(role)}",
         "process_count=#{:erlang.system_info(:process_count)}",
         "port_count=#{:erlang.system_info(:port_count)}",
         "memory=#{json!(memory)}",
+        "cgroup_memory_stat=#{json!(cgroup_memory_stat)}",
         "top_processes=#{json!(top_processes)}",
-        "top_message_queues=#{json!(top_message_queues)}"
+        "top_message_queues=#{json!(top_message_queues)}",
+        "top_ets_tables=#{json!(top_ets_tables)}"
       ]
       |> Enum.join(" ")
     end)
@@ -176,8 +203,56 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
 
   defp sanitized_memory_measurements(measurements) do
     measurements
-    |> Map.take([:total, :processes, :processes_used, :binary, :ets, :atom, :atom_used, :code])
+    |> Map.take([
+      :total,
+      :processes,
+      :processes_used,
+      :binary,
+      :ets,
+      :atom,
+      :atom_used,
+      :code,
+      :system
+    ])
     |> Map.new(fn {key, value} -> {key, integer_or_nil(value)} end)
+  end
+
+  defp role_metadata(env_reader) do
+    %{
+      oban_mode: safe_string(env_reader.("OBAN_MODE")),
+      hostname: safe_string(env_reader.("HOSTNAME")),
+      release_node: safe_string(env_reader.("RELEASE_NODE")),
+      node: node() |> Atom.to_string() |> safe_string()
+    }
+  end
+
+  defp top_ets_tables(limit) do
+    :ets.all()
+    |> Enum.flat_map(&ets_table_snapshot/1)
+    |> Enum.sort_by(&Map.fetch!(&1, :memory_words), :desc)
+    |> Enum.take(limit)
+  end
+
+  defp ets_table_snapshot(table) do
+    case :ets.info(table) do
+      :undefined ->
+        []
+
+      info when is_list(info) ->
+        owner = Keyword.get(info, :owner)
+
+        [
+          %{
+            table: inspect(table),
+            name: info |> Keyword.get(:name) |> safe_ets_value(),
+            owner: inspect(owner),
+            owner_name: owner_registered_name(owner),
+            memory_words: info_value(info, :memory, 0),
+            size: info_value(info, :size, 0),
+            type: info |> Keyword.get(:type) |> safe_atom()
+          }
+        ]
+    end
   end
 
   defp config(opts) do
@@ -211,7 +286,16 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
           "CODEX_POOLER_MEMORY_SAMPLER_TOP_PROCESSES",
           @default_top_processes
         ),
-      cgroup_usage_reader: Keyword.get(merged, :cgroup_usage_reader, &cgroup_usage_bytes/0)
+      top_ets_tables:
+        option_integer(
+          merged,
+          :top_ets_tables,
+          "CODEX_POOLER_MEMORY_SAMPLER_TOP_ETS_TABLES",
+          @default_top_ets_tables
+        ),
+      cgroup_usage_reader: Keyword.get(merged, :cgroup_usage_reader, &cgroup_usage_bytes/0),
+      cgroup_stat_reader: Keyword.get(merged, :cgroup_stat_reader, &cgroup_memory_stat/0),
+      env_reader: Keyword.get(merged, :env_reader, &System.get_env/1)
     }
   end
 
@@ -287,6 +371,46 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
     Enum.find_value(@cgroup_usage_paths, &read_cgroup_integer/1)
   end
 
+  defp cgroup_memory_stat do
+    @cgroup_stat_paths
+    |> Enum.find_value(&read_cgroup_stat/1)
+    |> case do
+      stat when is_map(stat) -> stat
+      _missing -> %{}
+    end
+  end
+
+  defp read_cgroup_stat(path) do
+    with {:ok, stat} <- File.read(path) do
+      stat
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(%{}, fn line, acc ->
+        case String.split(line, ~r/\s+/, parts: 2, trim: true) do
+          [key, value] ->
+            with {:ok, key} <- Map.fetch(@cgroup_stat_key_map, key),
+                 {integer, ""} when integer >= 0 <- Integer.parse(value) do
+              Map.put(acc, key, integer)
+            else
+              _ignored -> acc
+            end
+
+          _other ->
+            acc
+        end
+      end)
+    else
+      _error -> nil
+    end
+  end
+
+  defp sanitized_cgroup_memory_stat(stat) when is_map(stat) do
+    stat
+    |> Map.take(@cgroup_stat_keys)
+    |> Map.new(fn {key, value} -> {key, integer_or_nil(value)} end)
+  end
+
+  defp sanitized_cgroup_memory_stat(_stat), do: %{}
+
   defp read_cgroup_integer(path) do
     with {:ok, value} <- File.read(path),
          {integer, ""} <- value |> String.trim() |> Integer.parse(),
@@ -316,6 +440,27 @@ defmodule CodexPoolerWeb.Telemetry.MemorySampler do
 
   defp safe_registered_name(name) when is_atom(name), do: Atom.to_string(name)
   defp safe_registered_name(_name), do: "unknown"
+
+  defp safe_ets_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp safe_ets_value(value) when is_reference(value), do: inspect(value)
+  defp safe_ets_value(_value), do: "unknown"
+
+  defp owner_registered_name(pid) when is_pid(pid) do
+    pid
+    |> Process.info(:registered_name)
+    |> case do
+      {:registered_name, name} -> safe_registered_name(name)
+      _other -> "unknown"
+    end
+  end
+
+  defp owner_registered_name(_owner), do: "unknown"
+
+  defp safe_string(value) when is_binary(value) and value != "" do
+    value
+  end
+
+  defp safe_string(_value), do: "unknown"
 
   defp safe_stacktrace(stacktrace) when is_list(stacktrace) do
     stacktrace
