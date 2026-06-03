@@ -66,7 +66,7 @@ defmodule CodexPooler.MixProject do
       {:gen_smtp, "== 1.3.0"},
       {:req, "== 0.5.18"},
       {:finch, "== 0.22.0"},
-      {:mint, "== 1.8.0"},
+      {:mint, "== 1.9.0"},
       {:mint_web_socket, "== 1.0.5"},
       {:telemetry_metrics, "== 1.1.0"},
       {:telemetry_metrics_prometheus_core, "== 1.2.1"},
