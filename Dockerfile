@@ -1,5 +1,5 @@
-ARG DEBIAN_MIRROR=http://debian.mirror.garr.it/debian
-ARG DEBIAN_SECURITY_MIRROR=http://debian.mirror.garr.it/debian-security
+ARG DEBIAN_MIRROR=http://ftp.de.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://ftp.de.debian.org/debian-security
 
 FROM node:26.3.0-slim AS assets_deps
 
