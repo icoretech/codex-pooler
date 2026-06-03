@@ -1,7 +1,7 @@
 ARG DEBIAN_MIRROR=http://debian.mirror.garr.it/debian
 ARG DEBIAN_SECURITY_MIRROR=http://debian.mirror.garr.it/debian-security
 
-FROM node:26.2.0-slim AS assets_deps
+FROM node:26.3.0-slim AS assets_deps
 
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
