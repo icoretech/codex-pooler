@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.RequestLogsDisplay.{Errors, Status, UserAgents}
+  alias CodexPoolerWeb.DateTimeDisplay
 
   defdelegate selected_status_filter_option(status), to: Status
   defdelegate status_filter_options(), to: Status
@@ -100,10 +101,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def format_total(1), do: "1"
   def format_total(total), do: Integer.to_string(total || 0)
 
-  def format_datetime(nil), do: "not recorded"
+  def format_datetime(value, datetime_preferences),
+    do:
+      DateTimeDisplay.format_datetime(value, datetime_preferences, missing_label: "not recorded")
 
-  def format_datetime(%DateTime{} = datetime),
-    do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M:%S UTC")
+  def format_datetime(nil), do: "not recorded"
 
   def format_record_id(nil), do: nil
 
@@ -288,7 +290,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
-  defdelegate format_errors(log), to: Errors
+  defdelegate format_errors(log, datetime_preferences), to: Errors
 
   def format_integer(value) when is_integer(value) do
     value

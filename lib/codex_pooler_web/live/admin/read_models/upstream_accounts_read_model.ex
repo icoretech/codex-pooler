@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @quota_priming_labels %{
     "unknown" => "Priming pending",
@@ -80,11 +81,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   @spec list_visible_accounts(term(), [term()]) :: [account_snapshot()]
   def list_visible_accounts(scope, pools) when is_list(pools) do
-    list_visible_accounts(scope, pools, %{})
+    list_visible_accounts(scope, pools, %{}, DateTimeDisplay.preferences_for_user(nil))
   end
 
   @spec list_visible_accounts(term(), [term()], map()) :: [account_snapshot()]
   def list_visible_accounts(scope, pools, filters) when is_list(pools) and is_map(filters) do
+    list_visible_accounts(scope, pools, filters, DateTimeDisplay.preferences_for_user(nil))
+  end
+
+  @spec list_visible_accounts(term(), [term()], map(), DateTimeDisplay.preferences()) :: [
+          account_snapshot()
+        ]
+  def list_visible_accounts(scope, pools, filters, datetime_preferences)
+      when is_list(pools) and is_map(filters) and is_map(datetime_preferences) do
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
 
@@ -96,7 +105,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     token_burns = token_burn_summaries(identities)
 
     identities
-    |> Enum.map(&account_snapshot(&1, assignments, token_burns))
+    |> Enum.map(&account_snapshot(&1, assignments, token_burns, datetime_preferences))
     |> apply_filters(filters)
   end
 
@@ -189,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     Map.get(@quota_priming_labels, status, String.replace(status, "_", " "))
   end
 
-  defp account_snapshot(identity, assignments, token_burns) do
+  defp account_snapshot(identity, assignments, token_burns, datetime_preferences) do
     quota_windows = QuotaWindows.list_quota_windows(identity)
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
@@ -199,19 +208,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       plan_label: account_plan_label(identity),
       plan_reported?: account_plan_reported?(identity),
       refresh_status: refresh_status_label(identity),
-      token_refresh_label: token_refresh_label(identity),
+      token_refresh_label: token_refresh_label(identity, datetime_preferences),
       refresh_job_state: refresh_job_state(refresh_job),
-      quota_refresh_status: quota_refresh_status(Map.get(assignments, identity.id, [])),
-      auth_fresh_label: timestamp_status_label("auth imported", identity.auth_fresh_at),
-      auth_verified_label: timestamp_status_label("auth verified", identity.auth_verified_at),
-      access_token_label: access_token_label(identity),
+      quota_refresh_status:
+        quota_refresh_status(Map.get(assignments, identity.id, []), datetime_preferences),
+      auth_fresh_label:
+        timestamp_status_label("auth imported", identity.auth_fresh_at, datetime_preferences),
+      auth_verified_label:
+        timestamp_status_label("auth verified", identity.auth_verified_at, datetime_preferences),
+      access_token_label: access_token_label(identity, datetime_preferences),
       reauth_required?: reauth_required?(identity),
       reauth_reason_code: reauth_reason_code(identity),
       reauth_reason_message: reauth_reason_message(identity),
       token_burn: Map.fetch!(token_burns, identity.id),
       assignments: Map.get(assignments, identity.id, []),
       quota_readiness: quota_readiness(quota_windows),
-      quota_limits: quota_limit_rows(quota_windows)
+      quota_limits: quota_limit_rows(quota_windows, datetime_preferences)
     }
   end
 
@@ -280,19 +292,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     UpstreamQuotaReadiness.from_windows(windows)
   end
 
-  defp quota_limit_rows(windows) when is_list(windows) do
+  defp quota_limit_rows(windows, datetime_preferences) when is_list(windows) do
     additional_limits =
       windows
       |> Enum.reject(&account_quota_window?/1)
       |> Enum.sort_by(&quota_limit_sort_key/1)
       |> Enum.with_index(1)
       |> Enum.map(fn {window, index} ->
-        quota_limit_row(quota_limit_key(window, index), quota_limit_label(window), window)
+        quota_limit_row(
+          quota_limit_key(window, index),
+          quota_limit_label(window),
+          window,
+          datetime_preferences
+        )
       end)
 
     [
-      quota_limit_row(:primary_5h, "5h", quota_account_window(windows, "primary", 300)),
-      quota_limit_row(:weekly, "Weekly", quota_account_window(windows, "secondary", nil))
+      quota_limit_row(
+        :primary_5h,
+        "5h",
+        quota_account_window(windows, "primary", 300),
+        datetime_preferences
+      ),
+      quota_limit_row(
+        :weekly,
+        "Weekly",
+        quota_account_window(windows, "secondary", nil),
+        datetime_preferences
+      )
     ] ++ additional_limits
   end
 
@@ -415,7 +442,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp humanize_quota_label(_label), do: "Additional limit"
 
-  defp quota_limit_row(key, label, %Quota.AccountQuotaWindow{} = window) do
+  defp quota_limit_row(key, label, %Quota.AccountQuotaWindow{} = window, datetime_preferences) do
     remaining_percent = quota_remaining_percent(window)
 
     %{
@@ -426,11 +453,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       percent_label: quota_percent_label(remaining_percent),
       count_label: quota_count_label(window),
       reset_label: quota_reset_label(window.reset_at),
-      reset_title: quota_reset_title(window.reset_at)
+      reset_title: quota_reset_title(window.reset_at, datetime_preferences)
     }
   end
 
-  defp quota_limit_row(key, label, nil) do
+  defp quota_limit_row(key, label, nil, _datetime_preferences) do
     %{
       key: key,
       label: label,
@@ -514,11 +541,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp quota_reset_label(_reset_at), do: nil
 
-  defp quota_reset_title(%DateTime{} = reset_at) do
-    "resets #{Calendar.strftime(reset_at, "%Y-%m-%d %H:%M UTC")}"
+  defp quota_reset_title(%DateTime{} = reset_at, datetime_preferences) do
+    "resets #{DateTimeDisplay.format_datetime(reset_at, datetime_preferences)}"
   end
 
-  defp quota_reset_title(_reset_at), do: nil
+  defp quota_reset_title(_reset_at, _datetime_preferences), do: nil
 
   defp format_reset_duration(seconds) when seconds >= 86_400 do
     days = div(seconds, 86_400)
@@ -580,36 +607,65 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     |> Map.get("status", "not run")
   end
 
-  defp token_refresh_label(identity) do
+  defp token_refresh_label(identity, datetime_preferences) do
     identity
     |> TokenRefresh.token_refresh_status()
-    |> token_refresh_label_from_metadata()
+    |> token_refresh_label_from_metadata(datetime_preferences)
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => "succeeded"} = metadata) do
-    timestamp_status_label("token refresh succeeded", parse_timestamp(metadata["finished_at"]))
+  defp token_refresh_label_from_metadata(
+         %{"status" => "succeeded"} = metadata,
+         datetime_preferences
+       ) do
+    timestamp_status_label(
+      "token refresh succeeded",
+      parse_timestamp(metadata["finished_at"]),
+      datetime_preferences
+    )
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => "failed"} = metadata) do
+  defp token_refresh_label_from_metadata(
+         %{"status" => "failed"} = metadata,
+         _datetime_preferences
+       ) do
     token_refresh_failure_label("token refresh failed", metadata)
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => "reauth_required"} = metadata) do
+  defp token_refresh_label_from_metadata(
+         %{"status" => "reauth_required"} = metadata,
+         _datetime_preferences
+       ) do
     token_refresh_failure_label("reauth required", metadata)
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => "refreshing"} = metadata) do
-    timestamp_status_label("token refresh started", parse_timestamp(metadata["started_at"]))
+  defp token_refresh_label_from_metadata(
+         %{"status" => "refreshing"} = metadata,
+         datetime_preferences
+       ) do
+    timestamp_status_label(
+      "token refresh started",
+      parse_timestamp(metadata["started_at"]),
+      datetime_preferences
+    )
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => "imported"} = metadata) do
-    timestamp_status_label("token refresh imported", parse_timestamp(metadata["finished_at"]))
+  defp token_refresh_label_from_metadata(
+         %{"status" => "imported"} = metadata,
+         datetime_preferences
+       ) do
+    timestamp_status_label(
+      "token refresh imported",
+      parse_timestamp(metadata["finished_at"]),
+      datetime_preferences
+    )
   end
 
-  defp token_refresh_label_from_metadata(%{"status" => status}) when is_binary(status),
-    do: "token refresh #{String.replace(status, "_", " ")}"
+  defp token_refresh_label_from_metadata(%{"status" => status}, _datetime_preferences)
+       when is_binary(status),
+       do: "token refresh #{String.replace(status, "_", " ")}"
 
-  defp token_refresh_label_from_metadata(_metadata), do: "token refresh not run"
+  defp token_refresh_label_from_metadata(_metadata, _datetime_preferences),
+    do: "token refresh not run"
 
   defp token_refresh_failure_label(prefix, %{"reason" => %{} = reason}) do
     message = present_string(reason["message"])
@@ -633,20 +689,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     end
   end
 
-  defp access_token_label(%{metadata: %{} = metadata}) do
+  defp access_token_label(%{metadata: %{} = metadata}, datetime_preferences) do
     case parse_timestamp(metadata["access_token_expires_at"]) do
-      %DateTime{} = expires_at -> access_token_expiry_label(expires_at)
+      %DateTime{} = expires_at -> access_token_expiry_label(expires_at, datetime_preferences)
       nil -> "access token expiry not reported"
     end
   end
 
-  defp access_token_label(_identity), do: "access token expiry not reported"
+  defp access_token_label(_identity, _datetime_preferences),
+    do: "access token expiry not reported"
 
-  defp access_token_expiry_label(%DateTime{} = expires_at) do
+  defp access_token_expiry_label(%DateTime{} = expires_at, datetime_preferences) do
     if DateTime.compare(expires_at, DateTime.utc_now()) == :lt do
-      timestamp_status_label("access token expired", expires_at)
+      timestamp_status_label("access token expired", expires_at, datetime_preferences)
     else
-      timestamp_status_label("access token expires", expires_at)
+      timestamp_status_label("access token expires", expires_at, datetime_preferences)
     end
   end
 
@@ -675,25 +732,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   defp refresh_job_state(%{state: state}) when is_binary(state), do: state
   defp refresh_job_state(_job), do: nil
 
-  defp quota_refresh_status(assignments) do
+  defp quota_refresh_status(assignments, datetime_preferences) do
     assignments
     |> Enum.map(& &1.last_successful_refresh_at)
     |> Enum.reject(&is_nil/1)
     |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
     |> case do
-      %DateTime{} = refreshed_at -> Calendar.strftime(refreshed_at, "%Y-%m-%d %H:%M UTC")
-      nil -> "not run"
+      %DateTime{} = refreshed_at ->
+        DateTimeDisplay.format_datetime(refreshed_at, datetime_preferences)
+
+      nil ->
+        "not run"
     end
   end
 
   defp pool_label(nil), do: "Unknown Pool"
   defp pool_label(pool), do: "#{pool.name} (#{pool.slug})"
 
-  defp timestamp_status_label(prefix, %DateTime{} = timestamp) do
-    "#{prefix} #{Calendar.strftime(timestamp, "%Y-%m-%d %H:%M UTC")} · #{relative_time_label(timestamp)}"
+  defp timestamp_status_label(prefix, %DateTime{} = timestamp, datetime_preferences) do
+    "#{prefix} #{DateTimeDisplay.format_datetime(timestamp, datetime_preferences)} · #{relative_time_label(timestamp)}"
   end
 
-  defp timestamp_status_label(prefix, _timestamp), do: "#{prefix} not reported"
+  defp timestamp_status_label(prefix, _timestamp, _datetime_preferences),
+    do: "#{prefix} not reported"
 
   defp relative_time_label(%DateTime{} = timestamp) do
     diff = DateTime.diff(DateTime.utc_now(), timestamp, :second)

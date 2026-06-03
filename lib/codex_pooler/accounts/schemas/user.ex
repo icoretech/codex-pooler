@@ -18,6 +18,8 @@ defmodule CodexPooler.Accounts.User do
     field :password_hash, :string
     field :status, :string
     field :password_change_required, :boolean, default: false
+    field :datetime_format, :string
+    field :timezone, :string
     field :last_login_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec

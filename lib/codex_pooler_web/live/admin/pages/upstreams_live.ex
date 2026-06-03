@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
   alias CodexPoolerWeb.Admin.UpstreamPageComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @impl true
   def mount(_params, _session, socket) do
@@ -287,6 +288,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -309,6 +317,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         rename_account_form={@rename_account_form}
         upstream_accounts={@upstream_accounts}
         uploads={@uploads}
+        datetime_preferences={@datetime_preferences}
       />
     </AdminComponents.admin_shell>
     """
@@ -336,7 +345,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       UpstreamAccountsReadModel.list_visible_accounts(
         socket.assigns.current_scope,
         filtered_pools,
-        filter_values
+        filter_values,
+        DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
       )
 
     socket = maybe_subscribe_pool_events(socket, filtered_pools)

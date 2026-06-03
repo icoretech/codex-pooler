@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPoolerWeb.Admin.PoolListComponents
   alias CodexPoolerWeb.Admin.PoolsReadModel
   alias CodexPoolerWeb.Admin.PoolWizardComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @impl true
   def mount(_params, _session, socket) do
@@ -264,6 +265,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -371,6 +379,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           selected_pool_row={@selected_pool_row}
           selected_pool_tab={@selected_pool_tab}
           can_manage_pools?={@can_manage_pools?}
+          datetime_preferences={@datetime_preferences}
         />
       </section>
     </AdminComponents.admin_shell>

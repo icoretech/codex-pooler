@@ -6,12 +6,18 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   alias CodexPooler.Jobs.Schedule
   alias CodexPoolerWeb.Admin.AvatarComponents
   alias CodexPoolerWeb.Admin.JobsPresentation.{State, Targets}
+  alias CodexPoolerWeb.DateTimeDisplay
   alias Oban.Cron.Expression
 
-  @spec worker_cards(map(), DateTime.t()) :: [map()]
-  def worker_cards(jobs_by_group, now \\ DateTime.utc_now()) do
+  @spec worker_cards(map(), DateTimeDisplay.preferences(), DateTime.t()) :: [map()]
+  def worker_cards(jobs_by_group, datetime_preferences, now \\ DateTime.utc_now()) do
     Enum.map(worker_groups(), fn group ->
-      worker_card(group, Map.get(jobs_by_group, group.key, empty_worker_summary()), now)
+      worker_card(
+        group,
+        Map.get(jobs_by_group, group.key, empty_worker_summary()),
+        datetime_preferences,
+        now
+      )
     end)
   end
 
@@ -38,18 +44,21 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   @spec job_target(map()) :: map() | nil
   defdelegate job_target(job), to: Targets
 
-  @spec format_job_timestamp(DateTime.t() | nil) :: String.t()
-  def format_job_timestamp(nil), do: "No observed run"
+  @spec format_job_timestamp(DateTime.t() | nil, DateTimeDisplay.preferences()) :: String.t()
+  def format_job_timestamp(nil, _datetime_preferences), do: "No observed run"
 
-  def format_job_timestamp(%DateTime{} = datetime) do
-    "#{format_datetime_date(datetime)} #{format_datetime_time(datetime)}"
+  def format_job_timestamp(%DateTime{} = datetime, datetime_preferences) do
+    DateTimeDisplay.format_datetime(datetime, datetime_preferences,
+      missing_label: "No observed run"
+    )
   end
 
-  @spec timestamp_line(String.t(), DateTime.t() | nil) :: String.t()
-  def timestamp_line(label, nil), do: "#{label} -"
+  @spec timestamp_line(String.t(), DateTime.t() | nil, DateTimeDisplay.preferences()) ::
+          String.t()
+  def timestamp_line(label, nil, _datetime_preferences), do: "#{label} -"
 
-  def timestamp_line(label, %DateTime{} = datetime) do
-    "#{label} #{format_datetime_date(datetime)} #{format_datetime_time(datetime)}"
+  def timestamp_line(label, %DateTime{} = datetime, datetime_preferences) do
+    "#{label} #{format_job_timestamp(datetime, datetime_preferences)}"
   end
 
   @spec job_state_icon(String.t() | nil) :: String.t()
@@ -66,12 +75,12 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp worker_groups, do: Schedule.worker_groups()
 
-  defp worker_card(group, summary, now) do
+  defp worker_card(group, summary, datetime_preferences, now) do
     latest_job = summary.latest
     success_job = summary.latest_success
     failure_job = summary.latest_failure
     state = worker_card_state(group, summary, latest_job)
-    next_run = next_run_summary(group, summary.pending, now)
+    next_run = next_run_summary(group, summary.pending, datetime_preferences, now)
 
     %{
       id: group.id,
@@ -120,15 +129,15 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp empty_worker_state(_group), do: "idle"
 
-  defp next_run_summary(group, pending_job, now) do
+  defp next_run_summary(group, pending_job, datetime_preferences, now) do
     cadence = group.cadence
 
     cond do
       pending_job ->
-        pending_job_next_run(pending_job, cadence, now)
+        pending_job_next_run(pending_job, cadence, datetime_preferences, now)
 
       is_binary(cadence.cron) ->
-        cron_next_run(cadence, now)
+        cron_next_run(cadence, datetime_preferences, now)
 
       true ->
         %{
@@ -139,46 +148,54 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
     end
   end
 
-  defp pending_job_next_run(%{state: "executing"} = job, cadence, _now) do
+  defp pending_job_next_run(%{state: "executing"} = job, cadence, datetime_preferences, _now) do
     %{
       label: "Running now",
-      title: timestamp_title(job.attempted_at || job.scheduled_at || job.inserted_at),
+      title:
+        timestamp_title(
+          job.attempted_at || job.scheduled_at || job.inserted_at,
+          datetime_preferences
+        ),
       cadence_label: cadence.label
     }
   end
 
-  defp pending_job_next_run(%{state: "available"} = job, cadence, _now) do
+  defp pending_job_next_run(%{state: "available"} = job, cadence, datetime_preferences, _now) do
     %{
       label: "Queued now",
-      title: timestamp_title(job.scheduled_at || job.inserted_at),
+      title: timestamp_title(job.scheduled_at || job.inserted_at, datetime_preferences),
       cadence_label: cadence.label
     }
   end
 
-  defp pending_job_next_run(%{state: "retryable"} = job, cadence, now) do
+  defp pending_job_next_run(%{state: "retryable"} = job, cadence, datetime_preferences, now) do
     label = if job.scheduled_at, do: relative_time(job.scheduled_at, now), else: "Retry pending"
 
     %{
       label: label,
-      title: timestamp_title(job.scheduled_at || job.attempted_at || job.inserted_at),
+      title:
+        timestamp_title(
+          job.scheduled_at || job.attempted_at || job.inserted_at,
+          datetime_preferences
+        ),
       cadence_label: cadence.label
     }
   end
 
-  defp pending_job_next_run(job, cadence, now) do
+  defp pending_job_next_run(job, cadence, datetime_preferences, now) do
     %{
       label: relative_time(job.scheduled_at || job.inserted_at, now),
-      title: timestamp_title(job.scheduled_at || job.inserted_at),
+      title: timestamp_title(job.scheduled_at || job.inserted_at, datetime_preferences),
       cadence_label: cadence.label
     }
   end
 
-  defp cron_next_run(%{cron: cron, label: cadence_label}, now) do
+  defp cron_next_run(%{cron: cron, label: cadence_label}, datetime_preferences, now) do
     case cron |> Expression.parse!() |> Expression.next_at(now) do
       %DateTime{} = next_at ->
         %{
           label: relative_time(next_at, now),
-          title: timestamp_title(next_at),
+          title: timestamp_title(next_at, datetime_preferences),
           cadence_label: cadence_label
         }
 
@@ -359,13 +376,10 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
 
   defp truncate_failure_message(message), do: message
 
-  defp format_datetime_date(%DateTime{} = datetime), do: Calendar.strftime(datetime, "%Y-%m-%d")
+  defp timestamp_title(nil, _datetime_preferences), do: nil
 
-  defp format_datetime_time(%DateTime{} = datetime),
-    do: Calendar.strftime(datetime, "%H:%M:%S UTC")
-
-  defp timestamp_title(nil), do: nil
-  defp timestamp_title(%DateTime{} = datetime), do: format_job_timestamp(datetime)
+  defp timestamp_title(%DateTime{} = datetime, datetime_preferences),
+    do: format_job_timestamp(datetime, datetime_preferences)
 
   defp relative_time(nil, _now), do: "Unknown"
 

@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   alias CodexPoolerWeb.Admin.ApiKeyWizardComponents.{Limits, Review}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @impl true
   def mount(_params, _session, socket) do
@@ -245,7 +246,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :policy_limit_fields, ApiKeyPolicyForm.limit_fields())
+    assigns =
+      assigns
+      |> assign(:policy_limit_fields, ApiKeyPolicyForm.limit_fields())
+      |> assign(
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
 
     ~H"""
     <AdminComponents.admin_shell
@@ -345,6 +352,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
               review_errors={@api_key_review_errors}
               usage={@api_key_wizard_usage}
               warnings={@api_key_model_selector_state.warnings}
+              datetime_preferences={@datetime_preferences}
             />
           </:review>
         </ApiKeyWizardComponents.api_key_wizard>

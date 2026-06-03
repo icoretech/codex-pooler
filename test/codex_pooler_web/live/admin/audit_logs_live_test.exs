@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
   import Phoenix.LiveViewTest
 
   alias CodexPooler.Accounts
+  alias CodexPooler.Accounts.User
   alias CodexPooler.Alerts
   alias CodexPooler.Audit
   alias CodexPooler.Audit.AuditEvent
@@ -430,6 +431,37 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
            )
   end
 
+  test "renders table and drawer timestamps with operator datetime preferences", %{
+    conn: conn,
+    user: user
+  } do
+    set_datetime_preferences!(user, datetime_format: "short", timezone: "Europe/Rome")
+
+    assert {:ok, event} =
+             Audit.record_user_event(user, %{
+               action: "operator.update",
+               target_type: "user",
+               target_id: user.id,
+               details: %{"safe" => "timezone visible"}
+             })
+
+    {1, _rows} =
+      from(audit in AuditEvent, where: audit.id == ^event.id)
+      |> Repo.update_all(set: [occurred_at: ~U[2026-05-27 13:45:06Z]])
+
+    {:ok, view, _html} = live(conn, ~p"/admin/audit-logs")
+
+    assert has_element?(view, "#audit-log-time-#{event.id}", "2026-05-27 15:45")
+    assert has_element?(view, "#mobile-audit-log-time-#{event.id}", "2026-05-27 15:45")
+
+    view
+    |> element("#audit-log-time-#{event.id}")
+    |> render_click()
+
+    assert has_element?(view, "#audit-event-details-sidebar", "2026-05-27 15:45")
+    refute render(view) =~ "13:45:06 UTC"
+  end
+
   test "invalid filters render validation feedback and keep safe default results", %{conn: conn} do
     {:ok, view, _html} =
       live(
@@ -668,6 +700,14 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
       )
 
     assert has_element?(owner_view, "#audit-log-row-#{nilified_event.id}", "Pool deleted")
+  end
+
+  defp set_datetime_preferences!(user, attrs) do
+    {1, _rows} =
+      from(operator in User, where: operator.id == ^user.id)
+      |> Repo.update_all(set: attrs)
+
+    :ok
   end
 
   defp assigned_admin_conn(scope, pool, email) do

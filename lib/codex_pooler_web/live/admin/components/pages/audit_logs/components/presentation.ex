@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
   use CodexPoolerWeb, :html
 
   alias CodexPooler.Audit
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @outcome_options ~w(success failure)
   @actor_type_options ~w(user system)
@@ -201,10 +202,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
     |> String.slice(0, 8)
   end
 
-  def format_datetime(nil), do: "not recorded"
-
-  def format_datetime(%DateTime{} = datetime),
-    do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  def format_datetime(datetime, preferences) do
+    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: "not recorded")
+  end
 
   def format_total(1), do: "1"
   def format_total(total), do: Integer.to_string(total || 0)

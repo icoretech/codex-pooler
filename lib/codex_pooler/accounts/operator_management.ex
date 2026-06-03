@@ -24,6 +24,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   @role_instance_admin "instance_admin"
   @status_active "active"
   @status_revoked "revoked"
+  @datetime_formats ~w(default short long iso8601)
 
   @type operator_result :: CodexPooler.Accounts.operator_result()
   @type operator_lifecycle :: %{
@@ -33,6 +34,13 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   @type lifecycle_attrs :: %{
           required(:role) => String.t(),
           required(:pool_ids) => [Ecto.UUID.t()]
+        }
+  @type profile_attrs :: %{
+          optional(:email) => String.t() | nil,
+          optional(:display_name) => String.t() | nil,
+          optional(:datetime_format) => String.t() | nil,
+          optional(:timezone) => String.t() | nil,
+          optional(String.t()) => String.t() | nil | boolean()
         }
 
   @spec list_operators() :: [User.t()]
@@ -91,7 +99,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
     end
   end
 
-  @spec update_current_operator_profile(User.t(), map(), map()) ::
+  @spec update_current_operator_profile(User.t(), profile_attrs(), map()) ::
           {:ok, User.t()} | {:error, Ecto.Changeset.t() | atom()}
   def update_current_operator_profile(user, attrs, metadata \\ %{})
 
@@ -275,10 +283,10 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   defp update_current_operator_profile_target(user, attrs, metadata) do
     attrs = operator_profile_attrs(attrs)
 
-    Repo.transaction(fn ->
+    operator_for_update_transaction(user.id, fn user ->
       with {:ok, user} <-
              user
-             |> User.operator_update_changeset(attrs)
+             |> operator_profile_changeset(attrs)
              |> put_change(:updated_at, DateTime.utc_now())
              |> Repo.update(),
            {:ok, _audit} <-
@@ -288,13 +296,39 @@ defmodule CodexPooler.Accounts.OperatorManagement do
         error -> rollback_transaction_error(error)
       end
     end)
-    |> normalize_transaction_error()
   end
 
+  defp operator_profile_changeset(user, attrs) do
+    user
+    |> User.operator_update_changeset(attrs)
+    |> cast(attrs, [:datetime_format, :timezone])
+    |> validate_datetime_preferences()
+  end
+
+  defp validate_datetime_preferences(changeset) do
+    changeset
+    |> validate_required([:datetime_format, :timezone])
+    |> validate_inclusion(:datetime_format, @datetime_formats)
+    |> check_constraint(:datetime_format, name: :users_datetime_format_check)
+    |> validate_change(:timezone, &validate_timezone/2)
+  end
+
+  defp validate_timezone(:timezone, timezone) when is_binary(timezone) do
+    case DateTime.shift_zone(DateTime.utc_now(), timezone, Tzdata.TimeZoneDatabase) do
+      {:ok, _datetime} -> []
+      {:error, _reason} -> [timezone: "must be a valid IANA time zone"]
+    end
+  end
+
+  defp validate_timezone(:timezone, _timezone), do: [timezone: "must be a valid IANA time zone"]
+
+  @spec operator_profile_attrs(map()) :: profile_attrs()
   defp operator_profile_attrs(attrs) do
     %{}
     |> maybe_put_profile_attr(attrs, :email)
     |> maybe_put_profile_attr(attrs, :display_name)
+    |> maybe_put_profile_attr(attrs, :datetime_format)
+    |> maybe_put_profile_attr(attrs, :timezone)
   end
 
   defp maybe_put_profile_attr(profile_attrs, attrs, key) do

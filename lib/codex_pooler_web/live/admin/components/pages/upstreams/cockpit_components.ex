@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonDialog
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :cockpit, :map, required: true
   attr :auth_json_form, :any, required: true
@@ -18,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   attr :delete_account_form, :any, required: true
   attr :refresh_data_message, :string, default: nil
   attr :uploads, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def cockpit_page(assigns) do
     ~H"""
@@ -38,10 +40,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
       <.identity_summary cockpit={@cockpit} />
       <.status_summary cockpit={@cockpit} />
       <.assignments_section cockpit={@cockpit} />
-      <.quota_section cockpit={@cockpit} />
+      <.quota_section cockpit={@cockpit} datetime_preferences={@datetime_preferences} />
       <.request_section cockpit={@cockpit} />
       <.pool_contribution_section cockpit={@cockpit} />
-      <.recent_events_section cockpit={@cockpit} />
+      <.recent_events_section cockpit={@cockpit} datetime_preferences={@datetime_preferences} />
       <.actions_section cockpit={@cockpit} />
       <.related_links_section cockpit={@cockpit} />
       <.refresh_section cockpit={@cockpit} refresh_data_message={@refresh_data_message} />
@@ -212,6 +214,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   end
 
   attr :cockpit, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp quota_section(assigns) do
     ~H"""
@@ -221,7 +224,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
       description="Assignment-scoped quota evidence rendered as deterministic bars."
       count={quota_chart_count(@cockpit.charts.quota_health)}
     >
-      <.quota_health_chart chart={@cockpit.charts.quota_health} />
+      <.quota_health_chart
+        chart={@cockpit.charts.quota_health}
+        datetime_preferences={@datetime_preferences}
+      />
     </AdminComponents.admin_surface>
     """
   end
@@ -257,6 +263,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   end
 
   attr :cockpit, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp recent_events_section(assigns) do
     ~H"""
@@ -310,7 +317,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
                 datetime={DateTime.to_iso8601(event_row.event.timestamp)}
                 class="text-xs font-medium text-base-content/55"
               >
-                {format_event_timestamp(event_row.event.timestamp)}
+                {format_event_timestamp(event_row.event.timestamp, @datetime_preferences)}
               </time>
             </div>
             <.link
@@ -698,9 +705,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   end
 
   attr :chart, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp quota_health_chart(assigns) do
-    assigns = assign(assigns, :model, quota_health_chart_model(assigns.chart))
+    assigns =
+      assign(
+        assigns,
+        :model,
+        quota_health_chart_model(assigns.chart, assigns.datetime_preferences)
+      )
 
     ~H"""
     <div class="grid gap-4 p-4">
@@ -1010,8 +1023,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
     "Pool contribution is #{humanize_state(state)} with #{pluralize_count(kpis.successful_requests_7d, "successful request", "successful requests")} in the last 7 days."
   end
 
-  defp quota_health_chart_model(chart) do
-    items = Enum.map(chart.items, &quota_health_chart_item/1)
+  defp quota_health_chart_model(chart, datetime_preferences) do
+    items = Enum.map(chart.items, &quota_health_chart_item(&1, datetime_preferences))
 
     %{
       items: items,
@@ -1022,33 +1035,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
     }
   end
 
-  defp quota_health_chart_item(item) do
+  defp quota_health_chart_item(item, datetime_preferences) do
     bar_value = chart_value(item.bar_value)
 
     item
     |> Map.put(:bar_value, chart_value_label(bar_value))
     |> Map.put(:bar_label, percent_label(bar_value))
     |> Map.put(:aria_label, quota_item_aria_label(item, bar_value))
-    |> Map.put(:supporting_label, quota_item_supporting_label(item))
+    |> Map.put(:supporting_label, quota_item_supporting_label(item, datetime_preferences))
   end
 
   defp quota_item_aria_label(item, bar_value) do
     "#{item.assignment_label}: #{item.state_label}, #{percent_label(bar_value)} available"
   end
 
-  defp quota_item_supporting_label(%{state: "missing_evidence"}), do: "No current quota evidence"
+  defp quota_item_supporting_label(%{state: "missing_evidence"}, _datetime_preferences),
+    do: "No current quota evidence"
 
-  defp quota_item_supporting_label(%{reset_at: %DateTime{} = reset_at} = item) do
+  defp quota_item_supporting_label(
+         %{reset_at: %DateTime{} = reset_at} = item,
+         datetime_preferences
+       ) do
     [
       item.remaining_percent_value && "#{percent_label(item.remaining_percent_value)} remaining",
       item.used_percent_value && "#{percent_label(item.used_percent_value)} used",
-      "resets #{format_reset_at(reset_at)}"
+      "resets #{format_reset_at(reset_at, datetime_preferences)}"
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
   end
 
-  defp quota_item_supporting_label(item) do
+  defp quota_item_supporting_label(item, _datetime_preferences) do
     item.reason_codes
     |> Enum.reject(&blank?/1)
     |> case do
@@ -1157,8 +1174,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
 
   defp chart_date_label(date), do: to_string(date)
 
-  defp format_reset_at(%DateTime{} = reset_at),
-    do: Calendar.strftime(reset_at, "%b %-d, %H:%M UTC")
+  defp format_reset_at(%DateTime{} = reset_at, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(reset_at, datetime_preferences)
 
   defp compact_float(value) when is_float(value) do
     decimals = if value < 10 and value != Float.round(value, 0), do: 2, else: 1
@@ -1199,8 +1216,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   defp event_source_badge_class("audit_log"), do: "badge badge-primary badge-sm"
   defp event_source_badge_class(_source), do: "badge badge-neutral badge-sm"
 
-  defp format_event_timestamp(%DateTime{} = timestamp),
-    do: Calendar.strftime(timestamp, "%Y-%m-%d %H:%M UTC")
+  defp format_event_timestamp(%DateTime{} = timestamp, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(timestamp, datetime_preferences)
 
   defp request_logs_path(cockpit),
     do: ~p"/admin/request-logs?upstream_identity_id=#{cockpit.identity.id}"

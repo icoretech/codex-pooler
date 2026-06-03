@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts
+  alias CodexPooler.Accounts.User
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Jobs.CatalogSyncWorker
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
@@ -272,6 +273,72 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     refute rendered =~ "secret-token-123"
     refute rendered =~ "raw-prompt-text"
     refute rendered =~ "authorization-bearer-value"
+  end
+
+  test "renders absolute job timestamps with operator preferences while keeping relative next run",
+       %{
+         conn: conn,
+         user: user
+       } do
+    set_datetime_preferences!(user, datetime_format: "short", timezone: "Europe/Rome")
+
+    completed_job =
+      insert_job(
+        1,
+        worker: RuntimeStateCleanupWorker,
+        state: "completed",
+        inserted_at: ~U[2026-05-04 10:00:00Z],
+        attempted_at: ~U[2026-05-04 10:01:00Z],
+        completed_at: ~U[2026-05-04 10:02:00Z]
+      )
+
+    scheduled_at =
+      DateTime.utc_now()
+      |> DateTime.add(1_200, :second)
+      |> DateTime.truncate(:second)
+
+    insert_job(
+      2,
+      worker: TokenRefreshWorker,
+      state: "scheduled",
+      inserted_at: DateTime.add(scheduled_at, -60, :second),
+      scheduled_at: scheduled_at
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs?show_completed=true")
+
+    assert has_element?(
+             view,
+             "#job-#{completed_job.id} [data-role='inserted-at']",
+             "Inserted 2026-05-04 12:00"
+           )
+
+    assert has_element?(
+             view,
+             "#job-#{completed_job.id} [data-role='attempted-at']",
+             "Attempted 2026-05-04 12:01"
+           )
+
+    assert has_element?(
+             view,
+             "#job-#{completed_job.id} [data-role='completed-at']",
+             "Completed 2026-05-04 12:02"
+           )
+
+    assert has_element?(view, worker_card_selector(:runtime_cleanup), "2026-05-04 12:02")
+
+    assert has_element?(
+             view,
+             "#{worker_card_selector(:token_refresh)} [data-role='next-run']",
+             "in "
+           )
+
+    render_click(element(view, "#job-#{completed_job.id}"))
+
+    assert has_element?(view, "#job-detail-inserted-at", "2026-05-04 12:00")
+    assert has_element?(view, "#job-detail-attempted-at", "2026-05-04 12:01")
+    assert has_element?(view, "#job-detail-completed-at", "2026-05-04 12:02")
+    refute render(view) =~ "10:02:00 UTC"
   end
 
   test "jobs read model owns redesigned admin jobs page state" do
@@ -713,6 +780,14 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     state = :sys.get_state(view.pid)
     assert state.socket.assigns.selected_job == nil
     assert state.socket.assigns.filters.job_id == nil
+  end
+
+  defp set_datetime_preferences!(user, attrs) do
+    {1, _rows} =
+      from(operator in User, where: operator.id == ^user.id)
+      |> Repo.update_all(set: attrs)
+
+    :ok
   end
 
   defp insert_job(index, attrs) do

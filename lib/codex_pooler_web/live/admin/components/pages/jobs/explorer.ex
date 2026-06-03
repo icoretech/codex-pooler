@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
 
   attr :explorer, :map, required: true
   attr :current_params, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def jobs_explorer(assigns) do
     assigns = assign(assigns, pagination(assigns.explorer))
@@ -60,7 +61,11 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
             </tr>
           </thead>
           <tbody>
-            <.job_table_row :for={job <- @explorer.items} job={job} />
+            <.job_table_row
+              :for={job <- @explorer.items}
+              job={job}
+              datetime_preferences={@datetime_preferences}
+            />
           </tbody>
         </table>
       </div>
@@ -71,7 +76,11 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
         data-role="explorer-mobile"
         class="grid gap-3 p-3 lg:hidden"
       >
-        <.job_card :for={job <- @explorer.items} job={job} />
+        <.job_card
+          :for={job <- @explorer.items}
+          job={job}
+          datetime_preferences={@datetime_preferences}
+        />
       </div>
 
       <:footer>
@@ -106,6 +115,7 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
   end
 
   attr :job, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp job_table_row(assigns) do
     ~H"""
@@ -127,7 +137,7 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
         {format_attempts(@job)}
       </td>
       <td>
-        <.job_timeline job={@job} />
+        <.job_timeline job={@job} datetime_preferences={@datetime_preferences} />
       </td>
       <td>
         <.job_failure job={@job} />
@@ -137,6 +147,7 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
   end
 
   attr :job, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp job_card(assigns) do
     ~H"""
@@ -154,7 +165,7 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
         <span class="font-semibold text-base-content/80">Attempts</span>
         <span data-role="attempts" class="font-mono tabular-nums">{format_attempts(@job)}</span>
       </div>
-      <.job_timeline job={@job} />
+      <.job_timeline job={@job} datetime_preferences={@datetime_preferences} />
       <.job_failure job={@job} />
     </article>
     """
@@ -224,16 +235,29 @@ defmodule CodexPoolerWeb.Admin.JobExplorer do
   end
 
   attr :job, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp job_timeline(assigns) do
     ~H"""
     <div class="grid gap-1 text-xs text-base-content/60">
-      <span data-role="inserted-at">{timestamp_line("Inserted", @job.inserted_at)}</span>
-      <span data-role="scheduled-at">{timestamp_line("Scheduled", @job.scheduled_at)}</span>
-      <span data-role="attempted-at">{timestamp_line("Attempted", @job.attempted_at)}</span>
-      <span data-role="completed-at">{timestamp_line("Completed", @job.completed_at)}</span>
-      <span data-role="discarded-at">{timestamp_line("Discarded", @job.discarded_at)}</span>
-      <span data-role="cancelled-at">{timestamp_line("Cancelled", @job.cancelled_at)}</span>
+      <span data-role="inserted-at">
+        {timestamp_line("Inserted", @job.inserted_at, @datetime_preferences)}
+      </span>
+      <span data-role="scheduled-at">
+        {timestamp_line("Scheduled", @job.scheduled_at, @datetime_preferences)}
+      </span>
+      <span data-role="attempted-at">
+        {timestamp_line("Attempted", @job.attempted_at, @datetime_preferences)}
+      </span>
+      <span data-role="completed-at">
+        {timestamp_line("Completed", @job.completed_at, @datetime_preferences)}
+      </span>
+      <span data-role="discarded-at">
+        {timestamp_line("Discarded", @job.discarded_at, @datetime_preferences)}
+      </span>
+      <span data-role="cancelled-at">
+        {timestamp_line("Cancelled", @job.cancelled_at, @datetime_preferences)}
+      </span>
     </div>
     """
   end

@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolFilterComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   import CodexPoolerWeb.Admin.AuditLogsComponents,
     only: [audit_event_drawer: 1, audit_log_filters: 1, audit_logs_table: 1]
@@ -25,7 +26,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
        filter_errors: [],
-       pool_filter_options: []
+       pool_filter_options: [],
+       datetime_preferences:
+         DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
      )}
   end
 
@@ -101,11 +104,14 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
               pool_filter_options={@pool_filter_options}
             />
 
-            <.audit_logs_table audit_logs={@audit_logs} />
+            <.audit_logs_table audit_logs={@audit_logs} datetime_preferences={@datetime_preferences} />
           </section>
         </div>
 
-        <.audit_event_drawer selected_audit_event={@selected_audit_event} />
+        <.audit_event_drawer
+          selected_audit_event={@selected_audit_event}
+          datetime_preferences={@datetime_preferences}
+        />
       </div>
     </AdminComponents.admin_shell>
     """

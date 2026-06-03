@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :rename_account_form, :any, default: nil
   attr :upstream_accounts, :list, required: true
   attr :uploads, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def upstreams_page(assigns) do
     ~H"""
@@ -86,7 +87,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           </:actions>
         </AdminComponents.empty_state>
 
-        <.upstream_account_grid accounts={@upstream_accounts} />
+        <.upstream_account_grid
+          accounts={@upstream_accounts}
+          datetime_preferences={@datetime_preferences}
+        />
       </section>
     </section>
     """
@@ -311,6 +315,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   end
 
   attr :accounts, :list, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp upstream_account_grid(assigns) do
     ~H"""

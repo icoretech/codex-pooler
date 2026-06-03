@@ -55,6 +55,10 @@ defmodule CodexPooler.Accounts.OperatorLifecycleTest do
       assert operator.status == "active"
       assert operator.password_change_required == true
 
+      loaded_operator = Repo.reload!(operator)
+      assert loaded_operator.datetime_format == "default"
+      assert loaded_operator.timezone == "Etc/UTC"
+
       assert Repo.get_by(Membership,
                user_id: operator.id,
                role: "instance_admin",
@@ -393,6 +397,111 @@ defmodule CodexPooler.Accounts.OperatorLifecycleTest do
                )
 
       assert audit.correlation_id == "operator-profile-self-service"
+    end
+
+    @tag :operator_lifecycle
+    test "current operator profile updates persist valid datetime preferences" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      %{user: operator} = operator_fixture(owner, %{"email" => "operator@example.com"})
+
+      for {datetime_format, timezone} <- [
+            {"default", "Etc/UTC"},
+            {"short", "America/New_York"},
+            {"long", "Europe/Rome"},
+            {"iso8601", "Europe/Rome"}
+          ] do
+        assert {:ok, %User{} = updated} =
+                 Accounts.update_current_operator_profile(
+                   Repo.reload!(operator),
+                   %{
+                     "datetime_format" => datetime_format,
+                     "timezone" => timezone
+                   },
+                   operator_metadata(%{request_id: "operator-profile-datetime-valid"})
+                 )
+
+        assert updated.datetime_format == datetime_format
+        assert updated.timezone == timezone
+
+        loaded = Repo.reload!(operator)
+        assert loaded.datetime_format == datetime_format
+        assert loaded.timezone == timezone
+      end
+    end
+
+    @tag :operator_lifecycle
+    test "current operator profile rejects invalid datetime preferences without persistence" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      %{user: operator} = operator_fixture(owner, %{"email" => "operator@example.com"})
+
+      assert {:ok, %User{} = operator} =
+               Accounts.update_current_operator_profile(
+                 operator,
+                 %{
+                   "datetime_format" => "short",
+                   "timezone" => "Europe/Rome"
+                 },
+                 operator_metadata(%{request_id: "operator-profile-datetime-baseline"})
+               )
+
+      invalid_examples = [
+        {%{"datetime_format" => "relative", "timezone" => "Europe/Rome"}, :datetime_format},
+        {%{"datetime_format" => "short", "timezone" => "UTC+2"}, :timezone},
+        {%{"datetime_format" => "short", "timezone" => "Europe/NotAZone"}, :timezone}
+      ]
+
+      for {attrs, field} <- invalid_examples do
+        assert {:error, %Ecto.Changeset{} = changeset} =
+                 Accounts.update_current_operator_profile(
+                   Repo.reload!(operator),
+                   attrs,
+                   operator_metadata(%{request_id: "operator-profile-datetime-invalid"})
+                 )
+
+        assert %{^field => [_ | _]} = errors_on(changeset)
+
+        loaded = Repo.reload!(operator)
+        assert loaded.datetime_format == "short"
+        assert loaded.timezone == "Europe/Rome"
+      end
+    end
+
+    @tag :operator_lifecycle
+    test "datetime format storage constraint rejects invalid direct persistence" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      %{user: operator} = operator_fixture(owner, %{"email" => "operator@example.com"})
+
+      invalid_insert_changeset =
+        %User{}
+        |> Ecto.Changeset.change(%{
+          email: "invalid-datetime-format@example.com",
+          password_hash: "stored-hash",
+          status: "active",
+          password_change_required: false,
+          datetime_format: "relative",
+          timezone: "Etc/UTC"
+        })
+        |> Ecto.Changeset.check_constraint(:datetime_format,
+          name: :users_datetime_format_check
+        )
+
+      assert {:error, %Ecto.Changeset{} = insert_changeset} =
+               Repo.insert(invalid_insert_changeset)
+
+      assert %{datetime_format: [_ | _]} = errors_on(insert_changeset)
+
+      invalid_update_changeset =
+        operator
+        |> Ecto.Changeset.change(datetime_format: "relative")
+        |> Ecto.Changeset.check_constraint(:datetime_format,
+          name: :users_datetime_format_check
+        )
+
+      assert {:error, %Ecto.Changeset{} = update_changeset} =
+               Repo.update(invalid_update_changeset)
+
+      assert %{datetime_format: [_ | _]} = errors_on(update_changeset)
+      assert Repo.reload!(operator).datetime_format == "default"
     end
 
     @tag :operator_lifecycle

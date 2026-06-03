@@ -56,6 +56,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
   attr :development_action_status, :map, default: nil
   attr :smtp_test_status, :map, default: nil
   attr :development_helpers_available?, :boolean, required: true
+  attr :datetime_preferences, :map, required: true
 
   def instance_settings_panel(assigns) do
     ~H"""

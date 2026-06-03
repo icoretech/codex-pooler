@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.PoolInviteForm
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @page_size 50
   @status_options [
@@ -171,6 +172,13 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -245,6 +253,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
         <InvitesPageComponents.invites_table
           invites={@invites}
           mailer_configured?={@mailer_configured?}
+          datetime_preferences={@datetime_preferences}
         />
         <InvitesPageComponents.invite_revoke_dialog invite={@revoking_invite} />
       </section>

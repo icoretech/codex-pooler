@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
+  alias CodexPoolerWeb.DateTimeDisplay
 
   setup :register_and_log_in_user
 
@@ -337,7 +338,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#upstream-status-summary", "Auth verified")
     assert has_element?(view, "#upstream-status-summary", "access token expires")
     assert has_element?(view, "#upstream-status-summary", "token refresh succeeded")
-    assert has_element?(view, "#upstream-status-summary", "Quota refresh 2026-05-27 08:15 UTC")
+
+    assert has_element?(
+             view,
+             "#upstream-status-summary",
+             "Quota refresh #{datetime_label(~U[2026-05-27 08:15:00.000000Z], scope.user)}"
+           )
+
     assert has_element?(view, "#upstream-status-summary", "Quota refresh needed")
 
     primary_selector = "#upstream-assignment-#{primary_assignment.id}"
@@ -1921,7 +1928,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-event-summary-row-1 [data-role='recent-event-timestamp']",
-             event_timestamp_label(audit_event)
+             event_timestamp_label(audit_event, user)
            )
 
     assert has_element?(
@@ -1952,7 +1959,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-event-summary-row-2 [data-role='recent-event-timestamp']",
-             event_timestamp_label(request_event)
+             event_timestamp_label(request_event, user)
            )
 
     assert has_element?(
@@ -2683,8 +2690,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert positions == Enum.sort(positions)
   end
 
-  defp event_timestamp_label(%{timestamp: %DateTime{} = timestamp}),
-    do: Calendar.strftime(timestamp, "%Y-%m-%d %H:%M UTC")
+  defp event_timestamp_label(%{timestamp: %DateTime{} = timestamp}, user),
+    do: datetime_label(timestamp, user)
+
+  defp datetime_label(%DateTime{} = timestamp, user) do
+    user
+    |> DateTimeDisplay.preferences_for_user()
+    |> then(&DateTimeDisplay.format_datetime(timestamp, &1))
+  end
 
   defp auth_json_fixture(opts) do
     email = Keyword.get(opts, :email, "fixture-user@example.com")

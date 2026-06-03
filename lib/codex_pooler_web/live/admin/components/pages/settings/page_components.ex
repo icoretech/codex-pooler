@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :tabs, :list, required: true
   attr :selected_tab, :string, required: true
@@ -59,6 +60,9 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
   end
 
   attr :account_form, :any, required: true
+  attr :datetime_preferences, :map, required: true
+  attr :datetime_format_options, :list, required: true
+  attr :timezone_options, :list, required: true
   attr :mcp_global_enabled?, :boolean, required: true
   attr :mcp_account_enabled?, :boolean, required: true
   attr :mcp_toggle_form, :any, required: true
@@ -107,6 +111,24 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
               label="Display name"
             />
           </div>
+          <div class="grid gap-4 md:grid-cols-2">
+            <.input
+              id="settings-account-datetime-format"
+              field={@account_form[:datetime_format]}
+              type="select"
+              label="Time format"
+              options={@datetime_format_options}
+              required
+            />
+            <.input
+              id="settings-account-timezone"
+              field={@account_form[:timezone]}
+              type="select"
+              label="Timezone"
+              options={@timezone_options}
+              required
+            />
+          </div>
           <div class="flex justify-end">
             <AdminComponents.action_button
               id="settings-account-submit"
@@ -126,6 +148,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
         key_form={@mcp_key_form}
         keys={@mcp_keys}
         rename_forms={@mcp_rename_forms}
+        datetime_preferences={@datetime_preferences}
         created_secret={@mcp_created_secret}
         delete_key={@mcp_delete_key}
         delete_form={@mcp_delete_form}
@@ -140,6 +163,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
   attr :key_form, :any, required: true
   attr :keys, :list, required: true
   attr :rename_forms, :map, required: true
+  attr :datetime_preferences, :map, required: true
   attr :created_secret, :map, default: nil
   attr :delete_key, :any, default: nil
   attr :delete_form, :any, required: true
@@ -314,7 +338,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
                 <p class="truncate font-semibold text-base-content">{key.label}</p>
                 <p class="text-xs text-base-content/55">
                   Prefix <code class="font-mono">{key.key_prefix}</code>
-                  · Created {datetime_label(key.inserted_at)}
+                  · Created {datetime_label(key.inserted_at, @datetime_preferences)}
                 </p>
               </div>
 
@@ -506,6 +530,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
   attr :totp_enabled?, :boolean, required: true
   attr :totp_setup, :map, default: nil
   attr :current_scope, :any, required: true
+  attr :datetime_preferences, :map, required: true
   attr :password_form, :any, required: true
   attr :browser_sessions, :list, required: true
 
@@ -518,7 +543,10 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
         totp_setup={@totp_setup}
       />
       <.password_panel password_form={@password_form} />
-      <.browser_sessions_panel browser_sessions={@browser_sessions} />
+      <.browser_sessions_panel
+        browser_sessions={@browser_sessions}
+        datetime_preferences={@datetime_preferences}
+      />
     </section>
     """
   end
@@ -704,6 +732,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
   end
 
   attr :browser_sessions, :list, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp browser_sessions_panel(assigns) do
     ~H"""
@@ -763,9 +792,13 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
               {user_agent_label(session.user_agent)}
             </p>
             <p class="text-xs leading-5 text-base-content/50">
-              IP {ip_address_label(session.ip_address)} · Created {datetime_label(session.created_at)} · Last seen {datetime_label(
-                session.last_seen_at
-              )} · Expires {datetime_label(session.expires_at)}
+              IP {ip_address_label(session.ip_address)} · Created {datetime_label(
+                session.created_at,
+                @datetime_preferences
+              )} · Last seen {datetime_label(session.last_seen_at, @datetime_preferences)} · Expires {datetime_label(
+                session.expires_at,
+                @datetime_preferences
+              )}
             </p>
           </div>
           <button
@@ -845,12 +878,8 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
 
   defp ip_address_label(_ip_address), do: "not recorded"
 
-  defp datetime_label(nil), do: "not yet"
-
-  defp datetime_label(%DateTime{} = datetime) do
-    datetime
-    |> DateTime.truncate(:second)
-    |> Calendar.strftime("%Y-%m-%d %H:%M UTC")
+  defp datetime_label(datetime, preferences) do
+    DateTimeDisplay.format_datetime(datetime, preferences, missing_label: "not yet")
   end
 
   defp tab_query_params(tab), do: %{"tab" => tab}

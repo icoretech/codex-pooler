@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.UserAuth
 
   import CodexPooler.AccountsFixtures, only: [operator_fixture: 2, valid_user_password: 0]
@@ -77,6 +78,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(account_view, "#settings-account-form")
     assert has_element?(account_view, "#settings-account-email[value='#{user.email}']")
     assert has_element?(account_view, "#settings-account-display-name")
+    assert has_element?(account_view, "#settings-account-datetime-format")
+    assert has_element?(account_view, "#settings-account-timezone")
 
     {:ok, security_view, _html} = live(conn, ~p"/admin/settings?tab=security")
 
@@ -110,6 +113,91 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert updated.display_name == "Updated Owner"
     assert has_element?(view, "#settings-account-email[value='updated.owner@example.com']")
     assert has_element?(view, "#admin-sidebar-operator-label", "Updated Owner")
+  end
+
+  test "renders datetime preference selects from the shared formatter options", %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/admin/settings?tab=account")
+
+    assert has_element?(view, "#settings-account-datetime-format")
+    assert has_element?(view, "#settings-account-timezone")
+
+    assert select_options(html, "settings-account-datetime-format") ==
+             DateTimeDisplay.format_options()
+
+    timezone_options = DateTimeDisplay.timezone_options()
+    assert select_options(html, "settings-account-timezone") == timezone_options
+    assert List.first(timezone_options) == {"Etc/UTC", "Etc/UTC"}
+    assert {"Europe/Rome", "Europe/Rome"} in timezone_options
+  end
+
+  test "saves datetime preferences through the account form and reloads selected", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/settings?tab=account")
+
+    html =
+      view
+      |> element("#settings-account-form")
+      |> render_submit(%{
+        "user" => %{
+          "email" => user.email,
+          "display_name" => user.display_name,
+          "datetime_format" => "long",
+          "timezone" => "Europe/Rome"
+        }
+      })
+
+    assert html =~ "Account settings updated"
+
+    updated = Accounts.get_user!(user.id)
+    assert updated.datetime_format == "long"
+    assert updated.timezone == "Europe/Rome"
+    assert has_element?(view, "#settings-account-datetime-format option[selected][value='long']")
+    assert has_element?(view, "#settings-account-timezone option[selected][value='Europe/Rome']")
+
+    {:ok, remounted_view, _html} = live(conn, ~p"/admin/settings?tab=account")
+
+    assert has_element?(
+             remounted_view,
+             "#settings-account-datetime-format option[selected][value='long']"
+           )
+
+    assert has_element?(
+             remounted_view,
+             "#settings-account-timezone option[selected][value='Europe/Rome']"
+           )
+  end
+
+  test "rejects forged datetime preference values without persisting", %{conn: conn, user: user} do
+    assert {:ok, _updated} =
+             Accounts.update_current_operator_profile(user, %{
+               "email" => user.email,
+               "display_name" => user.display_name,
+               "datetime_format" => "short",
+               "timezone" => "Europe/Rome"
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/settings?tab=account")
+
+    html =
+      view
+      |> element("#settings-account-form")
+      |> render_submit(%{
+        "user" => %{
+          "email" => user.email,
+          "display_name" => user.display_name,
+          "datetime_format" => "custom",
+          "timezone" => "Europe/NotAZone"
+        }
+      })
+
+    assert html =~ "is invalid"
+    assert html =~ "must be a valid IANA time zone"
+
+    reloaded = Accounts.get_user!(user.id)
+    assert reloaded.datetime_format == "short"
+    assert reloaded.timezone == "Europe/Rome"
   end
 
   test "renders account MCP setup panel with gate status and safe setup instructions", %{
@@ -448,6 +536,17 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
 
     refute Accounts.get_user_by_session_token(current_token)
     assert_redirect(view, ~p"/login")
+  end
+
+  defp select_options(html, select_id) do
+    select_id = Regex.escape(select_id)
+
+    assert [_, select_html] =
+             Regex.run(~r/<select[^>]*id="#{select_id}"[^>]*>(.*?)<\/select>/s, html)
+
+    ~r/<option(?:\s+[^>]*)*\svalue="([^"]*)"[^>]*>(.*?)<\/option>/s
+    |> Regex.scan(select_html)
+    |> Enum.map(fn [_option, value, label] -> {label, value} end)
   end
 
   defp enable_global_mcp! do

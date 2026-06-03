@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.SystemPageComponents
   alias CodexPoolerWeb.Admin.SystemSettingsForm
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @default_tab "smtp"
   @base_system_tabs [
@@ -251,6 +252,13 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -286,6 +294,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
             development_action_status={@development_action_status}
             smtp_test_status={@smtp_test_status}
             development_helpers_available?={@development_helpers_available?}
+            datetime_preferences={@datetime_preferences}
           />
         </section>
       </section>

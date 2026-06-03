@@ -57,7 +57,7 @@ defmodule CodexPooler.Accounts do
           operator_result()
   defdelegate update_operator(actor, operator, attrs, metadata \\ %{}), to: OperatorManagement
 
-  @spec update_current_operator_profile(User.t(), map(), map()) ::
+  @spec update_current_operator_profile(User.t(), OperatorManagement.profile_attrs(), map()) ::
           {:ok, User.t()} | {:error, Ecto.Changeset.t() | atom()}
   defdelegate update_current_operator_profile(user, attrs, metadata \\ %{}),
     to: OperatorManagement

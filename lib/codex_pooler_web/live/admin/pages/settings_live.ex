@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
   alias CodexPooler.MCP
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.SettingsPageComponents
+  alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.UserAuth
 
   @default_tab "appearance"
@@ -28,6 +29,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         settings_tabs: @settings_tabs,
         current_user_token: session["user_token"],
         account_form: account_form(user),
+        datetime_format_options: DateTimeDisplay.format_options(),
+        timezone_options: DateTimeDisplay.timezone_options(),
         password_form: password_form(),
         totp_enabled?: Accounts.totp_enabled?(user),
         totp_setup: nil,
@@ -38,6 +41,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
 
     {:ok,
      socket
+     |> assign_datetime_preferences()
      |> assign_browser_sessions()
      |> assign_mcp_panel()}
   end
@@ -59,6 +63,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
          socket
          |> assign(:current_scope, Scope.for_user(user))
          |> assign(:account_form, account_form(user))
+         |> assign_datetime_preferences()
          |> assign_mcp_panel()
          |> put_flash(:info, "Account settings updated")}
 
@@ -312,6 +317,9 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
           <SettingsPageComponents.account_panel
             :if={@selected_tab == "account"}
             account_form={@account_form}
+            datetime_preferences={@datetime_preferences}
+            datetime_format_options={@datetime_format_options}
+            timezone_options={@timezone_options}
             mcp_global_enabled?={@mcp_global_enabled?}
             mcp_account_enabled?={@mcp_account_enabled?}
             mcp_toggle_form={@mcp_toggle_form}
@@ -326,6 +334,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
           <SettingsPageComponents.security_panel
             :if={@selected_tab == "security"}
             current_scope={@current_scope}
+            datetime_preferences={@datetime_preferences}
             totp_enabled?={@totp_enabled?}
             totp_setup={@totp_setup}
             password_form={@password_form}
@@ -351,6 +360,14 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
     Map.new(keys, fn key ->
       {key.id, to_form(%{"id" => key.id, "label" => key.label}, as: :mcp_key)}
     end)
+  end
+
+  defp assign_datetime_preferences(socket) do
+    assign(
+      socket,
+      :datetime_preferences,
+      DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
+    )
   end
 
   defp assign_mcp_panel(socket) do

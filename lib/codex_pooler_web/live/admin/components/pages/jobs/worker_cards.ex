@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
   import CodexPoolerWeb.Admin.JobsPresentation
 
   attr :card, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def job_worker_card(assigns) do
     ~H"""
@@ -16,11 +17,15 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
       <.job_worker_card_header card={@card} />
 
       <%= if @card.key == :account_reconciliation do %>
-        <.account_reconciliation_activity card={@card} />
+        <.account_reconciliation_activity card={@card} datetime_preferences={@datetime_preferences} />
       <% else %>
         <.worker_activity_strip card={@card} />
-        <.job_failure_dialog :for={marker <- @card.failure_markers} marker={marker} />
-        <.worker_schedule_facts card={@card} />
+        <.job_failure_dialog
+          :for={marker <- @card.failure_markers}
+          marker={marker}
+          datetime_preferences={@datetime_preferences}
+        />
+        <.worker_schedule_facts card={@card} datetime_preferences={@datetime_preferences} />
       <% end %>
     </article>
     """
@@ -61,6 +66,9 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
     </header>
     """
   end
+
+  attr :card, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp account_reconciliation_activity(assigns) do
     ~H"""
@@ -127,7 +135,11 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
         </div>
       </div>
 
-      <.job_failure_dialog :for={marker <- @card.failure_markers} marker={marker} />
+      <.job_failure_dialog
+        :for={marker <- @card.failure_markers}
+        marker={marker}
+        datetime_preferences={@datetime_preferences}
+      />
 
       <div class="target-schedule">
         <div class="next-run">
@@ -140,15 +152,15 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
         <dl class="run-facts">
           <div class="run-fact">
             <dt class="target-label">Last run</dt>
-            <dd>{format_job_timestamp(@card.last_seen_at)}</dd>
+            <dd>{format_job_timestamp(@card.last_seen_at, @datetime_preferences)}</dd>
           </div>
           <div class="run-fact">
             <dt class="target-label">Last success</dt>
-            <dd>{format_job_timestamp(@card.last_success_at)}</dd>
+            <dd>{format_job_timestamp(@card.last_success_at, @datetime_preferences)}</dd>
           </div>
           <div class="run-fact">
             <dt class="target-label">Last failure</dt>
-            <dd>{format_job_timestamp(@card.last_failure_at)}</dd>
+            <dd>{format_job_timestamp(@card.last_failure_at, @datetime_preferences)}</dd>
           </div>
           <div class="run-fact">
             <dt class="target-label">Attempts</dt>
@@ -225,6 +237,9 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
     """
   end
 
+  attr :marker, :map, required: true
+  attr :datetime_preferences, :map, required: true
+
   defp job_failure_dialog(assigns) do
     ~H"""
     <dialog id={"job-failure-dialog-#{@marker.id}"} data-role="failed-worker-dialog" class="modal">
@@ -245,7 +260,7 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
             <div>
               <dt>Last failure</dt>
               <dd class="tabular-nums text-base-content">
-                {format_job_timestamp(@marker.failed_at)}
+                {format_job_timestamp(@marker.failed_at, @datetime_preferences)}
               </dd>
             </div>
             <div>
@@ -264,6 +279,9 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
     </dialog>
     """
   end
+
+  attr :card, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   defp worker_schedule_facts(assigns) do
     ~H"""
@@ -290,19 +308,19 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
         <div class="grid min-w-0 gap-1">
           <dt class="text-base-content/50">Last run</dt>
           <dd class="font-semibold tabular-nums text-base-content">
-            {format_job_timestamp(@card.last_seen_at)}
+            {format_job_timestamp(@card.last_seen_at, @datetime_preferences)}
           </dd>
         </div>
         <div class="grid min-w-0 gap-1">
           <dt class="text-base-content/50">Last success</dt>
           <dd class="font-semibold tabular-nums text-base-content">
-            {format_job_timestamp(@card.last_success_at)}
+            {format_job_timestamp(@card.last_success_at, @datetime_preferences)}
           </dd>
         </div>
         <div class="grid min-w-0 gap-1">
           <dt class="text-base-content/50">Last failure</dt>
           <dd class="font-semibold tabular-nums text-base-content">
-            {format_job_timestamp(@card.last_failure_at)}
+            {format_job_timestamp(@card.last_failure_at, @datetime_preferences)}
           </dd>
         </div>
         <div class="grid min-w-0 gap-1">

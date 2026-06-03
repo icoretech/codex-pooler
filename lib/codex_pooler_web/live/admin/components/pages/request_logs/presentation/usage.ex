@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
       cached_cost_title: 1,
       format_cached_input_cost_summary: 1,
       format_cached_token_breakdown: 1,
-      format_errors: 1,
+      format_errors: 2,
       format_token_totals: 1,
       format_total_cost: 1,
       format_usage_cost: 1,
@@ -22,6 +22,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
 
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
+  attr :datetime_preferences, :map, required: true
   attr :show_errors, :boolean, default: false
 
   def request_log_usage_lines(assigns) do
@@ -80,7 +81,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
         </span>
       <% end %>
       <span
-        :for={error <- format_errors(@request_log)}
+        :for={error <- format_errors(@request_log, @datetime_preferences)}
         :if={@show_errors}
         data-role="error-line"
         class="block text-base-content/65"

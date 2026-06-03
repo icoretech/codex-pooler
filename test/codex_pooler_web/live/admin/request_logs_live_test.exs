@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.RequestLogsPresentation
 
   setup :register_and_log_in_user
 
@@ -1500,6 +1501,81 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#{row_selector} [data-role='errors']", "sanitized_denial")
   end
 
+  test "renders stored request timestamps with current operator datetime preferences", %{
+    scope: scope
+  } do
+    {:ok, user} =
+      Accounts.update_current_operator_profile(scope.user, %{
+        "datetime_format" => "default",
+        "timezone" => "Europe/Rome"
+      })
+
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "rome-logs", name: "Rome Logs"})
+
+    stored_timestamp = ~U[2026-05-27 13:45:06.000000Z]
+
+    %{request: request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-rome-time",
+        admitted_at: stored_timestamp,
+        completed_at: stored_timestamp,
+        request_metadata: %{
+          "candidate_exclusions" => [
+            %{
+              "reasons" => [
+                %{
+                  "code" => "quota_weekly_exhausted",
+                  "reason_codes" => ["exhausted"],
+                  "reset_at" => "2026-05-27T13:45:06Z"
+                }
+              ]
+            }
+          ]
+        }
+      })
+
+    {:ok, view, _html} =
+      live(
+        build_conn() |> log_in_user(user, session_token(user)),
+        ~p"/admin/request-logs?pool_id=#{pool.id}"
+      )
+
+    assert has_element?(
+             view,
+             "#request-log-row-#{request.id} [data-role='timestamp-datetime']",
+             "2026-05-27 15:45:06 Europe/Rome"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{request.id}-errors",
+             "resets 2026-05-27 15:45:06 Europe/Rome"
+           )
+  end
+
+  test "missing request timestamp keeps not recorded display", %{scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "missing-time-logs", name: "Missing Time Logs"})
+
+    %{request: request} = request_log_fixture(pool, %{correlation_id: "req-missing-time"})
+
+    request_logs = Accounting.list_request_logs(pool, limit: 1)
+
+    request_logs = %{
+      request_logs
+      | items: Enum.map(request_logs.items, &Map.replace!(&1, :admitted_at, nil))
+    }
+
+    html =
+      render_component(&RequestLogsPresentation.request_logs_table/1,
+        request_logs: request_logs,
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"}
+      )
+
+    assert html =~ ~s(id="request-log-row-#{request.id}")
+    assert html =~ "not recorded"
+  end
+
   test "upstream account column reflects the current account label after a rename",
        %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "renamed-row", name: "Renamed Row"})
@@ -1971,7 +2047,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     assert has_element?(view, "#request-log-#{request.id}-errors", "quota exhausted")
-    assert has_element?(view, "#request-log-#{request.id}-errors", "resets 2026-05-11 02:55 UTC")
+
+    assert has_element?(
+             view,
+             "#request-log-#{request.id}-errors",
+             "resets 2026-05-11 02:55:14 UTC"
+           )
+
     assert has_element?(view, "#request-log-#{request.id}-errors [data-role='error-line']")
 
     errors_html = view |> element("#request-log-#{request.id}-errors") |> render()
@@ -2109,6 +2191,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         requested_service_tier: Map.get(attrs, :requested_service_tier),
         actual_service_tier: Map.get(attrs, :actual_service_tier)
       })
+
+    request =
+      if Map.has_key?(attrs, :admitted_at) do
+        request
+        |> Ecto.Changeset.change(%{admitted_at: Map.get(attrs, :admitted_at)})
+        |> Repo.update!()
+      else
+        request
+      end
 
     attempt =
       request

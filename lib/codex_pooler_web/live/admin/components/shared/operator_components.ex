@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.{Dialogs, Identity}
+  alias CodexPoolerWeb.DateTimeDisplay
   alias Phoenix.LiveView.JS
 
   def operator_avatar(assigns), do: Identity.operator_avatar(assigns)
@@ -162,6 +163,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   attr :current_scope, :any, required: true
   attr :active_operator_count, :integer, required: true
   attr :filter_form, Phoenix.HTML.Form, required: true
+  attr :datetime_preferences, :map, required: true
 
   def operators_table(assigns) do
     ~H"""
@@ -236,7 +238,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
                   class="min-w-44 align-middle text-sm leading-5 text-base-content/60"
                 >
                   <span id={"operator-row-#{operator.id}-last-login-at"}>
-                    {format_datetime(operator.last_login_at)}
+                    {format_datetime(operator.last_login_at, @datetime_preferences)}
                   </span>
                 </td>
                 <td class="w-16 align-middle text-center">
@@ -385,8 +387,8 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp self_operator?(%User{id: operator_id}, %{user: %{id: operator_id}}), do: true
   defp self_operator?(_operator, _current_scope), do: false
 
-  defp format_datetime(nil), do: "not yet"
+  defp format_datetime(nil, _datetime_preferences), do: "not yet"
 
-  defp format_datetime(%DateTime{} = datetime),
-    do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(%DateTime{} = datetime, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "not yet")
 end

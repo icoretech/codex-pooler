@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents
   alias CodexPoolerWeb.Admin.OperatorForm
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @impl true
   def mount(_params, _session, socket) do
@@ -261,6 +262,13 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -327,6 +335,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           operators={@streams.operators}
           current_scope={@current_scope}
           active_operator_count={@active_operator_count}
+          datetime_preferences={@datetime_preferences}
         />
       </section>
     </AdminComponents.admin_shell>

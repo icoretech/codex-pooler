@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountCard
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.DateTimeDisplay
 
   setup :register_and_log_in_user
 
@@ -1664,6 +1665,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       })
 
     refreshed_at = ~U[2026-05-22 21:52:00Z]
+    datetime_preferences = DateTimeDisplay.preferences_for_user(scope.user)
 
     assignment
     |> PoolUpstreamAssignment.changeset(%{last_successful_refresh_at: refreshed_at})
@@ -1674,7 +1676,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}",
-             "quota refresh 2026-05-22 21:52 UTC"
+             "quota refresh #{DateTimeDisplay.format_datetime(refreshed_at, datetime_preferences)}"
            )
 
     assert has_element?(
@@ -1703,6 +1705,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     auth_verified_at = ~U[2026-05-02 10:30:00Z]
     token_finished_at = ~U[2026-05-03 11:45:00Z]
     access_expires_at = ~U[2026-05-04 12:00:00Z]
+    datetime_preferences = DateTimeDisplay.preferences_for_user(scope.user)
 
     identity =
       identity
@@ -1743,19 +1746,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-auth-fresh",
-             "2026-05-01 09:15 UTC"
+             DateTimeDisplay.format_datetime(auth_fresh_at, datetime_preferences)
            )
 
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-auth-verified",
-             "2026-05-02 10:30 UTC"
+             DateTimeDisplay.format_datetime(auth_verified_at, datetime_preferences)
            )
 
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-access-token",
-             "access token expired 2026-05-04 12:00 UTC"
+             "access token expired #{DateTimeDisplay.format_datetime(access_expires_at, datetime_preferences)}"
            )
 
     assert has_element?(

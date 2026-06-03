@@ -1,7 +1,7 @@
 defmodule CodexPoolerWeb.Admin.JobsLive do
   use CodexPoolerWeb, :admin_live_view
 
-  import CodexPoolerWeb.Admin.JobsPresentation, only: [worker_cards: 1]
+  import CodexPoolerWeb.Admin.JobsPresentation, only: [worker_cards: 2]
 
   alias CodexPooler.Events
   alias CodexPooler.Pools
@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   alias CodexPoolerWeb.Admin.JobsReadModel
   alias CodexPoolerWeb.Admin.JobWorkerCards
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @jobs_reload_debounce_ms 1_000
   @jobs_fallback_refresh_ms 5_000
@@ -29,6 +30,10 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
         owner_authorized?: Pools.owner?(socket.assigns.current_scope),
         jobs_reload_timer: nil,
         subscribed_pool_ids: MapSet.new()
+      )
+      |> assign(
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
       )
       |> assign_page_state(empty_page_state, %{})
 
@@ -178,6 +183,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
               :if={@owner_authorized?}
               explorer={@explorer}
               current_params={@current_params}
+              datetime_preferences={@datetime_preferences}
             />
 
             <div
@@ -185,12 +191,19 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
               id="admin-jobs-worker-grid"
               class="grid gap-4 xl:grid-cols-2"
             >
-              <JobWorkerCards.job_worker_card :for={card <- @worker_cards} card={card} />
+              <JobWorkerCards.job_worker_card
+                :for={card <- @worker_cards}
+                card={card}
+                datetime_preferences={@datetime_preferences}
+              />
             </div>
           </section>
         </div>
 
-        <JobDetailDrawer.job_detail_drawer selected_job={@selected_job} />
+        <JobDetailDrawer.job_detail_drawer
+          selected_job={@selected_job}
+          datetime_preferences={@datetime_preferences}
+        />
       </div>
     </AdminComponents.admin_shell>
     """
@@ -259,7 +272,8 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
       filter_errors: page_state.filter_warnings,
       selected_job: page_state.selected_job,
       jobs: page_state.explorer.items,
-      worker_cards: worker_cards(page_state.worker_jobs_by_group)
+      worker_cards:
+        worker_cards(page_state.worker_jobs_by_group, socket.assigns.datetime_preferences)
     )
   end
 

@@ -14,7 +14,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
       event_summary_rows: 1,
       event_title: 1,
       format_actor: 1,
-      format_datetime: 1,
+      format_datetime: 2,
       format_total: 1,
       target_label: 1,
       target_link: 1
@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   defdelegate audit_log_filters(assigns), to: Filters
 
   attr :audit_logs, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def audit_logs_table(assigns) do
     ~H"""
@@ -91,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                   phx-click="show_audit_event"
                   phx-value-id={event.id}
                 >
-                  {format_datetime(event.occurred_at)}
+                  {format_datetime(event.occurred_at, @datetime_preferences)}
                 </button>
               </td>
               <td class="align-middle">
@@ -207,7 +208,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                   phx-click="show_audit_event"
                   phx-value-id={event.id}
                 >
-                  {format_datetime(event.occurred_at)}
+                  {format_datetime(event.occurred_at, @datetime_preferences)}
                 </button>
               </td>
               <td class="align-middle">
@@ -247,6 +248,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   end
 
   attr :selected_audit_event, :map, default: nil
+  attr :datetime_preferences, :map, required: true
 
   def audit_event_drawer(assigns) do
     ~H"""
@@ -279,7 +281,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                   {event_title(@selected_audit_event)}
                 </h2>
                 <p class="mt-1 text-sm text-base-content/60">
-                  {format_datetime(@selected_audit_event.occurred_at)}
+                  {format_datetime(@selected_audit_event.occurred_at, @datetime_preferences)}
                 </p>
               </div>
               <button

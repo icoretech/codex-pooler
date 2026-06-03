@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @type cockpit :: UpstreamCockpitReadModel.t()
 
@@ -257,6 +258,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :datetime_preferences,
+        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
+      )
+
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -276,6 +284,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         delete_account_form={@delete_account_form}
         refresh_data_message={@refresh_data_message}
         uploads={@uploads}
+        datetime_preferences={@datetime_preferences}
       />
     </AdminComponents.admin_shell>
     """

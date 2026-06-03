@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
   import CodexPoolerWeb.Admin.JobsPresentation,
     only: [
       format_attempts: 1,
-      format_job_timestamp: 1,
+      format_job_timestamp: 2,
       job_failure_summary: 1,
       job_state_badge_class: 1,
       job_state_label: 1,
@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   attr :selected_job, :map, default: nil
+  attr :datetime_preferences, :map, required: true
 
   def job_detail_drawer(assigns) do
     ~H"""
@@ -76,37 +77,37 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
               <.detail_row
                 id="job-detail-inserted-at"
                 label="Inserted"
-                value={format_job_timestamp(@selected_job.inserted_at)}
+                value={format_job_timestamp(@selected_job.inserted_at, @datetime_preferences)}
                 mono
               />
               <.detail_row
                 id="job-detail-scheduled-at"
                 label="Scheduled"
-                value={format_job_timestamp(@selected_job.scheduled_at)}
+                value={format_job_timestamp(@selected_job.scheduled_at, @datetime_preferences)}
                 mono
               />
               <.detail_row
                 id="job-detail-attempted-at"
                 label="Attempted"
-                value={format_job_timestamp(@selected_job.attempted_at)}
+                value={format_job_timestamp(@selected_job.attempted_at, @datetime_preferences)}
                 mono
               />
               <.detail_row
                 id="job-detail-completed-at"
                 label="Completed"
-                value={format_job_timestamp(@selected_job.completed_at)}
+                value={format_job_timestamp(@selected_job.completed_at, @datetime_preferences)}
                 mono
               />
               <.detail_row
                 id="job-detail-discarded-at"
                 label="Discarded"
-                value={format_job_timestamp(@selected_job.discarded_at)}
+                value={format_job_timestamp(@selected_job.discarded_at, @datetime_preferences)}
                 mono
               />
               <.detail_row
                 id="job-detail-cancelled-at"
                 label="Cancelled"
-                value={format_job_timestamp(@selected_job.cancelled_at)}
+                value={format_job_timestamp(@selected_job.cancelled_at, @datetime_preferences)}
                 mono
               />
             </dl>

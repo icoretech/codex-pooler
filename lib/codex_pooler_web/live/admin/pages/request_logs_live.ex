@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.RequestLogFilterForm
   alias CodexPoolerWeb.Admin.RequestLogsDisplay
+  alias CodexPoolerWeb.DateTimeDisplay
 
   import CodexPoolerWeb.Admin.RequestLogsPresentation
 
@@ -31,6 +32,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
        filter_errors: [],
+       datetime_preferences:
+         DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user),
        pool_filter_options: [],
        model_filter_options: [],
        upstream_account_options: [],
@@ -188,7 +191,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           </div>
         </div>
 
-        <.request_logs_table request_logs={@request_logs} />
+        <.request_logs_table
+          request_logs={@request_logs}
+          datetime_preferences={@datetime_preferences}
+        />
       </section>
     </AdminComponents.admin_shell>
     """

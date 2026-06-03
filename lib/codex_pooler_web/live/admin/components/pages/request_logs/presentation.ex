@@ -10,8 +10,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
     only: [
       format_api_key: 1,
-      format_datetime: 1,
-      format_errors: 1,
+      format_datetime: 2,
+      format_errors: 2,
       format_latency_title: 1,
       format_model_details_title: 1,
       format_model_name: 1,
@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     ]
 
   attr :request_logs, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def request_logs_table(assigns) do
     ~H"""
@@ -104,7 +105,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                 class="whitespace-nowrap align-middle text-base-content/70"
                 style="padding-left: 0; padding-right: 0.5rem;"
               >
-                <.request_log_timestamp_cell request_log={request_log} />
+                <.request_log_timestamp_cell
+                  request_log={request_log}
+                  datetime_preferences={@datetime_preferences}
+                />
               </td>
               <td class="align-middle">
                 <.request_log_upstream_identity_cell request_log={request_log} />
@@ -131,7 +135,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                 <.request_log_route_cell request_log={request_log} prefix="request-log" />
               </td>
               <td class="align-middle">
-                <Usage.request_log_usage_lines request_log={request_log} prefix="request-log" />
+                <Usage.request_log_usage_lines
+                  request_log={request_log}
+                  prefix="request-log"
+                  datetime_preferences={@datetime_preferences}
+                />
               </td>
               <td class="align-middle">
                 <span
@@ -140,7 +148,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                   class="grid gap-0.5 text-base-content/65"
                 >
                   <span
-                    :for={error <- format_errors(request_log)}
+                    :for={error <- format_errors(request_log, @datetime_preferences)}
                     data-role="error-line"
                     class="block"
                   >
@@ -205,7 +213,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                 class="whitespace-nowrap align-middle text-base-content/70"
                 style="padding-left: 0; padding-right: 0.5rem;"
               >
-                <.request_log_timestamp_cell request_log={request_log} />
+                <.request_log_timestamp_cell
+                  request_log={request_log}
+                  datetime_preferences={@datetime_preferences}
+                />
               </td>
               <td class="align-middle">
                 <.request_log_upstream_identity_cell
@@ -231,6 +242,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                 <Usage.request_log_usage_lines
                   request_log={request_log}
                   prefix="mobile-request-log"
+                  datetime_preferences={@datetime_preferences}
                   show_errors
                 />
               </td>
@@ -312,12 +324,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   end
 
   attr :request_log, :map, required: true
+  attr :datetime_preferences, :map, required: true
 
   def request_log_timestamp_cell(assigns) do
     ~H"""
     <span data-role="timestamp" class="grid gap-0.5 leading-tight">
       <span data-role="timestamp-datetime" class="block whitespace-nowrap">
-        {format_datetime(@request_log.admitted_at)}
+        {format_datetime(@request_log.admitted_at, @datetime_preferences)}
       </span>
       <span
         :if={record_id = format_record_id(@request_log.id)}

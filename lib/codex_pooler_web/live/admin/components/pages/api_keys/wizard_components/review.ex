@@ -4,11 +4,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :review_sections, :list, required: true
   attr :review_errors, :list, required: true
   attr :usage, :map, required: true
   attr :warnings, :list, default: []
+  attr :datetime_preferences, :map, required: true
 
   def api_key_review_step(assigns) do
     ~H"""
@@ -41,7 +43,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
         <.review_section :for={{title, rows} <- @review_sections} title={title} rows={rows} />
       </div>
 
-      <.api_key_usage_summary id="api-key-usage-summary" usage={@usage} compact />
+      <.api_key_usage_summary
+        id="api-key-usage-summary"
+        usage={@usage}
+        datetime_preferences={@datetime_preferences}
+        compact
+      />
 
       <div :if={@warnings != []} id="api-key-review-warnings" class="grid gap-2">
         <div :for={warning <- @warnings} class="alert alert-warning items-start">
@@ -76,6 +83,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
   attr :id, :string, required: true
   attr :usage, :map, required: true
   attr :compact, :boolean, default: false
+  attr :datetime_preferences, :map, required: true
 
   defp api_key_usage_summary(assigns) do
     assigns =
@@ -118,7 +126,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
           <div class="mt-2 grid gap-1 text-base-content/70">
             <span>{usage_limit_values(limit)}</span>
             <span :if={limit[:reset_at]} class="font-mono text-xs">
-              resets {format_usage_reset(limit[:reset_at])}
+              resets {format_usage_reset(limit[:reset_at], @datetime_preferences)}
             </span>
           </div>
         </div>
@@ -186,15 +194,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents.Review do
 
   defp usage_limit_values(_limit), do: "Usage unavailable"
 
-  defp format_usage_reset(reset_at) when is_binary(reset_at) do
+  defp format_usage_reset(reset_at, datetime_preferences) when is_binary(reset_at) do
     case DateTime.from_iso8601(reset_at) do
-      {:ok, datetime, _offset} -> format_datetime(datetime)
+      {:ok, datetime, _offset} -> format_datetime(datetime, datetime_preferences)
       _error -> reset_at
     end
   end
 
-  defp format_usage_reset(reset_at), do: to_string(reset_at)
-  defp format_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp format_usage_reset(reset_at, _datetime_preferences), do: to_string(reset_at)
+
+  defp format_datetime(%DateTime{} = datetime, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(datetime, datetime_preferences)
 
   defp format_integer(value) when is_integer(value) do
     value

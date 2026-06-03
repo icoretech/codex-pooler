@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.DateTimeDisplay
   alias Phoenix.LiveView.JS
 
   attr :id, :string, required: true
@@ -75,6 +76,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
 
   attr :invites, :map, required: true
   attr :mailer_configured?, :boolean, required: true
+  attr :datetime_preferences, :map, required: true
 
   def invites_table(assigns) do
     ~H"""
@@ -127,7 +129,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
               class="text-sm transition-colors hover:bg-base-200/80"
             >
               <td class="truncate whitespace-nowrap text-xs text-base-content/70">
-                {datetime_label(invite.created_at)}
+                {datetime_label(invite.created_at, @datetime_preferences)}
               </td>
               <td class="w-24 text-center">
                 <span id={"invite-status-#{invite.id}"} class={status_badge_class(invite.status)}>
@@ -154,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
               </td>
               <td>
                 <div class="grid min-w-0 gap-0.5 text-xs text-base-content/65">
-                  <span class="truncate">{result_label(invite)}</span>
+                  <span class="truncate">{result_label(invite, @datetime_preferences)}</span>
                   <span
                     :if={invite.accepted_by_email}
                     class="truncate font-semibold text-base-content"
@@ -166,7 +168,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
               <td
                 id={"invite-expires-#{invite.id}"}
                 class="whitespace-nowrap text-center text-xs text-base-content/70"
-                title={datetime_label(invite.expires_at)}
+                title={datetime_label(invite.expires_at, @datetime_preferences)}
               >
                 {expiry_label(invite.expires_at)}
               </td>
@@ -314,15 +316,15 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   defp status_label("revoked"), do: "revoked"
   defp status_label(status), do: status
 
-  defp result_label(%{status: "accepted", accepted_at: accepted_at}),
-    do: "Accepted #{datetime_label(accepted_at)}"
+  defp result_label(%{status: "accepted", accepted_at: accepted_at}, datetime_preferences),
+    do: "Accepted #{datetime_label(accepted_at, datetime_preferences)}"
 
-  defp result_label(%{status: "revoked", revoked_at: revoked_at}),
-    do: "Revoked #{datetime_label(revoked_at)}"
+  defp result_label(%{status: "revoked", revoked_at: revoked_at}, datetime_preferences),
+    do: "Revoked #{datetime_label(revoked_at, datetime_preferences)}"
 
-  defp result_label(%{status: "expired"}), do: "Expired"
+  defp result_label(%{status: "expired"}, _datetime_preferences), do: "Expired"
 
-  defp result_label(_invite), do: "Awaiting acceptance"
+  defp result_label(_invite, _datetime_preferences), do: "Awaiting acceptance"
 
   defp email_sent_icon(%DateTime{}), do: "hero-check-circle"
   defp email_sent_icon(_email_sent_at), do: "hero-minus-circle"
@@ -333,10 +335,10 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   defp email_sent_label(%DateTime{}), do: "Invite email sent"
   defp email_sent_label(_email_sent_at), do: "Invite email not sent"
 
-  defp datetime_label(nil), do: "-"
+  defp datetime_label(nil, _datetime_preferences), do: "-"
 
-  defp datetime_label(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  defp datetime_label(%DateTime{} = datetime, datetime_preferences) do
+    DateTimeDisplay.format_datetime(datetime, datetime_preferences)
   end
 
   defp expiry_label(nil), do: "No expiry"

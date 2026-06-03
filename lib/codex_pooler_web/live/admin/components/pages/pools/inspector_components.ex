@@ -7,9 +7,11 @@ defmodule CodexPoolerWeb.Admin.PoolInspectorComponents do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :pool_row, :map, required: true
   attr :selected_tab, :string, required: true
+  attr :datetime_preferences, :map, required: true
 
   def pool_inspector(assigns) do
     ~H"""
@@ -70,7 +72,7 @@ defmodule CodexPoolerWeb.Admin.PoolInspectorComponents do
           <div class="flex items-center justify-between gap-3">
             <dt class="text-base-content/55">Created</dt>
             <dd class="text-right text-xs text-base-content/70">
-              {format_datetime(@pool_row.pool.created_at)}
+              {format_datetime(@pool_row.pool.created_at, @datetime_preferences)}
             </dd>
           </div>
           <div class="flex items-center justify-between gap-3">
@@ -264,10 +266,10 @@ defmodule CodexPoolerWeb.Admin.PoolInspectorComponents do
     "#{AdminBadges.metadata_chip_class(:neutral)} whitespace-nowrap"
   end
 
-  defp format_datetime(nil), do: "not recorded"
+  defp format_datetime(nil, _datetime_preferences), do: "not recorded"
 
-  defp format_datetime(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(%DateTime{} = datetime, datetime_preferences) do
+    DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "not recorded")
   end
 
   defp numeric_metric_integer(%Decimal{} = value),

@@ -21,6 +21,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :selected_pool_row, :any, default: nil
   attr :selected_pool_tab, :string, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :datetime_preferences, :map, required: true
 
   def pool_inventory(assigns) do
     ~H"""
@@ -85,6 +86,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           :if={@selected_pool_row}
           pool_row={@selected_pool_row}
           selected_tab={@selected_pool_tab}
+          datetime_preferences={@datetime_preferences}
         />
       </div>
     </div>

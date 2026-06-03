@@ -1,18 +1,21 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   @moduledoc false
 
-  def format_errors(%{errors: errors}) do
+  alias CodexPoolerWeb.DateTimeDisplay
+
+  def format_errors(%{errors: errors}, datetime_preferences) do
     if is_nil(errors) or errors == [] do
       ["—"]
     else
-      error_display_items(errors)
+      error_display_items(errors, datetime_preferences)
     end
   end
 
-  defp error_display_items(errors) do
+  defp error_display_items(errors, datetime_preferences) do
     cond do
       Enum.any?(errors, &quota_exhaustion_error?/1) ->
-        ["quota exhausted"] ++ reset_display_items(exhausted_reset_at(errors))
+        ["quota exhausted"] ++
+          reset_display_items(exhausted_reset_at(errors), datetime_preferences)
 
       Enum.any?(errors, &quota_evidence_unavailable?/1) ->
         ["quota evidence unavailable"]
@@ -24,8 +27,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
     end
   end
 
-  defp reset_display_items(nil), do: []
-  defp reset_display_items(reset_at), do: ["resets #{format_reset_at(reset_at)}"]
+  defp reset_display_items(nil, _datetime_preferences), do: []
+
+  defp reset_display_items(reset_at, datetime_preferences),
+    do: ["resets #{format_reset_at(reset_at, datetime_preferences)}"]
 
   defp exhausted_reset_at(errors) do
     Enum.find_value(errors, fn error ->
@@ -57,17 +62,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay.Errors do
   defp error_reset_at(%{"reset_at" => reset_at}), do: reset_at
   defp error_reset_at(_error), do: nil
 
-  defp format_reset_at(%DateTime{} = reset_at),
-    do: Calendar.strftime(reset_at, "%Y-%m-%d %H:%M UTC")
+  defp format_reset_at(%DateTime{} = reset_at, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(reset_at, datetime_preferences)
 
-  defp format_reset_at(reset_at) when is_binary(reset_at) do
+  defp format_reset_at(reset_at, datetime_preferences) when is_binary(reset_at) do
     case DateTime.from_iso8601(reset_at) do
-      {:ok, datetime, _offset} -> format_reset_at(datetime)
+      {:ok, datetime, _offset} -> format_reset_at(datetime, datetime_preferences)
       {:error, _reason} -> reset_at
     end
   end
 
-  defp format_reset_at(reset_at), do: to_string(reset_at)
+  defp format_reset_at(reset_at, _datetime_preferences), do: to_string(reset_at)
 
   defp format_single_error(%{code: code}) when is_binary(code) and code != "",
     do: code
