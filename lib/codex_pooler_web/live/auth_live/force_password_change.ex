@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.AuthLive.ForcePasswordChange do
               <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-warning">
                 password update required
               </p>
-              <h1 class="text-3xl font-bold tracking-tight text-primary sm:text-4xl">
+              <h1 class="text-3xl font-bold uppercase text-primary sm:text-4xl">
                 Choose a private password
               </h1>
               <p class="max-w-md text-sm leading-6 text-base-content/70">

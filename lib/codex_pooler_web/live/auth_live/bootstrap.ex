@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.AuthLive.Bootstrap do
           <div class="grid content-between gap-8 border-b border-base-300 bg-base-200/60 p-6 sm:p-8 lg:border-b-0 lg:border-r">
             <div class="space-y-3">
               <Layouts.public_logo id="bootstrap-logo" />
-              <h1 class="text-3xl font-bold tracking-tight text-primary sm:text-4xl">
+              <h1 class="text-3xl font-bold uppercase text-primary sm:text-4xl">
                 Bootstrap
               </h1>
               <p class="max-w-md text-sm leading-6 text-base-content/70">

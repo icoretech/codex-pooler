@@ -421,17 +421,19 @@ defmodule CodexPoolerWeb.AuthControllerTest do
       conn = log_in_user(conn, user, token)
       {:ok, view, _html} = live(conn, ~p"/password/change-required")
 
-      assert has_element?(view, "#password-change-logo[aria-label='Codex Pooler']")
-
-      assert has_element?(
-               view,
-               "#password-change-logo img[src='/images/project-icon.png'][alt='']"
-             )
+      assert has_element?(view, "#password-change-logo span.uppercase", "CODEX POOLER")
+      refute has_element?(view, "#password-change-logo img")
 
       assert has_element?(view, "#password-change-required-form")
       assert has_element?(view, "#password-change-form")
-      assert has_element?(view, "h1.text-primary", "Choose a private password")
+      assert has_element?(view, "h1.uppercase.text-primary", "Choose a private password")
       assert has_element?(view, "#auth-footer", "Codex Pooler")
+
+      assert has_element?(
+               view,
+               "#auth-footer a[href='https://docs.codex-pooler.com']",
+               "Codex Pooler"
+             )
 
       for params <- [
             %{"new_password" => "new-bootstrap-pass-456"},

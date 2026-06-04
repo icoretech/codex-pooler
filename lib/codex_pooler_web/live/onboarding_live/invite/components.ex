@@ -28,7 +28,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
               <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-primary">
                 device onboarding
               </p>
-              <h1 class="max-w-md text-3xl font-bold tracking-tight text-primary sm:text-4xl">
+              <h1 class="max-w-md text-3xl font-bold uppercase text-primary sm:text-4xl">
                 Connect your Codex account
               </h1>
               <p class="max-w-md text-sm leading-6 text-base-content/70">

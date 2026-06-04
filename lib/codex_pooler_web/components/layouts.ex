@@ -57,7 +57,14 @@ defmodule CodexPoolerWeb.Layouts do
       class="footer footer-center flex flex-col items-center justify-center gap-2 border-t border-base-300/70 bg-base-100/90 px-4 py-4 text-xs text-base-content/65 sm:flex-row sm:gap-3"
     >
       <aside class="flex flex-col items-center gap-2 sm:flex-row sm:gap-3">
-        <span class="font-medium text-base-content/75">Codex Pooler {@app_version}</span>
+        <.link
+          href="https://docs.codex-pooler.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="font-medium text-base-content/75 hover:text-base-content"
+        >
+          Codex Pooler {@app_version}
+        </.link>
         <span
           class="hidden h-1 w-1 rounded-full bg-base-content/30 sm:inline-block"
           aria-hidden="true"
@@ -88,17 +95,10 @@ defmodule CodexPoolerWeb.Layouts do
 
   def public_logo(assigns) do
     ~H"""
-    <div
-      id={@id}
-      aria-label="Codex Pooler"
-      class={["inline-flex items-center", @class]}
-    >
-      <img
-        src={~p"/images/project-icon.png"}
-        alt=""
-        aria-hidden="true"
-        class="size-14 rounded-box object-contain"
-      />
+    <div id={@id} class={["inline-flex items-center", @class]}>
+      <span class="text-sm font-black leading-none text-primary uppercase sm:text-base">
+        CODEX POOLER
+      </span>
     </div>
     """
   end

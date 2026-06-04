@@ -31,7 +31,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     html = render(view)
 
     assert has_element?(view, "#invite-page")
-    assert has_element?(view, "h1.text-primary", "Connect your Codex account")
+    assert has_element?(view, "h1.uppercase.text-primary", "Connect your Codex account")
     assert_public_footer(view, "#invite-footer")
     assert has_element?(view, "#invite-metadata")
     assert has_element?(view, "#invite-pool-name", "Team Alpha")
@@ -60,7 +60,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     refute has_element?(bootstrap_view, "header", "CODEX POOLER")
     refute has_element?(bootstrap_view, "header", "OPERATOR AUTH")
     assert_auth_logo(bootstrap_view, "#bootstrap-logo")
-    assert has_element?(bootstrap_view, "h1.text-primary", "Bootstrap")
+    assert has_element?(bootstrap_view, "h1.uppercase.text-primary", "Bootstrap")
     assert_public_footer(bootstrap_view, "#auth-footer")
     refute render(bootstrap_view) =~ ~s(data-phx-theme="system")
 
@@ -71,7 +71,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     refute has_element?(login_view, "header", "CODEX POOLER")
     refute has_element?(login_view, "header", "OPERATOR AUTH")
     assert_auth_logo(login_view, "#login-logo")
-    assert has_element?(login_view, "h1.text-primary", "Sign in")
+    assert has_element?(login_view, "h1.uppercase.text-primary", "Sign in")
     assert_public_footer(login_view, "#auth-footer")
     refute render(login_view) =~ ~s(data-phx-theme="system")
   end
@@ -710,14 +710,15 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     app_version = :codex_pooler |> Application.spec(:vsn) |> to_string()
 
     assert has_element?(view, selector, "Codex Pooler #{app_version}")
+    assert has_element?(view, "#{selector} a[href='https://docs.codex-pooler.com']")
     assert has_element?(view, selector, "© #{Date.utc_today().year} iCoreTech, Inc.")
     assert has_element?(view, "#{selector} a[href='https://github.com/icoretech/codex-pooler']")
     assert has_element?(view, "#{selector} a[aria-label='Codex Pooler on GitHub']")
   end
 
   defp assert_auth_logo(view, selector) do
-    assert has_element?(view, "#{selector}[aria-label='Codex Pooler']")
-    assert has_element?(view, "#{selector} img[src='/images/project-icon.png'][alt='']")
+    assert has_element?(view, "#{selector} span.uppercase", "CODEX POOLER")
+    refute has_element?(view, "#{selector} img")
     refute render(view) =~ ~s(/images/logo.svg)
   end
 end
