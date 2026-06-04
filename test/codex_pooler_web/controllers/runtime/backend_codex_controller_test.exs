@@ -3130,6 +3130,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(attempt.response_metadata) =~ "sensitive transport body"
   end
 
+  test "POST /backend-api/codex/responses finalizes reservation on upstream HTTP protocol error",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_protocol_error_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    %{base_url: invalid_base_url, served_ref: served_ref} = start_invalid_content_length_server!()
+
+    assert {:ok, _identity} =
+             IdentityLifecycle.update_upstream_identity(setup.identity, %{
+               metadata: %{"base_url" => invalid_base_url}
+             })
+
+    assert {:ok, _assignment} =
+             PoolAssignments.update_pool_assignment(setup.assignment, %{
+               metadata: %{"base_url" => invalid_base_url}
+             })
+
+    logs =
+      capture_log(fn ->
+        conn =
+          conn
+          |> auth(setup)
+          |> post("/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "sensitive protocol body"
+          })
+
+        assert %{"error" => %{"code" => "upstream_request_failed"}} = json_response(conn, 502)
+      end)
+
+    assert_receive {^served_ref, :served}, 1_000
+
+    assert logs =~ "gateway upstream transport failed"
+    assert logs =~ "endpoint=/backend-api/codex/responses"
+    assert logs =~ "upstream_identity_id=#{setup.identity.id}"
+    assert logs =~ "pool_upstream_assignment_id=#{setup.assignment.id}"
+    assert logs =~ "exception=Req.HTTPError"
+    assert logs =~ "reason=invalid_content_length_header"
+    refute logs =~ "sensitive protocol body"
+    refute logs =~ "upstream-token"
+    refute logs =~ "authorization"
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "http_json"
+    assert request.status == "failed"
+    assert request.response_status_code == 502
+    assert request.last_error_code == "upstream_network_error"
+    refute inspect(request.request_metadata) =~ "sensitive protocol body"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_network_error"
+    assert attempt.usage_status == "usage_unknown"
+    assert attempt.response_metadata["error_code"] == "upstream_network_error"
+    refute inspect(attempt.response_metadata) =~ "sensitive protocol body"
+  end
+
   test "POST /backend-api/codex/responses keeps pre-header receive timeout as network error" do
     release_ref = make_ref()
 
@@ -8206,5 +8271,70 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(error, "requires_new_upstream_session")
     refute Map.has_key?(error, "recovery_kind")
     refute Map.has_key?(error, "recovery")
+  end
+
+  defp start_invalid_content_length_server! do
+    {:ok, listen_socket} =
+      :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+
+    {:ok, port} = :inet.port(listen_socket)
+    parent = self()
+    served_ref = make_ref()
+
+    pid =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen_socket)
+        _request = read_raw_http_request(socket)
+
+        :ok =
+          :gen_tcp.send(socket, [
+            "HTTP/1.1 200 OK\r\n",
+            "content-type: application/json\r\n",
+            "content-length: +0\r\n",
+            "connection: close\r\n\r\n"
+          ])
+
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listen_socket)
+        send(parent, {served_ref, :served})
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: Process.exit(pid, :kill)
+      :gen_tcp.close(listen_socket)
+    end)
+
+    %{base_url: "http://127.0.0.1:#{port}", served_ref: served_ref}
+  end
+
+  defp read_raw_http_request(socket, acc \\ "") do
+    case :gen_tcp.recv(socket, 0, 1_000) do
+      {:ok, data} ->
+        acc = acc <> data
+
+        if raw_http_request_complete?(acc) do
+          acc
+        else
+          read_raw_http_request(socket, acc)
+        end
+
+      {:error, _reason} ->
+        acc
+    end
+  end
+
+  defp raw_http_request_complete?(data) do
+    case :binary.split(data, "\r\n\r\n") do
+      [headers, body] ->
+        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers,
+               capture: :all_but_first
+             ) do
+          [length] -> byte_size(body) >= String.to_integer(length)
+          nil -> true
+        end
+
+      _incomplete ->
+        false
+    end
   end
 end

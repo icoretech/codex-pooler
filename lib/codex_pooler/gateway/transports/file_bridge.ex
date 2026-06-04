@@ -41,6 +41,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
           | {:retry_timeout, bridge_success()}
           | {:error, safe_error() | term()}
 
+  defguardp transport_exception?(exception)
+            when is_struct(exception, Finch.TransportError) or
+                   is_struct(exception, Req.TransportError) or
+                   is_struct(exception, Req.HTTPError) or
+                   is_struct(exception, Mint.TransportError) or
+                   is_struct(exception, Mint.HTTPError) or
+                   is_struct(exception, Finch.HTTPError)
+
   @spec create_file(payload(), bridge_opts(), RoutingSelection.t()) :: bridge_result()
   def create_file(payload, opts, %RoutingSelection{} = selection) when is_map(payload) do
     endpoint = "/backend-api/files"
@@ -67,7 +75,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       |> normalize_upload_response(opts)
     end
   rescue
-    exception in [Req.TransportError, Finch.TransportError, Mint.TransportError, Mint.HTTPError] ->
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
       normalize_upload_response({:error, exception}, opts)
   end
 
@@ -208,27 +223,20 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     |> Req.post(request_options)
     |> normalize_transport_result(identity, opts)
   rescue
-    exception in [Req.TransportError, Finch.TransportError, Mint.TransportError, Mint.HTTPError] ->
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
       log_transport_exception(exception, identity, opts)
       {:error, safe_error(502, :upstream_request_failed, "upstream file bridge request failed")}
   end
 
-  defp normalize_transport_result({:error, %Finch.TransportError{} = exception}, identity, opts) do
-    log_transport_exception(exception, identity, opts)
-    {:error, safe_error(502, :upstream_request_failed, "upstream file bridge request failed")}
-  end
-
-  defp normalize_transport_result({:error, %Req.TransportError{} = exception}, identity, opts) do
-    log_transport_exception(exception, identity, opts)
-    {:error, safe_error(502, :upstream_request_failed, "upstream file bridge request failed")}
-  end
-
-  defp normalize_transport_result({:error, %Mint.TransportError{} = exception}, identity, opts) do
-    log_transport_exception(exception, identity, opts)
-    {:error, safe_error(502, :upstream_request_failed, "upstream file bridge request failed")}
-  end
-
-  defp normalize_transport_result({:error, %Mint.HTTPError{} = exception}, identity, opts) do
+  defp normalize_transport_result({:error, exception}, identity, opts)
+       when transport_exception?(exception) do
     log_transport_exception(exception, identity, opts)
     {:error, safe_error(502, :upstream_request_failed, "upstream file bridge request failed")}
   end
@@ -291,16 +299,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
            "upstream file upload failed with status #{status}"
          )}
 
-      {:error, %Finch.TransportError{} = exception} ->
-        upload_transport_error(exception, opts)
-
-      {:error, %Req.TransportError{} = exception} ->
-        upload_transport_error(exception, opts)
-
-      {:error, %Mint.TransportError{} = exception} ->
-        upload_transport_error(exception, opts)
-
-      {:error, %Mint.HTTPError{} = exception} ->
+      {:error, exception} when transport_exception?(exception) ->
         upload_transport_error(exception, opts)
 
       {:error, _reason} ->

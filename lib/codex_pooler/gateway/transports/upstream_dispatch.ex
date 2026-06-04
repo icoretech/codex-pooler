@@ -144,7 +144,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> Req.post(request_options)
     |> normalize_upstream_transport_result(identity, opts)
   rescue
-    exception in [Req.TransportError, Finch.TransportError, Mint.TransportError, Mint.HTTPError] ->
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
       log_upstream_transport_exception(exception, identity, opts)
       {:error, upstream_transport_error()}
   end
@@ -182,7 +189,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> Req.post(request_options)
     |> normalize_upstream_transport_result(identity, opts)
   rescue
-    exception in [Req.TransportError, Finch.TransportError, Mint.TransportError, Mint.HTTPError] ->
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
       log_upstream_transport_exception(exception, identity, opts)
       {:error, upstream_transport_error()}
   end
@@ -385,6 +399,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp normalize_upstream_transport_result(
+         {:error, %Req.HTTPError{} = exception},
+         identity,
+         opts
+       ) do
+    log_upstream_transport_exception(exception, identity, opts)
+    {:error, upstream_transport_error()}
+  end
+
+  defp normalize_upstream_transport_result(
          {:error, %Mint.TransportError{} = exception},
          identity,
          opts
@@ -395,6 +418,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp normalize_upstream_transport_result(
          {:error, %Mint.HTTPError{} = exception},
+         identity,
+         opts
+       ) do
+    log_upstream_transport_exception(exception, identity, opts)
+    {:error, upstream_transport_error()}
+  end
+
+  defp normalize_upstream_transport_result(
+         {:error, %Finch.HTTPError{} = exception},
          identity,
          opts
        ) do

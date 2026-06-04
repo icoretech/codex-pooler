@@ -115,7 +115,14 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
       retry: false
     )
   rescue
-    exception in [Req.TransportError, Finch.TransportError, Mint.TransportError, Mint.HTTPError] ->
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
       {:error, exception}
   end
 
