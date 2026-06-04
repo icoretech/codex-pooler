@@ -20,6 +20,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
           required(:account_identifier) => String.t(),
           required(:account_email) => String.t() | nil,
           required(:account_label) => String.t(),
+          required(:workspace_id) => String.t() | nil,
+          required(:workspace_label) => String.t() | nil,
+          required(:seat_type) => String.t() | nil,
           required(:plan_label) => String.t() | nil,
           required(:token) => String.t(),
           required(:refresh_token) => String.t(),
@@ -45,6 +48,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
          account_identifier: account_identifier,
          account_email: account_email(id_claims),
          account_label: account_label(id_claims),
+         workspace_id: workspace_id(id_claims),
+         workspace_label: workspace_label(id_claims),
+         seat_type: seat_type(id_claims),
          plan_label: plan_label(id_claims),
          token: tokens["access_token"],
          refresh_token: refresh_token,
@@ -164,6 +170,39 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   end
 
   defp plan_label(id_claims), do: auth_claim(id_claims, "chatgpt_plan_type")
+
+  defp workspace_id(id_claims),
+    do: claim_from_auth_or_top_level(id_claims, workspace_id_claim_keys())
+
+  defp workspace_label(id_claims),
+    do: claim_from_auth_or_top_level(id_claims, workspace_label_claim_keys())
+
+  defp seat_type(id_claims), do: claim_from_auth_or_top_level(id_claims, seat_type_claim_keys())
+
+  defp workspace_id_claim_keys,
+    do: ~w(workspace_id chatgpt_workspace_id organization_id org_id tenant_id)
+
+  defp workspace_label_claim_keys,
+    do: ~w(workspace_label workspace_name organization_name org_name tenant_name)
+
+  defp seat_type_claim_keys, do: ~w(seat_type chatgpt_seat_type entitlement_type)
+
+  defp claim_from_auth_or_top_level(claims, keys) do
+    auth_claims = auth_claims(claims)
+
+    first_present_claim(auth_claims, keys) || first_present_claim(claims, keys)
+  end
+
+  defp auth_claims(%{} = claims) do
+    case Map.get(claims, "https://api.openai.com/auth") do
+      %{} = auth_claims -> auth_claims
+      _value -> %{}
+    end
+  end
+
+  defp first_present_claim(claims, keys) when is_map(claims) do
+    Enum.find_value(keys, &present_string(Map.get(claims, &1)))
+  end
 
   defp auth_claim(id_claims, key) do
     id_claims

@@ -7,6 +7,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Auth.CodexAuth
+  alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -51,6 +52,7 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
     stale_after_ms = stale_after_ms(receive_timeout_ms)
 
     with %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id),
+         :ok <- IdentityLifecycle.guard_workspace_slot_mutation(identity, %{}),
          {:ok, refreshing_identity, refresh_token, attempt} <-
            begin_token_refresh(identity, trigger_kind, receive_timeout_ms, stale_after_ms) do
       refreshing_identity

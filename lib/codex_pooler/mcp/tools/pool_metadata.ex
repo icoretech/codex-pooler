@@ -298,7 +298,8 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     ReadableText.ambiguous("upstream metadata record", candidates, [
       {:id, "id"},
       {:account_label, "label", required: true},
-      {:chatgpt_account_id, "account"},
+      {:workspace_ref, "workspace", required: true},
+      {:workspace_label, "workspace_label"},
       {:status, "status", required: true}
     ])
   end
@@ -308,6 +309,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
       {:account_label, "label", required: true},
       {:status, "status", required: true},
       {:account, "account", required: true},
+      {:workspace, "workspace", required: true},
       {:plan, "plan", required: true},
       {:assignments, "assignments", required: true}
     ]
@@ -317,6 +319,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     item
     |> Map.take(["id", "account_label", "status"])
     |> Map.put("account", Map.get(item, "account_email") || Map.get(item, "chatgpt_account_id"))
+    |> Map.put("workspace", Map.get(item, "workspace_label") || Map.get(item, "workspace_ref"))
     |> Map.put("plan", Map.get(item, "plan_label") || Map.get(item, "plan_family"))
     |> Map.put("assignments", summary_text(item, "assignment_summary"))
   end
@@ -566,6 +569,8 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
       chatgpt_account_id: identity.chatgpt_account_id,
       account_label: safe_label(identity.account_label),
       account_email: identity.account_email,
+      workspace_ref: workspace_ref(identity.workspace_id),
+      workspace_label: safe_label(identity.workspace_label),
       onboarding_method: identity.onboarding_method,
       status: identity.status,
       plan_family: identity.plan_family,
@@ -670,12 +675,15 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
   defp resolve_upstream(upstreams, selector) do
     selector = normalize_selector(selector)
 
+    account_matches =
+      Enum.filter(upstreams, &(String.downcase(&1.chatgpt_account_id || "") == selector))
+
     cond do
       upstream = Enum.find(upstreams, &(&1.id == selector)) ->
         {:ok, upstream}
 
-      upstream = Enum.find(upstreams, &(String.downcase(&1.chatgpt_account_id || "") == selector)) ->
-        {:ok, upstream}
+      account_matches != [] ->
+        one_ambiguous_or_missing(account_matches)
 
       true ->
         upstreams
@@ -721,8 +729,9 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
   defp upstream_candidate(identity) do
     %{
       "id" => identity.id,
-      "chatgpt_account_id" => identity.chatgpt_account_id,
       "account_label" => safe_label(identity.account_label),
+      "workspace_ref" => workspace_ref(identity.workspace_id),
+      "workspace_label" => safe_label(identity.workspace_label),
       "status" => identity.status
     }
   end
@@ -786,6 +795,8 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
       identity.id,
       identity.chatgpt_account_id,
       identity.account_label,
+      identity.workspace_label,
+      workspace_ref(identity.workspace_id),
       identity.status
     ])
   end
@@ -809,6 +820,17 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
 
   defp normalize_selector(selector),
     do: selector |> to_string() |> String.trim() |> String.downcase()
+
+  defp workspace_ref(nil), do: "legacy"
+
+  defp workspace_ref(workspace_id) when is_binary(workspace_id) do
+    digest =
+      :crypto.hash(:sha256, workspace_id) |> Base.encode16(case: :lower) |> String.slice(0, 8)
+
+    "ws:" <> digest
+  end
+
+  defp workspace_ref(_workspace_id), do: "legacy"
 
   defp metadata_status(metadata) when is_map(metadata) and map_size(metadata) > 0, do: "present"
   defp metadata_status(_metadata), do: "empty"

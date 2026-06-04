@@ -42,6 +42,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
                 {@account.label}
               </.link>
             </h3>
+            <span
+              id={"upstream-account-#{@account.identity.id}-workspace"}
+              data-role="upstream-workspace-context"
+              class="badge badge-ghost badge-sm shrink-0 max-w-48 truncate text-[0.65rem]"
+              title={workspace_context_title(@account)}
+            >
+              {workspace_context_label(@account)}
+            </span>
           </div>
         </div>
         <div
@@ -487,6 +495,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp token_burn_icon_class(%{level: level}) when level in 3..4, do: "size-3.5 text-warning"
   defp token_burn_icon_class(%{level: 5}), do: "size-3.5 text-error"
   defp token_burn_icon_class(_token_burn), do: "size-3.5 text-base-content/35"
+
+  @spec workspace_context_label(map()) :: String.t()
+  defp workspace_context_label(%{workspace_label: label}) when is_binary(label) and label != "",
+    do: "Workspace " <> label
+
+  defp workspace_context_label(%{workspace_ref: ref}) when is_binary(ref) and ref != "",
+    do: "Workspace " <> ref
+
+  defp workspace_context_label(_account), do: "Workspace legacy"
+
+  @spec workspace_context_title(map()) :: String.t()
+  defp workspace_context_title(%{workspace_ref: ref}) when is_binary(ref) and ref != "",
+    do: "Workspace reference " <> ref
+
+  defp workspace_context_title(_account), do: "Workspace reference legacy"
 
   defp account_status_label(%{identity: %{status: status}}) when is_binary(status) do
     status

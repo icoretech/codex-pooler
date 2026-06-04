@@ -161,6 +161,49 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-add-capacity-card")
   end
 
+  test "distinguishes sibling workspace slots on upstream account cards", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "workspace-slots", name: "Workspace Slots"})
+    account_id = "acct_workspace_slots_#{System.unique_integer([:positive])}"
+    first_workspace_id = "workspace-card-alpha-#{System.unique_integer([:positive])}"
+    second_workspace_id = "workspace-card-beta-#{System.unique_integer([:positive])}"
+
+    %{identity: first_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared account slot",
+        chatgpt_account_id: account_id,
+        workspace_id: first_workspace_id,
+        workspace_label: "Alpha workspace"
+      })
+
+    %{identity: second_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared account slot",
+        chatgpt_account_id: account_id,
+        workspace_id: second_workspace_id,
+        workspace_label: "Beta workspace"
+      })
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{first_identity.id}-workspace[data-role='upstream-workspace-context']",
+             "Workspace Alpha workspace"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{second_identity.id}-workspace[data-role='upstream-workspace-context']",
+             "Workspace Beta workspace"
+           )
+
+    refute html =~ first_workspace_id
+    refute html =~ second_workspace_id
+  end
+
   @tag :upstream_filters
   test "renders URL-backed upstream filter controls without legacy select fallbacks", %{
     conn: conn,

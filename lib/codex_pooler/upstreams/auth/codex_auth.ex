@@ -22,6 +22,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
           email: String.t() | nil,
           chatgpt_account_id: String.t() | nil,
           chatgpt_user_id: String.t() | nil,
+          workspace_id: String.t() | nil,
+          workspace_label: String.t() | nil,
+          seat_type: String.t() | nil,
           plan_family: String.t() | nil,
           plan_label: String.t() | nil
         }
@@ -73,6 +76,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
          email: claims["email"],
          chatgpt_account_id: auth_claims["chatgpt_account_id"],
          chatgpt_user_id: auth_claims["chatgpt_user_id"],
+         workspace_id: claim_from_auth_or_top_level(claims, workspace_id_claim_keys()),
+         workspace_label: claim_from_auth_or_top_level(claims, workspace_label_claim_keys()),
+         seat_type: claim_from_auth_or_top_level(claims, seat_type_claim_keys()),
          plan_family: normalize_plan(auth_claims["chatgpt_plan_type"]),
          plan_label: auth_claims["chatgpt_plan_type"]
        }}
@@ -103,6 +109,38 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:client, __MODULE__.HTTPClient)
   end
+
+  defp workspace_id_claim_keys,
+    do: ~w(workspace_id chatgpt_workspace_id organization_id org_id tenant_id)
+
+  defp workspace_label_claim_keys,
+    do: ~w(workspace_label workspace_name organization_name org_name tenant_name)
+
+  defp seat_type_claim_keys, do: ~w(seat_type chatgpt_seat_type entitlement_type)
+
+  defp claim_from_auth_or_top_level(claims, keys) do
+    auth_claims = auth_claims(claims)
+
+    first_present_claim(auth_claims, keys) || first_present_claim(claims, keys)
+  end
+
+  defp auth_claims(%{} = claims) do
+    case Map.get(claims, "https://api.openai.com/auth") do
+      %{} = auth_claims -> auth_claims
+      _value -> %{}
+    end
+  end
+
+  defp first_present_claim(claims, keys) when is_map(claims) do
+    Enum.find_value(keys, &present_string(Map.get(claims, &1)))
+  end
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(_value), do: nil
 
   defp normalize_plan(nil), do: nil
 

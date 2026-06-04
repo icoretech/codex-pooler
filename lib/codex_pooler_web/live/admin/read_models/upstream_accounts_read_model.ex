@@ -61,6 +61,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @type account_snapshot :: %{
           required(:identity) => UpstreamIdentity.t(),
           required(:label) => String.t(),
+          required(:workspace_ref) => String.t(),
+          required(:workspace_label) => String.t() | nil,
           required(:plan_label) => String.t(),
           required(:plan_reported?) => boolean(),
           required(:refresh_status) => String.t(),
@@ -145,6 +147,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     [
       account.label,
       account.identity.chatgpt_account_id,
+      account.workspace_ref,
+      account.workspace_label,
       account.plan_label,
       account.identity.plan_family,
       account.identity.status,
@@ -205,6 +209,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     %{
       identity: identity,
       label: identity.account_label || identity.chatgpt_account_id || "Upstream account",
+      workspace_ref: workspace_ref(identity.workspace_id),
+      workspace_label: safe_workspace_label(identity.workspace_label),
       plan_label: account_plan_label(identity),
       plan_reported?: account_plan_reported?(identity),
       refresh_status: refresh_status_label(identity),
@@ -591,6 +597,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     |> Integer.to_string()
     |> String.replace(~r/\B(?=(\d{3})+(?!\d))/, ",")
   end
+
+  defp safe_workspace_label(value) do
+    case present_string(value) do
+      nil -> nil
+      label -> mask_email_like(label)
+    end
+  end
+
+  defp mask_email_like(value) do
+    if String.match?(value, ~r/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/) do
+      [local, domain] = String.split(value, "@", parts: 2)
+      String.slice(local, 0, min(2, String.length(local))) <> "***@" <> domain
+    else
+      value
+    end
+  end
+
+  defp workspace_ref(nil), do: "legacy"
+
+  defp workspace_ref(workspace_id) when is_binary(workspace_id) do
+    digest =
+      :crypto.hash(:sha256, workspace_id) |> Base.encode16(case: :lower) |> String.slice(0, 8)
+
+    "ws:" <> digest
+  end
+
+  defp workspace_ref(_workspace_id), do: "legacy"
 
   defp account_plan_label(%{plan_label: label}) when is_binary(label) and label != "", do: label
 

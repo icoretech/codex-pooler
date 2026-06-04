@@ -232,6 +232,74 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
            } = json_response(conn, 200)
   end
 
+  test "GET /api/codex/usage ChatGPT token branch selects the token-matched workspace slot", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    account_id = "chatgpt-shared-account-#{System.unique_integer([:positive])}"
+
+    %{identity: free_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        workspace_id: "ws_usage_free",
+        plan_family: "free"
+      })
+
+    %{identity: pro_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        workspace_id: "ws_usage_pro",
+        plan_family: "pro"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(free_identity, %{
+               secret_kind: "access_token",
+               plaintext: "free-slot-token"
+             })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(pro_identity, %{
+               secret_kind: "access_token",
+               plaintext: "pro-slot-token"
+             })
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(free_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("91"),
+                 reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
+                 source: "test",
+                 freshness_state: "fresh"
+               }
+             ])
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(pro_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("4"),
+                 reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
+                 source: "test",
+                 freshness_state: "fresh"
+               }
+             ])
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer free-slot-token")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+
+    assert %{
+             "plan_type" => "free",
+             "rate_limit" => %{"primary_window" => %{"used_percent" => 91}}
+           } = json_response(conn, 200)
+  end
+
   test "GET /api/codex/usage returns a statusful gateway error for inactive ChatGPT account usage",
        %{conn: conn} do
     pool = pool_fixture()

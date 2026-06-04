@@ -88,11 +88,10 @@ defmodule CodexPooler.Gateway.Usage do
         %RequestOptions{} = request_options
       ) do
     request_options = request_options(request_options, endpoint, %{})
-    chatgpt_account_id = identity.chatgpt_account_id
 
     with :ok <- record_chatgpt_usage_request(identity, endpoint, request_options) do
-      chatgpt_account_id
-      |> Accounting.build_codex_usage_for_chatgpt_account()
+      identity
+      |> Accounting.build_codex_usage_for_upstream_identity()
       |> usage_result()
     end
   end
@@ -127,14 +126,19 @@ defmodule CodexPooler.Gateway.Usage do
   end
 
   defp authenticate_chatgpt_account_token(chatgpt_account_id, token) do
-    with identity when not is_nil(identity) <-
-           Upstreams.get_upstream_identity_by_chatgpt_account(chatgpt_account_id),
-         {:ok, stored_token} <-
-           Secrets.decrypt_active_secret(identity, @secret_kind),
-         true <- secure_token_match?(stored_token, token) do
-      {:ok, identity}
-    else
-      _invalid -> {:error, :invalid_token}
+    chatgpt_account_id
+    |> Upstreams.list_upstream_identities_by_chatgpt_account()
+    |> Enum.find_value(fn identity ->
+      with {:ok, stored_token} <- Secrets.decrypt_active_secret(identity, @secret_kind),
+           true <- secure_token_match?(stored_token, token) do
+        {:ok, identity}
+      else
+        _invalid -> nil
+      end
+    end)
+    |> case do
+      {:ok, %UpstreamIdentity{}} = ok -> ok
+      nil -> {:error, :invalid_token}
     end
   end
 

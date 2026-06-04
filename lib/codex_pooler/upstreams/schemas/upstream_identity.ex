@@ -23,6 +23,9 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     field :chatgpt_account_id, :string
     field :account_email, :string
     field :account_label, :string
+    field :workspace_id, :string
+    field :workspace_label, :string
+    field :seat_type, :string
     field :onboarding_method, :string
     field :status, :string
     field :plan_family, :string
@@ -46,6 +49,9 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
       :chatgpt_account_id,
       :account_email,
       :account_label,
+      :workspace_id,
+      :workspace_label,
+      :seat_type,
       :onboarding_method,
       :status,
       :plan_family,
@@ -64,6 +70,9 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     |> update_change(:chatgpt_account_id, &trim_string/1)
     |> update_change(:account_email, &normalize_optional_email/1)
     |> update_change(:account_label, &trim_string/1)
+    |> update_change(:workspace_id, &normalize_optional_string/1)
+    |> update_change(:workspace_label, &normalize_optional_string/1)
+    |> update_change(:seat_type, &normalize_optional_string/1)
     |> update_change(:plan_family, &normalize_optional_token/1)
     |> update_change(:plan_label, &trim_string/1)
     |> validate_required([
@@ -80,7 +89,10 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     |> validate_inclusion(:onboarding_method, @onboarding_methods)
     |> validate_format(:plan_family, @plan_family_format)
     |> unique_constraint(:chatgpt_account_id,
-      name: :upstream_identities_chatgpt_identity_uq
+      name: :upstream_identities_chatgpt_legacy_workspace_uq
+    )
+    |> unique_constraint(:workspace_id,
+      name: :upstream_identities_chatgpt_workspace_slot_uq
     )
   end
 
@@ -143,6 +155,15 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
   end
 
   defp normalize_optional_email(value), do: value
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_optional_string(value), do: value
 
   defp trim_string(value) when is_binary(value), do: String.trim(value)
   defp trim_string(value), do: value

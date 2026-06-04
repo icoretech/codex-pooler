@@ -64,7 +64,9 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
         account_label: raw_email,
         chatgpt_account_id: "acct-quota-fresh",
         identity_metadata: %{"account_email" => raw_email, "provider_json" => raw_secret},
-        plan_family: "team"
+        plan_family: "team",
+        workspace_id: "workspace-quota-alpha",
+        workspace_label: "Quota alpha"
       })
 
     model =
@@ -103,6 +105,8 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert account.id == identity.id
     assert account.label == "TA***@example.com"
     assert account.stored_account_id == "acct-quota-fresh"
+    assert String.starts_with?(account.workspace_ref, "ws:")
+    assert account.workspace_label == "Quota alpha"
     assert account.status == "active"
     assert account.plan_family == "team"
 
@@ -153,6 +157,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
 
     refute inspect(account) =~ raw_email
     refute inspect(account) =~ raw_secret
+    refute inspect(account) =~ "workspace-quota-alpha"
     refute inspect(account) =~ "provider_json"
     refute inspect(account) =~ "metadata"
   end

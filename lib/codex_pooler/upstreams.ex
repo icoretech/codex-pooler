@@ -17,7 +17,7 @@ defmodule CodexPooler.Upstreams do
   }
 
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
-  alias CodexPooler.Upstreams.Lifecycle.AccountLifecycle
+  alias CodexPooler.Upstreams.Lifecycle.{AccountLifecycle, IdentityLifecycle}
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
 
   alias CodexPooler.Upstreams.Schemas.{
@@ -97,12 +97,20 @@ defmodule CodexPooler.Upstreams do
   def get_upstream_identity(_id), do: nil
 
   @spec get_upstream_identity_by_chatgpt_account(term()) :: UpstreamIdentity.t() | nil
-  def get_upstream_identity_by_chatgpt_account(chatgpt_account_id)
-      when is_binary(chatgpt_account_id) do
-    Repo.get_by(UpstreamIdentity, chatgpt_account_id: String.trim(chatgpt_account_id))
-  end
+  defdelegate get_upstream_identity_by_chatgpt_account(chatgpt_account_id),
+    to: IdentityLifecycle
 
-  def get_upstream_identity_by_chatgpt_account(_chatgpt_account_id), do: nil
+  @spec list_upstream_identities_by_chatgpt_account(term()) :: [UpstreamIdentity.t()]
+  defdelegate list_upstream_identities_by_chatgpt_account(chatgpt_account_id),
+    to: IdentityLifecycle
+
+  @spec get_upstream_identity_by_chatgpt_account_and_workspace(term(), term()) ::
+          UpstreamIdentity.t() | nil
+  defdelegate get_upstream_identity_by_chatgpt_account_and_workspace(
+                chatgpt_account_id,
+                workspace_id
+              ),
+              to: IdentityLifecycle
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   defdelegate import_codex_auth_json(scope, pool, content), to: Import

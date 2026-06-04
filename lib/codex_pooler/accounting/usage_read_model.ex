@@ -143,6 +143,13 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   defdelegate build_codex_usage_for_chatgpt_account(chatgpt_account_id, opts \\ []),
     to: UpstreamUsage
 
+  @spec build_codex_usage_for_upstream_identity(
+          CodexPooler.Upstreams.Schemas.UpstreamIdentity.t(),
+          keyword()
+        ) ::
+          {:ok, map()} | {:error, accounting_error()}
+  defdelegate build_codex_usage_for_upstream_identity(identity, opts \\ []), to: UpstreamUsage
+
   defp build_local_codex_usage_for_api_key(pool_or_id, api_key_or_id, opts) do
     with {:ok, usage} <- build_api_key_self_usage(pool_or_id, api_key_or_id, opts) do
       primary =

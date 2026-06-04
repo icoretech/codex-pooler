@@ -441,6 +441,56 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert active_secret_count("device_code") == 1
   end
 
+  test "invite completion keeps workspace slots distinct for the same Codex account" do
+    configure_codex_auth_client!(%{
+      poll_results: [
+        {:ok, token_payload(workspace_claims("workspace-alpha-slot", "Workspace A"))},
+        {:ok, token_payload(workspace_claims("workspace-beta-slot", "Workspace B"))}
+      ]
+    })
+
+    {first_token, pool} = invite_fixture()
+    {:ok, first_start} = InviteOnboarding.start_device(first_token)
+
+    {:ok, first_completed} =
+      InviteOnboarding.poll_device(first_token, first_start.account.identity.id)
+
+    scope =
+      Scope.for_user(Repo.get!(CodexPooler.Accounts.User, pool.created_by_user_id), [
+        "instance_owner"
+      ])
+
+    {:ok, %{token: second_token}} =
+      Access.create_invite(scope, pool, %{invited_email: "codex-user@example.com"})
+
+    {:ok, second_start} = InviteOnboarding.start_device(second_token)
+
+    {:ok, second_completed} =
+      InviteOnboarding.poll_device(second_token, second_start.account.identity.id)
+
+    assert first_completed.identity.id != second_completed.identity.id
+
+    assert first_completed.identity.chatgpt_account_id ==
+             second_completed.identity.chatgpt_account_id
+
+    assert first_completed.identity.workspace_id == "workspace-alpha-slot"
+    assert first_completed.identity.workspace_label == "Workspace A"
+    assert second_completed.identity.workspace_id == "workspace-beta-slot"
+    assert second_completed.identity.workspace_label == "Workspace B"
+    assert second_completed.identity.seat_type == "team"
+    assert first_completed.assignment.id != second_completed.assignment.id
+    assert first_completed.assignment.pool_id == pool.id
+    assert second_completed.assignment.pool_id == pool.id
+    assert Repo.aggregate(UpstreamIdentity, :count) == 2
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
+    assert active_secret_count("access_token") == 2
+    assert active_secret_count("refresh_token") == 2
+
+    html = render(live(build_conn(), ~p"/onboarding/invites/#{second_token}") |> elem(1))
+    refute html =~ "workspace-alpha-slot"
+    refute html =~ "workspace-beta-slot"
+  end
+
   test "invite onboarding into a second Pool reuses the existing upstream account and creates the target Pool assignment" do
     access_token = "invite-cross-pool-access"
     refresh_token = "invite-cross-pool-refresh"
@@ -587,6 +637,19 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
       access_token: Keyword.get(opts, :access_token, "access-token"),
       refresh_token: Keyword.get(opts, :refresh_token, "refresh-token"),
       id_token: id_token(claim_overrides)
+    }
+  end
+
+  defp workspace_claims(workspace_id, workspace_label) do
+    %{
+      "https://api.openai.com/auth" => %{
+        "chatgpt_account_id" => "acct_workspace_slots",
+        "chatgpt_user_id" => "user_workspace_slots",
+        "chatgpt_plan_type" => "team",
+        "workspace_id" => workspace_id,
+        "workspace_label" => workspace_label,
+        "seat_type" => "team"
+      }
     }
   end
 

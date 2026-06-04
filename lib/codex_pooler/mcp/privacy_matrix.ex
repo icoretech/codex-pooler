@@ -205,6 +205,8 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :id,
         :chatgpt_account_id,
         :account_label,
+        :workspace_ref,
+        :workspace_label,
         :onboarding_method,
         :status,
         :plan_family,
@@ -222,6 +224,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
       masked: [:account_email, :upstream_account_email],
       summarized: [:quota_summary, :assignment_summary, :metadata],
       omitted: [
+        :workspace_id,
         :upstream_auth_json,
         :auth_json,
         :access_token,
@@ -243,6 +246,8 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :id,
         :label,
         :stored_account_id,
+        :workspace_ref,
+        :workspace_label,
         :status,
         :plan_family,
         :assignment_summary,
@@ -254,6 +259,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
       omitted: [
         :account_email,
         :upstream_account_email,
+        :workspace_id,
         :metadata,
         :raw_metadata,
         :evidence,

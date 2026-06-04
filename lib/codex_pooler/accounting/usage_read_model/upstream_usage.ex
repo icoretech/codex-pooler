@@ -38,8 +38,8 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
 
   def build_codex_usage_for_chatgpt_account(chatgpt_account_id, opts)
       when is_binary(chatgpt_account_id) do
-    account =
-      Repo.one(
+    accounts =
+      Repo.all(
         from identity in UpstreamIdentity,
           join: assignment in PoolUpstreamAssignment,
           on: assignment.upstream_identity_id == identity.id,
@@ -47,18 +47,26 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
             identity.chatgpt_account_id == ^String.trim(chatgpt_account_id) and
               identity.status == ^@identity_active and
               assignment.status == ^@assignment_active,
-          order_by: [desc: assignment.updated_at, desc: assignment.id],
-          limit: 1,
+          distinct: true,
+          order_by: [asc: identity.id],
+          limit: 2,
           select: identity
       )
 
-    case account do
-      %UpstreamIdentity{} = identity ->
-        build_codex_usage_for_identity(identity, opts)
+    case accounts do
+      [%UpstreamIdentity{} = identity] ->
+        build_codex_usage_for_upstream_identity(identity, opts)
 
-      nil ->
+      [] ->
         {:error,
          accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+
+      [_first, _second | _rest] ->
+        {:error,
+         accounting_error(
+           :ambiguous_chatgpt_account,
+           "chatgpt-account-id matches multiple upstream workspaces"
+         )}
     end
   end
 
@@ -66,6 +74,17 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     do:
       {:error,
        accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+
+  @spec build_codex_usage_for_upstream_identity(UpstreamIdentity.t(), keyword()) ::
+          {:ok, map()} | {:error, accounting_error()}
+  def build_codex_usage_for_upstream_identity(%UpstreamIdentity{} = identity, opts \\ []) do
+    if active_assigned_identity?(identity) do
+      build_codex_usage_for_identity(identity, opts)
+    else
+      {:error,
+       accounting_error(:invalid_chatgpt_account, "unknown or inactive chatgpt-account-id")}
+    end
+  end
 
   @spec v1_upstream_limits_for_pool(term(), DateTime.t(), keyword()) :: [map()]
   def v1_upstream_limits_for_pool(pool_id, as_of, opts) when is_binary(pool_id) do
@@ -103,6 +122,17 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
        additional_rate_limits: additional_rate_limits
      }}
   end
+
+  defp active_assigned_identity?(%UpstreamIdentity{id: identity_id, status: @identity_active}) do
+    Repo.exists?(
+      from assignment in PoolUpstreamAssignment,
+        where:
+          assignment.upstream_identity_id == ^identity_id and
+            assignment.status == ^@assignment_active
+    )
+  end
+
+  defp active_assigned_identity?(%UpstreamIdentity{}), do: false
 
   defp best_codex_usage_identity_for_pool(pool_id, opts) when is_binary(pool_id) do
     candidates = codex_usage_candidates(pool_id)

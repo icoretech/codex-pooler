@@ -97,6 +97,8 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
       id: identity.id,
       label: safe_label(identity.account_label),
       stored_account_id: present_string(identity.chatgpt_account_id),
+      workspace_ref: workspace_ref(identity.workspace_id),
+      workspace_label: safe_label(identity.workspace_label),
       status: identity.status,
       plan_family: present_string(identity.plan_family),
       assignment_summary: assignment_summary(identity, visible_pool_ids),
@@ -270,6 +272,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   defp account_sort_key(account) do
     {
       account.label || "",
+      account.workspace_ref || "",
       account.id || "",
       account.quota_windows |> List.first(%{}) |> Map.get(:quota_kind, ""),
       account.quota_windows |> List.first(%{}) |> model_sort_value(),
@@ -319,6 +322,17 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
   defp source_precision(value) when value in @source_precisions, do: value
   defp source_precision(_value), do: nil
+
+  defp workspace_ref(nil), do: "legacy"
+
+  defp workspace_ref(workspace_id) when is_binary(workspace_id) do
+    digest =
+      :crypto.hash(:sha256, workspace_id) |> Base.encode16(case: :lower) |> String.slice(0, 8)
+
+    "ws:" <> digest
+  end
+
+  defp workspace_ref(_workspace_id), do: "legacy"
 
   defp safe_label(value) when is_binary(value) do
     value = String.trim(value)

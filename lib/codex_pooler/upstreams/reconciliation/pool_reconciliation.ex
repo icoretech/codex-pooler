@@ -39,23 +39,41 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
     case load_active_assignment_with_identity(pool_id, assignment_id) do
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->
-        health_step = record_reconciliation_health!(assignment)
         quota_step = refresh_reconciliation_quota(identity, assignment, opts)
-        status = summarize_reconciliation_status([health_step, quota_step])
 
-        assignment =
-          assignment
-          |> Repo.reload!()
-          |> record_reconciliation_summary!(status, [health_step, quota_step])
+        if identity_conflict_step?(quota_step) do
+          assignment =
+            record_identity_conflict!(assignment, quota_step.details["identity_conflict"])
 
-        {:ok,
-         %{
-           status: status,
-           assignment: assignment,
-           identity: identity,
-           health: health_step,
-           quota: quota_step
-         }}
+          health_step =
+            step_result(:skipped, "health_skipped", "assignment health was not refreshed")
+
+          {:ok,
+           %{
+             status: :failed,
+             assignment: assignment,
+             identity: identity,
+             health: health_step,
+             quota: quota_step
+           }}
+        else
+          health_step = record_reconciliation_health!(assignment)
+          status = summarize_reconciliation_status([health_step, quota_step])
+
+          assignment =
+            assignment
+            |> Repo.reload!()
+            |> record_reconciliation_summary!(status, [health_step, quota_step])
+
+          {:ok,
+           %{
+             status: status,
+             assignment: assignment,
+             identity: identity,
+             health: health_step,
+             quota: quota_step
+           }}
+        end
 
       nil ->
         {:error,
@@ -98,11 +116,9 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   end
 
   defp refresh_reconciliation_quota(identity, assignment, opts) do
-    windows =
-      Keyword.get(opts, :quota_windows) || metadata_quota_windows(identity, assignment) ||
-        codex_usage_quota_windows(identity, assignment, opts)
+    source = reconciliation_quota_source(identity, assignment, opts)
 
-    case windows do
+    case source do
       :auth_unavailable ->
         step_result(
           :failed,
@@ -113,21 +129,55 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       :usage_unavailable ->
         step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
 
-      [_ | _] ->
-        case Quota.Windows.upsert_quota_windows(identity, windows, delete_missing?: true) do
-          {:ok, refreshed} ->
-            step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
-              "window_count" => length(refreshed)
-            })
+      {:windows, windows, identity_attrs} ->
+        upsert_reconciliation_quota(identity, windows, identity_attrs, nil)
 
-          {:error, reason} ->
-            step_result(:failed, "quota_refresh_failed", safe_error_message(reason))
-        end
-
-      _empty ->
-        step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
+      {:usage, %UpstreamIdentity{} = usage_identity, payload, windows} ->
+        upsert_reconciliation_quota(
+          usage_identity,
+          windows,
+          identity_attrs_from_codex_usage_payload(payload),
+          payload
+        )
     end
   end
+
+  defp reconciliation_quota_source(identity, assignment, opts) do
+    cond do
+      Keyword.has_key?(opts, :quota_windows) ->
+        {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{})}
+
+      windows = metadata_quota_windows(identity, assignment) ->
+        {:windows, windows, %{}}
+
+      true ->
+        codex_usage_quota_windows(identity, assignment, opts)
+    end
+  end
+
+  defp upsert_reconciliation_quota(identity, windows, identity_attrs, payload)
+       when is_list(windows) do
+    case Quota.Windows.upsert_quota_windows(identity, windows,
+           delete_missing?: true,
+           identity_attrs: identity_attrs
+         ) do
+      {:ok, refreshed} ->
+        if is_map(payload), do: maybe_update_identity_plan(identity, payload)
+
+        step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
+          "window_count" => length(refreshed)
+        })
+
+      {:error, {:identity_conflict, :workspace_identity_mismatch, conflict}} ->
+        identity_conflict_step(conflict)
+
+      {:error, reason} ->
+        step_result(:failed, "quota_refresh_failed", safe_error_message(reason))
+    end
+  end
+
+  defp upsert_reconciliation_quota(_identity, _windows, _identity_attrs, _payload),
+    do: step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
 
   defp metadata_quota_windows(identity, assignment) do
     identity_windows = Quota.Windows.quota_windows_from_metadata(identity.metadata)
@@ -151,8 +201,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          observed_at <- now() do
       case fetch_codex_usage_payload(identity, assignment, access_token, observed_at, opts) do
         {:ok, payload, _url, windows} ->
-          maybe_update_identity_plan(identity, payload)
-          windows
+          {:usage, identity, payload, windows}
 
         {:error, {:upstream_status, status}} when status in [401, 403] ->
           retry_codex_usage_after_token_refresh(identity, assignment, opts)
@@ -181,8 +230,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
              observed_at,
              opts
            ) do
-      maybe_update_identity_plan(refreshed_identity, payload)
-      windows
+      {:usage, refreshed_identity, payload, windows}
     else
       _unavailable -> :auth_unavailable
     end
@@ -302,6 +350,48 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp upstream_usage_base_url(identity, assignment) do
     EndpointMetadata.usage_base_url(identity, assignment)
+  end
+
+  defp identity_attrs_from_codex_usage_payload(%{"plan_type" => plan_type})
+       when is_binary(plan_type) do
+    %{plan_family: normalize_plan(plan_type), plan_label: plan_type}
+  end
+
+  defp identity_attrs_from_codex_usage_payload(_payload), do: %{}
+
+  defp identity_conflict_step(conflict) do
+    step_result(:failed, "workspace_identity_mismatch", "workspace identity mismatch", %{
+      "identity_conflict" => conflict_metadata(conflict)
+    })
+  end
+
+  defp identity_conflict_step?(%{code: "workspace_identity_mismatch"}), do: true
+  defp identity_conflict_step?(_step), do: false
+
+  defp record_identity_conflict!(%PoolUpstreamAssignment{} = assignment, conflict)
+       when is_map(conflict) do
+    timestamp = now()
+
+    assignment
+    |> PoolUpstreamAssignment.changeset(%{
+      metadata: Map.put(assignment.metadata || %{}, "identity_conflict", conflict),
+      updated_at: timestamp
+    })
+    |> Repo.update!()
+  end
+
+  defp conflict_metadata(conflict) when is_map(conflict) do
+    conflict
+    |> Map.take([
+      :path,
+      :stored_workspace_ref,
+      :incoming_workspace_ref,
+      :stored_plan_family,
+      :incoming_plan_family,
+      :stored_seat_type,
+      :incoming_seat_type
+    ])
+    |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
   end
 
   defp maybe_update_identity_plan(identity, %{"plan_type" => plan_type})

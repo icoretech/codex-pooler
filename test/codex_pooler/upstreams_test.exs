@@ -13,7 +13,7 @@ defmodule CodexPooler.UpstreamsTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
-  alias CodexPooler.Upstreams.Auth.TokenRefresh
+  alias CodexPooler.Upstreams.Auth.{CodexAuth, CodexAuthJson, TokenRefresh}
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 
   alias CodexPooler.Upstreams.Quota
@@ -66,6 +66,68 @@ defmodule CodexPooler.UpstreamsTest do
       assert updated_identity.id == identity.id
       assert updated_identity.account_label == "Renamed account"
       assert Repo.get!(UpstreamIdentity, identity.id).plan_label == "Team"
+    end
+
+    test "allows one legacy null workspace slot per ChatGPT account" do
+      account_id = "acct_legacy_slot_#{System.unique_integer([:positive])}"
+
+      assert {:ok, _identity} =
+               IdentityLifecycle.create_upstream_identity(%{
+                 chatgpt_account_id: account_id,
+                 account_label: "Legacy slot",
+                 onboarding_method: "import"
+               })
+
+      assert {:error, changeset} =
+               IdentityLifecycle.create_upstream_identity(%{
+                 chatgpt_account_id: account_id,
+                 account_label: "Duplicate legacy slot",
+                 onboarding_method: "import"
+               })
+
+      assert %{chatgpt_account_id: ["has already been taken"]} = errors_on(changeset)
+    end
+
+    test "allows legacy and concrete workspace slots for the same ChatGPT account" do
+      %{legacy: legacy, alpha: alpha, beta: beta} = workspace_slot_identities_fixture()
+
+      assert legacy.chatgpt_account_id == "acct_123"
+      assert legacy.workspace_id == nil
+      assert alpha.chatgpt_account_id == "acct_123"
+      assert alpha.workspace_id == "ws_alpha"
+      assert beta.chatgpt_account_id == "acct_123"
+      assert beta.workspace_id == "ws_beta"
+      assert alpha.id != beta.id
+      assert legacy.id != alpha.id
+      assert legacy.id != beta.id
+    end
+
+    test "normalizes blank workspace ids to the legacy null slot" do
+      account_id = "acct_blank_workspace_#{System.unique_integer([:positive])}"
+
+      assert {:ok, identity} =
+               IdentityLifecycle.create_upstream_identity(%{
+                 chatgpt_account_id: account_id,
+                 workspace_id: "   ",
+                 workspace_label: " Workspace label ",
+                 seat_type: " team ",
+                 account_label: "Blank workspace",
+                 onboarding_method: "import"
+               })
+
+      assert identity.workspace_id == nil
+      assert identity.workspace_label == "Workspace label"
+      assert identity.seat_type == "team"
+
+      assert {:error, changeset} =
+               IdentityLifecycle.create_upstream_identity(%{
+                 chatgpt_account_id: account_id,
+                 workspace_id: nil,
+                 account_label: "Duplicate blank workspace",
+                 onboarding_method: "import"
+               })
+
+      assert %{chatgpt_account_id: ["has already been taken"]} = errors_on(changeset)
     end
 
     test "generic operator updates cannot set reported plan metadata" do
@@ -626,6 +688,454 @@ defmodule CodexPooler.UpstreamsTest do
       refute inspect(event) =~ access_token
       refute inspect(event) =~ refresh_token
       refute inspect(event) =~ auth_json
+    end
+
+    test "auth parsers prefer nested workspace claims over conflicting top-level claims" do
+      id_token =
+        jwt_token(%{
+          "email" => "workspace-nested@example.com",
+          "workspace_id" => "ws_top",
+          "workspace_label" => "Top Workspace",
+          "seat_type" => "top-seat",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => "acct_workspace_nested",
+            "organization_id" => "ws_nested",
+            "organization_name" => "Nested Workspace",
+            "entitlement_type" => "nested-seat"
+          }
+        })
+
+      assert {:ok,
+              %{
+                workspace_id: "ws_nested",
+                workspace_label: "Nested Workspace",
+                seat_type: "nested-seat"
+              }} = CodexAuth.token_info(id_token)
+
+      assert {:ok, attrs} =
+               CodexAuthJson.parse(
+                 auth_json_fixture(account_id: "acct_workspace_nested", id_token: id_token)
+               )
+
+      assert attrs.workspace_id == "ws_nested"
+      assert attrs.workspace_label == "Nested Workspace"
+      assert attrs.seat_type == "nested-seat"
+    end
+
+    test "auth.json parser falls back to accepted top-level workspace claim aliases" do
+      cases = [
+        {"workspace_id", "workspace_label", "seat_type"},
+        {"chatgpt_workspace_id", "workspace_name", "chatgpt_seat_type"},
+        {"organization_id", "organization_name", "entitlement_type"},
+        {"org_id", "org_name", "seat_type"},
+        {"tenant_id", "tenant_name", "seat_type"}
+      ]
+
+      for {id_key, label_key, seat_key} <- cases do
+        unique = System.unique_integer([:positive])
+
+        id_token =
+          jwt_token(%{
+            "email" => "workspace-alias-#{unique}@example.com",
+            "https://api.openai.com/auth" => %{
+              "chatgpt_account_id" => "acct_workspace_alias_#{unique}"
+            },
+            id_key => "ws_alias_#{unique}",
+            label_key => "Alias Workspace #{unique}",
+            seat_key => "alias-seat-#{unique}"
+          })
+
+        assert {:ok, attrs} =
+                 CodexAuthJson.parse(
+                   auth_json_fixture(
+                     account_id: "acct_workspace_alias_#{unique}",
+                     id_token: id_token
+                   )
+                 )
+
+        assert attrs.workspace_id == "ws_alias_#{unique}"
+        assert attrs.workspace_label == "Alias Workspace #{unique}"
+        assert attrs.seat_type == "alias-seat-#{unique}"
+      end
+    end
+
+    test "auth.json import stores workspace claim metadata on upstream identities" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "auth-json-workspace", name: "auth.json Workspace"})
+
+      id_token =
+        jwt_token(%{
+          "email" => "workspace-import@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => "acct_workspace_import",
+            "workspace_id" => "ws_import",
+            "workspace_label" => "Imported Workspace",
+            "seat_type" => "team-seat",
+            "chatgpt_plan_type" => "team"
+          }
+        })
+
+      assert {:ok, %{identity: identity}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(account_id: "acct_workspace_import", id_token: id_token)
+               )
+
+      assert identity.chatgpt_account_id == "acct_workspace_import"
+      assert identity.workspace_id == "ws_import"
+      assert identity.workspace_label == "Imported Workspace"
+      assert identity.seat_type == "team-seat"
+      assert identity.plan_label == "team"
+    end
+
+    test "auth.json import normalizes blank workspace claims and does not key on label alone" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "auth-json-workspace-label", name: "auth.json Label"})
+
+      id_token =
+        jwt_token(%{
+          "email" => "workspace-label@example.com",
+          "workspace_id" => "   ",
+          "workspace_label" => " Display Only Workspace ",
+          "seat_type" => "   ",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => "acct_workspace_label_only"
+          }
+        })
+
+      auth_json =
+        auth_json_fixture(account_id: "acct_workspace_label_only", id_token: id_token)
+        |> Jason.decode!()
+        |> Map.merge(%{
+          "workspace_id" => "untrusted_payload_workspace",
+          "workspace_label" => "Untrusted Payload Workspace",
+          "seat_type" => "untrusted-seat"
+        })
+        |> Jason.encode!()
+
+      assert {:ok, %{identity: identity}} =
+               Upstreams.import_codex_auth_json(scope, pool, auth_json)
+
+      assert identity.workspace_id == nil
+      assert identity.workspace_label == "Display Only Workspace"
+      assert identity.seat_type == nil
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+    end
+
+    test "auth.json import updates the exact account workspace slot" do
+      scope = fixture_owner_scope()
+      {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-slot", name: "auth.json Slot"})
+      account_id = "acct_workspace_exact_#{System.unique_integer([:positive])}"
+      first_access = jwt_token(%{"exp" => future_unix(), "nonce" => "slot-first"})
+      second_access = jwt_token(%{"exp" => future_unix(), "nonce" => "slot-second"})
+
+      first_id_token =
+        jwt_token(%{
+          "email" => "slot-exact@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => "ws_exact",
+            "workspace_label" => "Exact Workspace",
+            "entitlement_type" => "team-seat"
+          }
+        })
+
+      second_id_token =
+        jwt_token(%{
+          "email" => "slot-exact@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => "ws_exact",
+            "workspace_label" => "Exact Workspace Renamed",
+            "entitlement_type" => "enterprise-seat"
+          }
+        })
+
+      assert {:ok, %{status: :created, identity: first_identity, assignment: first_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: first_access,
+                   id_token: first_id_token
+                 )
+               )
+
+      assert {:ok, %{status: :existing, identity: second_identity, assignment: second_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: second_access,
+                   id_token: second_id_token
+                 )
+               )
+
+      assert second_identity.id == first_identity.id
+      assert second_assignment.id == first_assignment.id
+      assert second_identity.workspace_id == "ws_exact"
+      assert second_identity.workspace_label == "Exact Workspace Renamed"
+      assert second_identity.seat_type == "enterprise-seat"
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
+
+      assert {:ok, ^second_access} =
+               Secrets.decrypt_active_secret(second_identity, "access_token")
+    end
+
+    test "auth.json import upgrades a unique legacy slot to the incoming workspace" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "auth-json-legacy-slot", name: "auth.json Legacy Slot"})
+
+      account_id = "acct_workspace_upgrade_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{identity: legacy_identity, assignment: legacy_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(account_id: account_id)
+               )
+
+      assert legacy_identity.workspace_id == nil
+
+      workspace_id_token =
+        jwt_token(%{
+          "email" => "legacy-upgrade@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => "ws_promoted",
+            "workspace_label" => "Promoted Workspace",
+            "entitlement_type" => "team-seat"
+          }
+        })
+
+      assert {:ok, %{status: :existing, identity: promoted, assignment: promoted_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(account_id: account_id, id_token: workspace_id_token)
+               )
+
+      assert promoted.id == legacy_identity.id
+      assert promoted_assignment.id == legacy_assignment.id
+      assert promoted.workspace_id == "ws_promoted"
+      assert promoted.workspace_label == "Promoted Workspace"
+      assert promoted.seat_type == "team-seat"
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
+    end
+
+    test "auth.json import keeps a legacy slot distinct when concrete siblings exist" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "auth-json-sibling-slot", name: "auth.json Sibling Slot"})
+
+      account_id = "acct_workspace_sibling_#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{identity: legacy_identity}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(account_id: account_id)
+               )
+
+      concrete_sibling =
+        active_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_email: "sibling-slot@example.com",
+          account_label: "Existing concrete slot",
+          workspace_id: "ws_existing"
+        })
+
+      incoming_id_token =
+        jwt_token(%{
+          "email" => "sibling-slot@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => "ws_new",
+            "workspace_label" => "New Workspace",
+            "entitlement_type" => "team-seat"
+          }
+        })
+
+      assert {:ok, %{status: :created, identity: new_identity}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(account_id: account_id, id_token: incoming_id_token)
+               )
+
+      assert new_identity.id != legacy_identity.id
+      assert new_identity.id != concrete_sibling.id
+      assert new_identity.workspace_id == "ws_new"
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).workspace_id == nil
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).status == "active"
+      assert Repo.get!(UpstreamIdentity, concrete_sibling.id).workspace_id == "ws_existing"
+      assert Repo.get!(UpstreamIdentity, concrete_sibling.id).status == "active"
+      assert Repo.aggregate(UpstreamIdentity, :count) == 3
+    end
+
+    test "email workspace fallback updates only a single unambiguous candidate" do
+      email = "fallback-single-#{System.unique_integer([:positive])}@example.com"
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_fallback_single_#{System.unique_integer([:positive])}",
+          account_email: email,
+          account_label: "Fallback original",
+          workspace_id: "ws_fallback"
+        })
+
+      assert {:ok, updated_identity} =
+               IdentityLifecycle.upsert_upstream_identity(%{
+                 account_email: email,
+                 account_label: "Fallback updated",
+                 workspace_id: "ws_fallback",
+                 onboarding_method: "import",
+                 status: "active"
+               })
+
+      assert updated_identity.id == identity.id
+      assert updated_identity.chatgpt_account_id == identity.chatgpt_account_id
+      assert updated_identity.account_label == "Fallback updated"
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+    end
+
+    test "email workspace fallback refuses zero candidates without creating an identity" do
+      email = "fallback-missing-#{System.unique_integer([:positive])}@example.com"
+      workspace_id = "ws_missing_fallback"
+
+      assert {:error,
+              {:identity_conflict, :workspace_identity_mismatch,
+               %{
+                 path: "upstream_identity.reconciliation",
+                 stored_workspace_ref: "legacy",
+                 incoming_workspace_ref: incoming_workspace_ref,
+                 stored_plan_family: nil,
+                 incoming_plan_family: "team",
+                 stored_seat_type: nil,
+                 incoming_seat_type: "enterprise-seat"
+               } = conflict}} =
+               IdentityLifecycle.upsert_upstream_identity(%{
+                 account_email: email,
+                 account_label: "Fallback missing",
+                 workspace_id: workspace_id,
+                 onboarding_method: "import",
+                 plan_family: "team",
+                 seat_type: "enterprise-seat",
+                 status: "active"
+               })
+
+      assert String.starts_with?(incoming_workspace_ref, "ws:")
+
+      assert Map.keys(conflict) |> Enum.sort() ==
+               [
+                 :incoming_plan_family,
+                 :incoming_seat_type,
+                 :incoming_workspace_ref,
+                 :path,
+                 :stored_plan_family,
+                 :stored_seat_type,
+                 :stored_workspace_ref
+               ]
+
+      assert Repo.aggregate(UpstreamIdentity, :count) == 0
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+      assert Repo.aggregate(EncryptedSecret, :count) == 0
+      refute inspect(conflict) =~ email
+      refute inspect(conflict) =~ workspace_id
+    end
+
+    test "email legacy fallback refuses concrete sibling ambiguity without mutations" do
+      pool = pool_fixture()
+      email = "fallback-conflict-#{System.unique_integer([:positive])}@example.com"
+      account_id = "acct_fallback_conflict_#{System.unique_integer([:positive])}"
+      configure_upstream_secret_key!()
+      access_token = generated_secret("fallback-conflict")
+
+      legacy_identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_email: email,
+          account_label: "Fallback legacy",
+          plan_family: "pro"
+        })
+
+      concrete_identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_email: email,
+          account_label: "Fallback concrete",
+          workspace_id: "ws_conflict",
+          seat_type: "team-seat"
+        })
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, legacy_identity)
+      assert {:ok, assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(legacy_identity, %{
+                 secret_kind: "access_token",
+                 plaintext: access_token
+               })
+
+      assert {:error,
+              {:identity_conflict, :workspace_identity_mismatch,
+               %{
+                 path: "upstream_identity.reconciliation",
+                 stored_workspace_ref: stored_workspace_ref,
+                 incoming_workspace_ref: "legacy",
+                 stored_plan_family: nil,
+                 incoming_plan_family: "team",
+                 stored_seat_type: "team-seat",
+                 incoming_seat_type: "enterprise-seat"
+               } = conflict}} =
+               IdentityLifecycle.upsert_upstream_identity(%{
+                 account_email: email,
+                 account_label: "Fallback incoming",
+                 onboarding_method: "import",
+                 plan_family: "team",
+                 seat_type: "enterprise-seat",
+                 status: "active"
+               })
+
+      assert String.starts_with?(stored_workspace_ref, "ws:")
+
+      assert Map.keys(conflict) |> Enum.sort() ==
+               [
+                 :incoming_plan_family,
+                 :incoming_seat_type,
+                 :incoming_workspace_ref,
+                 :path,
+                 :stored_plan_family,
+                 :stored_seat_type,
+                 :stored_workspace_ref
+               ]
+
+      assert Repo.aggregate(UpstreamIdentity, :count) == 2
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).account_label == "Fallback legacy"
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).workspace_id == nil
+      assert Repo.get!(UpstreamIdentity, concrete_identity.id).workspace_id == "ws_conflict"
+
+      assert Repo.get!(PoolUpstreamAssignment, assignment.id).upstream_identity_id ==
+               legacy_identity.id
+
+      assert Repo.get!(PoolUpstreamAssignment, assignment.id).status == "active"
+      assert {:ok, ^access_token} = Secrets.decrypt_active_secret(legacy_identity, "access_token")
+      refute inspect(conflict) =~ email
+      refute inspect(conflict) =~ account_id
+      refute inspect(conflict) =~ "ws_conflict"
     end
 
     test "auth.json import primes quota through the canonical assignment job path" do
@@ -4853,6 +5363,223 @@ defmodule CodexPooler.UpstreamsTest do
       assert window.window_kind == "primary"
       assert window.window_minutes == 300
       assert window.used_percent == Decimal.new("42.5")
+    end
+
+    test "quota refresh refuses workspace slot conflicts without mutating windows" do
+      identity =
+        active_identity_fixture(%{
+          workspace_id: "ws_quota_guard",
+          seat_type: "member-seat"
+        })
+
+      assert {:ok, identity} =
+               IdentityLifecycle.activate_upstream_identity_with_plan(identity, %{
+                 plan_family: "pro",
+                 plan_label: "Pro"
+               })
+
+      assert {:ok, [existing]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("12"),
+                   source: "codex_usage_api",
+                   freshness_state: "fresh"
+                 }
+               ])
+
+      assert {:error,
+              {:identity_conflict, :workspace_identity_mismatch,
+               %{
+                 path: "upstream_identity.reconciliation",
+                 stored_workspace_ref: stored_workspace_ref,
+                 incoming_workspace_ref: incoming_workspace_ref,
+                 stored_plan_family: "pro",
+                 incoming_plan_family: "team",
+                 stored_seat_type: "member-seat",
+                 incoming_seat_type: "enterprise-seat"
+               } = conflict}} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   %{
+                     window_kind: "primary",
+                     window_minutes: 300,
+                     used_percent: Decimal.new("88"),
+                     source: "codex_usage_api",
+                     freshness_state: "fresh"
+                   }
+                 ],
+                 delete_missing?: true,
+                 identity_attrs: %{
+                   workspace_id: "ws_quota_other",
+                   plan_family: "team",
+                   seat_type: "enterprise-seat"
+                 }
+               )
+
+      assert String.starts_with?(stored_workspace_ref, "ws:")
+      assert String.starts_with?(incoming_workspace_ref, "ws:")
+
+      assert [persisted] = QuotaWindows.list_quota_windows(identity)
+      assert persisted.id == existing.id
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("12"))
+      assert Repo.get!(UpstreamIdentity, identity.id).plan_family == "pro"
+      assert Repo.get!(UpstreamIdentity, identity.id).workspace_id == "ws_quota_guard"
+
+      conflict_text = inspect(conflict)
+      refute conflict_text =~ "ws_quota_guard"
+      refute conflict_text =~ "ws_quota_other"
+      refute conflict_text =~ identity.chatgpt_account_id
+    end
+
+    test "reconciliation records sanitized identity conflicts without refreshing health plan or quota" do
+      upstream =
+        start_path_upstream(%{
+          "/api/codex/usage" =>
+            {200,
+             %{
+               "plan_type" => "Team",
+               "rate_limit" => %{
+                 "primary_window" => %{
+                   "used_percent" => 64,
+                   "limit_window_seconds" => 18_000,
+                   "reset_after_seconds" => 900
+                 }
+               }
+             }}
+        })
+
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_reconcile_conflict_#{System.unique_integer([:positive])}",
+          workspace_id: "ws_reconcile_guard",
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        })
+
+      assert {:ok, identity} =
+               IdentityLifecycle.activate_upstream_identity_with_plan(identity, %{
+                 plan_family: "free",
+                 plan_label: "Free"
+               })
+
+      assert {:ok, assignment} =
+               PoolAssignments.create_pool_assignment(pool, identity, %{})
+
+      assert {:ok, assignment} =
+               PoolAssignments.activate_pool_assignment(assignment)
+
+      configure_upstream_secret_key!()
+      access_token = generated_secret("reconcile-conflict")
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "access_token",
+                 plaintext: access_token
+               })
+
+      assert {:ok, [existing]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("17"),
+                   source: "codex_usage_api",
+                   freshness_state: "fresh"
+                 }
+               ])
+
+      before_assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+
+      assert {:ok, result} = Upstreams.reconcile_pool_account(pool, assignment)
+      assert result.status == :failed
+      assert result.quota.code == "workspace_identity_mismatch"
+      assert result.health.code == "health_skipped"
+
+      reloaded_identity = Repo.get!(UpstreamIdentity, identity.id)
+      assert reloaded_identity.plan_family == "free"
+      assert reloaded_identity.plan_label == "Free"
+      assert reloaded_identity.status == "active"
+      assert reloaded_identity.workspace_id == "ws_reconcile_guard"
+
+      reloaded_assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert reloaded_assignment.status == before_assignment.status
+      assert reloaded_assignment.health_status == before_assignment.health_status
+      assert reloaded_assignment.eligibility_status == before_assignment.eligibility_status
+      assert reloaded_assignment.last_healthcheck_at == before_assignment.last_healthcheck_at
+      refute Map.has_key?(reloaded_assignment.metadata, "last_reconciliation")
+
+      assert %{
+               "path" => "upstream_identity.reconciliation",
+               "stored_workspace_ref" => stored_workspace_ref,
+               "incoming_workspace_ref" => "legacy",
+               "stored_plan_family" => "free",
+               "incoming_plan_family" => "team"
+             } = reloaded_assignment.metadata["identity_conflict"]
+
+      assert String.starts_with?(stored_workspace_ref, "ws:")
+      assert [persisted] = QuotaWindows.list_quota_windows(identity)
+      assert persisted.id == existing.id
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("17"))
+      assert {:ok, ^access_token} = Secrets.decrypt_active_secret(identity, "access_token")
+
+      conflict_text = inspect(reloaded_assignment.metadata["identity_conflict"])
+      refute conflict_text =~ "ws_reconcile_guard"
+      refute conflict_text =~ identity.chatgpt_account_id
+      refute conflict_text =~ access_token
+    end
+
+    test "token refresh refuses ambiguous legacy workspace slots without mutating state" do
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {200, %{"access_token" => generated_secret("unused-access")}}
+        })
+
+      account_id = "acct_refresh_conflict_#{System.unique_integer([:positive])}"
+
+      legacy_identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        })
+
+      _concrete_identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          workspace_id: "ws_refresh_guard"
+        })
+
+      configure_upstream_secret_key!()
+      refresh_token = generated_secret("refresh-conflict")
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(legacy_identity, %{
+                 secret_kind: "refresh_token",
+                 plaintext: refresh_token
+               })
+
+      before_identity = Repo.get!(UpstreamIdentity, legacy_identity.id)
+
+      assert {:error,
+              {:identity_conflict, :workspace_identity_mismatch,
+               %{incoming_workspace_ref: "legacy", stored_workspace_ref: stored_workspace_ref} =
+                 conflict}} = TokenRefresh.refresh_access_token(legacy_identity)
+
+      assert String.starts_with?(stored_workspace_ref, "ws:")
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).status == before_identity.status
+      assert Repo.get!(UpstreamIdentity, legacy_identity.id).metadata == before_identity.metadata
+      assert FakeUpstream.count(upstream) == 0
+
+      assert {:ok, ^refresh_token} =
+               Secrets.decrypt_active_secret(legacy_identity, "refresh_token")
+
+      conflict_text = inspect(conflict)
+      refute conflict_text =~ "ws_refresh_guard"
+      refute conflict_text =~ account_id
+      refute conflict_text =~ refresh_token
     end
 
     test "metadata import treats malformed used percent as absent" do

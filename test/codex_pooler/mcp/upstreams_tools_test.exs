@@ -118,6 +118,50 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 
+  test "stored account id selector returns workspace candidates when ambiguous", %{auth: auth} do
+    pool = pool_fixture()
+    account_id = "acct-task7-shared-#{System.unique_integer([:positive])}"
+    first_workspace_id = "workspace-mcp-alpha-#{System.unique_integer([:positive])}"
+    second_workspace_id = "workspace-mcp-beta-#{System.unique_integer([:positive])}"
+
+    %{identity: first} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared MCP slot",
+        chatgpt_account_id: account_id,
+        workspace_id: first_workspace_id,
+        workspace_label: "MCP alpha"
+      })
+
+    %{identity: second} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared MCP slot",
+        chatgpt_account_id: account_id,
+        workspace_id: second_workspace_id,
+        workspace_label: "MCP beta"
+      })
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_upstream", %{"selector" => account_id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert result["structuredContent"]["status"] == "ambiguous"
+    assert result["structuredContent"]["item"] == nil
+
+    candidates = result["structuredContent"]["candidates"]
+    assert MapSet.new(Enum.map(candidates, & &1["id"])) == MapSet.new([first.id, second.id])
+    assert Enum.all?(candidates, &String.starts_with?(&1["workspace_ref"], "ws:"))
+    assert Enum.sort(Enum.map(candidates, & &1["workspace_label"])) == ["MCP alpha", "MCP beta"]
+
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert text =~ "2 visible upstream metadata record candidates matched the selector"
+    assert text =~ "workspace=ws:"
+    refute inspect(result) =~ first_workspace_id
+    refute inspect(result) =~ second_workspace_id
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
   test "upstream list empty text and not-found text do not echo caller sentinels", %{auth: auth} do
     sentinel = Redaction.forbidden_sentinel!(:prompt)
 

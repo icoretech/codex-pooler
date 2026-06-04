@@ -97,6 +97,9 @@ defmodule CodexPooler.PoolerFixtures do
         chatgpt_account_id: Map.get(attrs, :chatgpt_account_id),
         account_email: Map.get(attrs, :account_email),
         account_label: Map.get(attrs, :account_label, "Primary upstream"),
+        workspace_id: Map.get(attrs, :workspace_id),
+        workspace_label: Map.get(attrs, :workspace_label),
+        seat_type: Map.get(attrs, :seat_type),
         onboarding_method: Map.get(attrs, :onboarding_method, "import"),
         status: Map.get(attrs, :identity_status, "active"),
         plan_family: Map.get(attrs, :plan_family),
@@ -125,6 +128,69 @@ defmodule CodexPooler.PoolerFixtures do
     %{identity: identity, assignment: assignment}
   end
 
+  def upstream_identity_fixture(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    unique = System.unique_integer([:positive])
+
+    assert {:ok, identity} =
+             IdentityLifecycle.create_upstream_identity(%{
+               chatgpt_account_id: Map.get(attrs, :chatgpt_account_id, "acct_#{unique}"),
+               account_email: Map.get(attrs, :account_email),
+               account_label: Map.get(attrs, :account_label, "Gateway upstream #{unique}"),
+               workspace_id: Map.get(attrs, :workspace_id),
+               workspace_label: Map.get(attrs, :workspace_label),
+               seat_type: Map.get(attrs, :seat_type),
+               onboarding_method: Map.get(attrs, :onboarding_method, "import"),
+               plan_family: Map.get(attrs, :plan_family),
+               plan_label: Map.get(attrs, :plan_label),
+               metadata: Map.get(attrs, :metadata, %{})
+             })
+
+    identity
+  end
+
+  def active_upstream_identity_fixture(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+
+    attrs
+    |> upstream_identity_fixture()
+    |> IdentityLifecycle.activate_upstream_identity()
+    |> then(fn result ->
+      assert {:ok, identity} = result
+      identity
+    end)
+  end
+
+  def workspace_slot_identities_fixture(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    account_id = Map.get(attrs, :chatgpt_account_id, "acct_123")
+
+    %{
+      legacy:
+        active_upstream_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_label: "Legacy workspace slot",
+          workspace_id: nil
+        }),
+      alpha:
+        active_upstream_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_label: "Alpha workspace slot",
+          workspace_id: "ws_alpha",
+          workspace_label: "Alpha workspace",
+          seat_type: "team"
+        }),
+      beta:
+        active_upstream_identity_fixture(%{
+          chatgpt_account_id: account_id,
+          account_label: "Beta workspace slot",
+          workspace_id: "ws_beta",
+          workspace_label: "Beta workspace",
+          seat_type: "enterprise"
+        })
+    }
+  end
+
   def active_upstream_assignment_fixture(pool \\ pool_fixture(), attrs \\ %{}) do
     attrs = Map.new(attrs)
     unique = System.unique_integer([:positive])
@@ -136,6 +202,9 @@ defmodule CodexPooler.PoolerFixtures do
                chatgpt_account_id: Map.get(attrs, :chatgpt_account_id, "acct_#{unique}"),
                account_email: Map.get(attrs, :account_email),
                account_label: Map.get(attrs, :account_label, "Gateway upstream #{unique}"),
+               workspace_id: Map.get(attrs, :workspace_id),
+               workspace_label: Map.get(attrs, :workspace_label),
+               seat_type: Map.get(attrs, :seat_type),
                onboarding_method: Map.get(attrs, :onboarding_method, "import"),
                metadata: metadata
              })

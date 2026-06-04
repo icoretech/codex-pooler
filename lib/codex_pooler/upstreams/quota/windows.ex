@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     Quota.Windows.Routing
   }
 
+  alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   alias Ecto.Multi
@@ -22,19 +23,31 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   @account_quota_key "account"
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
+  @type identity_conflict :: IdentityLifecycle.identity_conflict()
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
 
-  @spec upsert_quota_windows(identity_ref(), [map()]) ::
-          {:ok, [Quota.AccountQuotaWindow.t()]} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  @spec upsert_quota_windows(identity_ref(), [map()], keyword()) ::
+          {:ok, [Quota.AccountQuotaWindow.t()]}
+          | {:error, Ecto.Changeset.t() | lifecycle_error() | identity_conflict()}
   def upsert_quota_windows(identity_or_id, windows, opts \\ [delete_missing?: false])
 
   def upsert_quota_windows(identity_or_id, windows, opts) when is_list(windows) do
     case normalize_identity(identity_or_id) do
       %UpstreamIdentity{} = identity ->
-        do_upsert_quota_windows(identity, windows, opts)
+        guarded_upsert_quota_windows(identity, windows, opts)
 
       nil ->
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+    end
+  end
+
+  defp guarded_upsert_quota_windows(%UpstreamIdentity{} = identity, windows, opts) do
+    with :ok <-
+           IdentityLifecycle.guard_workspace_slot_mutation(
+             identity,
+             Keyword.get(opts, :identity_attrs, %{})
+           ) do
+      do_upsert_quota_windows(identity, windows, Keyword.delete(opts, :identity_attrs))
     end
   end
 
@@ -286,11 +299,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   end
 
   @spec upsert_quota_windows_from_codex_usage_payload(identity_ref(), term(), DateTime.t()) ::
-          {:ok, [Quota.AccountQuotaWindow.t()]} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+          {:ok, [Quota.AccountQuotaWindow.t()]}
+          | {:error, Ecto.Changeset.t() | lifecycle_error() | identity_conflict()}
   def upsert_quota_windows_from_codex_usage_payload(identity_or_id, payload, synced_at \\ now()) do
     with {:ok, windows} <- codex_usage_quota_windows_from_payload(payload, synced_at),
          %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id) do
-      do_upsert_quota_windows(identity, windows, delete_missing?: false)
+      guarded_upsert_quota_windows(identity, windows,
+        delete_missing?: false,
+        identity_attrs: identity_attrs_from_codex_usage_payload(payload)
+      )
     else
       nil ->
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
@@ -305,7 +322,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   def upsert_quota_windows_from_codex_headers(identity_or_id, headers, synced_at \\ now()) do
     with [_ | _] = windows <- quota_windows_from_codex_headers(headers, synced_at),
          %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id) do
-      do_upsert_quota_windows(identity, windows, delete_missing?: false)
+      guarded_upsert_quota_windows(identity, windows, delete_missing?: false)
     else
       nil ->
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
@@ -320,7 +337,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   def upsert_quota_windows_from_codex_rate_limit_event(identity_or_id, event, synced_at \\ now()) do
     with [_ | _] = windows <- quota_windows_from_codex_rate_limit_event(event, synced_at),
          %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id) do
-      do_upsert_quota_windows(identity, windows, delete_missing?: false)
+      guarded_upsert_quota_windows(identity, windows, delete_missing?: false)
     else
       nil ->
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
@@ -339,7 +356,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
       ) do
     with [_ | _] = windows <- quota_windows_from_codex_rate_limit_error(payload, synced_at),
          %UpstreamIdentity{} = identity <- normalize_identity(identity_or_id) do
-      do_upsert_quota_windows(identity, windows, delete_missing?: false)
+      guarded_upsert_quota_windows(identity, windows, delete_missing?: false)
     else
       nil ->
         {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
@@ -347,6 +364,26 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
       [] ->
         {:ok, []}
     end
+  end
+
+  defp identity_attrs_from_codex_usage_payload(%{"plan_type" => plan_type})
+       when is_binary(plan_type) do
+    %{plan_family: normalize_plan_family(plan_type), plan_label: plan_type}
+  end
+
+  defp identity_attrs_from_codex_usage_payload(_payload), do: %{}
+
+  defp normalize_plan_family(plan) do
+    plan
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> String.trim("-")
+    |> present_string()
+  end
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
   end
 
   defp quota_windows_from_codex_headers(headers, synced_at) do

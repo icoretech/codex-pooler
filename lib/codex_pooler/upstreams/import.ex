@@ -12,6 +12,7 @@ defmodule CodexPooler.Upstreams.Import do
 
   alias CodexPooler.Upstreams.Auth.CodexAuthJson
   alias CodexPooler.Upstreams.Lifecycle.AccountAudit
+  alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   @active UpstreamIdentity.active_status()
@@ -21,7 +22,10 @@ defmodule CodexPooler.Upstreams.Import do
   @health_active PoolUpstreamAssignment.active_health_status()
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
-  @type import_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  @type import_result ::
+          {:ok, map()}
+          | {:error,
+             Ecto.Changeset.t() | lifecycle_error() | IdentityLifecycle.identity_conflict()}
 
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   def import_codex_auth_json(scope, pool, content) do
@@ -104,9 +108,12 @@ defmodule CodexPooler.Upstreams.Import do
 
     identity_attrs =
       %{
-        chatgpt_account_id: attrs.account_identifier,
+        chatgpt_account_id: attrs.chatgpt_account_id,
         account_email: attrs.account_email,
         account_label: attrs.account_label,
+        workspace_id: attrs.workspace_id,
+        workspace_label: attrs.workspace_label,
+        seat_type: attrs.seat_type,
         onboarding_method: "import",
         auth_verified_at: timestamp,
         auth_fresh_at: timestamp,
@@ -116,8 +123,11 @@ defmodule CodexPooler.Upstreams.Import do
       }
       |> Map.merge(trusted_import_plan_metadata(attrs))
 
-    case get_upstream_identity_by_chatgpt_account(attrs.account_identifier) do
-      %UpstreamIdentity{} = identity ->
+    case IdentityLifecycle.select_upsert_identity(identity_attrs) do
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, %UpstreamIdentity{} = identity} ->
         attrs =
           Map.update!(identity_attrs, :metadata, fn import_metadata ->
             import_metadata
@@ -129,7 +139,7 @@ defmodule CodexPooler.Upstreams.Import do
           {:ok, :existing, active_identity}
         end
 
-      nil ->
+      {:ok, nil} ->
         identity_attrs =
           Map.update!(identity_attrs, :metadata, fn import_metadata ->
             put_imported_token_refresh_metadata(import_metadata, %{}, timestamp)
@@ -174,11 +184,6 @@ defmodule CodexPooler.Upstreams.Import do
           {:ok, :created, assignment}
         end
     end
-  end
-
-  defp get_upstream_identity_by_chatgpt_account(chatgpt_account_id)
-       when is_binary(chatgpt_account_id) do
-    Repo.get_by(UpstreamIdentity, chatgpt_account_id: String.trim(chatgpt_account_id))
   end
 
   defp create_identity_with_plan(attrs) when is_map(attrs) do
@@ -250,15 +255,22 @@ defmodule CodexPooler.Upstreams.Import do
   defp import_result_status(_identity_status, _assignment_status), do: :existing
 
   defp normalize_import_attrs(attrs) do
+    chatgpt_account_id =
+      attrs
+      |> import_value(:chatgpt_account_id)
+      |> Kernel.||(import_value(attrs, :account_identifier))
+      |> present_string()
+
+    account_email = attrs |> import_value(:account_email) |> normalize_email()
+
     %{
-      account_identifier:
-        attrs
-        |> import_value(:account_identifier)
-        |> Kernel.||(import_value(attrs, :chatgpt_account_id))
-        |> Kernel.||(import_value(attrs, :account_email))
-        |> present_string(),
-      account_email: attrs |> import_value(:account_email) |> normalize_email(),
+      chatgpt_account_id: chatgpt_account_id,
+      account_identifier: chatgpt_account_id || account_email,
+      account_email: account_email,
       account_label: attrs |> import_value(:account_label) |> present_string(),
+      workspace_id: attrs |> import_value(:workspace_id) |> present_string(),
+      workspace_label: attrs |> import_value(:workspace_label) |> present_string(),
+      seat_type: attrs |> import_value(:seat_type) |> present_string(),
       pool_id: attrs |> import_value(:pool_id) |> present_string(),
       plan_label: attrs |> import_value(:plan_label) |> present_string(),
       token:

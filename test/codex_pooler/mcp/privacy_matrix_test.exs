@@ -120,7 +120,12 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     assert PrivacyMatrix.field_policy!(:pool_api_keys, :key_prefix) == :allowed
     assert PrivacyMatrix.field_policy!(:pool_api_keys, :key_hash) == :omitted
     assert PrivacyMatrix.field_policy!(:upstreams, :account_label) == :allowed
+    assert PrivacyMatrix.field_policy!(:upstreams, :workspace_ref) == :allowed
+    assert PrivacyMatrix.field_policy!(:upstreams, :workspace_label) == :allowed
+    assert PrivacyMatrix.field_policy!(:upstreams, :workspace_id) == :omitted
     assert PrivacyMatrix.field_policy!(:upstreams, :account_email) == :masked
+    assert PrivacyMatrix.field_policy!(:upstream_quotas, :workspace_ref) == :allowed
+    assert PrivacyMatrix.field_policy!(:upstream_quotas, :workspace_id) == :omitted
     assert PrivacyMatrix.field_policy!(:upstream_quotas, :quota_windows) == :allowed
     assert PrivacyMatrix.field_policy!(:upstream_quotas, :metadata) == :omitted
     assert PrivacyMatrix.field_policy!(:upstream_quota_windows, :active_limit) == :allowed

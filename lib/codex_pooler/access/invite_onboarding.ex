@@ -231,8 +231,11 @@ defmodule CodexPooler.Access.InviteOnboarding do
       chatgpt_account_id ->
         info = Map.put(info, :chatgpt_account_id, chatgpt_account_id)
 
-        case Upstreams.get_upstream_identity_by_chatgpt_account(chatgpt_account_id) do
-          %UpstreamIdentity{id: existing_id} = existing when existing_id != identity.id ->
+        case IdentityLifecycle.select_upsert_identity(verified_identity_attrs(identity, info)) do
+          {:error, reason} ->
+            {:error, reason}
+
+          {:ok, %UpstreamIdentity{id: existing_id} = existing} when existing_id != identity.id ->
             complete_existing_account(
               invite,
               identity,
@@ -247,6 +250,19 @@ defmodule CodexPooler.Access.InviteOnboarding do
             complete_pending_account(invite, identity, assignment, tokens, method, info)
         end
     end
+  end
+
+  defp verified_identity_attrs(identity, info) do
+    %{
+      chatgpt_account_id: info.chatgpt_account_id,
+      account_email: info.email,
+      account_label: info.email || identity.account_label,
+      workspace_id: info.workspace_id,
+      workspace_label: info.workspace_label,
+      seat_type: info.seat_type,
+      plan_family: info.plan_family,
+      plan_label: info.plan_label
+    }
   end
 
   defp complete_pending_account(invite, identity, assignment, tokens, method, info) do
@@ -279,36 +295,31 @@ defmodule CodexPooler.Access.InviteOnboarding do
   end
 
   defp activate_verified_identity(identity, invite, method, info) do
-    IdentityLifecycle.activate_upstream_identity_with_plan(identity, %{
-      chatgpt_account_id: info.chatgpt_account_id,
-      account_email: info.email,
-      account_label: info.email || identity.account_label,
-      plan_family: info.plan_family,
-      plan_label: info.plan_label,
-      metadata:
+    attrs =
+      Map.put(
+        verified_identity_attrs(identity, info),
+        :metadata,
         identity.metadata
         |> complete_onboarding_metadata(invite, method)
         |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
         |> put_account_email(info.email)
-    })
+      )
+
+    IdentityLifecycle.activate_upstream_identity_with_plan(identity, attrs)
   end
 
   defp activate_verified_pool_account(identity, assignment, invite, method, info) do
     InternalLifecycle.activate_verified_pool_account(
       identity,
       assignment,
-      %{
-        chatgpt_account_id: info.chatgpt_account_id,
-        account_email: info.email,
-        account_label: info.email || identity.account_label,
-        plan_family: info.plan_family,
-        plan_label: info.plan_label,
-        metadata:
-          identity.metadata
-          |> complete_onboarding_metadata(invite, method)
-          |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
-          |> put_account_email(info.email)
-      },
+      Map.put(
+        verified_identity_attrs(identity, info),
+        :metadata,
+        identity.metadata
+        |> complete_onboarding_metadata(invite, method)
+        |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
+        |> put_account_email(info.email)
+      ),
       %{
         metadata: complete_onboarding_metadata(assignment.metadata, invite, method),
         skip_quota_priming: true
