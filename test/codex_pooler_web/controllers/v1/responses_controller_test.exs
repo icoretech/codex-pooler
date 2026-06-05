@@ -1853,6 +1853,94 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
+  test "POST /v1/responses streaming passes response metadata moderation without storing it", %{
+    conn: conn
+  } do
+    moderation_metadata = %{
+      "openai_chatgpt_moderation_metadata" => %{
+        "check_id" => "mod_check_metadata_fixture",
+        "private_probe" => "metadata moderation sentinel must not persist"
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{
+               "id" => "resp_v1_stream_response_metadata_moderation",
+               "status" => "in_progress",
+               "metadata" => moderation_metadata
+             }
+           }},
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "visible metadata text"}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_stream_response_metadata_moderation",
+               "status" => "completed",
+               "metadata" => moderation_metadata,
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic response metadata moderation stream request",
+        "stream" => true
+      })
+
+    events = public_sse_events(conn.resp_body)
+
+    assert %{
+             "event" => "response.created",
+             "data" => %{
+               "response" => %{
+                 "metadata" => ^moderation_metadata
+               }
+             }
+           } = Enum.find(events, &(&1["event"] == "response.created"))
+
+    assert %{
+             "event" => "response.completed",
+             "data" => %{
+               "response" => %{
+                 "metadata" => ^moderation_metadata
+               }
+             }
+           } = Enum.find(events, &(&1["event"] == "response.completed"))
+
+    assert conn.resp_body =~ "visible metadata text"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    persistence_text =
+      inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)})
+
+    refute persistence_text =~ "synthetic response metadata moderation stream request"
+    refute persistence_text =~ "visible metadata text"
+    refute persistence_text =~ "metadata moderation sentinel must not persist"
+    refute persistence_text =~ "openai_chatgpt_moderation_metadata"
+    refute persistence_text =~ "mod_check_metadata_fixture"
+  end
+
+  @tag :streaming_sequence
   test "POST /v1/responses streaming marks visible upstream output once", %{conn: conn} do
     upstream =
       start_upstream(
