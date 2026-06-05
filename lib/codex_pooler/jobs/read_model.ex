@@ -1041,14 +1041,18 @@ defmodule CodexPooler.Jobs.ReadModel do
   defp sanitize_explorer_error_summaries(jobs),
     do: Enum.map(jobs, &sanitize_explorer_error_summary/1)
 
-  defp sanitize_explorer_error_summary(%{errors: [latest_error | _errors]} = job)
-       when is_map(latest_error) do
+  defp sanitize_explorer_error_summary(%{errors: errors} = job) when is_list(errors) do
     job
     |> Map.delete(:errors)
-    |> Map.put(:failure_summary, failure_summary(latest_error))
+    |> maybe_put_failure_summary(latest_error_by_attempt(errors))
   end
 
   defp sanitize_explorer_error_summary(job), do: Map.delete(job, :errors)
+
+  defp maybe_put_failure_summary(job, latest_error) when is_map(latest_error),
+    do: Map.put(job, :failure_summary, failure_summary(latest_error))
+
+  defp maybe_put_failure_summary(job, _latest_error), do: job
 
   defp failure_summary(error) do
     %{
@@ -1056,6 +1060,23 @@ defmodule CodexPooler.Jobs.ReadModel do
       message: error |> Map.get("error") |> safe_failure_message()
     }
   end
+
+  defp latest_error_by_attempt(errors) do
+    errors
+    |> Enum.filter(&is_map/1)
+    |> Enum.max_by(&error_attempt_number/1, fn -> nil end)
+  end
+
+  defp error_attempt_number(%{"attempt" => attempt}) when is_integer(attempt), do: attempt
+
+  defp error_attempt_number(%{"attempt" => attempt}) when is_binary(attempt) do
+    case Integer.parse(attempt) do
+      {attempt, ""} -> attempt
+      _not_integer -> -1
+    end
+  end
+
+  defp error_attempt_number(_error), do: -1
 
   defp failure_title(%{"error" => message} = error) when is_binary(message) do
     [failure_attempt(error), operator_failure_title(message) || failure_kind(error)]
@@ -1134,6 +1155,12 @@ defmodule CodexPooler.Jobs.ReadModel do
       oban_discard_failure?(message) ->
         "Run discarded"
 
+      catalog_sync_invalid_trigger_kind?(message) ->
+        "Invalid catalog sync trigger"
+
+      catalog_sync_in_progress?(message) ->
+        "Catalog sync already running"
+
       code == "quota_refresh_auth_unavailable" ->
         "Quota refresh blocked"
 
@@ -1152,21 +1179,30 @@ defmodule CodexPooler.Jobs.ReadModel do
   end
 
   defp operator_failure_message(message) do
-    case reconciliation_failure_code(message) do
-      "quota_refresh_auth_unavailable" ->
-        "Quota refresh needs account reauthentication."
+    cond do
+      catalog_sync_invalid_trigger_kind?(message) ->
+        "Manual catalog sync could not start because the enqueue action used an unsupported trigger kind."
 
-      "quota_refresh_unavailable" ->
-        "Quota data was not available from the upstream account."
+      catalog_sync_in_progress?(message) ->
+        "Catalog sync could not start because this pool already has a sync run marked as running."
 
-      "quota_refresh_failed" ->
-        "Quota refresh failed for the upstream account."
+      true ->
+        case reconciliation_failure_code(message) do
+          "quota_refresh_auth_unavailable" ->
+            "Quota refresh needs account reauthentication."
 
-      code when is_binary(code) ->
-        "Account reconciliation needs attention: #{humanize_failure_code(code)}."
+          "quota_refresh_unavailable" ->
+            "Quota data was not available from the upstream account."
 
-      nil ->
-        message
+          "quota_refresh_failed" ->
+            "Quota refresh failed for the upstream account."
+
+          code when is_binary(code) ->
+            "Account reconciliation needs attention: #{humanize_failure_code(code)}."
+
+          nil ->
+            message
+        end
     end
   end
 
@@ -1183,6 +1219,17 @@ defmodule CodexPooler.Jobs.ReadModel do
   end
 
   defp oban_discard_failure?(message), do: Regex.match?(~r/failed with :discard\b/, message)
+
+  defp catalog_sync_invalid_trigger_kind?(message) do
+    String.contains?(message, "CodexPooler.Jobs.CatalogSyncWorker") and
+      String.contains?(message, "trigger_kind:") and
+      String.contains?(message, "is invalid")
+  end
+
+  defp catalog_sync_in_progress?(message) do
+    String.contains?(message, "catalog sync already running") or
+      String.contains?(message, "code: :catalog_sync_in_progress")
+  end
 
   defp humanize_failure_code(code) do
     code

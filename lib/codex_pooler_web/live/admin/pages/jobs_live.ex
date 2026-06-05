@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
   def handle_event("enqueue_worker_group", %{"id" => worker_group}, socket) do
     if socket.assigns.owner_authorized? do
-      case Jobs.enqueue_worker_group_now(worker_group, trigger_kind: "admin_jobs_live") do
+      case Jobs.enqueue_worker_group_now(worker_group) do
         {:ok, result} ->
           {level, message} = enqueue_worker_group_flash(socket, worker_group, result)
 
@@ -346,6 +346,9 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
       inserted_count == 0 and conflicts_count > 0 ->
         {:info, "#{title} already queued"}
 
+      inserted_count == 0 and conflicts_count == 0 ->
+        {:info, enqueue_worker_group_empty_message(socket, worker_group)}
+
       true ->
         {:info,
          "#{title} enqueue requested: #{inserted_count} queued, #{conflicts_count} already queued"}
@@ -358,6 +361,17 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
   defp enqueue_worker_group_flash(socket, worker_group, %Oban.Job{}) do
     {:info, "#{worker_group_title(socket, worker_group)} queued"}
+  end
+
+  defp enqueue_worker_group_empty_message(socket, worker_group) do
+    title = worker_group_title(socket, worker_group)
+
+    case worker_group_key(worker_group) do
+      "catalog_sync" -> "#{title} has no active pools to sync"
+      "account_reconciliation" -> "#{title} has no active assignments to reconcile"
+      "alert_evaluation" -> "#{title} has no active alert rules to evaluate"
+      _worker_group -> "#{title} has no work to enqueue"
+    end
   end
 
   defp enqueue_worker_group_error(socket, worker_group, :worker_group_requires_target) do
@@ -395,6 +409,12 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
 
   defp worker_group_id(worker_group) when is_binary(worker_group) do
     String.replace(worker_group, "_", "-")
+  end
+
+  defp worker_group_key(worker_group) do
+    worker_group
+    |> to_string()
+    |> String.replace("-", "_")
   end
 
   defp fallback_worker_group_title(worker_group) do

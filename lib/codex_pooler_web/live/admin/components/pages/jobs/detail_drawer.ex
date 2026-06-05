@@ -20,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
 
   def job_detail_drawer(assigns) do
     ~H"""
-    <div :if={@selected_job} class="drawer-side z-[70]">
+    <div class="drawer-side z-[70]" data-role="job-detail-drawer-side">
       <label
         for="job-detail-drawer"
         aria-label="Close job details"
@@ -32,90 +32,96 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
       <AdminComponents.object_inspector
         id="job-detail-sidebar"
         title={job_title(@selected_job)}
-        subtitle={safe_text(@selected_job.worker)}
-        status={job_state_label(@selected_job.state)}
-        status_class={job_state_badge_class(@selected_job.state)}
+        subtitle={job_subtitle(@selected_job)}
+        status={job_status(@selected_job)}
+        status_class={job_status_class(@selected_job)}
         close_event="close_job"
         close_label="Close job details"
         role="dialog"
         aria_modal={true}
         class="flex min-h-full w-full max-w-md flex-col overflow-hidden border-l border-base-300 bg-base-100 shadow-2xl"
       >
-        <section id="job-detail-metadata" class="grid gap-4">
-          <div class="grid gap-2">
-            <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Metadata
-            </p>
-            <dl class="grid gap-2 text-sm">
-              <.detail_row id="job-detail-job-id" label="Job id" value={@selected_job.id} mono />
-              <.detail_row id="job-detail-worker" label="Worker" value={@selected_job.worker} />
-              <.detail_row id="job-detail-queue" label="Queue" value={@selected_job.queue} />
-              <.detail_row
-                id="job-detail-state"
-                label="State"
-                value={job_state_label(@selected_job.state)}
-              />
-              <.detail_row
-                id="job-detail-health"
-                label="Health"
-                value={health_label(@selected_job)}
-              />
-              <.detail_row
-                id="job-detail-attempts"
-                label="Attempts"
-                value={format_attempts(@selected_job)}
-                mono
-              />
-            </dl>
-          </div>
+        <%= if @selected_job do %>
+          <section id="job-detail-metadata" class="grid gap-4">
+            <div class="grid gap-2">
+              <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
+                Metadata
+              </p>
+              <dl class="grid gap-2 text-sm">
+                <.detail_row id="job-detail-job-id" label="Job id" value={@selected_job.id} mono />
+                <.detail_row id="job-detail-worker" label="Worker" value={@selected_job.worker} />
+                <.detail_row id="job-detail-queue" label="Queue" value={@selected_job.queue} />
+                <.detail_row
+                  id="job-detail-state"
+                  label="State"
+                  value={job_state_label(@selected_job.state)}
+                />
+                <.detail_row
+                  id="job-detail-health"
+                  label="Health"
+                  value={health_label(@selected_job)}
+                />
+                <.detail_row
+                  id="job-detail-attempts"
+                  label="Attempts"
+                  value={format_attempts(@selected_job)}
+                  mono
+                />
+              </dl>
+            </div>
 
-          <div class="grid gap-2">
-            <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-              Timeline
-            </p>
-            <dl class="grid gap-2 text-sm sm:grid-cols-2">
-              <.detail_row
-                id="job-detail-inserted-at"
-                label="Inserted"
-                value={format_job_timestamp(@selected_job.inserted_at, @datetime_preferences)}
-                mono
-              />
-              <.detail_row
-                id="job-detail-scheduled-at"
-                label="Scheduled"
-                value={format_job_timestamp(@selected_job.scheduled_at, @datetime_preferences)}
-                mono
-              />
-              <.detail_row
-                id="job-detail-attempted-at"
-                label="Attempted"
-                value={format_job_timestamp(@selected_job.attempted_at, @datetime_preferences)}
-                mono
-              />
-              <.detail_row
-                id="job-detail-completed-at"
-                label="Completed"
-                value={format_job_timestamp(@selected_job.completed_at, @datetime_preferences)}
-                mono
-              />
-              <.detail_row
-                id="job-detail-discarded-at"
-                label="Discarded"
-                value={format_job_timestamp(@selected_job.discarded_at, @datetime_preferences)}
-                mono
-              />
-              <.detail_row
-                id="job-detail-cancelled-at"
-                label="Cancelled"
-                value={format_job_timestamp(@selected_job.cancelled_at, @datetime_preferences)}
-                mono
-              />
-            </dl>
-          </div>
+            <div class="grid gap-2">
+              <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
+                Timeline
+              </p>
+              <dl class="grid gap-2 text-sm sm:grid-cols-2">
+                <.detail_row
+                  id="job-detail-inserted-at"
+                  label="Inserted"
+                  value={format_job_timestamp(@selected_job.inserted_at, @datetime_preferences)}
+                  mono
+                />
+                <.detail_row
+                  id="job-detail-scheduled-at"
+                  label="Scheduled"
+                  value={format_job_timestamp(@selected_job.scheduled_at, @datetime_preferences)}
+                  mono
+                />
+                <.detail_row
+                  id="job-detail-attempted-at"
+                  label="Attempted"
+                  value={format_job_timestamp(@selected_job.attempted_at, @datetime_preferences)}
+                  mono
+                />
+                <.detail_row
+                  id="job-detail-completed-at"
+                  label="Completed"
+                  value={format_job_timestamp(@selected_job.completed_at, @datetime_preferences)}
+                  mono
+                />
+                <.detail_row
+                  id="job-detail-discarded-at"
+                  label="Discarded"
+                  value={format_job_timestamp(@selected_job.discarded_at, @datetime_preferences)}
+                  mono
+                />
+                <.detail_row
+                  id="job-detail-cancelled-at"
+                  label="Cancelled"
+                  value={format_job_timestamp(@selected_job.cancelled_at, @datetime_preferences)}
+                  mono
+                />
+              </dl>
+            </div>
 
-          <.target_summary job={@selected_job} />
-          <.failure_summary job={@selected_job} />
-        </section>
+            <.target_summary job={@selected_job} />
+            <.failure_summary job={@selected_job} />
+          </section>
+        <% else %>
+          <div class="grid min-h-64 place-items-center text-center text-sm text-base-content/60">
+            Select a job to inspect its details.
+          </div>
+        <% end %>
       </AdminComponents.object_inspector>
     </div>
     """
@@ -213,6 +219,16 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
   defp health_label(_job), do: "Unknown"
 
   defp job_title(%{id: id}), do: "Job ##{id}"
+  defp job_title(_job), do: "Job details"
+
+  defp job_subtitle(%{worker: worker}), do: safe_text(worker)
+  defp job_subtitle(_job), do: nil
+
+  defp job_status(%{state: state}), do: job_state_label(state)
+  defp job_status(_job), do: nil
+
+  defp job_status_class(%{state: state}), do: job_state_badge_class(state)
+  defp job_status_class(_job), do: nil
 
   defp safe_text(value, fallback \\ "-")
   defp safe_text(nil, fallback), do: fallback

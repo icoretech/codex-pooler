@@ -126,7 +126,7 @@ defmodule CodexPooler.JobsTest do
       assert {:ok, %{inserted: [job], conflicts: [], errors: []}} =
                Jobs.enqueue_worker_group_now("catalog-sync", trigger_kind: "admin_jobs_live")
 
-      assert job.args == %{"pool_id" => pool.id, "trigger_kind" => "admin_jobs_live"}
+      assert job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
       assert [enqueued_job] = all_enqueued(worker: CatalogSyncWorker)
       assert enqueued_job.id == job.id
     end

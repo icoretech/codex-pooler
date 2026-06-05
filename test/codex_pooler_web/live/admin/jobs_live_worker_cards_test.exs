@@ -6,7 +6,9 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Jobs.AccountReconciliationWorker
+  alias CodexPooler.Jobs.AlertEvaluationWorker
   alias CodexPooler.Jobs.CatalogSyncWorker
+  alias CodexPooler.Jobs.DailyRollupRebuildWorker
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Repo
@@ -261,6 +263,40 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
     assert has_element?(view, "#job-detail-sidebar #job-detail-failure-summary", "refresh failed")
   end
 
+  test "job detail drawer panel is mounted before selection so opening can slide", %{conn: conn} do
+    job =
+      insert_job(
+        1,
+        worker: TokenRefreshWorker,
+        state: "discarded",
+        attempt: 1,
+        max_attempts: 8,
+        inserted_at: ~U[2026-05-04 10:00:00Z],
+        discarded_at: ~U[2026-05-04 10:00:30Z],
+        errors: [
+          %{
+            "attempt" => 1,
+            "kind" => "RuntimeError",
+            "error" => "refresh failed"
+          }
+        ]
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+
+    assert has_element?(view, "#job-detail-drawer:not([checked])")
+    assert has_element?(view, "[data-role='job-detail-drawer-side']")
+    assert has_element?(view, "[data-role='job-detail-drawer-side'] > #job-detail-sidebar")
+    refute has_element?(view, "#job-detail-sidebar #job-detail-metadata")
+
+    render_click(element(view, "#admin-jobs-explorer-desktop #job-#{job.id}"))
+    assert_patch(view, ~p"/admin/jobs?job_id=#{job.id}")
+
+    assert has_element?(view, "#job-detail-drawer[checked]")
+    assert has_element?(view, "[data-role='job-detail-drawer-side'] > #job-detail-sidebar")
+    assert has_element?(view, "#job-detail-sidebar #job-detail-metadata")
+  end
+
   test "worker cards omit subtitles and keep compact schedule facts", %{conn: conn} do
     job =
       insert_job(
@@ -335,6 +371,121 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
     assert has_element?(view, "#job-#{job.id}")
   end
 
+  test "daily rollup active jobs do not render live target avatars", %{conn: conn} do
+    insert_job(
+      1,
+      worker: DailyRollupRebuildWorker,
+      state: "executing",
+      inserted_at: ~U[2026-05-04 10:00:00Z],
+      attempted_at: ~U[2026-05-04 10:00:30Z],
+      args: %{"rollup_date" => "2026-05-03"}
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    card = worker_card_selector(:daily_rollup_rebuild)
+
+    assert has_element?(view, "#{card} [data-role='worker-state-badge']", "Executing")
+    assert has_element?(view, "#{card} [data-role='next-run']", "Running now")
+    refute has_element?(view, "#{card} [data-role='worker-activity-strip']")
+    refute render(view) =~ "R2"
+  end
+
+  test "daily rollup failures still render failure markers with rollup context", %{conn: conn} do
+    job =
+      insert_job(
+        1,
+        worker: DailyRollupRebuildWorker,
+        state: "discarded",
+        attempt: 1,
+        max_attempts: 3,
+        inserted_at: ~U[2026-05-04 10:00:00Z],
+        discarded_at: ~U[2026-05-04 10:00:30Z],
+        args: %{"rollup_date" => "2026-05-03"},
+        errors: [
+          %{
+            "attempt" => 1,
+            "kind" => "RuntimeError",
+            "error" => "rollup rebuild failed"
+          }
+        ]
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    card = worker_card_selector(:daily_rollup_rebuild)
+
+    assert has_element?(view, "#{card} [data-role='worker-activity-strip']", "Needs attention")
+
+    assert has_element?(
+             view,
+             "#{card} #job-failure-#{job.id}[aria-label*='Rollup 2026-05-03']"
+           )
+
+    render_click(element(view, "#{card} #job-failure-#{job.id}"))
+
+    assert has_element?(
+             view,
+             "#{card} #{failure_panel_selector(job)}[data-open='true']",
+             "Rollup 2026-05-03"
+           )
+  end
+
+  test "catalog sync changeset failures use latest attempt and operator copy", %{conn: conn} do
+    pool = pool_fixture(%{name: "Manual Catalog Pool", slug: "manual-catalog-pool"})
+
+    job =
+      insert_job(
+        1,
+        worker: CatalogSyncWorker,
+        state: "discarded",
+        attempt: 3,
+        max_attempts: 3,
+        inserted_at: ~U[2026-05-04 10:00:00Z],
+        discarded_at: ~U[2026-05-04 10:02:00Z],
+        args: %{"pool_id" => pool.id, "trigger_kind" => "manual"},
+        errors: [
+          %{
+            "attempt" => 1,
+            "error" => catalog_sync_invalid_trigger_error("2026-05-04 10:00:00Z")
+          },
+          %{
+            "attempt" => 2,
+            "error" => catalog_sync_invalid_trigger_error("2026-05-04 10:01:00Z")
+          },
+          %{
+            "attempt" => 3,
+            "error" => catalog_sync_invalid_trigger_error("2026-05-04 10:02:00Z")
+          }
+        ]
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    card = worker_card_selector(:catalog_sync)
+
+    render_click(element(view, "#{card} #job-failure-#{job.id}"))
+
+    assert has_element?(
+             view,
+             "#{card} #{failure_panel_selector(job)}[data-open='true']",
+             "Attempt 3 · Invalid catalog sync trigger"
+           )
+
+    assert has_element?(
+             view,
+             "#{card} #{failure_panel_selector(job)} [data-role='failure-message']",
+             "Manual catalog sync could not start because the enqueue action used an unsupported trigger kind."
+           )
+
+    assert has_element?(
+             view,
+             "#admin-jobs-explorer-desktop #job-#{job.id} [data-role='failure-title']",
+             "Attempt 3 · Invalid catalog sync trigger"
+           )
+
+    rendered = render(view)
+    refute rendered =~ "Ecto.Changeset"
+    refute rendered =~ "admin_jobs_live"
+  end
+
   test "worker card action menus enqueue runnable workers and skip target-scoped workers", %{
     conn: conn
   } do
@@ -369,6 +520,19 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
            ] = Repo.all(from job in Oban.Job, order_by: [asc: job.id])
 
     assert render(view) =~ "Runtime cleanup queued"
+  end
+
+  test "alert evaluation enqueue explains when there are no active rules", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/jobs")
+    card = worker_card_selector(:alert_evaluation)
+
+    assert has_element?(view, "#{card} #enqueue-job-worker-alert-evaluation", "Enqueue Now")
+
+    render_click(element(view, "#{card} #enqueue-job-worker-alert-evaluation"))
+
+    alert_worker = worker_name(AlertEvaluationWorker)
+    refute Repo.exists?(from job in Oban.Job, where: job.worker == ^alert_worker)
+    assert render(view) =~ "Alert evaluation has no active alert rules to evaluate"
   end
 
   test "account reconciliation card renders one compact active marker per assignment", %{
@@ -895,6 +1059,10 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
   end
 
   defp failure_panel_selector(job), do: "#job-failure-panel-#{job.id}"
+
+  defp catalog_sync_invalid_trigger_error(timestamp) do
+    "** (Oban.PerformError) CodexPooler.Jobs.CatalogSyncWorker failed with {:error, #Ecto.Changeset<action: :insert, changes: %{status: \"running\", started_at: ~U[#{timestamp}], stats: %{}, pool_id: \"pool-id\", trigger_kind: \"admin_jobs_live\"}, errors: [trigger_kind: {\"is invalid\", [validation: :inclusion, enum: [\"manual\", \"scheduled\", \"bootstrap\", \"reconcile\"]]}], data: #CodexPooler.Catalog.SyncRun<>, valid?: false, ...>}"
+  end
 
   defp count_occurrences(source, pattern) do
     source

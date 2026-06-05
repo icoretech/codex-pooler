@@ -36,14 +36,37 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
     %{title: title, message: message}
   end
 
-  def job_failure_summary(%{errors: [latest_error | _errors]}) when is_map(latest_error) do
-    %{
-      title: failure_title(latest_error),
-      message: latest_error |> Map.get("error") |> safe_failure_message()
-    }
+  def job_failure_summary(%{errors: errors}) when is_list(errors) do
+    if latest_error = latest_error_by_attempt(errors) do
+      failure_summary_from_error(latest_error)
+    end
   end
 
   def job_failure_summary(_job), do: nil
+
+  defp failure_summary_from_error(error) do
+    %{
+      title: failure_title(error),
+      message: error |> Map.get("error") |> safe_failure_message()
+    }
+  end
+
+  defp latest_error_by_attempt(errors) do
+    errors
+    |> Enum.filter(&is_map/1)
+    |> Enum.max_by(&error_attempt_number/1, fn -> nil end)
+  end
+
+  defp error_attempt_number(%{"attempt" => attempt}) when is_integer(attempt), do: attempt
+
+  defp error_attempt_number(%{"attempt" => attempt}) when is_binary(attempt) do
+    case Integer.parse(attempt) do
+      {attempt, ""} -> attempt
+      _not_integer -> -1
+    end
+  end
+
+  defp error_attempt_number(_error), do: -1
 
   @spec job_target(map()) :: map() | nil
   defdelegate job_target(job), to: Targets
@@ -114,7 +137,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
       failure_marker_overflow_count:
         marker_overflow_count(failure_markers, @visible_failure_marker_limit),
       latest_failure: latest_failure_summary(latest_unresolved_failure),
-      activity_label: activity_label(summary.active, summary.unresolved_failures),
+      activity_label: activity_label(active_markers, failure_markers),
       last_seen_at: job_event_timestamp(latest_job),
       last_success_at: job_event_timestamp(success_job),
       last_failure_at: job_event_timestamp(failure_job)
@@ -239,17 +262,23 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   end
 
   defp activity_markers(jobs) do
-    Enum.map(jobs, fn job ->
-      target = job_target(job)
+    Enum.flat_map(jobs, fn job ->
+      case job_target(job) do
+        %{kind: kind} = target when kind in [:assignment, :direct_identity, :pool, :api_key] ->
+          [
+            %{
+              id: job.id,
+              worker_label: worker_label(job.worker || "not recorded"),
+              target_label: marker_target_label(target),
+              title: marker_title(job, target),
+              avatar_email: marker_avatar_email(target),
+              glyph: marker_glyph(target)
+            }
+          ]
 
-      %{
-        id: job.id,
-        worker_label: worker_label(job.worker || "not recorded"),
-        target_label: marker_target_label(target),
-        title: marker_title(job, target),
-        avatar_email: marker_avatar_email(target),
-        glyph: marker_glyph(target)
-      }
+        _target ->
+          []
+      end
     end)
   end
 
@@ -446,6 +475,12 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
       oban_discard_failure?(message) ->
         "Run discarded"
 
+      catalog_sync_invalid_trigger_kind?(message) ->
+        "Invalid catalog sync trigger"
+
+      catalog_sync_in_progress?(message) ->
+        "Catalog sync already running"
+
       code == "quota_refresh_auth_unavailable" ->
         "Quota refresh blocked"
 
@@ -464,21 +499,30 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   end
 
   defp operator_failure_message(message) do
-    case reconciliation_failure_code(message) do
-      "quota_refresh_auth_unavailable" ->
-        "Quota refresh needs account reauthentication."
+    cond do
+      catalog_sync_invalid_trigger_kind?(message) ->
+        "Manual catalog sync could not start because the enqueue action used an unsupported trigger kind."
 
-      "quota_refresh_unavailable" ->
-        "Quota data was not available from the upstream account."
+      catalog_sync_in_progress?(message) ->
+        "Catalog sync could not start because this pool already has a sync run marked as running."
 
-      "quota_refresh_failed" ->
-        "Quota refresh failed for the upstream account."
+      true ->
+        case reconciliation_failure_code(message) do
+          "quota_refresh_auth_unavailable" ->
+            "Quota refresh needs account reauthentication."
 
-      code when is_binary(code) ->
-        "Account reconciliation needs attention: #{humanize_failure_code(code)}."
+          "quota_refresh_unavailable" ->
+            "Quota data was not available from the upstream account."
 
-      nil ->
-        message
+          "quota_refresh_failed" ->
+            "Quota refresh failed for the upstream account."
+
+          code when is_binary(code) ->
+            "Account reconciliation needs attention: #{humanize_failure_code(code)}."
+
+          nil ->
+            message
+        end
     end
   end
 
@@ -495,6 +539,17 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   end
 
   defp oban_discard_failure?(message), do: Regex.match?(~r/failed with :discard\b/, message)
+
+  defp catalog_sync_invalid_trigger_kind?(message) do
+    String.contains?(message, "CodexPooler.Jobs.CatalogSyncWorker") and
+      String.contains?(message, "trigger_kind:") and
+      String.contains?(message, "is invalid")
+  end
+
+  defp catalog_sync_in_progress?(message) do
+    String.contains?(message, "catalog sync already running") or
+      String.contains?(message, "code: :catalog_sync_in_progress")
+  end
 
   defp humanize_failure_code(code) do
     code

@@ -731,7 +731,9 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/jobs?state=discarded")
 
-    refute has_element?(view, "#job-detail-drawer-root [role='dialog']")
+    assert has_element?(view, "#job-detail-drawer-root #job-detail-sidebar[role='dialog']")
+    refute has_element?(view, "#job-detail-drawer[checked]")
+    refute has_element?(view, "#job-detail-job-id")
 
     render_click(element(view, "#job-#{job.id}"))
 

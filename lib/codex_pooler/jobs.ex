@@ -134,7 +134,7 @@ defmodule CodexPooler.Jobs do
   @spec enqueue_worker_group_now(atom() | String.t(), keyword()) ::
           manual_worker_group_enqueue_result()
   def enqueue_worker_group_now(worker_group, opts \\ []) do
-    opts = Keyword.put_new(opts, :trigger_kind, "manual")
+    opts = Keyword.put(opts, :trigger_kind, "manual")
 
     case normalize_manual_worker_group(worker_group) do
       :catalog_sync -> enqueue_catalog_sync_for_active_pools(opts)
