@@ -1,0 +1,184 @@
+---
+title: Pools
+description: Understand the admin Pools page, Pool cards, routing settings, linked upstreams, Pool API keys, and traffic indicators.
+---
+
+The Pools page is the operator surface for routing boundaries. A Pool groups the upstream accounts that can receive work, the Pool API keys that clients use, routing behavior, and the metadata scope used by request logs and audit logs.
+
+Use this page when you need to answer:
+
+1. which Pools exist
+2. whether a Pool is active, disabled, or archived
+3. how many upstream accounts and API keys are tied to a Pool
+4. how much recent traffic the Pool handled
+5. how new runtime requests are routed across eligible upstream accounts
+
+The page is metadata-only. It shows Pool names, counts, routing settings, usage totals, safe status labels, and links to related admin pages. It does not show prompts, responses, files, audio, images, websocket frames, raw bearer tokens, raw Pool API keys, upstream secrets, or Codex `auth.json` contents.
+
+![Pools page overview](/operators/pools/pools-overview.png)
+
+## What a Pool Controls
+
+A Pool is the boundary that a runtime client authenticates against. Clients do not authenticate as one upstream account. They send a Pool API key, then Codex Pooler chooses one eligible upstream account inside that Pool.
+
+A Pool controls:
+
+1. `status`, which decides whether the Pool can receive new work
+2. upstream assignments, which decide which accounts are available to the Pool
+3. Pool API key assignments, which decide which client credentials can use the Pool
+4. routing strategy, which decides how eligible upstreams are ordered
+5. continuity settings, which decide when related requests should prefer the same upstream
+6. compatibility settings, such as OpenAI-style `/v1` routes and sanitized OpenAI control-plane analytics forwarding
+7. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
+
+## Page Metrics
+
+The metric cards at the top summarize the visible Pool scope for the current operator.
+
+| Metric | Meaning |
+| --- | --- |
+| Total pools | Count of Pools visible to the operator. Owners can see management Pools. Assigned admins only see Pools in their reporting scope. |
+| Upstream accounts | Count of upstream accounts linked to the visible Pools. These are the account identities that may become route candidates if active and eligible. |
+| API keys | Count of Pool API keys linked to the visible Pools. These are runtime client credentials, not operator login credentials. |
+| Requests 5h | Runtime request count for the last five hours across the visible Pools. |
+| TPS 5h | Tokens per second for the same recent usage window. It is computed from total tokens divided by cumulative request latency, so it is a throughput signal, not a wall-clock request rate. |
+
+The search box filters Pool cards by text. The status dropdown filters the card list by Pool lifecycle state.
+
+## Pool Cards
+
+Each Pool appears as a card. The card header contains the Pool name, the routing strategy badge, the lifecycle status badge, and the dotted action menu.
+
+The lifecycle states are:
+
+| State | Meaning |
+| --- | --- |
+| Active | The Pool can receive new runtime work if it has an active API key and eligible upstream assignments. |
+| Disabled | The Pool stays configured and visible for operations, but should not admit new runtime work. |
+| Archived | The Pool is kept for historical reporting and cleanup. Hard deletion is only available after archive. |
+
+The routing strategy badge shows the ordering policy used after hard eligibility checks. For the default `Bridge ring` strategy, Codex Pooler spreads requests across eligible upstreams while still honoring continuity, prompt-cache locality, quota evidence, and recent demotions.
+
+## Traffic 24h
+
+The chart shows Pool traffic for the last 24 hours:
+
+1. orange bars show token volume by hour
+2. the blue line shows request count by hour
+3. the total above the chart shows 24 hour token and request totals
+4. the empty state appears when no traffic exists in that window
+
+The chart is a quick health and shape check. Use it to spot traffic bursts, quiet periods, and obvious changes in request volume before moving to Stats or Request logs for deeper investigation.
+
+## Card Footer Links
+
+The footer is a compact navigation row for the main related records.
+
+| Footer label | Meaning | Link target |
+| --- | --- | --- |
+| Upstreams | Active upstream accounts assigned to the Pool | the Upstreams page filtered to this Pool |
+| API keys | Pool API keys assigned to the Pool | the API keys page filtered to this Pool |
+| Requests 5h | Runtime requests received by this Pool during the last five hours | the Request logs page filtered to this Pool |
+| TPS 5h | Tokens per second over the recent usage window | informational only |
+
+The labels link to the related page. The numeric values stay plain text so the card reads like a metric summary.
+
+## Action Menu
+
+Open the dotted menu on a Pool card for management actions.
+
+![Pool card action menu](/operators/pools/pools-card-action-menu.png)
+
+The current actions are:
+
+| Action | What it does |
+| --- | --- |
+| Copy Pool ID | Copies the Pool UUID to the browser clipboard. Use this for support, logs, or exact filters. |
+| Edit | Opens the Pool configuration dialog for lifecycle, routing, upstream assignments, and API key assignments. |
+| Delete | Hard-deletes a Pool only after it is archived. Active and disabled Pools cannot be hard-deleted from the card menu. |
+
+Use archive before delete when you need to retire a Pool but keep historical request and audit metadata available.
+
+## Create a Pool
+
+Click `Create Pool` to open the Pool configuration dialog.
+
+![Create Pool details step](/operators/pools/pools-create-dialog-details.png)
+
+The create dialog is a four-step wizard:
+
+1. Details
+2. Routing
+3. Upstreams
+4. API keys
+
+The Details step asks for the operator-facing Pool name. New Pools start from the create defaults; lifecycle status is edited later from the edit dialog.
+
+The dialog footer includes a Docs link on the left and the action buttons on the right. `Cancel` closes the dialog without saving. `Create Pool` submits the current configuration.
+
+## Routing Step
+
+The Routing step controls how the Pool chooses among eligible upstream accounts.
+
+![Create Pool routing step](/operators/pools/pools-create-dialog-routing.png)
+
+Routing settings are split into selection policy, continuity, and compatibility.
+
+### Selection Policy
+
+`Routing strategy` chooses how eligible upstreams are ordered. Strategy does not bypass eligibility. An upstream must still be active, assigned to the Pool, compatible with the requested model and route shape, and usable according to quota and health evidence.
+
+`Ring size` controls how many ordered upstreams Codex Pooler prepares for a request. A ring size of `3` means the route plan can include up to three eligible upstreams. If the first attempt fails in a retryable way, Codex Pooler can try the next eligible upstream in that plan.
+
+### Continuity
+
+`Sticky websocket sessions` keeps websocket work with the same upstream when a continuity identity exists. This protects reconnects and session-bound websocket state.
+
+`HTTP affinity` gives related HTTP requests a same-upstream preference. It is a preference, not permission to use an ineligible account.
+
+`Prompt cache affinity` keeps related prompt-cache-key requests near the same upstream for routing locality. Codex Pooler uses this as a routing input only. It does not store prompts or responses for this control.
+
+### Compatibility
+
+`Forward analytics` forwards sanitized OpenAI control-plane analytics. This is about OpenAI's control-plane analytics surface, not Codex Pooler's own telemetry.
+
+`Allow /v1 compatibility` enables OpenAI-style `/v1` compatibility routes for clients that use that surface.
+
+## Upstreams Step
+
+The Upstreams step selects which active upstream accounts are available to the Pool. A checked upstream becomes a Pool assignment. Runtime routing still applies eligibility checks before using it.
+
+Assign more than one upstream when you want load distribution, fallback, quota flexibility, or account maintenance without moving clients to a different API key. Keep an upstream unassigned when it should not receive work for that Pool.
+
+## API Keys Step
+
+The API keys step selects existing Pool API keys assigned to the Pool. Assigning a key lets that client credential use this Pool. Creating or rotating the raw key happens on the API keys page, where the raw secret is shown only once.
+
+Use separate Pool API keys for separate clients, environments, or automation boundaries. That makes rotation and investigation easier without changing the Pool's upstream configuration.
+
+## Edit a Pool
+
+Use the card menu's `Edit` action to update an existing Pool.
+
+![Edit Pool details step](/operators/pools/pools-edit-dialog-details.png)
+
+The edit Details step includes the Pool name and lifecycle status. Status is the safest way to retire or pause a Pool without deleting historical metadata.
+
+![Edit Pool routing step](/operators/pools/pools-edit-dialog-routing.png)
+
+The edit Routing step uses the same routing controls as create. Changes apply to new runtime work after the Pool is saved. In-flight requests and already-open streams keep the routing state they started with.
+
+## Operational Checklist
+
+When a Pool is not behaving as expected, check it in this order:
+
+1. confirm the Pool status is `active`
+2. confirm the client is using an active Pool API key assigned to this Pool
+3. confirm the Pool has active upstream assignments
+4. confirm those upstreams are not paused, disabled, archived, or reauth-required
+5. confirm the requested model and route shape are supported by the assigned upstreams
+6. inspect recent Requests 5h, TPS 5h, and Traffic 24h for changes in load
+7. open Request logs filtered from the card footer for request-level metadata
+8. check Audit logs when a Pool, upstream assignment, or API key changed recently
+
+If all upstreams fail eligibility, routing cannot use them even if the Pool card looks active. The card shows Pool-level configuration, while final routing also depends on upstream status, model support, quota evidence, route health, and continuity constraints.
