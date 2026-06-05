@@ -7,7 +7,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   @reasoning_summaries ~w(auto concise detailed)
   @service_tiers ~w(auto default flex priority scale ultrafast)
-  @locally_unsupported_fields ~w(background context_management conversation max_tool_calls prompt top_logprobs truncation user)
+  @truncation_modes ~w(auto disabled)
+  @locally_unsupported_fields ~w(background context_management conversation max_tool_calls prompt top_logprobs user)
 
   @endpoint "/backend-api/codex/responses"
 
@@ -27,6 +28,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- validate_reasoning(payload),
          :ok <- validate_moderation(payload),
          :ok <- validate_service_tier(payload),
+         :ok <- validate_truncation(payload),
          :ok <- validate_stream_options(payload),
          :ok <- StrictSchema.validate(payload),
          :ok <- InputShape.validate(payload) do
@@ -138,16 +140,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_reasoning_effort(nil), do: :ok
 
-  defp validate_reasoning_effort(effort) when is_binary(effort) do
-    if String.trim(effort) != "" do
-      :ok
-    else
-      {:error, Error.invalid_request("reasoning effort is not supported", "reasoning.effort")}
-    end
-  end
-
-  defp validate_reasoning_effort(_effort),
-    do: {:error, Error.invalid_request("reasoning effort is not supported", "reasoning.effort")}
+  defp validate_reasoning_effort(effort),
+    do: Validation.validate_reasoning_effort_token(effort, "reasoning.effort")
 
   defp validate_reasoning_summary(nil), do: :ok
 
@@ -213,6 +207,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     do: {:error, Error.invalid_request("service_tier is not supported", "service_tier")}
 
   defp validate_service_tier(_payload), do: :ok
+
+  defp validate_truncation(%{"truncation" => truncation}) when is_binary(truncation) do
+    normalized = truncation |> String.trim() |> String.downcase()
+
+    if normalized in @truncation_modes do
+      :ok
+    else
+      {:error, Error.invalid_request("truncation is not supported", "truncation")}
+    end
+  end
+
+  defp validate_truncation(%{"truncation" => _truncation}),
+    do: {:error, Error.invalid_request("truncation is not supported", "truncation")}
+
+  defp validate_truncation(_payload), do: :ok
 
   defp validate_stream_options(%{"stream_options" => options}) when is_map(options) do
     with :ok <- validate_stream_option_keys(options, ["include_obfuscation"]) do

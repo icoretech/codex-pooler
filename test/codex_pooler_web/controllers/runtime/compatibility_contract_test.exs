@@ -159,6 +159,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "non-executable input"
       assert responses_chat.contract =~ "never merged into executable tools"
       assert responses_chat.contract =~ "never used to satisfy tool_choice"
+      assert responses_chat.contract =~ "truncation accepts auto and disabled locally"
+      assert responses_chat.contract =~ "not forwarded upstream"
       refute responses_chat.contract =~ "Responses-to-chat parity"
       refute responses_chat.contract =~ "top-level additional_tools"
 
@@ -183,6 +185,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert v1_fixture.chat_input_fallback == expected_chat_fallback
       assert responses_fixture.additional_tools_input_item == expected_additional_tools
       assert v1_fixture.additional_tools_input_item == expected_additional_tools
+
+      assert responses_fixture.responses_truncation == %{
+               accepted_values: ["auto", "disabled"],
+               forwarded_upstream: false
+             }
+
+      assert v1_fixture.responses_truncation == responses_fixture.responses_truncation
     end
 
     test "documents v1 supported surface as authenticated OpenAI compatibility" do
@@ -207,6 +216,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "without forwarding session-id or x-session-affinity upstream"
       assert feature.contract =~ "pinned /v1/responses continuations"
       assert feature.contract =~ "restart_with_full_context recovery guidance"
+      assert feature.contract =~ "accept Responses truncation auto and disabled locally"
+      assert feature.contract =~ "without forwarding it upstream"
       assert feature.contract =~ "chat input fallback"
       assert feature.contract =~ "Responses additional_tools support narrow and non-executable"
       refute feature.contract =~ "metadata"

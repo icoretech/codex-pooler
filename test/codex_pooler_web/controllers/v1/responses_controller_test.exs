@@ -764,6 +764,37 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert attempt.status == "succeeded"
   end
 
+  test "POST /v1/responses accepts truncation but does not forward it upstream", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_truncation_not_forwarded",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic v1 truncation request",
+        "truncation" => "disabled"
+      })
+
+    assert %{"id" => "resp_v1_truncation_not_forwarded", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+    refute Map.has_key?(captured.json, "truncation")
+  end
+
   test "POST /v1/responses preserves request-shaped additional_tools input items", %{
     conn: conn
   } do

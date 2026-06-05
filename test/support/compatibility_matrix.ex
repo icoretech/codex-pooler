@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_chat,
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses truncation accepts auto and disabled locally but is not forwarded upstream; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :backend_v1_alias_surface,
@@ -258,7 +258,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, and keep chat input fallback plus Responses additional_tools support narrow and non-executable"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, and keep chat input fallback plus Responses additional_tools support narrow and non-executable"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -328,6 +328,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false
+      },
+      responses_truncation: %{
+        accepted_values: ["auto", "disabled"],
+        forwarded_upstream: false
       },
       json: %{
         "model" => "gpt-fixture-text",
@@ -482,6 +486,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false
+      },
+      responses_truncation: %{
+        accepted_values: ["auto", "disabled"],
+        forwarded_upstream: false
       },
       continuity_precedence: [
         "x-codex-session-id",

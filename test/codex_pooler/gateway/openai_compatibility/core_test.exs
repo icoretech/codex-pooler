@@ -570,7 +570,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                })
     end
 
-    for field <- ["background", "conversation", "prompt", "truncation"] do
+    for field <- ["background", "conversation", "prompt"] do
       assert {:error, %{status: 400, code: "unsupported_parameter", param: ^field}} =
                Responses.coerce(%{
                  "model" => "gpt-fixture-text",
@@ -2037,6 +2037,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                  })
       end
     end
+
+    test "Responses accepts truncation auto and disabled without forwarding it" do
+      for truncation <- ["auto", "disabled", " AUTO ", " Disabled "] do
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "truncation" => truncation
+                 })
+
+        refute Map.has_key?(result.payload, "truncation")
+      end
+    end
+
+    test "Responses rejects unsupported truncation variants deterministically" do
+      for truncation <- ["enabled", "", 123, true] do
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "invalid_request",
+                  param: "truncation"
+                }} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "truncation" => truncation
+                 })
+      end
+    end
   end
 
   describe "Task 7 multimodal media compatibility" do
@@ -2306,7 +2335,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   defp unsupported_value("prompt"), do: %{"id" => "prompt_fixture"}
   defp unsupported_value("stop"), do: ["STOP"]
   defp unsupported_value("stream_options"), do: %{"include_usage" => true}
-  defp unsupported_value("truncation"), do: "auto"
   defp unsupported_value("web_search_options"), do: %{"search_context_size" => "low"}
   defp unsupported_value(_field), do: true
 end
