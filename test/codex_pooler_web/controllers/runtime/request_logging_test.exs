@@ -221,15 +221,17 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
 
     setup = gateway_setup(upstream)
 
-    {conn, query_events} =
-      collect_repo_query_events(fn ->
-        conn
-        |> put_req_header("x-request-id", Ecto.UUID.generate())
-        |> auth(setup)
-        |> post("/backend-api/codex/responses", %{
-          "model" => setup.model.exposed_model_id,
-          "input" => input
-        })
+    {{conn, query_events}, _log} =
+      with_log([level: :info], fn ->
+        collect_repo_query_events(fn ->
+          conn
+          |> put_req_header("x-request-id", Ecto.UUID.generate())
+          |> auth(setup)
+          |> post("/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => input
+          })
+        end)
       end)
 
     assert %{"id" => "resp_metadata_coalesced"} = json_response(conn, 200)

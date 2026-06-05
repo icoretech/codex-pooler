@@ -578,6 +578,54 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
              }
     end
 
+    test "grouped worker summaries batch oban job selects across configured groups" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      insert_listing_job(1,
+        worker: CatalogSyncWorker,
+        state: "completed",
+        inserted_at: ~U[2026-05-04 10:00:00Z],
+        completed_at: ~U[2026-05-04 10:01:00Z]
+      )
+
+      insert_listing_job(2,
+        worker: TokenRefreshWorker,
+        state: "scheduled",
+        inserted_at: ~U[2026-05-04 10:05:00Z],
+        scheduled_at: ~U[2026-05-04 10:06:00Z]
+      )
+
+      insert_listing_job(3,
+        worker: RuntimeStateCleanupWorker,
+        state: "retryable",
+        inserted_at: ~U[2026-05-04 10:10:00Z],
+        attempted_at: ~U[2026-05-04 10:11:00Z]
+      )
+
+      groups = [
+        worker_group(:catalog_card, [CatalogSyncWorker]),
+        worker_group(:token_refresh_card, [TokenRefreshWorker]),
+        worker_group(:runtime_cleanup_card, [RuntimeStateCleanupWorker]),
+        worker_group(:mixed_card, [CatalogSyncWorker, TokenRefreshWorker]),
+        worker_group(:missing_card, [AccountReconciliationWorker])
+      ]
+
+      {summaries, repo_queries} =
+        capture_repo_queries(fn -> Jobs.worker_job_summaries_by_group(scope, groups) end)
+
+      assert MapSet.new(Map.keys(summaries)) ==
+               MapSet.new([
+                 :catalog_card,
+                 :missing_card,
+                 :mixed_card,
+                 :runtime_cleanup_card,
+                 :token_refresh_card
+               ])
+
+      assert oban_jobs_select_count(repo_queries) <= 6
+    end
+
     @tag :unresolved
     test "grouped worker summaries preserve unresolved failure target resolution semantics" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
@@ -928,6 +976,51 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
     do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
   defp worker_name(worker) when is_binary(worker), do: worker
+
+  defp capture_repo_queries(fun) when is_function(fun, 0) do
+    test_pid = self()
+    handler_id = {__MODULE__, test_pid, System.unique_integer([:positive])}
+
+    handler = fn _event, _measurements, metadata, _config ->
+      if metadata[:repo] == Repo do
+        send(test_pid, {
+          handler_id,
+          %{
+            source: normalize_query_metadata(metadata[:source]),
+            query: normalize_query_metadata(metadata[:query])
+          }
+        })
+      end
+    end
+
+    :ok = :telemetry.attach(handler_id, [:codex_pooler, :repo, :query], handler, nil)
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_query_events(handler_id, events) do
+    receive do
+      {^handler_id, event} -> drain_repo_query_events(handler_id, [event | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp oban_jobs_select_count(events) do
+    Enum.count(events, fn event ->
+      event.source == "oban_jobs" and
+        event.query |> String.trim_leading() |> String.upcase() |> String.starts_with?("SELECT")
+    end)
+  end
+
+  defp normalize_query_metadata(nil), do: "unknown"
+  defp normalize_query_metadata(value) when is_binary(value), do: value
+  defp normalize_query_metadata(value), do: to_string(value)
 
   defp empty_worker_job_summary do
     %{
