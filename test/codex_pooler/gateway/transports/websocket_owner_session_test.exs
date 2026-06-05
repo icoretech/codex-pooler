@@ -288,6 +288,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              {:error, :duplicate_downstream}
   end
 
+  test "latest reconnect fences old downstream request submissions", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    {:ok, first_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("first-request"))
+
+    {:ok, second_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("second-request"))
+
+    request = %UpstreamWebSocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "stale-request-frame",
+      timeouts: %{},
+      writer: fn _frame -> :ok end
+    }
+
+    assert WebsocketOwnerSession.submit_request(owner, first_downstream, request) ==
+             {:error, :duplicate_downstream}
+
+    assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == []
+
+    assert :ok = WebsocketOwnerSession.submit_request(owner, second_downstream, request)
+    assert [forwarded_request] = WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
+    assert forwarded_request.payload == "stale-request-frame"
+  end
+
   test "sends owner frames only to the active downstream epoch", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     {:ok, owner} = start_owner(context, upstream: upstream)
