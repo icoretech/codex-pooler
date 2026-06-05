@@ -8,6 +8,8 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   def admin_shell(assigns), do: Shell.admin_shell(assigns)
 
+  @docs_url "https://docs.codex-pooler.com"
+
   attr :id, :string, required: true
   attr :eyebrow, :string, default: "Admin"
   attr :title, :string, required: true
@@ -175,6 +177,48 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   defp admin_surface_overflow_class(:visible), do: "overflow-visible"
   defp admin_surface_overflow_class(_overflow), do: "overflow-hidden"
+
+  attr :id, :string, required: true
+
+  attr :class, :any,
+    default: "modal-action mt-0 w-full border-t border-base-300 bg-base-200/80 px-6 py-3"
+
+  attr :docs_link_role, :string, default: "admin-dialog-docs-link"
+  attr :docs_link_id, :string, default: nil
+  attr :docs_icon_role, :string, default: "admin-dialog-docs-icon"
+
+  slot :actions, required: true
+
+  def dialog_footer(assigns) do
+    assigns =
+      assigns
+      |> assign(:docs_url, @docs_url)
+      |> assign(:resolved_docs_link_id, assigns.docs_link_id || "#{assigns.id}-docs-link")
+
+    ~H"""
+    <footer id={@id} class={@class}>
+      <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <a
+          id={@resolved_docs_link_id}
+          data-role={@docs_link_role}
+          href={@docs_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open Codex Pooler documentation"
+          class="inline-flex w-fit items-center gap-1.5 text-xs font-semibold text-base-content/55 transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          <span data-role={@docs_icon_role} aria-hidden="true">
+            <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
+          </span>
+          <span>Docs</span>
+        </a>
+        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {render_slot(@actions)}
+        </div>
+      </div>
+    </footer>
+    """
+  end
 
   attr :id, :string, required: true
   attr :title, :string, required: true

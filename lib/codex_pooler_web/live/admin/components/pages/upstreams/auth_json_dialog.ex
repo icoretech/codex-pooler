@@ -144,8 +144,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonDialog do
             title="Codex Pooler becomes the refresh-token authority."
             description="This is a credential lineage handoff: Do not keep using the same auth.json from another Codex install, machine, or automation, because provider refresh-token rotation can invalidate one copy and move the account to reauth_required."
           />
+        </.form>
 
-          <div class="modal-action mt-0">
+        <AdminComponents.dialog_footer id="auth-json-import-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="auth-json-import-cancel"
               icon="hero-x-mark"
@@ -157,10 +159,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonDialog do
               icon="hero-document-arrow-up"
               label="Import auth.json"
               type="submit"
+              form="auth-json-import-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_import_auth_json">close</button>

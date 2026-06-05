@@ -114,6 +114,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
     assert has_element?(view, "#api-key[open]")
     assert has_element?(view, "#api-key-form")
+
+    assert has_element?(
+             view,
+             "#api-key-footer [data-role='policy-editor-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(view, "#api-key-docs-link [data-role='policy-editor-docs-icon']")
     assert has_element?(view, "#api-key-header")
     assert has_element?(view, "#api-key-sections")
     assert has_element?(view, "#api-key-tabs[role='tablist']")

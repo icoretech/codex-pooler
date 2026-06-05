@@ -1,6 +1,6 @@
 defmodule CodexPoolerWeb.Admin.PoolListComponents do
   @moduledoc """
-  Pool inventory, filter, action menu, delete dialog, and inspector shell components.
+  Pool inventory, filter, action menu, and delete dialog components.
   """
 
   use CodexPoolerWeb, :html
@@ -8,7 +8,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolForm
-  alias CodexPoolerWeb.Admin.PoolInspectorComponents
   alias CodexPoolerWeb.Admin.PoolsReadModel
 
   alias Phoenix.LiveView.JS
@@ -18,10 +17,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :delete_form_version, :integer, required: true
   attr :pool_filter_form, Phoenix.HTML.Form, required: true
   attr :pools, :list, required: true
-  attr :selected_pool_row, :any, default: nil
-  attr :selected_pool_tab, :string, required: true
   attr :can_manage_pools?, :boolean, required: true
-  attr :datetime_preferences, :map, required: true
 
   def pool_inventory(assigns) do
     ~H"""
@@ -31,65 +27,37 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       delete_form_version={@delete_form_version}
     />
 
-    <div id="pool-details-drawer-root" class="drawer drawer-end">
-      <input
-        id="pool-details-drawer"
-        type="checkbox"
-        class="drawer-toggle"
-        checked={@selected_pool_row != nil}
-      />
+    <section
+      id="pool-inventory-surface"
+      class="grid min-w-0 gap-4 overflow-visible"
+    >
+      <.pool_filter_form form={@pool_filter_form} />
 
-      <div class="drawer-content min-w-0">
-        <section
-          id="pool-inventory-surface"
-          class="grid min-w-0 gap-4 overflow-visible"
-        >
-          <.pool_filter_form form={@pool_filter_form} />
-
-          <AdminComponents.empty_state
-            :if={@pools == []}
-            id="pool-empty-state"
-            title={if @can_manage_pools?, do: "No Pools Found", else: "No assigned Pools"}
-            description={pool_empty_description(@can_manage_pools?)}
-            icon="hero-server-stack"
-          >
-            <:actions>
-              <AdminComponents.action_button
-                :if={@can_manage_pools?}
-                id="pool-empty-create-action"
-                icon="hero-plus"
-                label="Create Pool"
-                phx-click="open_create_pool"
-                variant={:primary}
-              />
-            </:actions>
-          </AdminComponents.empty_state>
-
-          <.pool_grid
-            :if={@pools != []}
-            pools={@pools}
-            selected_pool_row={@selected_pool_row}
-            can_manage_pools?={@can_manage_pools?}
+      <AdminComponents.empty_state
+        :if={@pools == []}
+        id="pool-empty-state"
+        title={if @can_manage_pools?, do: "No Pools Found", else: "No assigned Pools"}
+        description={pool_empty_description(@can_manage_pools?)}
+        icon="hero-server-stack"
+      >
+        <:actions>
+          <AdminComponents.action_button
+            :if={@can_manage_pools?}
+            id="pool-empty-create-action"
+            icon="hero-plus"
+            label="Create Pool"
+            phx-click="open_create_pool"
+            variant={:primary}
           />
-        </section>
-      </div>
+        </:actions>
+      </AdminComponents.empty_state>
 
-      <div class="drawer-side z-[70]">
-        <label
-          for="pool-details-drawer"
-          aria-label="close Pool details"
-          class="drawer-overlay"
-          phx-click="close_pool_inspector"
-        >
-        </label>
-        <PoolInspectorComponents.pool_inspector
-          :if={@selected_pool_row}
-          pool_row={@selected_pool_row}
-          selected_tab={@selected_pool_tab}
-          datetime_preferences={@datetime_preferences}
-        />
-      </div>
-    </div>
+      <.pool_grid
+        :if={@pools != []}
+        pools={@pools}
+        can_manage_pools?={@can_manage_pools?}
+      />
+    </section>
     """
   end
 
@@ -315,7 +283,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp pool_query_filter_value(_field), do: ""
 
   attr :pools, :list, required: true
-  attr :selected_pool_row, :any, default: nil
   attr :can_manage_pools?, :boolean, required: true
 
   defp pool_grid(assigns) do
@@ -327,7 +294,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       <.pool_card
         :for={pool_row <- @pools}
         pool_row={pool_row}
-        selected_pool_row={@selected_pool_row}
         can_manage_pools?={@can_manage_pools?}
       />
     </div>
@@ -335,31 +301,21 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   end
 
   attr :pool_row, :map, required: true
-  attr :selected_pool_row, :any, default: nil
   attr :can_manage_pools?, :boolean, required: true
 
   defp pool_card(assigns) do
     ~H"""
-    <article
-      id={"pool-row-#{@pool_row.pool.id}"}
-      class={[
-        "pool-card",
-        @selected_pool_row && @selected_pool_row.pool.id == @pool_row.pool.id && "is-selected"
-      ]}
-    >
+    <article id={"pool-row-#{@pool_row.pool.id}"} class="pool-card">
       <div class="pool-card-header">
         <div class="pool-card-header-row">
           <div class="pool-card-identity">
             <div id={"pool-row-#{@pool_row.pool.id}-title-line"} class="pool-card-title-line">
-              <button
-                id={"inspect-pool-#{@pool_row.pool.id}"}
-                type="button"
-                class="pool-card-title text-left text-base-content transition-colors hover:text-primary"
-                phx-click="select_pool"
-                phx-value-id={@pool_row.pool.id}
+              <h2
+                id={"pool-row-#{@pool_row.pool.id}-name"}
+                class="pool-card-title text-base-content"
               >
                 {@pool_row.pool.name}
-              </button>
+              </h2>
               <span
                 id={"pool-row-#{@pool_row.pool.id}-routing-strategy"}
                 class={routing_strategy_class()}

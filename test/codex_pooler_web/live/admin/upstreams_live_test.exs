@@ -658,6 +658,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#auth-json-import-file-dropzone")
     assert has_element?(view, "#auth_json_pool_id")
     assert has_element?(view, "#auth_json_content")
+    assert_admin_dialog_docs_link(view, "auth-json-import-dialog-footer")
 
     html = render(view)
 
@@ -906,6 +907,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#rename-upstream-account-dialog[open]", "Rename upstream account")
     assert has_element?(view, "#rename-upstream-account-form")
     assert has_element?(view, "#rename_account_label[value='Original Codex']")
+    assert_admin_dialog_docs_link(view, "rename-upstream-account-dialog-footer")
 
     view
     |> element("#rename-upstream-account-form")
@@ -2892,6 +2894,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     view
     |> element("#upstream-page-import-auth-json-action")
     |> render_click()
+  end
+
+  defp assert_admin_dialog_docs_link(view, footer_id) do
+    assert has_element?(
+             view,
+             "##{footer_id} [data-role='admin-dialog-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(
+             view,
+             "##{footer_id}-docs-link [data-role='admin-dialog-docs-icon']"
+           )
   end
 
   defp audit_events(action, target_id) do

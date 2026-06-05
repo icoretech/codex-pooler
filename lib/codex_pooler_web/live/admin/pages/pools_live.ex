@@ -10,7 +10,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPoolerWeb.Admin.PoolListComponents
   alias CodexPoolerWeb.Admin.PoolsReadModel
   alias CodexPoolerWeb.Admin.PoolWizardComponents
-  alias CodexPoolerWeb.DateTimeDisplay
 
   @impl true
   def mount(_params, _session, socket) do
@@ -32,10 +31,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_filter_form: PoolForm.filter_form(),
        pool_metrics: PoolsReadModel.empty_metrics(),
        data_load_warnings: [],
-       subscribed_pool_events?: false,
-       selected_pool_id: nil,
-       selected_pool_row: nil,
-       selected_pool_tab: "overview"
+       subscribed_pool_events?: false
      )
      |> load_pools()}
   end
@@ -206,7 +202,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
      socket
      |> assign(:pool_filters, filters)
      |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> assign(:selected_pool_id, nil)
      |> load_pools()}
   end
 
@@ -217,7 +212,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
      socket
      |> assign(:pool_filters, filters)
      |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> assign(:selected_pool_id, nil)
      |> load_pools()}
   end
 
@@ -228,24 +222,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
      socket
      |> assign(:pool_filters, filters)
      |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> assign(:selected_pool_id, nil)
      |> load_pools()}
-  end
-
-  def handle_event("select_pool", %{"id" => pool_id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:selected_pool_id, pool_id)
-     |> assign(:selected_pool_tab, "overview")
-     |> load_pools()}
-  end
-
-  def handle_event("close_pool_inspector", _params, socket) do
-    {:noreply, assign(socket, selected_pool_id: nil, selected_pool_row: nil)}
-  end
-
-  def handle_event("select_pool_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, :selected_pool_tab, pool_inspector_tab(tab))}
   end
 
   @impl true
@@ -265,13 +242,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @impl true
   def render(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :datetime_preferences,
-        DateTimeDisplay.preferences_for_user(assigns.current_scope.user)
-      )
-
     ~H"""
     <AdminComponents.admin_shell
       flash={@flash}
@@ -376,10 +346,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           delete_form_version={@delete_form_version}
           pool_filter_form={@pool_filter_form}
           pools={@pools}
-          selected_pool_row={@selected_pool_row}
-          selected_pool_tab={@selected_pool_tab}
           can_manage_pools?={@can_manage_pools?}
-          datetime_preferences={@datetime_preferences}
         />
       </section>
     </AdminComponents.admin_shell>
@@ -390,8 +357,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     page_state =
       PoolsReadModel.load(
         socket.assigns.current_scope,
-        socket.assigns.pool_filters,
-        socket.assigns.selected_pool_id
+        socket.assigns.pool_filters
       )
 
     socket
@@ -408,11 +374,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       socket
     end)
   end
-
-  defp pool_inspector_tab(tab) when tab in ["overview", "upstreams", "api_keys"],
-    do: tab
-
-  defp pool_inspector_tab(_tab), do: "overview"
 
   defp ensure_can_manage_pools(socket) do
     if Pools.can_manage_pools?(socket.assigns.current_scope) do

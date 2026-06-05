@@ -445,14 +445,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-inventory-surface > footer")
     refute has_element?(view, "#pools-count")
     assert has_element?(view, "#pools-page-create-action")
-    assert has_element?(view, "#pool-details-drawer-root")
-    assert has_element?(view, "#pool-details-drawer")
-    refute has_element?(view, "#pool-details-drawer[checked]")
+    refute has_element?(view, "#pool-details-drawer-root")
+    refute has_element?(view, "#pool-details-drawer")
+    refute has_element?(view, "#pool-inspector")
     assert has_element?(view, "#pools-grid")
     refute has_element?(view, "#pools-table-scroll-region")
     refute has_element?(view, "#pools-table")
     assert has_element?(view, "article#pool-row-#{pool.id}.pool-card", "Admin Pools")
-    assert has_element?(view, "#inspect-pool-#{pool.id}")
+    assert has_element?(view, "#pool-row-#{pool.id}-name", "Admin Pools")
+    refute has_element?(view, "#inspect-pool-#{pool.id}")
     refute has_element?(view, "#pool-row-#{pool.id}", "admin-pools")
     refute has_element?(view, "article#pool-row-#{pool.id}", "Created")
 
@@ -486,37 +487,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-status-form-#{pool.id}")
     refute has_element?(view, "#archive-pool-#{pool.id}")
     refute has_element?(view, "#pool-row-#{pool.id}-compatibility-mode")
-
-    view |> element("#inspect-pool-#{pool.id}") |> render_click()
-
-    assert has_element?(view, "#pool-details-drawer[checked]")
-    assert has_element?(view, "#pool-inspector[role='dialog']", "Admin Pools")
-    assert has_element?(view, "#pool-inspector-close")
-    assert has_element?(view, "#pool-inspector", "Admin Pools")
-    assert has_element?(view, "#pool-inspector-details")
-    refute has_element?(view, "#pool-inspector-compatibility-mode")
-    assert has_element?(view, "#pool-inspector-usage")
-    assert has_element?(view, "#pool-inspector-links")
-    assert has_element?(view, "#pool-inspector-tab-overview[aria-selected='true']")
-
-    view |> element("#pool-inspector-tab-api-keys") |> render_click()
-
-    assert has_element?(view, "#pool-inspector-tab-api-keys[aria-selected='true']")
-    assert has_element?(view, "#pool-inspector-api-keys", "0 API keys")
-    refute has_element?(view, "#pool-inspector-details")
-
-    view |> element("#pool-inspector-close") |> render_click()
-
-    refute has_element?(view, "#pool-details-drawer[checked]")
-
-    view |> element("#inspect-pool-#{pool.id}") |> render_click()
-
-    assert has_element?(view, "#pool-api-keys-link-#{pool.id}", "API keys")
-    assert has_element?(view, "#pool-upstreams-link-#{pool.id}", "Upstreams")
-    assert has_element?(view, "#pool-request-logs-link-#{pool.id}", "Request logs")
-    assert has_element?(view, "#pool-audit-logs-link-#{pool.id}", "Audit logs")
-    refute has_element?(view, "#pool-sessions-link-#{pool.id}")
-    refute has_element?(view, "#pool-inspector-tab-sessions")
+    refute has_element?(view, "#pool-api-keys-link-#{pool.id}")
+    refute has_element?(view, "#pool-upstreams-link-#{pool.id}")
+    refute has_element?(view, "#pool-request-logs-link-#{pool.id}")
+    refute has_element?(view, "#pool-audit-logs-link-#{pool.id}")
     refute has_element?(view, "#archive-pool-form-#{pool.id}")
     assert has_element?(view, "#edit-pool-#{pool.id}")
     assert has_element?(view, "#delete-pool-#{pool.id}[disabled]")
@@ -527,6 +501,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-form")
     assert has_element?(view, "#pool-create-dialog-header", "Pool configuration")
     refute has_element?(view, "#pool-create-dialog-header", "Pool lifecycle")
+    assert_policy_editor_docs_link(view, "pool-create-dialog")
     assert has_element?(view, "#pool-create-dialog-tabs[role='tablist']")
     assert has_element?(view, "#pool-create-dialog-tab-details[aria-selected='true']")
     assert has_element?(view, "#pool-create-dialog-tab-routing[role='tab']")
@@ -596,6 +571,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-create-routing-controls",
+             "Forward sanitized OpenAI control-plane analytics."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Codex Pooler telemetry is separate."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
              "Allow /v1 compatibility"
            )
 
@@ -631,7 +618,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool_slug")
   end
 
-  test "filters the pool inventory and inspector from the toolbar", %{conn: conn, scope: scope} do
+  test "filters the pool inventory from the toolbar", %{conn: conn, scope: scope} do
     {:ok, active_pool} =
       Pools.create_pool(scope, %{slug: "filter-active", name: "Filter Active"})
 
@@ -667,7 +654,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#pool-row-#{active_pool.id}")
     assert has_element?(view, "#pool-row-#{disabled_pool.id}", "Filter Disabled")
-    refute has_element?(view, "#pool-details-drawer[checked]")
+    refute has_element?(view, "#pool-details-drawer")
+    refute has_element?(view, "#pool-inspector")
 
     view
     |> element("#pool-filter-form")
@@ -682,11 +670,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#pool-row-#{active_pool.id}")
     assert has_element?(view, "#pool-row-#{disabled_pool.id}", "Filter Disabled")
-
-    view |> element("#inspect-pool-#{disabled_pool.id}") |> render_click()
-
-    assert has_element?(view, "#pool-details-drawer[checked]")
-    assert has_element?(view, "#pool-inspector", "Filter Disabled")
+    assert has_element?(view, "#pool-row-#{disabled_pool.id}-name", "Filter Disabled")
+    refute has_element?(view, "#inspect-pool-#{disabled_pool.id}")
   end
 
   @tag feature_pool_control_plane_analytics: true
@@ -846,6 +831,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-edit-dialog[open]")
     assert has_element?(view, "#pool-edit-form")
+    assert_policy_editor_docs_link(view, "pool-edit-dialog")
     assert has_element?(view, "#pool-edit-dialog-tabs[role='tablist']")
     assert has_element?(view, "#pool-edit-dialog-tab-details[aria-selected='true']")
     assert has_element?(view, "#pool-edit-dialog-tab-routing[role='tab']")
@@ -978,6 +964,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-edit-routing-controls",
              "Forward analytics"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Forward sanitized OpenAI control-plane analytics."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Codex Pooler telemetry is separate."
            )
 
     assert has_element?(
@@ -1255,10 +1253,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
 
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Bridge ring")
-
-    view |> element("#inspect-pool-#{pool.id}") |> render_click()
-
-    assert has_element?(view, "#pool-inspector-details", "Bridge ring")
+    refute has_element?(view, "#pool-inspector")
 
     assert {:ok, _settings} =
              Pools.update_routing_settings(scope, pool, %{
@@ -1268,7 +1263,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Deterministic rotation")
-    assert has_element?(view, "#pool-inspector-details", "Deterministic rotation")
+    refute has_element?(view, "#pool-inspector")
   end
 
   test "refreshes pool counts and usage metrics when events arrive", %{conn: conn, scope: scope} do
@@ -1579,6 +1574,19 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   defp open_create_dialog(view) do
     view |> element("#pools-page-create-action") |> render_click()
+  end
+
+  defp assert_policy_editor_docs_link(view, dialog_id) do
+    assert has_element?(
+             view,
+             "##{dialog_id}-footer [data-role='policy-editor-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(
+             view,
+             "##{dialog_id}-docs-link [data-role='policy-editor-docs-icon']"
+           )
   end
 
   defp quota_window_attrs(window_kind, window_minutes, active_limit, used_percent, reset_at) do

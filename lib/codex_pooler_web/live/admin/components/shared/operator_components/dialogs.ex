@@ -67,7 +67,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
             />
             <.temporary_password_fields form={@create_form} />
           </div>
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer
+          :if={!@temporary_password_receipt}
+          id="operator-create-dialog-footer"
+        >
+          <:actions>
             <AdminComponents.action_button
               id="operator-create-cancel"
               icon="hero-x-mark"
@@ -79,10 +85,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               icon="hero-user-plus"
               label="Create operator"
               type="submit"
+              form="operator-create-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_create_operator">close</button>
@@ -131,7 +138,10 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               field_prefix="operator_edit"
             />
           </div>
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer id="operator-edit-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="operator-edit-cancel"
               icon="hero-x-mark"
@@ -143,10 +153,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               icon="hero-check"
               label="Save operator"
               type="submit"
+              form="operator-edit-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_edit">close</button>
@@ -211,7 +222,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           <div class="grid gap-4 md:grid-cols-2">
             <.temporary_password_fields form={@reset_form} />
           </div>
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer
+          :if={@resetting_operator && !@password_dialog_receipt}
+          id="operator-password-dialog-footer"
+        >
+          <:actions>
             <AdminComponents.action_button
               id="operator-reset-password-cancel"
               icon="hero-x-mark"
@@ -223,10 +240,11 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
               icon="hero-arrow-path"
               label={reset_button_label(@reset_operation)}
               type="submit"
+              form="operator-reset-password-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_reset">close</button>
@@ -387,18 +405,19 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           </button>
         </div>
       </div>
-
-      <div class="modal-action mt-0">
-        <button
-          id={@close_button_id}
-          type="button"
-          class="btn btn-primary btn-sm"
-          phx-click={@close_event}
-        >
-          Close
-        </button>
-      </div>
     </div>
+
+    <AdminComponents.dialog_footer id={"#{@wrapper_id}-footer"}>
+      <:actions>
+        <AdminComponents.action_button
+          id={@close_button_id}
+          icon="hero-check"
+          label="Close"
+          phx-click={@close_event}
+          variant={:primary}
+        />
+      </:actions>
+    </AdminComponents.dialog_footer>
     """
   end
 

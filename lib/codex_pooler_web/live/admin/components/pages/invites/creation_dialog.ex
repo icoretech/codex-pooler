@@ -98,8 +98,10 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
               </div>
             </div>
           </div>
+        </div>
 
-          <div class="modal-action mt-0">
+        <AdminComponents.dialog_footer :if={@last_invite} id="pool-invite-ready-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="pool-invite-dialog-close"
               icon="hero-check"
@@ -107,8 +109,8 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
               phx-click="cancel_create_invite"
               variant={:primary}
             />
-          </div>
-        </div>
+          </:actions>
+        </AdminComponents.dialog_footer>
 
         <.form
           :if={!@last_invite}
@@ -149,7 +151,10 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
               </p>
             </div>
           </div>
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer :if={!@last_invite} id="pool-invite-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="pool-invite-cancel"
               icon="hero-x-mark"
@@ -161,11 +166,12 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
               icon="hero-user-plus"
               label="Create Pool invite"
               type="submit"
+              form="pool-invite-form"
               variant={:primary}
               disabled={!@invite_form_valid?}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_create_invite">close</button>

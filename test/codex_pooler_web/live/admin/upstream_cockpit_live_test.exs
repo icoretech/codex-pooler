@@ -2241,6 +2241,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     view |> element("#cockpit-rename-upstream-account-#{identity.id}") |> render_click()
     assert has_element?(view, "#cockpit-rename-upstream-account-dialog[open]")
+    assert_admin_dialog_docs_link(view, "cockpit-rename-upstream-account-dialog-footer")
 
     view
     |> element("#cockpit-rename-upstream-account-form")
@@ -2255,6 +2256,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     |> render_click()
 
     assert has_element?(view, "#auth-json-import-dialog[open]")
+    assert_admin_dialog_docs_link(view, "auth-json-import-dialog-footer")
 
     replacement_auth_json =
       auth_json_fixture(
@@ -2312,6 +2314,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     view |> element("#cockpit-delete-upstream-account-#{identity.id}") |> render_click()
     assert has_element?(view, "#cockpit-delete-upstream-account-dialog[open]")
+    assert_admin_dialog_docs_link(view, "cockpit-delete-upstream-account-dialog-footer")
 
     view
     |> element("#cockpit-delete-upstream-account-form")
@@ -2738,4 +2741,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
   defp runtime_secret(label),
     do: Enum.join(["admin", label, "secret", "do", "not", "render"], "-")
+
+  defp assert_admin_dialog_docs_link(view, footer_id) do
+    assert has_element?(
+             view,
+             "##{footer_id} [data-role='admin-dialog-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(
+             view,
+             "##{footer_id}-docs-link [data-role='admin-dialog-docs-icon']"
+           )
+  end
 end

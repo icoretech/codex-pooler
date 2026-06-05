@@ -112,6 +112,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
 
     assert has_element?(view, "#pool-invite-dialog[open]")
     assert has_element?(view, "#pool-invite-form")
+    assert_admin_dialog_docs_link(view, "pool-invite-dialog-footer")
 
     assert has_element?(
              view,
@@ -302,6 +303,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     assert has_element?(view, "#pool-invite-copy-url[data-copy-label='Copy']")
     assert has_element?(view, "#pool-invite-copy-url[data-copied-label='Copied']")
     assert has_element?(view, "#pool-invite-copy-url [data-copy-label]", "Copy")
+    assert_admin_dialog_docs_link(view, "pool-invite-ready-dialog-footer")
 
     raw_token = invite_token_from_html!(html)
     invite = Repo.one!(Invite)
@@ -509,6 +511,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
 
     assert has_element?(view, "#invite-revoke-dialog[open]", "Revoke Pool invite")
     assert has_element?(view, "#invite-revoke-dialog", "revoke@example.com")
+    assert_admin_dialog_docs_link(view, "invite-revoke-dialog-footer")
 
     view
     |> element("#invite-revoke-confirm")
@@ -578,6 +581,19 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     view
     |> element("#invite-page-create-action")
     |> render_click()
+  end
+
+  defp assert_admin_dialog_docs_link(view, footer_id) do
+    assert has_element?(
+             view,
+             "##{footer_id} [data-role='admin-dialog-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(
+             view,
+             "##{footer_id}-docs-link [data-role='admin-dialog-docs-icon']"
+           )
   end
 
   defp invite_token_from_html!(html) do

@@ -39,8 +39,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   @type page_state :: %{
           required(:pools) => [pool_row()],
           required(:pool_metrics) => metrics(),
-          required(:selected_pool_row) => pool_row() | nil,
-          required(:selected_pool_id) => Ecto.UUID.t() | nil,
           required(:can_manage_pools?) => boolean(),
           required(:upstream_identity_options) => [option()],
           required(:api_key_options) => [option()],
@@ -50,11 +48,10 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   @spec empty_metrics() :: metrics()
   def empty_metrics, do: pool_metrics([])
 
-  @spec load(term(), map(), term()) :: page_state()
-  def load(scope, filters, selected_pool_id) do
+  @spec load(term(), map()) :: page_state()
+  def load(scope, filters) do
     pool_rows = pool_rows(scope)
     visible_pool_rows = filter_pool_rows(pool_rows, filters)
-    selected_pool_row = selected_pool_row(visible_pool_rows, selected_pool_id)
     can_manage_pools? = Pools.can_manage_pools?(scope)
 
     {upstream_identity_options, upstream_warnings} =
@@ -65,8 +62,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     %{
       pools: visible_pool_rows,
       pool_metrics: pool_metrics(pool_rows, scope),
-      selected_pool_row: selected_pool_row,
-      selected_pool_id: selected_pool_row && selected_pool_row.pool.id,
       can_manage_pools?: can_manage_pools?,
       upstream_identity_options: upstream_identity_options,
       api_key_options: api_key_options,
@@ -147,14 +142,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
 
   defp pool_matches_status?(_pool_row, "all"), do: true
   defp pool_matches_status?(pool_row, status), do: pool_row.pool.status == status
-
-  defp selected_pool_row([], _selected_pool_id), do: nil
-
-  defp selected_pool_row(pool_rows, selected_pool_id) when is_binary(selected_pool_id) do
-    Enum.find(pool_rows, &(&1.pool.id == selected_pool_id))
-  end
-
-  defp selected_pool_row(_pool_rows, _selected_pool_id), do: nil
 
   defp pool_metrics(pool_rows) do
     %{

@@ -259,27 +259,32 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           </div>
         </div>
 
-        <div class="modal-action mt-0 border-t border-base-300 px-5 py-4">
-          <button
-            id="invite-revoke-cancel"
-            type="button"
-            class="btn btn-secondary btn-sm gap-2"
-            phx-click="cancel_revoke_invite"
-          >
-            <.icon name="hero-x-mark" class="size-4" />
-            <span>Cancel</span>
-          </button>
-          <button
-            id="invite-revoke-confirm"
-            type="button"
-            class="btn btn-error btn-sm gap-2"
-            phx-click="confirm_revoke_invite"
-            phx-value-id={@invite.id}
-          >
-            <.icon name="hero-no-symbol" class="size-4" />
-            <span>Revoke invite</span>
-          </button>
-        </div>
+        <AdminComponents.dialog_footer
+          id="invite-revoke-dialog-footer"
+          class="modal-action mt-0 w-full border-t border-base-300 bg-base-200/80 px-5 py-4"
+        >
+          <:actions>
+            <button
+              id="invite-revoke-cancel"
+              type="button"
+              class="btn btn-secondary btn-sm gap-2"
+              phx-click="cancel_revoke_invite"
+            >
+              <.icon name="hero-x-mark" class="size-4" />
+              <span>Cancel</span>
+            </button>
+            <button
+              id="invite-revoke-confirm"
+              type="button"
+              class="btn btn-error btn-sm gap-2"
+              phx-click="confirm_revoke_invite"
+              phx-value-id={@invite.id}
+            >
+              <.icon name="hero-no-symbol" class="size-4" />
+              <span>Revoke invite</span>
+            </button>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_revoke_invite">close</button>

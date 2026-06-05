@@ -39,6 +39,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator_role")
     assert has_element?(view, "#operator_pool_ids_group")
     assert has_element?(view, "#operator-create-cancel + #operator-create-submit")
+    assert_admin_dialog_docs_link(view, "operator-create-dialog-footer")
     assert has_element?(view, "#operators-table-scroll-region")
     assert has_element?(view, "#operators-table[phx-update='stream']")
     assert has_element?(view, "#operators-table-scroll-region thead th", "TOTP")
@@ -100,6 +101,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator-create-dialog[open]")
     assert has_element?(view, "#operator-create-temporary-password-value", temporary_password)
     assert has_element?(view, "#operator-create-copy-temporary-password")
+    assert_admin_dialog_docs_link(view, "operator-create-temporary-password-receipt-footer")
     assert has_element?(view, "#operator-row-#{operator.id}", "Generated Operator")
     assert has_element?(view, "#operator-row-#{operator.id}-last-login-at", "not yet")
     assert_email_sent(to: {"", operator.email}, subject: "Codex Pooler operator access")
@@ -468,6 +470,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator_edit_role")
     assert has_element?(view, "#operator_edit_pool_ids_group")
     assert has_element?(view, "#operator-edit-cancel + #operator-edit-submit")
+    assert_admin_dialog_docs_link(view, "operator-edit-dialog-footer")
 
     view
     |> element("#operator-edit-form")
@@ -538,6 +541,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator-reset-password-form")
     assert has_element?(view, "#operator-reset-password-cancel + #operator-reset-password-submit")
     assert has_element?(view, "#operator-password-dialog", "reset.operator@example.com")
+    assert_admin_dialog_docs_link(view, "operator-password-dialog-footer")
 
     html =
       view
@@ -564,6 +568,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator-temporary-password-dialog-value", reset_password)
     assert has_element?(view, "#operator-copy-temporary-password")
     assert has_element?(view, "#operator-password-dialog-close")
+    assert_admin_dialog_docs_link(view, "operator-temporary-password-dialog-receipt-footer")
 
     assert_email_sent(fn email ->
       assert email.to == [{"", operator.email}]
@@ -617,5 +622,18 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
 
   defp open_create_dialog(view) do
     view |> element("#operator-page-create-action") |> render_click()
+  end
+
+  defp assert_admin_dialog_docs_link(view, footer_id) do
+    assert has_element?(
+             view,
+             "##{footer_id} [data-role='admin-dialog-docs-link'][href='https://docs.codex-pooler.com'][target='_blank'][rel='noopener noreferrer'].text-xs",
+             "Docs"
+           )
+
+    assert has_element?(
+             view,
+             "##{footer_id}-docs-link [data-role='admin-dialog-docs-icon']"
+           )
   end
 end

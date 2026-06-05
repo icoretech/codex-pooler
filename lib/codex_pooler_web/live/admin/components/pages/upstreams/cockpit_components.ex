@@ -542,7 +542,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
           class="grid gap-5 p-6"
         >
           <.input field={@form[:account_label]} type="text" label="Label" required />
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer id="cockpit-rename-upstream-account-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="cockpit-rename-upstream-account-cancel"
               icon="hero-x-mark"
@@ -554,10 +557,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
               icon="hero-pencil-square"
               label="Rename"
               type="submit"
+              form="cockpit-rename-upstream-account-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_rename_account">close</button>
@@ -600,7 +604,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
             placeholder={@account.label}
             required
           />
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer id="cockpit-delete-upstream-account-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="cockpit-delete-upstream-account-cancel"
               icon="hero-x-mark"
@@ -612,10 +619,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
               icon="hero-trash"
               label="Delete"
               type="submit"
+              form="cockpit-delete-upstream-account-form"
               variant={:danger}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_delete_account">close</button>

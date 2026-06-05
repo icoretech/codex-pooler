@@ -289,8 +289,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             placeholder="Account label"
             required
           />
+        </.form>
 
-          <div class="modal-action mt-0">
+        <AdminComponents.dialog_footer id="rename-upstream-account-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="rename-upstream-account-cancel"
               icon="hero-x-mark"
@@ -302,10 +304,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               icon="hero-pencil-square"
               label="Rename"
               type="submit"
+              form="rename-upstream-account-form"
               variant={:primary}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_rename_account">close</button>

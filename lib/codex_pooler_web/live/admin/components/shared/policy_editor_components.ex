@@ -4,6 +4,8 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
   """
   use CodexPoolerWeb, :html
 
+  alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+
   attr :id, :string, required: true
   attr :eyebrow, :string, default: nil
   attr :title, :string, required: true
@@ -131,14 +133,17 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
           {render_slot(@inner_block)}
         </section>
 
-        <footer
+        <AdminComponents.dialog_footer
           id={"#{@id}-footer"}
           class="modal-action sticky bottom-0 mt-0 shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
+          docs_link_role="policy-editor-docs-link"
+          docs_link_id={"#{@id}-docs-link"}
+          docs_icon_role="policy-editor-docs-icon"
         >
-          <div class="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <:actions>
             {render_slot(@actions)}
-          </div>
-        </footer>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form id={"#{@id}-backdrop"} method="dialog" class="modal-backdrop">
         <button type="button" phx-click={@backdrop_event}>{@backdrop_label}</button>
