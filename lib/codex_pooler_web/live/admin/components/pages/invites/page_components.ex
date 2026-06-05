@@ -95,18 +95,18 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     >
       <div
         id="invite-table-scroll-region"
-        class="overflow-x-auto md:overflow-visible"
+        class="overflow-x-auto"
       >
-        <table id="invite-table" class="table w-full table-fixed">
+        <table id="invite-table" class="table w-full min-w-[74rem] table-fixed">
           <colgroup>
-            <col class="w-36" />
+            <col class="w-32" />
             <col class="w-24" />
             <col class="w-32" />
-            <col />
+            <col class="w-48" />
+            <col class="w-44" />
+            <col class="w-16" />
             <col class="w-56" />
-            <col class="w-20" />
-            <col class="w-56" />
-            <col class="w-28" />
+            <col class="w-24" />
             <col class="w-20" />
           </colgroup>
           <thead>
