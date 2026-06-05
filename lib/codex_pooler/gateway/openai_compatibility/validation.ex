@@ -71,6 +71,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Validation do
 
   def clean_string(_value), do: nil
 
+  @reasoning_effort_token_pattern ~r/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
+
+  @spec validate_reasoning_effort_token(term(), String.t()) :: :ok | {:error, Error.reason()}
+  def validate_reasoning_effort_token(value, param) when is_binary(value) do
+    value = String.trim(value)
+
+    if Regex.match?(@reasoning_effort_token_pattern, value) and not repeated_separator?(value) do
+      :ok
+    else
+      {:error, Error.invalid_request("reasoning effort is not supported", param)}
+    end
+  end
+
+  def validate_reasoning_effort_token(_value, param),
+    do: {:error, Error.invalid_request("reasoning effort is not supported", param)}
+
   @spec normalize_value(term()) :: term()
   def normalize_value(%Plug.Upload{} = upload), do: upload
 
@@ -110,6 +126,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Validation do
 
   def upload_metadata(_value),
     do: {:error, Error.invalid_request("file metadata is invalid", "file")}
+
+  defp repeated_separator?(value) do
+    String.contains?(value, ["__", "--", "_-", "-_"])
+  end
 
   defp safe_upload_filename(filename) when is_binary(filename) do
     filename |> Path.basename() |> String.slice(0, 255) |> clean_string() || "upload"

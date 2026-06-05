@@ -637,7 +637,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
        "moderation.extra"},
       {%{"moderation" => "omni-moderation-latest"}, "moderation"},
       {%{"reasoning" => %{"context" => "recent_turns"}}, "reasoning.context"},
-      {%{"reasoning" => %{"effort" => " "}}, "reasoning.effort"}
+      {%{"reasoning" => %{"effort" => " "}}, "reasoning.effort"},
+      {%{"reasoning" => %{"effort" => "very high"}}, "reasoning.effort"},
+      {%{"reasoning" => %{"effort" => "high!!!"}}, "reasoning.effort"},
+      {%{"reasoning" => %{"effort" => "synthetic freeform effort text"}}, "reasoning.effort"},
+      {%{"reasoning" => %{"effort" => "focused\nmax"}}, "reasoning.effort"},
+      {%{"reasoning" => %{"effort" => String.duplicate("a", 33)}}, "reasoning.effort"}
     ]
 
     Enum.each(invalid_payloads, fn {payload, expected_param} ->
@@ -656,6 +661,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                "messages" => [%{"role" => "user", "content" => "synthetic"}],
                "moderation" => %{"model" => " "}
              })
+
+    invalid_chat_efforts = [
+      "",
+      "   ",
+      "very high",
+      "high!!!",
+      "synthetic freeform effort text",
+      "focused\nmax",
+      String.duplicate("a", 33)
+    ]
+
+    Enum.each(invalid_chat_efforts, fn effort ->
+      assert {:error, %{status: 400, code: "invalid_request", param: "reasoning_effort"}} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [%{"role" => "user", "content" => "synthetic"}],
+                 "reasoning_effort" => effort
+               })
+    end)
   end
 
   @tag :unsupported_fields

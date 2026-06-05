@@ -35,7 +35,10 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     setup = gateway_setup(upstream)
 
-    payload = Map.put(chat_payload(setup), "moderation", %{"model" => "omni-moderation-latest"})
+    payload =
+      chat_payload(setup)
+      |> Map.put("moderation", %{"model" => "omni-moderation-latest"})
+      |> Map.put("reasoning_effort", "focused")
 
     conn =
       conn
@@ -74,6 +77,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
+    assert request.reasoning_effort == "focused"
     assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
 
     assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
@@ -361,6 +365,31 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     refute metadata =~ "Synthetic user"
     refute metadata =~ "streamed moderated answer"
     refute metadata =~ "omni-moderation-latest"
+  end
+
+  test "POST /v1/chat/completions rejects unsafe reasoning effort before dispatch", %{
+    conn: conn
+  } do
+    unsafe_effort = "synthetic freeform effort text"
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        chat_payload(setup)
+        |> Map.put("reasoning_effort", unsafe_effort)
+      )
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "reasoning_effort"
+    refute conn.resp_body =~ unsafe_effort
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   test "POST /v1/chat/completions normalizes upstream JSON errors", %{conn: conn} do

@@ -88,15 +88,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     end
   end
 
-  defp validate_reasoning_effort(%{"reasoning_effort" => effort}) when is_binary(effort) do
-    if String.trim(effort) != "",
-      do: :ok,
-      else:
-        {:error, Error.invalid_request("reasoning_effort is not supported", "reasoning_effort")}
-  end
-
-  defp validate_reasoning_effort(%{"reasoning_effort" => _effort}),
-    do: {:error, Error.invalid_request("reasoning_effort is not supported", "reasoning_effort")}
+  defp validate_reasoning_effort(%{"reasoning_effort" => effort}),
+    do: Validation.validate_reasoning_effort_token(effort, "reasoning_effort")
 
   defp validate_reasoning_effort(_payload), do: :ok
 

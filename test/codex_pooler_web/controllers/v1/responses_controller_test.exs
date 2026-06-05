@@ -738,7 +738,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       |> auth(setup)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic v1 response"
+        "input" => "synthetic v1 response",
+        "reasoning" => %{"effort" => "focused"}
       })
 
     assert %{"id" => "resp_v1_non_stream", "object" => "response"} = json_response(conn, 200)
@@ -750,6 +751,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
+    assert request.reasoning_effort == "focused"
     assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
 
     assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
@@ -762,6 +764,29 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  test "POST /v1/responses rejects unsafe reasoning effort before dispatch", %{conn: conn} do
+    unsafe_effort = "synthetic freeform effort text"
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic unsafe effort request",
+        "reasoning" => %{"effort" => unsafe_effort}
+      })
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "reasoning.effort"
+    refute conn.resp_body =~ unsafe_effort
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   test "POST /v1/responses accepts truncation but does not forward it upstream", %{conn: conn} do
