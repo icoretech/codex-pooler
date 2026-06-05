@@ -385,42 +385,33 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         data-role="pool-card-metrics"
       >
         <dl class="grid min-w-0 grid-cols-4 divide-x divide-base-300/70 text-xs leading-5">
-          <div class="min-w-0 pr-3" data-role="pool-upstream-count-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              Upstreams
-            </dt>
-            <dd
-              id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}
-              class="truncate text-base-content/60"
-            >
-              {@pool_row.upstream_count}
-            </dd>
-          </div>
-          <div class="min-w-0 px-3" data-role="pool-api-key-count-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              Keys
-            </dt>
-            <dd
-              id={"pool-row-#{@pool_row.pool.id}-api-key-count"}
-              class="truncate text-base-content/60"
-            >
-              {@pool_row.api_key_count}
-            </dd>
-          </div>
-          <div class="min-w-0 px-3" data-role="pool-request-count-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              Requests
-            </dt>
-            <dd
-              id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}
-              class="truncate text-base-content/60"
-            >
-              {PoolsReadModel.format_metric_integer(@pool_row.request_count_5h)}
-            </dd>
-          </div>
+          <.pool_metric_link
+            data_role="pool-upstream-count-cell"
+            href={~p"/admin/upstreams?pool_id=#{@pool_row.pool.id}"}
+            label="Upstreams"
+            value={@pool_row.upstream_count}
+            value_id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}
+            wrapper_class="min-w-0 pr-3"
+          />
+          <.pool_metric_link
+            data_role="pool-api-key-count-cell"
+            href={~p"/admin/api-keys?pool_id=#{@pool_row.pool.id}"}
+            label="API keys"
+            value={@pool_row.api_key_count}
+            value_id={"pool-row-#{@pool_row.pool.id}-api-key-count"}
+            wrapper_class="min-w-0 px-3"
+          />
+          <.pool_metric_link
+            data_role="pool-request-count-cell"
+            href={~p"/admin/request-logs?pool_id=#{@pool_row.pool.id}"}
+            label="Requests 5h"
+            value={PoolsReadModel.format_metric_integer(@pool_row.request_count_5h)}
+            value_id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}
+            wrapper_class="min-w-0 px-3"
+          />
           <div class="min-w-0 pl-3" data-role="pool-tps-cell">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              TPS
+              TPS 5h
             </dt>
             <dd
               id={"pool-row-#{@pool_row.pool.id}-tokens-per-sec"}
@@ -432,6 +423,31 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         </dl>
       </footer>
     </article>
+    """
+  end
+
+  attr :data_role, :string, required: true
+  attr :href, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :any, required: true
+  attr :value_id, :string, required: true
+  attr :wrapper_class, :string, required: true
+
+  defp pool_metric_link(assigns) do
+    ~H"""
+    <div class={@wrapper_class} data-role={@data_role}>
+      <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
+        <.link
+          navigate={@href}
+          class="block truncate transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          {@label}
+        </.link>
+      </dt>
+      <dd id={@value_id} class="truncate text-base-content/60">
+        {@value}
+      </dd>
+    </div>
     """
   end
 

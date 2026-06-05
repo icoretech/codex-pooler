@@ -222,22 +222,41 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{pool.id} > footer.pool-card-metrics.border-t")
 
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id} > footer [data-role='pool-upstream-count-cell']"
-           )
+    metric_links = [
+      {"pool-upstream-count-cell", "pool-row-#{pool.id}-upstream-account-count",
+       "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
+      {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count",
+       "/admin/api-keys?pool_id=#{pool.id}", "API keys", "1"},
+      {"pool-request-count-cell", "pool-row-#{pool.id}-request-count-5h",
+       "/admin/request-logs?pool_id=#{pool.id}", "Requests 5h", "0"}
+    ]
 
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id} > footer [data-role='pool-api-key-count-cell']"
-           )
+    for {role, value_id, href, label, value} <- metric_links do
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id} > footer [data-role='#{role}'] dt a[href='#{href}'].hover\\:text-primary",
+               label
+             )
 
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id} > footer [data-role='pool-request-count-cell']"
-           )
+      assert has_element?(view, "##{value_id}", value)
+      refute has_element?(view, "##{value_id} a")
+    end
+
+    for {role, _value_id, _href, _label, _value} <- metric_links do
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id} > footer [data-role='#{role}']"
+             )
+    end
 
     assert has_element?(view, "#pool-row-#{pool.id} > footer [data-role='pool-tps-cell']")
+
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id} > footer [data-role='pool-tps-cell'] dt",
+             "TPS 5h"
+           )
+
     assert has_element?(view, "#pool-metric-requests", "0")
     refute has_element?(view, "#pool-metric-requests", "Last 5h requests")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "0")
