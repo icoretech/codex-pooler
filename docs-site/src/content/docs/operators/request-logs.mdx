@@ -1,0 +1,152 @@
+---
+title: Request logs
+description: Understand the admin Request logs page, sanitized gateway metadata, filters, route outcomes, usage lines, and privacy boundaries.
+---
+
+The Request logs page is the operator surface for recent runtime traffic. It helps you inspect whether requests were admitted, which Pool handled them, which upstream account was selected, how the route behaved, and what usage metadata was settled.
+
+Use this page when you need to answer:
+
+1. whether a client request reached Codex Pooler
+2. which Pool, upstream account, model, API key, and transport were involved
+3. whether the request succeeded, failed, retried, or is still in progress
+4. how long routing and upstream work took
+5. which token and cost metadata was recorded
+6. whether errors were safe operational errors, quota issues, or upstream failures
+
+Request logs are metadata-only. They do not show prompt text, generated content, uploaded file bytes, media contents, websocket frames, bearer tokens, upstream credentials, raw Pool API keys, raw idempotency keys, or raw provider payloads.
+
+![Request logs overview](/operators/request-logs/request-logs-overview.png)
+
+The screenshots in this guide redact live row values. The production UI shows safe labels and prefixes for operators, but public docs should not publish production identifiers or usage totals.
+
+## Filters
+
+The top filters narrow the table without changing any data.
+
+![Request logs filters](/operators/request-logs/request-logs-filters.png)
+
+Primary filters are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Filter</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Pool</td>
+      <td>Limits rows to one Pool. Owners can inspect all visible Pools; assigned admins only see their Pool scope.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Limits rows by request outcome, such as completed, failed, rejected, or in-progress states.</td>
+    </tr>
+    <tr>
+      <td>Upstream account</td>
+      <td>Limits rows to a visible upstream identity. When a Pool is selected, this list narrows to accounts assigned to that Pool.</td>
+    </tr>
+    <tr>
+      <td>Model</td>
+      <td>Limits rows to a model name observed in request logs.</td>
+    </tr>
+  </tbody>
+</table>
+
+Advanced filters are:
+
+1. `Correlation or row id`, for finding one request by known id
+2. `Date from`, for the start of the time range
+3. `Date to`, for the end of the time range
+
+Invalid or unsupported filters are ignored with a warning so operators can fix the query without losing the page.
+
+## Table Columns
+
+The table shows the latest matching rows, with a hard page size limit.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Status icon</td>
+      <td>Outcome indicator for the request row. Use the icon with the Errors column to understand failures.</td>
+    </tr>
+    <tr>
+      <td>Timestamp</td>
+      <td>Admission time and short row id. Use this when correlating with logs, audit events, or client reports.</td>
+    </tr>
+    <tr>
+      <td>Upstream account</td>
+      <td>Selected upstream account label and Pool name when selection metadata is visible.</td>
+    </tr>
+    <tr>
+      <td>Plan</td>
+      <td>Safe upstream plan badge when known.</td>
+    </tr>
+    <tr>
+      <td>Model / API Key</td>
+      <td>Requested or enforced model, reasoning and service tier, plus the API key label or safe prefix.</td>
+    </tr>
+    <tr>
+      <td>Transport</td>
+      <td>Request transport and protocol family, such as HTTP JSON or HTTP SSE.</td>
+    </tr>
+    <tr>
+      <td>Route</td>
+      <td>Runtime route family and safe client metadata. It can include path shape and latency, not request content.</td>
+    </tr>
+    <tr>
+      <td>Usage</td>
+      <td>Settled token and cost metadata when available. Missing usage can mean the request did not settle or pricing was unavailable.</td>
+    </tr>
+    <tr>
+      <td>Errors</td>
+      <td>Sanitized error summary lines. These should identify operational cause without exposing content or credentials.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Status and Errors
+
+Use status and errors together. A completed row with token usage usually means the request reached an upstream and settled successfully. A failed row may still show route, latency, or partial attempt metadata. A rejected row usually means admission or policy failed before upstream work.
+
+Common causes to inspect are:
+
+1. Pool API key paused, revoked, expired, or attached to the wrong Pool
+2. requested model not allowed by the key policy
+3. no active upstream assigned to the Pool
+4. selected upstream needing reauthorization or token refresh
+5. quota evidence exhausted or stale
+6. upstream route failure or timeout
+7. request shape unsupported by the current compatibility surface
+
+The Errors column should stay safe to copy into operator tickets. It should not include raw prompts, responses, uploaded file contents, credentials, or provider payloads.
+
+## Usage Metadata
+
+Usage lines summarize request accounting, including request count context, token totals, cached input tokens, and estimated cost when pricing is available. Treat these as operational attribution and capacity evidence. They are not a replacement for provider billing records.
+
+If usage is blank, check the request status first. A request can be admitted without final usage if it failed before settlement, if pricing was not matched, or if accounting metadata was not available for that route.
+
+## Operational Checklist
+
+When investigating a client report, check request logs in this order:
+
+1. filter by Pool or API key context if known
+2. filter by request id when the client provided one
+3. narrow by model or upstream only after confirming the Pool
+4. inspect status, transport, route, and errors
+5. compare timestamps with Audit logs for recent policy or lifecycle changes
+6. open the Pool page to confirm active status and assignments
+7. open the Upstreams page to confirm readiness, quota, and freshness
+8. open API keys to confirm key policy, status, expiry, and limits
+
+If no row exists, the request may not have reached Codex Pooler, may have used a different Pool API key, or may be outside the visible operator scope.

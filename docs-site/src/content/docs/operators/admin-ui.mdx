@@ -35,6 +35,16 @@ A Pool API key represents the Pool, not a single upstream. Runtime clients send 
 
 An upstream is a Codex account identity or Pool assignment that Codex Pooler can route eligible work to. Operators use the upstreams page to add accounts, check readiness, pause accounts, and review account status.
 
+Use the dedicated [Upstreams page](/operators/upstreams/) for a detailed
+walkthrough of account cards, import dialogs, quota readiness, card actions, and
+the upstream cockpit. At a high level, Upstreams answer operator questions such
+as:
+
+1. Which accounts are available to route Pool traffic
+2. Which accounts are assigned to each Pool
+3. Whether quota, freshness, or reauthorization blocks an account
+4. Which account actions are available for recovery or lifecycle changes
+
 Safe upstream metadata can include labels, assignment state, model support, quota window state, freshness state, stored account identifiers, and last observed routing status. Secret material is stored behind the upstream secret store. The UI doesn't show provider credentials after import.
 
 Common upstream states mean:
@@ -48,6 +58,10 @@ Common upstream states mean:
 
 Pool API keys are bearer credentials for runtime clients. Create one for each client, environment, or automation boundary that should use a Pool.
 
+Use the dedicated [API keys page](/operators/api-keys/) for a detailed
+walkthrough of key tables, the policy wizard, one-time secret handling, usage
+metadata, rotation, and lifecycle actions.
+
 The raw key is shown only once when created or rotated. After that, operators see metadata such as label, prefix, Pool, status, policy summary, usage counters, and timestamps. Use that metadata to rotate stale keys, pause a client, or confirm which Pool a client is allowed to use.
 
 Pool API keys are separate from operator browser sessions and MCP tokens. Don't use a Pool API key for admin UI sign-in or the operator MCP endpoint.
@@ -56,11 +70,22 @@ Pool API keys are separate from operator browser sessions and MCP tokens. Don't 
 
 Owners can invite operators and assign Pool access. Use invites for onboarding people who need browser access, then keep ongoing permissions on the operator record.
 
+Use the dedicated [Invites page](/operators/invites/) for Pool onboarding links,
+delivery state, invite outcomes, and invite lifecycle actions.
+
+Use the dedicated [Operators page](/operators/operators/) for local admin
+accounts, roles, Pool assignments, TOTP state, password resets, and account
+lifecycle actions.
+
 Invite and operator pages should be treated as account-management surfaces. They show masked identity metadata, status, role, Pool assignments, and authentication setup state. They don't reveal passwords, temporary credentials, TOTP secrets, MCP tokens, or raw emails beyond the UI's safe display format.
 
 ## Request logs
 
 Request logs show routing and accounting metadata for runtime traffic. They are meant for operational questions, not content review.
+
+Use the dedicated [Request logs page](/operators/request-logs/) for a detailed
+walkthrough of filters, table columns, status metadata, usage lines, and
+safe-error boundaries.
 
 Request logs can help answer:
 
@@ -78,6 +103,10 @@ Request logs don't show raw prompt text, generated content, payload contents, up
 
 Audit logs track administrative changes and security-relevant events as metadata. They help owners and assigned admins understand who changed what, when it happened, and whether it succeeded.
 
+Use the dedicated [Audit logs page](/operators/audit-logs/) for a detailed
+walkthrough of filters, table columns, the event details drawer, and redacted
+detail fields.
+
 Audit records can include actor class, masked actor identity, action, target kind, outcome, time, Pool label, request correlation metadata, and sanitized detail summaries. They don't expose raw change blobs, secret settings, raw credentials, prompt text, provider payloads, or private identifiers.
 
 Use audit logs to confirm control-plane changes such as Pool edits, upstream lifecycle changes, key creation or rotation, invite changes, operator permission updates, system settings changes, and MCP gate changes.
@@ -86,9 +115,13 @@ Use audit logs to confirm control-plane changes such as Pool edits, upstream lif
 
 The jobs page is owner-facing. It shows background work metadata so owners can see whether scheduled and queued maintenance tasks are healthy.
 
+Use the dedicated [System jobs page](/operators/jobs/) for a detailed
+walkthrough of worker cards, manual enqueue actions, live target markers,
+failure panels, filters, the explorer table, and the job detail drawer.
+
 Job metadata can include worker name, queue, state, attempt count, timestamps, and safe error class. It is a status surface, not a deep recovery guide, and it doesn't reveal job args that contain secrets or raw client content.
 
-Typical job areas include catalog refresh, quota evidence refresh, accounting maintenance, email delivery, and cleanup tasks. A failed or retrying job usually means an owner should check the affected product area, for example upstream quota freshness or mail delivery settings.
+Typical job areas include catalog refresh, pricing import, account reconciliation, alert evaluation, token refresh, usage rollup rebuilds, and runtime cleanup. A failed or retrying job usually means an owner should check the affected product area, for example upstream quota freshness, Pool catalog state, alert rules, or request accounting.
 
 ## System settings
 

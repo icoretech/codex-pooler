@@ -1,0 +1,254 @@
+---
+title: API keys
+description: Understand the admin API keys page, Pool-scoped client credentials, policy wizard, usage metadata, rotation, and destructive actions.
+---
+
+The API keys page is the operator surface for runtime client credentials. A Pool API key lets a client send requests through one Pool. It does not represent an upstream account, and it is not an operator login credential.
+
+Use this page when you need to answer:
+
+1. which client credentials exist for each Pool
+2. whether a key is active, paused, or revoked
+3. which model policy applies to a key
+4. whether request or token limits are configured
+5. how much usage has been attributed to a key
+6. when a key needs rotation, pause, revoke, or deletion
+
+The page is metadata-only after create or rotate. It shows display names, safe key prefixes, Pool grouping, status, usage counters, model policy summaries, and action menus. It does not show raw Pool API keys after the one-time secret dialog is closed.
+
+![API keys page overview](/operators/api-keys/api-keys-overview.png)
+
+## What an API Key Controls
+
+A Pool API key is the bearer credential a runtime client uses for Codex Pooler routes. The key authorizes the client into one Pool. The Pool then decides which eligible upstream account receives the request.
+
+An API key controls:
+
+1. the owning Pool
+2. display name and operator notes
+3. lifecycle status, such as active or paused
+4. optional expiry
+5. allowed model policy
+6. optional enforced request fields
+7. default request and token limits
+8. one optional model-scoped limit override
+
+API key policy does not bypass Pool routing. The Pool still needs active upstream assignments, compatible models, fresh credentials, and usable quota evidence.
+
+## Key Table
+
+Keys are grouped by Pool. Each group has a compact table.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Key</td>
+      <td>Operator display name and safe key prefix. The prefix helps identify a credential without exposing the full bearer token.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Lifecycle state for the client credential. Active keys can authenticate new runtime requests; paused or revoked keys should not.</td>
+    </tr>
+    <tr>
+      <td>Usage</td>
+      <td>Request, token, cached-token, and cost metadata attributed to the key when usage data is available.</td>
+    </tr>
+    <tr>
+      <td>Policy</td>
+      <td>Short model-policy summary, such as all models or selected models.</td>
+    </tr>
+    <tr>
+      <td>Actions</td>
+      <td>Dotted menu for edit, pause, resume, rotate, revoke, and delete actions.</td>
+    </tr>
+  </tbody>
+</table>
+
+Operator notes appear behind the small information icon when present. Keep notes operational and sanitized; do not store secrets, customer content, or raw keys in notes.
+
+## Create API Key
+
+Click `Create API key` to open the policy wizard.
+
+![Create API key basics step](/operators/api-keys/api-keys-create-basics-dialog.png)
+
+The wizard has four sections:
+
+1. Basics
+2. Models
+3. Limits
+4. Review
+
+The dialog footer keeps Docs on the left and actions on the right. `Cancel` closes without creating a credential. `Create API key` submits the policy and then shows the raw key once.
+
+## Basics
+
+Basics defines the operator label, owning Pool, status, optional expiry, and operator notes.
+
+Use one key per client, environment, or automation boundary. Separate keys make rotation and investigation easier because request logs and usage totals stay attributable to one client credential.
+
+Status choices are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Status</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Active</td>
+      <td>The key can authenticate new runtime requests for its Pool.</td>
+    </tr>
+    <tr>
+      <td>Paused</td>
+      <td>The key remains configured but should not admit new runtime requests.</td>
+    </tr>
+  </tbody>
+</table>
+
+Expiry is optional. Use it for temporary automation or time-bounded access. Leave it blank for long-lived client credentials that are rotated operationally.
+
+## Models
+
+The Models step chooses model scope and optional enforced request fields.
+
+![Create API key models step](/operators/api-keys/api-keys-create-models-dialog.png)
+
+Model modes are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Mode</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>All models</td>
+      <td>Allows current and future routable models for the Pool, subject to upstream eligibility.</td>
+    </tr>
+    <tr>
+      <td>Selected</td>
+      <td>Allows only checked catalog models and any manual model identifiers saved on the key.</td>
+    </tr>
+    <tr>
+      <td>Deny all</td>
+      <td>Keeps the key valid but blocks model use. Use this for staged credentials or emergency containment.</td>
+    </tr>
+  </tbody>
+</table>
+
+Catalog models are derived from current routable model metadata. Manual model identifiers support controlled exceptions when a model is not yet present in the catalog.
+
+Enforced request fields let the key override selected client request values:
+
+1. enforced model
+2. enforced reasoning effort
+3. enforced service tier
+
+Leave a field unset when the client request should pass through unchanged.
+
+## Limits
+
+The Limits step saves optional policy caps.
+
+![Create API key limits step](/operators/api-keys/api-keys-create-limits-dialog.png)
+
+Default limits can cap:
+
+1. requests per minute
+2. tokens per day
+3. tokens per week
+4. input tokens per request
+5. output tokens per request
+
+Leave a field blank when no cap should be saved. A blank limit is different from a zero limit.
+
+The model-scoped override is an optional single-model override. Use it when one model should be more constrained than the default policy. Additional model rows are not part of the current wizard.
+
+## Review
+
+The Review step shows normalized policy before saving.
+
+![Create API key review step](/operators/api-keys/api-keys-create-review-dialog.png)
+
+Resolve review errors before saving. The submit button stays disabled when required policy data is missing. The review summary is useful because it shows what the key will actually enforce after normalization, not only what the operator entered on the previous steps.
+
+For existing keys, the review step can also show usage and active limits. Usage is metadata-only and should be used for operational attribution, not content review.
+
+## One-Time Secret Dialog
+
+After a key is created or rotated, Codex Pooler shows the raw bearer token exactly once. Copy it before closing the dialog.
+
+Future views only show the safe prefix. If the raw value is lost, rotate the key and update the client with the new value. Do not store raw keys in operator notes, screenshots, tickets, chat, request logs, audit comments, or public docs.
+
+## Action Menu
+
+Open the dotted menu on a key row for lifecycle actions.
+
+![API key action menu](/operators/api-keys/api-keys-action-menu.png)
+
+The current actions are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Edit</td>
+      <td>Opens the same policy wizard for an existing key. Stored secret material is not shown.</td>
+    </tr>
+    <tr>
+      <td>Pause</td>
+      <td>Disables new runtime authentication for an active key while keeping the key configured.</td>
+    </tr>
+    <tr>
+      <td>Resume</td>
+      <td>Returns a paused key to active authentication.</td>
+    </tr>
+    <tr>
+      <td>Rotate</td>
+      <td>Creates a new raw bearer token for the same key record and shows it once. Update clients immediately.</td>
+    </tr>
+    <tr>
+      <td>Revoke</td>
+      <td>Marks the key revoked. Revoked keys cannot be edited or resumed.</td>
+    </tr>
+    <tr>
+      <td>Delete</td>
+      <td>Opens a confirmation dialog that requires the key prefix. Delete permanently removes the key and related request history from this instance.</td>
+    </tr>
+  </tbody>
+</table>
+
+Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete only when the key and its related local history should be removed.
+
+## Operational Checklist
+
+When client traffic is rejected or not behaving as expected, check API keys in this order:
+
+1. confirm the client is using a Pool API key, not an upstream account credential
+2. confirm the key belongs to the expected Pool
+3. confirm the key status is `active`
+4. confirm the key is not expired
+5. confirm model policy allows the requested model
+6. confirm enforced request fields are expected
+7. confirm request and token limits are not exceeded
+8. check the owning Pool for active upstream assignments
+9. use Request logs filtered by Pool or key metadata to inspect recent failures
+10. use Audit logs to confirm recent create, rotate, pause, revoke, or edit actions
+
+If the raw key was copied incorrectly or lost, do not create another unrelated key unless the client identity should change. Rotate the existing key so usage and audit history stay attached to the same operator label.

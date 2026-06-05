@@ -1,0 +1,183 @@
+---
+title: Operators
+description: Understand the admin Operators page, local admin accounts, owner/admin roles, Pool assignments, TOTP state, and credential actions.
+---
+
+The Operators page is the owner-facing surface for browser admin accounts. Operators are people who can sign in to the admin UI. They are separate from upstream Codex accounts and separate from Pool API keys.
+
+Use this page when you need to answer:
+
+1. which local operators can access the admin UI
+2. whether an operator is active or disabled
+3. whether TOTP is set up
+4. whether the operator must change password on next sign-in
+5. which Pool assignments apply to an instance admin
+6. whether an operator needs a password reset, deactivation, or reactivation
+
+Only instance owners can manage operators. Instance admins work inside their assigned Pool scope and do not manage local operator accounts.
+
+![Operators page overview](/operators/operators/operators-overview.png)
+
+The screenshots in this guide redact live operator identity values. The production UI shows authorized owners operator emails and display names, but public docs should not publish them.
+
+## Filters
+
+The top filters narrow the table.
+
+<table>
+  <thead>
+    <tr>
+      <th>Filter</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Search</td>
+      <td>Filters operators by visible identity metadata.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Filters to all, active, or disabled operators.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Operator Table
+
+The table shows local account state.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Operator</td>
+      <td>Display name, email, and avatar metadata.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Active or disabled lifecycle state.</td>
+    </tr>
+    <tr>
+      <td>TOTP</td>
+      <td>Whether two-factor authentication is active for the account.</td>
+    </tr>
+    <tr>
+      <td>Password policy</td>
+      <td>Whether the operator must change password on next sign-in.</td>
+    </tr>
+    <tr>
+      <td>Last login</td>
+      <td>Most recent recorded browser sign-in time.</td>
+    </tr>
+    <tr>
+      <td>Actions</td>
+      <td>Dotted menu for edit, deactivate/reactivate, and password reset actions.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Roles
+
+Operator roles are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Role</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Owner</td>
+      <td>Instance-wide operator. Owners can manage Pools, operators, global jobs, system-level surfaces, and all visible operational metadata.</td>
+    </tr>
+    <tr>
+      <td>Instance admin</td>
+      <td>Pool-scoped operator. Admins can work inside assigned Pools but do not manage global owner-only surfaces.</td>
+    </tr>
+  </tbody>
+</table>
+
+Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
+
+## Create Operator
+
+Click `Create operator` to open the local account dialog.
+
+![Create operator dialog](/operators/operators/operators-create-dialog.png)
+
+The dialog asks for:
+
+1. email
+2. display name
+3. operator role
+4. assigned Pools for instance admins
+5. temporary password mode
+6. optional manual password
+7. whether password change is required on next sign-in
+8. whether to send a text credential email
+
+The temporary password is shown only once after creation when it needs to be copied manually. Do not store that password in tickets, notes, screenshots, or docs. If it is lost, reset the operator password.
+
+## Action Menu
+
+Open the dotted menu on an operator row for lifecycle actions.
+
+![Operator action menu](/operators/operators/operators-action-menu.png)
+
+The current actions are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Edit</td>
+      <td>Opens the edit dialog for display name, email, role, Pool assignments, and password-change requirement.</td>
+    </tr>
+    <tr>
+      <td>Deactivate</td>
+      <td>Disables the operator account. The UI prevents deactivating yourself and protects against removing the last active operator.</td>
+    </tr>
+    <tr>
+      <td>Reactivate</td>
+      <td>Returns a disabled operator to active state and prepares a temporary password flow.</td>
+    </tr>
+    <tr>
+      <td>Reset password</td>
+      <td>Opens the temporary password dialog. The UI prevents resetting your own password from this page; use account settings for your own password.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Password Reset
+
+Password reset and reactivation use the same temporary-password flow. The operator can receive a generated password or, when manual mode is selected, a password chosen by the owner.
+
+The one-time password receipt is shown only after the reset or reactivation succeeds. Copy it immediately when email delivery is not used or fails. After the dialog closes, the raw password is not available again.
+
+## Operational Checklist
+
+When an operator cannot use the admin UI, check operators in this order:
+
+1. confirm the account status is `active`
+2. confirm the operator is using the browser admin login, not a Pool API key
+3. confirm TOTP setup state when two-factor auth is expected
+4. confirm password-change-required state
+5. confirm the role is correct
+6. confirm Pool assignments if the operator is an instance admin
+7. reset the password when the operator lost the temporary password
+8. use Audit logs to confirm recent sign-ins, operator edits, resets, deactivations, or reactivations
+
+For your own password, use account settings. The Operators page is for owners managing other local operator accounts.

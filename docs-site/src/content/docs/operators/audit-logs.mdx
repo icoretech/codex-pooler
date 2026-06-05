@@ -1,0 +1,148 @@
+---
+title: Audit logs
+description: Understand the admin Audit logs page, redacted operator events, filters, event details drawer, and privacy boundaries.
+---
+
+The Audit logs page is the operator surface for administrative and security-relevant events. It records who changed operational state, what kind of target was affected, when the event happened, and whether the action succeeded.
+
+Use this page when you need to answer:
+
+1. who changed a Pool, upstream, API key, invite, operator, setting, or session
+2. when a control-plane action happened
+3. whether the action succeeded or failed
+4. which Pool or target record was involved
+5. which sanitized detail fields changed
+6. whether a recent operational issue lines up with an admin action
+
+Audit logs are redacted metadata. They do not show raw credentials, raw Pool API keys, passwords, TOTP secrets, upstream `auth.json` contents, prompt text, generated content, request payloads, provider responses, or raw secret settings.
+
+![Audit logs overview](/operators/audit-logs/audit-logs-overview.png)
+
+The screenshots in this guide redact live row values. The production UI shows safe operator metadata to authorized users, but public docs should not publish production identities or record ids.
+
+## Filters
+
+The top filters narrow the table.
+
+<table>
+  <thead>
+    <tr>
+      <th>Filter</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Pool</td>
+      <td>Limits events to one Pool when the event has Pool scope.</td>
+    </tr>
+    <tr>
+      <td>Outcome</td>
+      <td>Limits events to successful or failed actions.</td>
+    </tr>
+    <tr>
+      <td>Event</td>
+      <td>Limits events to one supported audit action.</td>
+    </tr>
+    <tr>
+      <td>Actor type</td>
+      <td>Advanced filter for user or system actors.</td>
+    </tr>
+    <tr>
+      <td>Actor</td>
+      <td>Advanced text filter for actor metadata, such as safe email or id.</td>
+    </tr>
+    <tr>
+      <td>Target</td>
+      <td>Advanced text filter for target metadata, such as target kind or id.</td>
+    </tr>
+    <tr>
+      <td>Date from / Date to</td>
+      <td>Advanced date range filters.</td>
+    </tr>
+  </tbody>
+</table>
+
+Unsupported filters are ignored with a warning. The table is limited to the latest matching rows for fast operator review.
+
+## Table Columns
+
+The table is designed for scanning.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Event icon</td>
+      <td>Visual category and outcome indicator.</td>
+    </tr>
+    <tr>
+      <td>Time</td>
+      <td>Event timestamp. Click the timestamp to open the details drawer.</td>
+    </tr>
+    <tr>
+      <td>Event</td>
+      <td>Operator-facing title for the action, such as API key updated or operator signed in.</td>
+    </tr>
+    <tr>
+      <td>Actor</td>
+      <td>User or system actor that caused the event. Linked actors open related operator records when available.</td>
+    </tr>
+    <tr>
+      <td>Context</td>
+      <td>Target kind or related record, with a link when the target is still visible.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Details Drawer
+
+Click a timestamp to open the right-side event drawer.
+
+![Audit event details drawer](/operators/audit-logs/audit-logs-detail-drawer.png)
+
+The drawer shows:
+
+1. event title and timestamp
+2. outcome
+3. actor
+4. target kind
+5. request or event ids when available
+6. action name
+7. links to the operator or related record when safe and visible
+8. sanitized details
+
+Sanitized details are the useful part of most investigations. They can show changed field names, counts, safe labels, safe prefixes, policy modes, target kind, or route metadata. They should not contain raw secret values or private request content.
+
+## Common Events
+
+Common audit events include:
+
+1. operator sign-in and account changes
+2. Pool creation, edit, archive, and delete actions
+3. upstream import, rename, pause, reactivate, refresh, or recovery actions
+4. Pool API key creation, edit, rotate, pause, resume, revoke, and delete actions
+5. invite creation and acceptance
+6. system setting updates
+7. MCP token creation, rename, or deletion
+
+Use Audit logs with Request logs when routing behavior changes unexpectedly. Request logs show runtime symptoms; Audit logs show whether an operator or system action changed the control plane around the same time.
+
+## Operational Checklist
+
+When investigating a control-plane change, check audit logs in this order:
+
+1. filter by Pool if the issue is Pool-scoped
+2. filter by Event if you know the action family
+3. filter by Actor when the operator identity is known
+4. narrow the date range to the incident window
+5. open the details drawer for the strongest matching event
+6. review changed fields and related links
+7. compare the timestamp with Request logs and System jobs when needed
+
+If an event is missing, confirm the action was inside your visible Pool scope. Owners can inspect global history; assigned admins see Pool-scoped events they are authorized to operate.

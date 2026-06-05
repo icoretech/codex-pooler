@@ -1,0 +1,182 @@
+---
+title: Invites
+description: Understand the admin Invites page, Pool onboarding links, delivery state, acceptance outcomes, and invite lifecycle actions.
+---
+
+The Invites page is the operator surface for onboarding Codex accounts into Pools. An invite creates a one-time URL that lets the invited account complete the hosted onboarding flow and attach the resulting upstream identity to a Pool.
+
+Use this page when you need to answer:
+
+1. which Pool invites were created
+2. which account email was invited
+3. who created the invite
+4. whether email delivery was attempted
+5. whether the invite was accepted, expired, or revoked
+6. whether an active invite should be reissued or revoked
+
+Invites are metadata-only after creation. The one-time invite URL is shown only in the create-result dialog and is not stored for later display in admin history.
+
+![Invites page overview](/operators/invites/invites-overview.png)
+
+The screenshots in this guide redact live row values. The production UI shows authorized operators safe invite metadata, but public docs should not publish production emails or invite results.
+
+## Filters
+
+The top filters narrow the invite table.
+
+<table>
+  <thead>
+    <tr>
+      <th>Filter</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Pool</td>
+      <td>Limits rows to invites for one Pool.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Limits rows to active, accepted, expired, or revoked invites.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Invite Table
+
+The table shows the latest matching invites.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Created</td>
+      <td>When the invite was created.</td>
+    </tr>
+    <tr>
+      <td>Status</td>
+      <td>Current invite lifecycle state.</td>
+    </tr>
+    <tr>
+      <td>Pool</td>
+      <td>Target Pool for the onboarding flow.</td>
+    </tr>
+    <tr>
+      <td>Codex account email</td>
+      <td>Account email the invite was created for.</td>
+    </tr>
+    <tr>
+      <td>Invited by</td>
+      <td>Operator who created the invite.</td>
+    </tr>
+    <tr>
+      <td>Email</td>
+      <td>Whether invite email delivery was recorded.</td>
+    </tr>
+    <tr>
+      <td>Result</td>
+      <td>Acceptance, revocation, expiry, or awaiting-acceptance summary.</td>
+    </tr>
+    <tr>
+      <td>Expires</td>
+      <td>Relative expiry state.</td>
+    </tr>
+    <tr>
+      <td>Actions</td>
+      <td>Reissue and revoke actions for active invites.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Create Pool Invite
+
+Click `Create Pool invite` to open the invite dialog.
+
+![Create Pool invite dialog](/operators/invites/invites-create-dialog.png)
+
+The dialog asks for:
+
+1. target Pool
+2. Codex account email
+3. whether Codex Pooler should send the invite email
+
+The submit button stays disabled until the form is valid. When SMTP is not configured, email delivery is unavailable and the operator must share the invite URL manually.
+
+After a valid invite is created, the result dialog shows the one-time invite URL. Copy it immediately. That URL is not shown again in the invite table or audit history.
+
+## Invite States
+
+Invite lifecycle states are:
+
+<table>
+  <thead>
+    <tr>
+      <th>State</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Active</td>
+      <td>The invite URL can still be used until it expires or is revoked.</td>
+    </tr>
+    <tr>
+      <td>Accepted</td>
+      <td>The invited account completed onboarding.</td>
+    </tr>
+    <tr>
+      <td>Expired</td>
+      <td>The invite URL is no longer usable because its expiry passed.</td>
+    </tr>
+    <tr>
+      <td>Revoked</td>
+      <td>An operator invalidated the invite URL before acceptance.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Active Invite Actions
+
+Active invites expose a dotted action menu.
+
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Reissue</td>
+      <td>Sends the invite email again when SMTP is configured. It is disabled when email delivery is unavailable or the invite is no longer active.</td>
+    </tr>
+    <tr>
+      <td>Revoke</td>
+      <td>Opens a confirmation dialog. Confirming makes the existing invite URL stop working immediately.</td>
+    </tr>
+  </tbody>
+</table>
+
+Revoking an invite does not delete existing upstream accounts. It only invalidates that invite URL.
+
+## Operational Checklist
+
+When onboarding is not working, check invites in this order:
+
+1. confirm the invite status is `active`
+2. confirm the invite has not expired
+3. confirm the target Pool is correct
+4. confirm the account email is the intended Codex account email
+5. confirm SMTP is configured if the operator expected email delivery
+6. reissue the active invite email only when email delivery is available
+7. create a new invite when the old invite is expired or revoked
+8. use Audit logs to confirm who created, accepted, revoked, or reissued the invite
+
+If the invite was accepted but no upstream appears ready, move to the Upstreams page and inspect the account's credential and quota state.

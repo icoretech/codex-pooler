@@ -1,0 +1,227 @@
+---
+title: Upstreams
+description: Understand the admin Upstreams page, account cards, auth.json import, quota readiness, and account recovery actions.
+---
+
+The Upstreams page is the operator surface for Codex account capacity. An upstream is an account identity that Codex Pooler can assign to one or more Pools and consider for runtime routing when it is active, fresh, compatible, and inside usable quota windows.
+
+Use this page when you need to answer:
+
+1. which upstream accounts are available
+2. which Pool each account is assigned to
+3. whether an account is active, paused, stale, or blocked by quota evidence
+4. whether token refresh or reauthorization needs attention
+5. how recent token usage compares with observed quota windows
+6. which account actions are available without exposing raw credentials
+
+The page is metadata-only after import. It shows operator labels, workspace and plan badges, safe status labels, quota-window evidence, token counters, assignment counts, and links to related logs. It does not show prompts, responses, files, websocket frames, bearer tokens, refresh tokens, provider cookies, or stored Codex `auth.json` contents.
+
+![Upstreams page overview](/operators/upstreams/upstreams-overview.png)
+
+## What an Upstream Controls
+
+An upstream account is not a client credential. Clients authenticate with Pool API keys. Codex Pooler then chooses an eligible upstream assigned to that Pool.
+
+An upstream controls:
+
+1. encrypted account credentials imported from Codex `auth.json`
+2. account lifecycle state, such as active, paused, refresh due, or reauth required
+3. Pool assignments that make the account available to routing boundaries
+4. quota and token freshness evidence used by route eligibility
+5. model and route compatibility evidence observed from the account
+6. operator-facing labels used in cards, logs, audit events, and recovery views
+
+Routing still happens at request time. A visible active upstream can be skipped if it is not assigned to the Pool, does not support the requested model or route shape, has stale credentials, is temporarily demoted, or is outside usable quota evidence.
+
+## Page Actions
+
+The primary page action is `Import auth.json`. Use it when adding an account from Codex CLI or Codex Desktop credentials.
+
+![Upstreams page action menu](/operators/upstreams/upstreams-page-actions-menu.png)
+
+The dropdown beside the primary action contains `Invite account`. That action opens the invite flow for onboarding a person who will provide or operate an account through the browser UI.
+
+The search box filters upstream cards by account label or safe metadata. The Pool filter narrows cards to accounts assigned to a specific Pool. The status filter narrows cards by lifecycle or readiness state.
+
+## Account Cards
+
+Each account appears as a card. The header shows the operator label, workspace badge, plan badge, and dotted action menu. Clicking the account label opens the upstream cockpit.
+
+The card body is split into status, token burn, quota windows, and footer metrics.
+
+<table>
+  <thead>
+    <tr>
+      <th>Card area</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Status</td>
+      <td>Current lifecycle and route-readiness state for the account. Active means the account can be considered, but final routing still checks Pool assignment, model support, freshness, and quota evidence.</td>
+    </tr>
+    <tr>
+      <td>Token burn</td>
+      <td>Recent token multiplier shown from observed usage pressure. It is a quick warning signal, not a billing ledger.</td>
+    </tr>
+    <tr>
+      <td>Quota bars</td>
+      <td>Observed window fullness for account-level and model-specific quota windows. Green windows have usable room; red or exhausted windows can keep the account out of routing.</td>
+    </tr>
+    <tr>
+      <td>Routing</td>
+      <td>Compact route posture such as quota ready or quota exhausted. It summarizes why this account is likely eligible or blocked before request-specific checks.</td>
+    </tr>
+    <tr>
+      <td>Pools</td>
+      <td>How many Pools currently assign this upstream account.</td>
+    </tr>
+    <tr>
+      <td>5m tokens</td>
+      <td>Recent token volume observed for this upstream over the short rolling window.</td>
+    </tr>
+  </tbody>
+</table>
+
+## Readiness States
+
+Common upstream states are:
+
+<table>
+  <thead>
+    <tr>
+      <th>State</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Active</td>
+      <td>The account is configured and can be considered for eligible Pool traffic.</td>
+    </tr>
+    <tr>
+      <td>Paused</td>
+      <td>The account stays configured, but Codex Pooler should not select it for new traffic.</td>
+    </tr>
+    <tr>
+      <td>Refresh due</td>
+      <td>The account needs credential or quota refresh work before freshness is trusted.</td>
+    </tr>
+    <tr>
+      <td>Refreshing</td>
+      <td>A background refresh is currently updating account evidence or credentials.</td>
+    </tr>
+    <tr>
+      <td>Reauth required</td>
+      <td>The account needs operator recovery before it can route work again. Import replacement credentials or reinvite the account when those actions are available.</td>
+    </tr>
+    <tr>
+      <td>Quota exhausted</td>
+      <td>Observed quota evidence says the account should not receive matching work until one or more windows reset.</td>
+    </tr>
+  </tbody>
+</table>
+
+Readiness is intentionally conservative. If quota evidence is missing, stale, or exhausted, Codex Pooler may keep an account out of routing even when the card still exists and the account is assigned to a Pool.
+
+## Import auth.json
+
+Click `Import auth.json` to open the upstream credentials dialog.
+
+![Import auth.json dialog](/operators/upstreams/upstreams-import-auth-json-dialog.png)
+
+The import dialog asks for:
+
+1. target Pool, which assigns the imported account to a routing boundary
+2. pasted `auth.json` contents, when the file is already open
+3. uploaded `auth.json`, when the file is available on disk
+
+The upload accepts small auth files only. The current UI states a 64 KB limit.
+
+After import, Codex Pooler becomes the refresh-token authority for that account lineage. Do not keep using the same `auth.json` from another Codex install, machine, or automation. Provider refresh-token rotation can invalidate one copy and move the account into `reauth_required`.
+
+The dialog footer keeps docs on the left and the submit actions on the right. `Cancel` closes without importing. `Import auth.json` stores the credential material through encrypted upstream secret storage.
+
+## Card Action Menu
+
+Open the dotted menu on an upstream card for account actions.
+
+![Upstream card action menu](/operators/upstreams/upstreams-card-action-menu.png)
+
+The current actions are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Rename</td>
+      <td>Opens a label dialog. This changes the operator-facing account label only.</td>
+    </tr>
+    <tr>
+      <td>Pause</td>
+      <td>Stops the account from being selected for new runtime work while keeping it configured.</td>
+    </tr>
+    <tr>
+      <td>Reactivate</td>
+      <td>Returns a paused or recoverable account to active consideration when the action is enabled.</td>
+    </tr>
+    <tr>
+      <td>Refresh token</td>
+      <td>Requests a token-refresh job for the account. Use this when freshness evidence is stale or recovery instructions ask for it.</td>
+    </tr>
+    <tr>
+      <td>Replace auth.json</td>
+      <td>Appears for recovery states that can accept replacement account credentials.</td>
+    </tr>
+    <tr>
+      <td>Reinvite account</td>
+      <td>Appears for recovery states where operator-driven reauthorization is the right next step.</td>
+    </tr>
+    <tr>
+      <td>Delete</td>
+      <td>Soft-deletes the upstream from active use. This is an immediate destructive account-lifecycle action in the current UI, so use it only when the account should leave routing.</td>
+    </tr>
+  </tbody>
+</table>
+
+Some actions are disabled or hidden depending on the account state. For example, `Reactivate` is not useful while an account is already active, and recovery actions only appear when the account is in a recovery-eligible state.
+
+## Rename Dialog
+
+`Rename` opens a small account dialog.
+
+![Rename upstream account dialog](/operators/upstreams/upstreams-rename-dialog.png)
+
+The label is the operator-facing name used in cards and related metadata. It is not the provider account ID, not a Pool API key, and not secret material. Use labels that make operations clear without embedding private customer or credential details.
+
+## Upstream Cockpit
+
+Clicking an account label opens the upstream cockpit.
+
+![Upstream cockpit overview](/operators/upstreams/upstreams-cockpit-overview.png)
+
+The cockpit is the focused detail view for one account. The top summary shows identity state, quota posture, request posture, stored account identifier hash, lifecycle badges, token freshness, and quota freshness.
+
+Use it when the card says an account is degraded, stale, exhausted, or needs recovery. The detail page provides more space for assignment posture, quota health, recent events, and related links without exposing raw account secrets.
+
+## Operational Checklist
+
+When an upstream is not routing as expected, check it in this order:
+
+1. confirm the upstream state is `active`
+2. confirm it is assigned to the Pool used by the client API key
+3. confirm the Pool itself is active
+4. inspect the routing footer for quota ready or quota exhausted posture
+5. inspect quota bars for exhausted account-level or model-specific windows
+6. confirm token freshness and quota freshness are recent enough to trust
+7. open the upstream cockpit when the card shows degraded, stale, or recovery states
+8. use Request logs filtered by Pool or upstream metadata to confirm whether traffic selected this account
+9. use Audit logs when lifecycle, assignment, import, pause, or rename actions changed recently
+
+If an account remains inactive after import or refresh, treat `reauth_required` as a credential-lineage problem first. Importing the same stale `auth.json` again may not recover it if another machine already rotated the refresh token.

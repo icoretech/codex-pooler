@@ -1,0 +1,287 @@
+---
+title: System jobs
+description: Understand the admin System Jobs page, worker cards, manual enqueue actions, failure markers, filters, and job detail drawer.
+---
+
+The System Jobs page is the owner-facing surface for background work. It shows scheduled and on-demand maintenance jobs so owners can quickly see whether workers are queued, running, completed, retrying, or failing.
+
+Use this page when you need to answer:
+
+1. which background workers exist
+2. when each worker last ran
+3. when scheduled workers will run next
+4. whether any worker currently has live targets
+5. whether a target needs attention after a failed job
+6. whether a supported worker group can be manually enqueued
+7. which recent job row explains a failure or retry
+
+The page is metadata-only. It shows worker names, queue names, safe target labels, state, attempt counts, timestamps, and sanitized failure summaries. It does not show raw prompts, generated content, uploaded file contents, websocket frames, credentials, upstream secret material, provider payloads, or raw job args that contain private material.
+
+![System jobs overview](/operators/jobs/jobs-overview.png)
+
+The screenshot in this guide redacts live target values from the explorer table. Authorized owners see safe operator labels in production, but public docs should not publish production account or Pool identifiers.
+
+## Worker Cards
+
+The top grid groups related Oban workers into operator-facing cards. Each card shows the worker group name, a small icon, optional live state, optional action menu, and schedule facts.
+
+The schedule footer has three fields:
+
+<table>
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Next run</td>
+      <td>When the next scheduled, queued, retrying, or on-demand run is expected. `Running now` means a matching job is executing.</td>
+    </tr>
+    <tr>
+      <td>Last run</td>
+      <td>Most recent observed event timestamp for that worker group.</td>
+    </tr>
+    <tr>
+      <td>Schedule</td>
+      <td>Configured cadence for the worker group. On-demand workers do not run from cron.</td>
+    </tr>
+  </tbody>
+</table>
+
+The current worker groups are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Worker group</th>
+      <th>Purpose</th>
+      <th>Cadence</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Catalog sync</td>
+      <td>Refreshes model catalog metadata for active Pools.</td>
+      <td>Every 30 minutes, plus manual enqueue.</td>
+    </tr>
+    <tr>
+      <td>Pricing import</td>
+      <td>Imports reporting-only pricing data.</td>
+      <td>Hourly, plus manual enqueue.</td>
+    </tr>
+    <tr>
+      <td>Account reconciliation</td>
+      <td>Checks upstream account assignments and readiness evidence.</td>
+      <td>Every minute, plus manual enqueue.</td>
+    </tr>
+    <tr>
+      <td>Alert evaluation</td>
+      <td>Evaluates active alert rules.</td>
+      <td>Every 5 minutes, plus manual enqueue when active rules exist.</td>
+    </tr>
+    <tr>
+      <td>Token refresh</td>
+      <td>Refreshes access-token material for a specific upstream identity.</td>
+      <td>On demand only. This card does not expose `Enqueue Now` because the job requires a target.</td>
+    </tr>
+    <tr>
+      <td>Daily rollup rebuild</td>
+      <td>Rebuilds usage rollups for a specific rollup date.</td>
+      <td>Daily at 00:17 UTC, plus manual enqueue for the previous UTC day.</td>
+    </tr>
+    <tr>
+      <td>Runtime cleanup</td>
+      <td>Cleans expired runtime state.</td>
+      <td>Every 15 minutes, plus manual enqueue.</td>
+    </tr>
+  </tbody>
+</table>
+
+Worker cards only show the execution badge when a grouped worker is currently executing. Completed workers do not keep a permanent success badge in the card header, because the schedule footer already shows the last observed run.
+
+## Manual Enqueue
+
+Cards that support manual work have a dotted action menu.
+
+![System job worker action menu](/operators/jobs/jobs-worker-action-menu.png)
+
+`Enqueue Now` requests immediate work for the whole worker group. It is available only when the worker group can be enqueued without extra target parameters.
+
+Possible results are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Toast result</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Queued</td>
+      <td>One immediate job was inserted.</td>
+    </tr>
+    <tr>
+      <td>Already queued</td>
+      <td>A matching unique job already exists, so no duplicate was inserted.</td>
+    </tr>
+    <tr>
+      <td>Requested with counts</td>
+      <td>A fan-out action inserted some jobs, skipped existing ones, or partially failed. The toast summarizes the counts.</td>
+    </tr>
+    <tr>
+      <td>No active work</td>
+      <td>The worker group had nothing eligible to enqueue. For example, alert evaluation can return no work when there are no active alert rules.</td>
+    </tr>
+  </tbody>
+</table>
+
+Do not expect `Token refresh` to have this menu. Token refresh requires a specific upstream identity, so it is launched from target-aware recovery flows instead of the global worker card.
+
+## Live and Failure Markers
+
+When a worker has active or unresolved target jobs, the card shows an activity strip between the header and schedule footer.
+
+Activity labels are:
+
+<table>
+  <thead>
+    <tr>
+      <th>Label</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Live targets</td>
+      <td>One or more target-specific jobs are currently executing.</td>
+    </tr>
+    <tr>
+      <td>Needs attention</td>
+      <td>One or more unresolved failures exist for that worker group.</td>
+    </tr>
+    <tr>
+      <td>Live targets and failures</td>
+      <td>The worker group has both active work and unresolved failed targets.</td>
+    </tr>
+  </tbody>
+</table>
+
+Markers can represent accounts, direct identities, Pools, API keys, or rollup dates. If a target has a safe avatar email, the UI shows its avatar. If not, the marker uses a compact glyph from the target label. For example, a rollup target can appear as a short `R` plus digit glyph because the target label is based on the rollup date.
+
+Click a `Needs attention` marker to open the latest failure panel for that target. The panel is hidden by default, and the selected failure is tracked in the page URL so LiveView refreshes can keep it open. The panel shows target label, worker label, failure title, failed time, attempts, and a sanitized diagnostic message. Close it from the panel `x` button or click the same marker again.
+
+## Filters
+
+The filter row narrows the explorer table.
+
+<table>
+  <thead>
+    <tr>
+      <th>Filter</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Attention</td>
+      <td>Limits rows by operational attention state, such as active failures, retry pressure, stuck execution, or backlog pressure.</td>
+    </tr>
+    <tr>
+      <td>State</td>
+      <td>Limits rows by Oban state, such as executing, available, scheduled, retryable, completed, cancelled, or discarded.</td>
+    </tr>
+    <tr>
+      <td>Worker</td>
+      <td>Limits rows to one worker module.</td>
+    </tr>
+    <tr>
+      <td>Queue</td>
+      <td>Limits rows to one Oban queue.</td>
+    </tr>
+    <tr>
+      <td>Completed visibility</td>
+      <td>Hides completed rows by default. Include completed rows when you need recent successful history.</td>
+    </tr>
+    <tr>
+      <td>Target kind</td>
+      <td>Advanced filter for target type, such as Pool, account, API key, or rollup.</td>
+    </tr>
+    <tr>
+      <td>Target id</td>
+      <td>Advanced text filter for a UUID, rollup date, or blank target.</td>
+    </tr>
+  </tbody>
+</table>
+
+Invalid filters are ignored with a warning so the page can recover from stale URLs or copied query strings.
+
+## Explorer Table
+
+The explorer table shows matching job rows. Completed rows are hidden by default to keep active problems visible.
+
+<table>
+  <thead>
+    <tr>
+      <th>Column</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Job</td>
+      <td>Worker module, job id, queue, and state.</td>
+    </tr>
+    <tr>
+      <td>Target</td>
+      <td>Safe target summary when a job is tied to an account, Pool, API key, direct identity, or rollup date. System jobs can be blank.</td>
+    </tr>
+    <tr>
+      <td>Last event</td>
+      <td>Latest relevant state timestamp for the row.</td>
+    </tr>
+    <tr>
+      <td>Attempts</td>
+      <td>Current attempt count over maximum attempts.</td>
+    </tr>
+    <tr>
+      <td>Failure</td>
+      <td>Sanitized latest failure summary, or `-` when no diagnostic is recorded.</td>
+    </tr>
+  </tbody>
+</table>
+
+Click any row to open the detail drawer.
+
+## Detail Drawer
+
+The right drawer shows one selected job.
+
+![System job detail drawer](/operators/jobs/jobs-detail-drawer.png)
+
+The drawer contains:
+
+1. job id, worker, queue, state, health, and attempts
+2. inserted, scheduled, attempted, completed, discarded, and cancelled timestamps
+3. safe target summary
+4. latest error summary
+
+The drawer is read-only. Use it to understand what happened before deciding whether to rerun a worker group, inspect the affected Pool or upstream, or check Request logs and Audit logs around the same time.
+
+## Operational Checklist
+
+When background work looks unhealthy, check jobs in this order:
+
+1. scan worker cards for `Live targets` or `Needs attention`
+2. click a needs-attention marker when present
+3. use the explorer table with completed rows hidden first
+4. filter by state or worker if the table has too many rows
+5. open the strongest row in the detail drawer
+6. compare target summary with the relevant Pool, Upstream, API key, or Alert page
+7. use manual enqueue only when the worker group supports targetless work
+8. if manual enqueue reports no active work, check whether the source objects exist and are active
+9. compare timestamps with Request logs and Audit logs when the job was triggered by operator or runtime activity
+
+System jobs are status and recovery evidence. They are not a substitute for product-specific pages: Pools explain routing boundaries, Upstreams explain account readiness, API keys explain client policy, Request logs explain runtime symptoms, and Audit logs explain control-plane changes.

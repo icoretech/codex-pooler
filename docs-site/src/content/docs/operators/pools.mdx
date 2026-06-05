@@ -35,13 +35,36 @@ A Pool controls:
 
 The metric cards at the top summarize the visible Pool scope for the current operator.
 
-| Metric | Meaning |
-| --- | --- |
-| Total pools | Count of Pools visible to the operator. Owners can see management Pools. Assigned admins only see Pools in their reporting scope. |
-| Upstream accounts | Count of upstream accounts linked to the visible Pools. These are the account identities that may become route candidates if active and eligible. |
-| API keys | Count of Pool API keys linked to the visible Pools. These are runtime client credentials, not operator login credentials. |
-| Requests 5h | Runtime request count for the last five hours across the visible Pools. |
-| TPS 5h | Tokens per second for the same recent usage window. It is computed from total tokens divided by cumulative request latency, so it is a throughput signal, not a wall-clock request rate. |
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Total pools</td>
+      <td>Count of Pools visible to the operator. Owners can see management Pools. Assigned admins only see Pools in their reporting scope.</td>
+    </tr>
+    <tr>
+      <td>Upstream accounts</td>
+      <td>Count of upstream accounts linked to the visible Pools. These are the account identities that may become route candidates if active and eligible.</td>
+    </tr>
+    <tr>
+      <td>API keys</td>
+      <td>Count of Pool API keys linked to the visible Pools. These are runtime client credentials, not operator login credentials.</td>
+    </tr>
+    <tr>
+      <td>Requests 5h</td>
+      <td>Runtime request count for the last five hours across the visible Pools.</td>
+    </tr>
+    <tr>
+      <td>TPS 5h</td>
+      <td>Tokens per second for the same recent usage window. It is computed from total tokens divided by cumulative request latency, so it is a throughput signal, not a wall-clock request rate.</td>
+    </tr>
+  </tbody>
+</table>
 
 The search box filters Pool cards by text. The status dropdown filters the card list by Pool lifecycle state.
 
@@ -51,11 +74,28 @@ Each Pool appears as a card. The card header contains the Pool name, the routing
 
 The lifecycle states are:
 
-| State | Meaning |
-| --- | --- |
-| Active | The Pool can receive new runtime work if it has an active API key and eligible upstream assignments. |
-| Disabled | The Pool stays configured and visible for operations, but should not admit new runtime work. |
-| Archived | The Pool is kept for historical reporting and cleanup. Hard deletion is only available after archive. |
+<table>
+  <thead>
+    <tr>
+      <th>State</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Active</td>
+      <td>The Pool can receive new runtime work if it has an active API key and eligible upstream assignments.</td>
+    </tr>
+    <tr>
+      <td>Disabled</td>
+      <td>The Pool stays configured and visible for operations, but should not admit new runtime work.</td>
+    </tr>
+    <tr>
+      <td>Archived</td>
+      <td>The Pool is kept for historical reporting and cleanup. Hard deletion is only available after archive.</td>
+    </tr>
+  </tbody>
+</table>
 
 The routing strategy badge shows the ordering policy used after hard eligibility checks. For the default `Bridge ring` strategy, Codex Pooler spreads requests across eligible upstreams while still honoring continuity, prompt-cache locality, quota evidence, and recent demotions.
 
@@ -74,12 +114,37 @@ The chart is a quick health and shape check. Use it to spot traffic bursts, quie
 
 The footer is a compact navigation row for the main related records.
 
-| Footer label | Meaning | Link target |
-| --- | --- | --- |
-| Upstreams | Active upstream accounts assigned to the Pool | the Upstreams page filtered to this Pool |
-| API keys | Pool API keys assigned to the Pool | the API keys page filtered to this Pool |
-| Requests 5h | Runtime requests received by this Pool during the last five hours | the Request logs page filtered to this Pool |
-| TPS 5h | Tokens per second over the recent usage window | informational only |
+<table>
+  <thead>
+    <tr>
+      <th>Footer label</th>
+      <th>Meaning</th>
+      <th>Link target</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Upstreams</td>
+      <td>Active upstream accounts assigned to the Pool</td>
+      <td>the Upstreams page filtered to this Pool</td>
+    </tr>
+    <tr>
+      <td>API keys</td>
+      <td>Pool API keys assigned to the Pool</td>
+      <td>the API keys page filtered to this Pool</td>
+    </tr>
+    <tr>
+      <td>Requests 5h</td>
+      <td>Runtime requests received by this Pool during the last five hours</td>
+      <td>the Request logs page filtered to this Pool</td>
+    </tr>
+    <tr>
+      <td>TPS 5h</td>
+      <td>Tokens per second over the recent usage window</td>
+      <td>informational only</td>
+    </tr>
+  </tbody>
+</table>
 
 The labels link to the related page. The numeric values stay plain text so the card reads like a metric summary.
 
@@ -91,11 +156,28 @@ Open the dotted menu on a Pool card for management actions.
 
 The current actions are:
 
-| Action | What it does |
-| --- | --- |
-| Copy Pool ID | Copies the Pool UUID to the browser clipboard. Use this for support, logs, or exact filters. |
-| Edit | Opens the Pool configuration dialog for lifecycle, routing, upstream assignments, and API key assignments. |
-| Delete | Hard-deletes a Pool only after it is archived. Active and disabled Pools cannot be hard-deleted from the card menu. |
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Copy Pool ID</td>
+      <td>Copies the Pool UUID to the browser clipboard. Use this for support, logs, or exact filters.</td>
+    </tr>
+    <tr>
+      <td>Edit</td>
+      <td>Opens the Pool configuration dialog for lifecycle, routing, upstream assignments, and API key assignments.</td>
+    </tr>
+    <tr>
+      <td>Delete</td>
+      <td>Hard-deletes a Pool only after it is archived. Active and disabled Pools cannot be hard-deleted from the card menu.</td>
+    </tr>
+  </tbody>
+</table>
 
 Use archive before delete when you need to retire a Pool but keep historical request and audit metadata available.
 
