@@ -481,14 +481,8 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
       catalog_sync_in_progress?(message) ->
         "Catalog sync already running"
 
-      code == "quota_refresh_auth_unavailable" ->
-        "Quota refresh blocked"
-
-      code == "quota_refresh_unavailable" ->
-        "Quota unavailable"
-
-      code == "quota_refresh_failed" ->
-        "Quota refresh failed"
+      title = quota_failure_title(code) ->
+        title
 
       is_binary(code) ->
         humanize_failure_code(code)
@@ -497,6 +491,11 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
         nil
     end
   end
+
+  defp quota_failure_title("quota_refresh_auth_unavailable"), do: "Quota refresh blocked"
+  defp quota_failure_title("quota_refresh_unavailable"), do: "Quota unavailable"
+  defp quota_failure_title("quota_refresh_failed"), do: "Quota refresh failed"
+  defp quota_failure_title(_code), do: nil
 
   defp operator_failure_message(message) do
     cond do

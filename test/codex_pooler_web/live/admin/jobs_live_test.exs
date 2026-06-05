@@ -387,7 +387,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     refute render(view) =~ "10:02:00 UTC"
   end
 
-  test "jobs read model owns redesigned admin jobs page state" do
+  test "jobs read model owns admin jobs page state" do
     job =
       insert_job(
         1,

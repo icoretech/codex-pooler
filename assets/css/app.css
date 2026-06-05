@@ -300,7 +300,7 @@ body {
   line-height: 1.25rem;
 }
 
-.pool-redesign-audit {
+.pool-card {
   display: grid;
   min-width: 0;
   gap: 0;
@@ -312,20 +312,19 @@ body {
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
 }
 
-.pool-redesign-audit.is-selected {
+.pool-card.is-selected {
   border-color: color-mix(in oklab, var(--color-primary) 42%, transparent);
 }
 
-.pool-redesign-audit .audit-row {
+.pool-card .pool-card-header {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(12rem, 1.35fr) minmax(0, 1fr) auto;
-  gap: 0.85rem;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.65rem;
   padding: 0.9rem 1rem;
 }
 
-.pool-redesign-audit .audit-name {
+.pool-card .pool-card-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -333,30 +332,11 @@ body {
   font-weight: 700;
 }
 
-.pool-redesign-audit .audit-id {
-  margin-top: 0.2rem;
-  overflow: hidden;
-  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
-  font-size: 0.68rem;
-  line-height: 1rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pool-redesign-audit .audit-states {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.pool-redesign-audit .audit-identity {
+.pool-card .pool-card-identity {
   min-width: 0;
 }
 
-.pool-redesign-audit .pool-card-title-line {
+.pool-card .pool-card-title-line {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
@@ -364,7 +344,7 @@ body {
   gap: 0.5rem;
 }
 
-.pool-redesign-audit .pool-card-actions {
+.pool-card .pool-card-actions {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -372,25 +352,14 @@ body {
   gap: 0.45rem;
 }
 
-.pool-redesign-audit .audit-row-v2 {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.65rem;
-}
-
-.pool-redesign-audit .audit-row-v2 .audit-command-line {
+.pool-card .pool-card-header-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.6rem;
   align-items: center;
 }
 
-.pool-redesign-audit .audit-row-v2 .audit-states {
-  grid-column: 1 / -1;
-  order: 2;
-}
-
-.pool-redesign-audit .audit-row-v2 .pool-card-actions {
+.pool-card .pool-card-header .pool-card-actions {
   justify-self: end;
 }
 
@@ -554,13 +523,6 @@ body {
   .routing-option-help {
     padding-left: 1.85rem;
   }
-}
-
-@media (width < 56rem) {
-  .pool-redesign-audit .audit-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
 }
 
 .admin-log-table.table-sm :where(th, td) {

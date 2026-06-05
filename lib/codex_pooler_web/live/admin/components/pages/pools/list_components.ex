@@ -343,18 +343,18 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     <article
       id={"pool-row-#{@pool_row.pool.id}"}
       class={[
-        "pool-redesign-audit",
+        "pool-card",
         @selected_pool_row && @selected_pool_row.pool.id == @pool_row.pool.id && "is-selected"
       ]}
     >
-      <div class="audit-row audit-row-v2">
-        <div class="audit-command-line">
-          <div class="audit-identity">
+      <div class="pool-card-header">
+        <div class="pool-card-header-row">
+          <div class="pool-card-identity">
             <div id={"pool-row-#{@pool_row.pool.id}-title-line"} class="pool-card-title-line">
               <button
                 id={"inspect-pool-#{@pool_row.pool.id}"}
                 type="button"
-                class="audit-name text-left text-base-content transition-colors hover:text-primary"
+                class="pool-card-title text-left text-base-content transition-colors hover:text-primary"
                 phx-click="select_pool"
                 phx-value-id={@pool_row.pool.id}
               >

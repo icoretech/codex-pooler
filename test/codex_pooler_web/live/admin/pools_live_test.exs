@@ -432,7 +432,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pools-grid")
     refute has_element?(view, "#pools-table-scroll-region")
     refute has_element?(view, "#pools-table")
-    assert has_element?(view, "article#pool-row-#{pool.id}", "Admin Pools")
+    assert has_element?(view, "article#pool-row-#{pool.id}.pool-card", "Admin Pools")
     assert has_element?(view, "#inspect-pool-#{pool.id}")
     refute has_element?(view, "#pool-row-#{pool.id}", "admin-pools")
     refute has_element?(view, "article#pool-row-#{pool.id}", "Created")
