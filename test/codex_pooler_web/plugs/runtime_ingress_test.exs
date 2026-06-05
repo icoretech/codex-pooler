@@ -557,6 +557,29 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{"id" => "gzip_updated_limit_ok"} = json_response(accepted_conn, 200)
     end
 
+    test "reads compressed request bodies across multiple read chunks", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        max_compressed_body_bytes: 3 * 1024 * 1024,
+        max_decompressed_body_bytes: 5 * 1024 * 1024,
+        max_decompression_ratio: 100
+      })
+
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "gzip_chunked_ok"}))
+      setup = gateway_setup(upstream)
+      large_input = :crypto.strong_rand_bytes(1_200_000) |> Base.encode16(case: :lower)
+      body = gateway_body(setup) |> Map.put("input", large_input)
+      compressed = :zlib.gzip(Jason.encode!(body))
+
+      assert byte_size(compressed) > 1_000_000
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post("/backend-api/codex/responses", "gzip", compressed)
+
+      assert %{"id" => "gzip_chunked_ok"} = json_response(conn, 200)
+    end
+
     test "rejects zstd bodies above the decompressed-size limit during streaming inflate", %{
       conn: conn
     } do

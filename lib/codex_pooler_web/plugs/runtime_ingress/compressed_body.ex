@@ -120,23 +120,32 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
   end
 
   defp read_compressed_body(conn, settings) do
-    read_opts = [
-      length: settings.max_compressed_body_bytes,
-      read_length: min(settings.max_compressed_body_bytes, 1_000_000),
-      read_timeout: settings.decompression_timeout_ms
-    ]
+    read_compressed_body(conn, settings, [], 0)
+  end
 
+  defp read_compressed_body(conn, settings, acc, total_bytes) do
+    remaining_bytes = settings.max_compressed_body_bytes - total_bytes
+
+    if remaining_bytes <= 0 do
+      compressed_body_too_large(conn)
+    else
+      read_opts = [
+        length: remaining_bytes,
+        read_length: min(remaining_bytes, 1_000_000),
+        read_timeout: settings.decompression_timeout_ms
+      ]
+
+      read_compressed_body_chunk(conn, settings, acc, total_bytes, read_opts)
+    end
+  end
+
+  defp read_compressed_body_chunk(conn, settings, acc, total_bytes, read_opts) do
     case Plug.Conn.read_body(conn, read_opts) do
       {:ok, body, conn} ->
-        {:ok, body, conn}
+        {:ok, IO.iodata_to_binary(Enum.reverse([body | acc])), conn}
 
-      {:more, _body, conn} ->
-        {:error,
-         %{
-           status: 413,
-           code: "compressed_request_too_large",
-           message: "compressed request body is too large"
-         }, conn}
+      {:more, body, conn} ->
+        read_compressed_body(conn, settings, [body | acc], total_bytes + byte_size(body))
 
       {:error, :timeout} ->
         {:error,
@@ -150,6 +159,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
         {:error,
          %{status: 400, code: "invalid_request", message: "request body could not be read"}, conn}
     end
+  end
+
+  defp compressed_body_too_large(conn) do
+    {:error,
+     %{
+       status: 413,
+       code: "compressed_request_too_large",
+       message: "compressed request body is too large"
+     }, conn}
   end
 
   defp decompress_with_timeout(_compressed, _encoding, %{decompression_timeout_ms: timeout})
@@ -353,19 +371,57 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
     chunk_size = min(@decompression_chunk_bytes, byte_size(compressed) - state.offset)
     chunk = binary_part(compressed, state.offset, chunk_size)
     compressed_size = state.offset + chunk_size
-    {_state, output} = :zlib.safeInflate(zstream, chunk)
+
+    state = %DecompressionState{
+      state
+      | offset: compressed_size,
+        compressed_size: compressed_size
+    }
+
+    case inflate_chunk_outputs(zstream, chunk, settings, state) do
+      {:ok, state} -> inflate_chunks(zstream, compressed, settings, state)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp inflate_chunk_outputs(zstream, input, settings, %DecompressionState{} = state) do
+    case :zlib.safeInflate(zstream, input) do
+      {:continue, output} ->
+        continue_inflate_chunk_outputs(
+          zstream,
+          settings,
+          append_inflate_output(output, settings, state)
+        )
+
+      {:finished, output} ->
+        append_inflate_output(output, settings, state)
+    end
+  end
+
+  defp continue_inflate_chunk_outputs(zstream, settings, {:ok, state}) do
+    case state.acc do
+      [latest_output | _rest] when latest_output in [[], ""] ->
+        {:ok, state}
+
+      _non_empty_output ->
+        inflate_chunk_outputs(zstream, <<>>, settings, state)
+    end
+  end
+
+  defp continue_inflate_chunk_outputs(_zstream, _settings, {:error, reason}), do: {:error, reason}
+
+  defp append_inflate_output(output, settings, %DecompressionState{} = state) do
     output_size = IO.iodata_length(output)
     decompressed_size = state.decompressed_size + output_size
 
     with :ok <- validate_decompressed_size(decompressed_size, settings),
-         :ok <- validate_decompression_ratio(compressed_size, decompressed_size, settings) do
-      inflate_chunks(zstream, compressed, settings, %DecompressionState{
-        state
-        | offset: compressed_size,
-          compressed_size: compressed_size,
-          decompressed_size: decompressed_size,
-          acc: [output | state.acc]
-      })
+         :ok <- validate_decompression_ratio(state.compressed_size, decompressed_size, settings) do
+      {:ok,
+       %DecompressionState{
+         state
+         | decompressed_size: decompressed_size,
+           acc: [output | state.acc]
+       }}
     end
   end
 
