@@ -6,7 +6,7 @@ defmodule CodexPooler.Access.APIKey do
 
   @derive {Inspect, except: [:key_hash]}
   @reasoning_efforts ~w(minimal low medium high xhigh)
-  @service_tiers ~w(auto default flex priority)
+  @service_tiers ~w(auto default flex priority scale)
 
   @type t :: %__MODULE__{}
   @type attrs :: map()

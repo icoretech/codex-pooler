@@ -336,7 +336,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
           status: "active",
           enforced_model_identifier: "gpt-5.4-mini",
           enforced_reasoning_effort: "medium",
-          enforced_service_tier: "priority"
+          enforced_service_tier: "scale"
         })
 
       assert valid_api_key_changeset.valid?

@@ -16,7 +16,7 @@ defmodule CodexPooler.Repo.Migrations.RemoveUltrafastServiceTier do
     execute """
     ALTER TABLE api_keys
     ADD CONSTRAINT api_keys_enforced_service_tier_check
-    CHECK (enforced_service_tier IS NULL OR enforced_service_tier = ANY (ARRAY['auto'::text, 'default'::text, 'flex'::text, 'priority'::text]))
+    CHECK (enforced_service_tier IS NULL OR enforced_service_tier = ANY (ARRAY['auto'::text, 'default'::text, 'flex'::text, 'priority'::text, 'scale'::text]))
     """
   end
 

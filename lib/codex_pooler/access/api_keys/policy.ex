@@ -8,7 +8,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
   @status_paused "paused"
   @status_revoked "revoked"
   @reasoning_efforts ~w(minimal low medium high xhigh)
-  @service_tiers ~w(auto default flex priority)
+  @service_tiers ~w(auto default flex priority scale)
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type policy_result :: {:ok, map()} | {:error, atom() | access_error()}

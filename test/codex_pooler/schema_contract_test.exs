@@ -239,6 +239,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["api_keys_enforced_reasoning_effort_check"] =~ "'xhigh'"
     assert constraints["api_keys_enforced_service_tier_check"] =~ "'auto'"
     assert constraints["api_keys_enforced_service_tier_check"] =~ "'priority'"
+    assert constraints["api_keys_enforced_service_tier_check"] =~ "'scale'"
     refute constraints["api_keys_enforced_service_tier_check"] =~ "'ultrafast'"
 
     assert constraints["api_key_policy_bindings_max_tokens_per_week_check"] =~

@@ -111,7 +111,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       {"Auto - upstream chooses", "auto"},
       {"Default - standard capacity", "default"},
       {"Flex - flexible capacity", "flex"},
-      {"Priority - fast responses", "priority"}
+      {"Priority - fast responses", "priority"},
+      {"Scale - scale capacity", "scale"}
     ]
   end
 
