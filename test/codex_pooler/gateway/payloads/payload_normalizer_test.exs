@@ -28,7 +28,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         refute Map.has_key?(Jason.decode!(encoded), "service_tier")
       end
 
-      for tier <- ["priority", "flex"] do
+      for tier <- ["priority", "flex", "scale", "latency_preview"] do
         payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 

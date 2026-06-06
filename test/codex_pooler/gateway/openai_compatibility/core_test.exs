@@ -2064,7 +2064,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       refute Map.has_key?(result.payload, "service_tier")
 
-      for tier <- ["auto", "default", "flex", "priority", "ultrafast"] do
+      for tier <- ["auto", "default", "flex", "priority", "scale"] do
         payload = %{
           "model" => "gpt-fixture-text",
           "input" => "synthetic input",
@@ -2077,7 +2077,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
 
     test "Responses rejects unsupported service_tier variants deterministically" do
-      for tier <- ["unsupported", "", 123, true] do
+      for tier <- ["unsupported", "ultrafast", "", 123, true] do
         assert {:error,
                 %{
                   status: 400,
@@ -2090,6 +2090,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                    "service_tier" => tier
                  })
       end
+    end
+
+    test "SDK-internal serviceTier alias remains unsupported on public v1 payloads" do
+      assert {:error,
+              %{
+                status: 400,
+                code: "unsupported_parameter",
+                param: "serviceTier"
+              }} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "serviceTier" => "priority"
+               })
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "unsupported_parameter",
+                param: "serviceTier"
+              }} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+                 "serviceTier" => "priority"
+               })
     end
 
     test "Responses accepts truncation auto and disabled without forwarding it" do

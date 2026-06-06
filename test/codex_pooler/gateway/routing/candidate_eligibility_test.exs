@@ -157,7 +157,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     test "a concrete unsupported tier produces no compatible backend" do
       model = model_with_tier_support("assignment-supported", "priority")
       candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "ultrafast"}
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "latency_preview"}
 
       request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -170,7 +170,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     test "a concrete tier excludes source assignments missing per-assignment metadata" do
       model = model_missing_assignment_metadata("assignment-missing")
       candidates = [candidate("assignment-missing")]
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "ultrafast"}
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "latency_preview"}
 
       request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -178,6 +178,21 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                CandidateEligibility.filter_runtime_compatible_candidates(
                  filter_input(model, payload, request_options, candidates)
                )
+    end
+
+    test "SDK-internal serviceTier alias does not narrow candidate eligibility" do
+      model = model_missing_assignment_metadata("assignment-missing")
+      candidates = [candidate("assignment-missing")]
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "serviceTier" => "latency_preview"}
+
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {:ok, filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, request_options, candidates)
+               )
+
+      assert candidate_ids(filtered) == ["assignment-missing"]
     end
 
     test "missing per-assignment metadata remains compatible without a concrete tier" do
