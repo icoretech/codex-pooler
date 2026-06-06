@@ -387,7 +387,8 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
     assert has_element?(view, "#{card} [data-role='worker-state-badge']", "Executing")
     assert has_element?(view, "#{card} [data-role='next-run']", "Running now")
     refute has_element?(view, "#{card} [data-role='worker-activity-strip']")
-    refute render(view) =~ "R2"
+    refute has_element?(view, "#{card} [data-role='active-worker-marker']")
+    refute has_element?(view, "#{card} [data-role='target-initial']", "R2")
   end
 
   test "daily rollup failures still render failure markers with rollup context", %{conn: conn} do
