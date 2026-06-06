@@ -641,6 +641,52 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       assert FakeUpstream.count(upstream) == 0
     end
 
+    test "PAT-like access-only identities cannot hydrate through token refresh" do
+      personal_access_token = "at-refresh-pat-do-not-leak-#{System.unique_integer([:positive])}"
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {200, %{"access_token" => secret("access", "unused-pat")}},
+          "/api/auth/whoami" => {200, %{"email" => "pat-user@example.com"}}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      store_secret!(identity, "access_token", personal_access_token)
+      assignment = active_assignment_for_identity!(identity)
+
+      assert {:ok, %{status: :reauth_required, retryable?: false} = result} =
+               TokenRefresh.refresh_access_token(identity,
+                 trigger_kind: "pat_unsupported_boundary"
+               )
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      token_refresh = persisted.metadata["token_refresh"]
+
+      assert persisted.status == "reauth_required"
+      assert token_refresh["status"] == "reauth_required"
+      assert token_refresh["trigger_kind"] == "pat_unsupported_boundary"
+
+      assert token_refresh["reason"] == %{
+               "code" => "missing_refresh_token",
+               "message" => "refresh token is missing"
+             }
+
+      assert {:ok, ^personal_access_token} =
+               Secrets.decrypt_active_secret(identity, "access_token")
+
+      assert {:error, %{code: :upstream_secret_not_found}} =
+               Secrets.decrypt_active_secret(identity, "refresh_token")
+
+      cascaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert cascaded.health_status == "disabled"
+      assert cascaded.eligibility_status == "ineligible"
+      assert FakeUpstream.count(upstream) == 0
+      refute inspect(result) =~ personal_access_token
+      refute inspect(persisted.metadata) =~ personal_access_token
+    end
+
     test "token refresh jobs are unique per upstream identity" do
       identity = refreshable_identity_fixture("active")
 

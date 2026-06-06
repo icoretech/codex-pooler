@@ -439,6 +439,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert html =~ "Codex Pooler becomes the refresh-token authority."
     assert html =~ "This is a credential lineage handoff"
+    assert html =~ "Personal access token auth.json entries are not supported in this cycle"
 
     assert has_element?(
              view,

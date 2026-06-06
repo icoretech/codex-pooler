@@ -1603,6 +1603,48 @@ defmodule CodexPooler.UpstreamsTest do
       assert Repo.aggregate(EncryptedSecret, :count) == 0
     end
 
+    test "rejects personal access token auth.json without storing or exposing the token" do
+      scope = fixture_owner_scope()
+      {:ok, pool} = Pools.create_pool(scope, %{slug: "auth-json-pat", name: "PAT JSON"})
+      personal_access_token = "at-auth-json-pat-do-not-leak-#{System.unique_integer([:positive])}"
+      unsupported_message = "Codex personal access token auth.json is not supported in this cycle"
+
+      payloads = [
+        Jason.encode!(%{
+          "auth_mode" => "personalAccessToken",
+          "personalAccessToken" => personal_access_token
+        }),
+        Jason.encode!(%{"personalAccessToken" => personal_access_token}),
+        Jason.encode!(%{
+          "tokens" => %{
+            "access_token" => personal_access_token,
+            "id_token" => id_token_fixture(),
+            "refresh_token" => runtime_secret("auth-json-pat-refresh"),
+            "account_id" => "acct_pat_unsupported"
+          }
+        })
+      ]
+
+      for payload <- payloads do
+        assert {:error, %{code: :unsupported_auth_json, message: ^unsupported_message}} =
+                 CodexAuthJson.parse(payload)
+
+        assert {:error, changeset} = Upstreams.import_codex_auth_json(scope, pool, payload)
+        assert %{content: [^unsupported_message]} = errors_on(changeset)
+        refute inspect(changeset) =~ personal_access_token
+        refute inspect(changeset) =~ payload
+      end
+
+      assert Repo.aggregate(UpstreamIdentity, :count) == 0
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+      assert Repo.aggregate(EncryptedSecret, :count) == 0
+
+      assert Repo.aggregate(
+               from(event in AuditEvent, where: event.action == "upstream_account.import"),
+               :count
+             ) == 0
+    end
+
     test "invalid upstream secret key rolls back auth.json import without partial rows" do
       scope = fixture_owner_scope()
 

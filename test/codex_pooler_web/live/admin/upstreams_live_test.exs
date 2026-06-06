@@ -2321,6 +2321,51 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert Repo.aggregate(EncryptedSecret, :count) == 0
   end
 
+  test "personal access token auth.json is rejected without echoing the token", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "auth-json-pat", name: "auth.json PAT"})
+
+    personal_access_token = "at-admin-pat-do-not-render-#{System.unique_integer([:positive])}"
+
+    unsupported_auth_json =
+      Jason.encode!(%{
+        "auth_mode" => "personalAccessToken",
+        "personalAccessToken" => personal_access_token
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    open_auth_json_import_dialog(view)
+
+    html =
+      view
+      |> element("#auth-json-import-form")
+      |> render_submit(%{
+        "auth_json" => %{
+          "pool_id" => pool.id,
+          "content" => unsupported_auth_json
+        }
+      })
+
+    assert has_element?(view, "#auth-json-import-dialog[open]")
+
+    assert has_element?(
+             view,
+             "#auth-json-import-form",
+             "Codex personal access token auth.json is not supported in this cycle"
+           )
+
+    assert Repo.aggregate(UpstreamIdentity, :count) == 0
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+    assert Repo.aggregate(EncryptedSecret, :count) == 0
+    refute html =~ personal_access_token
+    refute render(view) =~ personal_access_token
+    refute render(view) =~ unsupported_auth_json
+  end
+
   test "rejects auth.json import when paste and file upload are both provided", %{
     conn: conn,
     scope: scope

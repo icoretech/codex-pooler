@@ -74,13 +74,42 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
     parse_error(:unsupported_auth_json, "Codex API-key auth.json is not supported")
   end
 
+  defp ensure_chatgpt_auth(%{"personalAccessToken" => token}) when is_binary(token) do
+    if present_string(token) do
+      parse_error(:unsupported_auth_json, personal_access_token_unsupported_message())
+    else
+      :ok
+    end
+  end
+
+  defp ensure_chatgpt_auth(%{"personal_access_token" => token}) when is_binary(token) do
+    if present_string(token) do
+      parse_error(:unsupported_auth_json, personal_access_token_unsupported_message())
+    else
+      :ok
+    end
+  end
+
   defp ensure_chatgpt_auth(%{"auth_mode" => mode}) when is_binary(mode) do
     case String.downcase(mode) do
       mode when mode in ["chatgpt", "chat_gpt"] ->
         :ok
 
+      mode
+      when mode in ["personalaccesstoken", "personal_access_token", "personal-access-token"] ->
+        parse_error(:unsupported_auth_json, personal_access_token_unsupported_message())
+
       _mode ->
         parse_error(:unsupported_auth_json, "Codex auth.json must contain ChatGPT token auth")
+    end
+  end
+
+  defp ensure_chatgpt_auth(%{"tokens" => %{"access_token" => access_token}})
+       when is_binary(access_token) do
+    if personal_access_token?(access_token) do
+      parse_error(:unsupported_auth_json, personal_access_token_unsupported_message())
+    else
+      :ok
     end
   end
 
@@ -237,6 +266,15 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   end
 
   defp present_string(_value), do: nil
+
+  defp personal_access_token?(token) when is_binary(token) do
+    token
+    |> String.trim()
+    |> String.starts_with?("at-")
+  end
+
+  defp personal_access_token_unsupported_message,
+    do: "Codex personal access token auth.json is not supported in this cycle"
 
   defp parse_error(code, message), do: {:error, %{code: code, message: message}}
 end

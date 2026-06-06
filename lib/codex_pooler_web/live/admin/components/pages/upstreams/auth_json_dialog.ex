@@ -142,7 +142,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonDialog do
             icon="hero-exclamation-triangle"
             tone={:warning}
             title="Codex Pooler becomes the refresh-token authority."
-            description="This is a credential lineage handoff: Do not keep using the same auth.json from another Codex install, machine, or automation, because provider refresh-token rotation can invalidate one copy and move the account to reauth_required."
+            description="This is a credential lineage handoff: Do not keep using the same auth.json from another Codex install, machine, or automation, because provider refresh-token rotation can invalidate one copy and move the account to reauth_required. Personal access token auth.json entries are not supported in this cycle; import ChatGPT token auth.json only."
           />
         </.form>
 
