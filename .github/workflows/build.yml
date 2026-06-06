@@ -34,7 +34,8 @@ jobs:
             exit 1
           fi
 
-          version="${tag#v}"
+          version="${tag#codex-pooler-}"
+          version="${version#v}"
           major_minor="$(awk -F. '{print $1 "." $2}' <<<"$version")"
 
           {
@@ -48,6 +49,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.prepare.outputs.checkout_ref }}
+
+      - name: Resolve checked-out revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -66,7 +71,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/icoretech/codex-pooler
             org.opencontainers.image.documentation=https://github.com/icoretech/codex-pooler/blob/main/README.md
             org.opencontainers.image.vendor=iCoreTech, Inc.
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
             org.opencontainers.image.version=${{ steps.prepare.outputs.version }}
           tags: |
             type=raw,value=${{ steps.prepare.outputs.version }}
