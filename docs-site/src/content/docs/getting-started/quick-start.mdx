@@ -12,6 +12,7 @@ To start Codex Pooler locally, generate a private `.env`, start the Docker Compo
 ## What You Need
 
 - Docker with Compose
+- Git, if you are cloning the repository
 - `openssl`
 - A browser for the owner setup and admin UI
 - At least one Codex account credential to import when you create your first upstream
@@ -24,12 +25,27 @@ Clone the repository, generate local secrets, and start the app with Postgres.
 git clone https://github.com/icoretech/codex-pooler.git
 cd codex-pooler
 
+# Optional: pin a release tag before generating .env.
+# Omit this for a quick trial that follows the latest tag.
+# export CODEX_POOLER_IMAGE_TAG=<release-tag>
+
 scripts/self-host/generate-env.sh
 docker compose pull
 docker compose up -d
 ```
 
+The first run pulls the app and Postgres images, waits for Postgres health, runs the migration container, then starts the web app.
+
 Open [http://localhost:4000](http://localhost:4000). The first page should take you to owner setup.
+
+To verify that before opening a browser:
+
+```bash
+curl -sS -D - -o /dev/null http://localhost:4000/ | grep -i '^location: /bootstrap'
+curl -fsS http://localhost:4000/bootstrap/status
+```
+
+The status endpoint should return `{"status":"ok","bootstrap":"pending"}` on a fresh database.
 
 If the page does not load, check the containers and app logs:
 
@@ -37,6 +53,8 @@ If the page does not load, check the containers and app logs:
 docker compose ps
 docker compose logs -f app
 ```
+
+Use `http://localhost:4000` for the default Compose stack even if the Phoenix startup banner prints an endpoint URL such as `https://localhost`; the Compose port mapping is the local URL to open. The release image includes the OS timezone database used for operator timezone display.
 
 ## 2. Create The Owner Account
 

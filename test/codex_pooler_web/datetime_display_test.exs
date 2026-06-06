@@ -13,9 +13,9 @@ defmodule CodexPoolerWeb.DateTimeDisplayTest do
       assert %DateTime{} = DateTime.add(DateTime.utc_now(), 30_000, :millisecond)
     end
 
-    test "explicit timezone database converts UTC instants to real IANA zones" do
+    test "explicit Zoneinfo database converts UTC instants to real IANA zones" do
       assert {:ok, rome_time} =
-               DateTime.shift_zone(@example_instant, "Europe/Rome", Tzdata.TimeZoneDatabase)
+               DateTime.shift_zone(@example_instant, "Europe/Rome", Zoneinfo.TimeZoneDatabase)
 
       assert rome_time.year == 2026
       assert rome_time.month == 5
@@ -29,9 +29,9 @@ defmodule CodexPoolerWeb.DateTimeDisplayTest do
       assert rome_time.time_zone == "Europe/Rome"
     end
 
-    test "explicit timezone database rejects invalid IANA zones" do
+    test "explicit Zoneinfo database rejects invalid IANA zones" do
       assert {:error, :time_zone_not_found} =
-               DateTime.shift_zone(@example_instant, "Europe/NotAZone", Tzdata.TimeZoneDatabase)
+               DateTime.shift_zone(@example_instant, "Europe/NotAZone", Zoneinfo.TimeZoneDatabase)
     end
   end
 

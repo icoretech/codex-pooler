@@ -756,6 +756,7 @@ fastest way to try Codex Pooler on a laptop or small server.
 Prerequisites:
 
 - Docker with Compose
+- Git, if you are cloning the repository
 - `openssl`
 
 Start Codex Pooler:
@@ -764,13 +765,30 @@ Start Codex Pooler:
 git clone https://github.com/icoretech/codex-pooler.git
 cd codex-pooler
 
+# Optional: pin a release tag before generating .env.
+# Omit this for a quick trial that follows the latest tag.
+# export CODEX_POOLER_IMAGE_TAG=<release-tag>
+
 scripts/self-host/generate-env.sh
 docker compose pull
 docker compose up -d
 ```
 
+The first run pulls the app and Postgres images, waits for Postgres health, runs
+the migration container, then starts the web app.
+
 Open `http://localhost:4000`. On the first visit, create the owner account at
 `/bootstrap`, then sign in and start with `/admin/pools`.
+
+To verify the first-run redirect before opening a browser:
+
+```bash
+curl -sS -D - -o /dev/null http://localhost:4000/ | grep -i '^location: /bootstrap'
+curl -fsS http://localhost:4000/bootstrap/status
+```
+
+The status endpoint should return `{"status":"ok","bootstrap":"pending"}` on a
+fresh database.
 
 Useful commands:
 
@@ -779,6 +797,11 @@ docker compose ps
 docker compose logs -f app
 docker compose down
 ```
+
+Use `http://localhost:4000` for the default Compose stack even if the Phoenix
+startup banner prints an endpoint URL such as `https://localhost`; the Compose
+port mapping is the local URL to open. The release image includes the OS
+timezone database used for operator timezone display.
 
 To remove the local database too:
 
@@ -913,7 +936,10 @@ Docker Compose is the easiest way to try the software. For Kubernetes, use the
 [iCoreTech Helm repository](https://github.com/icoretech/helm). The chart
 deploys the same release image with separate app, worker, scheduler, and
 migration roles. It expects an explicit immutable image tag for real
-deployments. The chart defaults the web app to one replica because backend
+deployments. Official release images include the OS IANA timezone database used
+for operator timezone display. Custom runtime images or hosts must provide
+zoneinfo files at `/usr/share/zoneinfo` or set `TZDIR`. The chart defaults the
+web app to one replica because backend
 websocket continuity owns a live upstream websocket in an app pod. Owner-alive
 cross-node forwarding is wired, but scaling web replicas still requires
 clustering, owner-forwarding, and the explicit unsafe topology acknowledgement

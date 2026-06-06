@@ -77,7 +77,7 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
   @spec timezone_options() :: [{String.t(), String.t()}]
   def timezone_options do
     zones =
-      Tzdata.zone_list()
+      Zoneinfo.time_zones()
       |> Enum.uniq()
       |> Enum.reject(&(&1 == @default_timezone))
       |> Enum.sort()
@@ -99,7 +99,7 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
   defp shift_for_display(datetime, timezone) do
     timezone = normalize_timezone_value(timezone)
 
-    case DateTime.shift_zone(datetime, timezone, Tzdata.TimeZoneDatabase) do
+    case DateTime.shift_zone(datetime, timezone, Zoneinfo.TimeZoneDatabase) do
       {:ok, shifted} ->
         shifted
 

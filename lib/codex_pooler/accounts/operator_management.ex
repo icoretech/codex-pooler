@@ -314,7 +314,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   end
 
   defp validate_timezone(:timezone, timezone) when is_binary(timezone) do
-    case DateTime.shift_zone(DateTime.utc_now(), timezone, Tzdata.TimeZoneDatabase) do
+    case DateTime.shift_zone(DateTime.utc_now(), timezone, Zoneinfo.TimeZoneDatabase) do
       {:ok, _datetime} -> []
       {:error, _reason} -> [timezone: "must be a valid IANA time zone"]
     end

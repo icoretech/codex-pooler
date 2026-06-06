@@ -12,6 +12,7 @@ Use it when you want a simple first install before moving to Kubernetes.
 You need:
 
 - Docker with Compose
+- Git, if you are cloning the repository
 - `openssl`
 - A checked-out Codex Pooler repository
 
@@ -22,24 +23,26 @@ cd codex-pooler
 
 ## Generate the local environment
 
-Create the local `.env` file before starting the stack:
-
-```bash
-scripts/self-host/generate-env.sh
-```
-
-The generated `.env` contains release secrets, encryption roots, database settings, and image settings such as `CODEX_POOLER_IMAGE` and `CODEX_POOLER_IMAGE_TAG`. Keep it private. Don't commit it, paste it into tickets, or reuse values between public installs.
-
-For real installs, run an explicit release image tag instead of a floating tag. The tag should identify the exact image you meant to deploy.
+For a reproducible install, choose the release image before creating `.env`.
+The generator defaults to `latest`, which is convenient for a quick trial but
+less explicit for a real install.
 
 {/* x-release-please-start-version */}
 
 ```bash
-CODEX_POOLER_IMAGE=ghcr.io/icoretech/codex-pooler
-CODEX_POOLER_IMAGE_TAG=0.0.1
+export CODEX_POOLER_IMAGE=ghcr.io/icoretech/codex-pooler
+export CODEX_POOLER_IMAGE_TAG=0.0.1
+scripts/self-host/generate-env.sh
 ```
 
 {/* x-release-please-end */}
+
+The generated `.env` contains release secrets, encryption roots, database settings, and image settings such as `CODEX_POOLER_IMAGE` and `CODEX_POOLER_IMAGE_TAG`. Keep it private. Don't commit it, paste it into tickets, or reuse values between public installs.
+
+If you already generated `.env`, edit `CODEX_POOLER_IMAGE_TAG` before
+`docker compose pull` when you want a specific release instead of the floating
+`latest` tag. If port `4000` is already in use, set `CODEX_POOLER_HTTP_PORT`
+before generation or edit it in `.env` before starting the stack.
 
 ## Start Codex Pooler
 
@@ -50,6 +53,9 @@ docker compose pull
 docker compose up -d
 ```
 
+The first run pulls the app and Postgres images, waits for Postgres health, runs
+the migration container, then starts the web app.
+
 Open the local site:
 
 ```text
@@ -57,6 +63,20 @@ http://localhost:4000
 ```
 
 On the first visit, create the owner account at `/bootstrap`. After sign-in, start with `/admin/pools`.
+
+To verify the first-run redirect from the shell:
+
+```bash
+curl -sS -D - -o /dev/null http://localhost:4000/ | grep -i '^location: /bootstrap'
+curl -fsS http://localhost:4000/bootstrap/status
+```
+
+The status endpoint should return `{"status":"ok","bootstrap":"pending"}` on a
+fresh database. Use `http://localhost:4000` for the default Compose stack even
+if the Phoenix startup banner prints an endpoint URL such as
+`https://localhost`; the Compose port mapping is the local URL to open. A
+release image includes the OS timezone database used for operator timezone
+display.
 
 ## Bootstrap runtime access
 

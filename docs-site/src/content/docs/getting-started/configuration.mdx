@@ -11,6 +11,19 @@ For Docker Compose, `scripts/self-host/generate-env.sh` writes a local `.env` fi
 
 The local web URL is `http://localhost:4000`.
 
+The generator writes `CODEX_POOLER_IMAGE_TAG=latest` unless you set a tag first.
+Replace `<release-tag>` with the release you want before running the command:
+
+```bash
+export CODEX_POOLER_IMAGE_TAG=<release-tag>
+scripts/self-host/generate-env.sh
+```
+
+If port `4000` is already in use, set `CODEX_POOLER_HTTP_PORT` before
+generation or edit the generated `.env` before starting the stack. Use the
+Compose URL above even if the Phoenix startup banner prints an endpoint URL such
+as `https://localhost`; the port mapping is the local URL to open.
+
 ## Release Environment Variables
 
 Set release environment variables for values the app needs before it can read database settings.
@@ -87,6 +100,8 @@ Set release environment variables for values the app needs before it can read da
 </table>
 
 The upstream secret key must decode to 32 raw bytes. The TOTP and upstream key versions let operators rotate encrypted secret roots deliberately.
+
+Official release images include the OS IANA timezone database used for operator timezone display. Custom runtime images or hosts must provide zoneinfo files at `/usr/share/zoneinfo` or set `TZDIR`.
 
 ## Admin-Managed Settings
 
