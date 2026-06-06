@@ -50,9 +50,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     model = Map.get(log, :requested_model)
     tier = Map.get(log, :requested_service_tier)
 
-    cond do
-      fast_metadata?(metadata) or model == "gpt-5.4" or service_tier_priority?(tier) -> :fast
-      true -> nil
+    if fast_metadata?(metadata) or model == "gpt-5.4" or service_tier_priority?(tier) do
+      :fast
     end
   end
 
