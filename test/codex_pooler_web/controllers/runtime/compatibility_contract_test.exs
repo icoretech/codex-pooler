@@ -194,6 +194,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert v1_fixture.responses_truncation == responses_fixture.responses_truncation
     end
 
+    test "documents compaction and context-overflow recovery as client/upstream owned" do
+      responses_chat = CompatibilityMatrix.by_slug!(:responses_chat)
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert responses_chat.contract =~ "compaction_trigger payloads pass through unchanged"
+      assert responses_chat.contract =~ "context-overflow recovery stays client/upstream-owned"
+      assert responses_chat.contract =~ "no server-side compaction"
+      assert responses_chat.contract =~ "stored prompt/frame reconstruction"
+
+      assert fixture.compaction_recovery_boundary == %{
+               backend_compaction_trigger: %{
+                 route: "/backend-api/codex/responses",
+                 behavior: "forwarded_unchanged",
+                 local_retry: false
+               },
+               context_overflow: %{
+                 recovery_owner: "client_or_upstream",
+                 server_side_compaction: false,
+                 hidden_replay: false,
+                 stores_prompt_bodies: false,
+                 stores_websocket_frames: false,
+                 client_action: "restart_with_full_context"
+               }
+             }
+    end
+
     test "documents v1 supported surface as authenticated OpenAI compatibility" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
       fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)
@@ -624,6 +650,59 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ setup.upstream_token
       refute metadata_text =~ "synthetic upstream validation failure"
+    end
+
+    test "supported responses contract does not server-compact context-overflow failures", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          {:json_error, 400,
+           %{
+             "error" => %{
+               "code" => "context_length_exceeded",
+               "message" => "synthetic context overflow failure"
+             }
+           }}
+        )
+
+      setup = gateway_setup(upstream)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post(~p"/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic oversized context request",
+          "stream" => false
+        })
+
+      assert json_response(conn, 400)["error"]["code"] == "context_length_exceeded"
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+
+      assert [request] =
+               Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_status"
+      assert request.response_status_code == 400
+
+      assert [attempt] =
+               Repo.all(from attempt in Attempt, where: attempt.request_id == ^request.id)
+
+      assert attempt.status == "failed"
+      assert attempt.network_error_code == "upstream_status"
+      assert attempt.upstream_status_code == 400
+
+      metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+      refute metadata_text =~ "synthetic oversized context request"
+      refute metadata_text =~ "synthetic context overflow failure"
+      refute metadata_text =~ "compacted"
+      refute metadata_text =~ "server_side_compaction"
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ setup.upstream_token
     end
 
     test "supported responses contract keeps safe OpenAI responses fields and strips auto controls",

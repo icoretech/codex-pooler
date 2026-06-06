@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_chat,
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses truncation accepts auto and disabled locally but is not forwarded upstream; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses truncation accepts auto and disabled locally but is not forwarded upstream; compaction_trigger payloads pass through unchanged on backend Responses, while context-overflow recovery stays client/upstream-owned with no server-side compaction, hidden replay, or stored prompt/frame reconstruction; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :backend_v1_alias_surface,
@@ -333,6 +333,21 @@ defmodule CodexPooler.CompatibilityMatrix do
       responses_truncation: %{
         accepted_values: ["auto", "disabled"],
         forwarded_upstream: false
+      },
+      compaction_recovery_boundary: %{
+        backend_compaction_trigger: %{
+          route: "/backend-api/codex/responses",
+          behavior: "forwarded_unchanged",
+          local_retry: false
+        },
+        context_overflow: %{
+          recovery_owner: "client_or_upstream",
+          server_side_compaction: false,
+          hidden_replay: false,
+          stores_prompt_bodies: false,
+          stores_websocket_frames: false,
+          client_action: "restart_with_full_context"
+        }
       },
       json: %{
         "model" => "gpt-fixture-text",
