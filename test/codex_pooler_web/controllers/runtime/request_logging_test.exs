@@ -16,8 +16,6 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
-  require Logger
-
   @websocket_lifecycle_metadata_keys ~w(
     codex_session_id
     downstream_epoch

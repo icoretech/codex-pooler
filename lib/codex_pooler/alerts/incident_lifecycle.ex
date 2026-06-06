@@ -340,7 +340,7 @@ defmodule CodexPooler.Alerts.IncidentLifecycle do
   defp atomized_attrs(attrs) do
     Enum.reduce(attrs, %{}, fn {key, value}, acc ->
       case normalize_key(key) do
-        key when is_atom(key) -> Map.put(acc, key, value)
+        key when is_atom(key) and not is_nil(key) -> Map.put(acc, key, value)
         nil -> acc
       end
     end)

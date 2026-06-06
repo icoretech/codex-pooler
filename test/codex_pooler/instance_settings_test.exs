@@ -82,7 +82,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     Repo.delete_all(Settings)
 
     assert_raise FunctionClauseError, fn ->
-      InstanceSettings.change(%{"gateway" => %{"gateway_debug" => true}})
+      InstanceSettings.change(dynamic_term(%{"gateway" => %{"gateway_debug" => true}}))
     end
 
     assert Repo.aggregate(Settings, :count) == 0
@@ -93,6 +93,8 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert Ecto.Changeset.get_change(changeset, :gateway).changes.gateway_debug == true
     assert Repo.aggregate(Settings, :count) == 1
   end
+
+  defp dynamic_term(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
 
   test "changeset rejects invalid CIDR, negative TTL, invalid TLS, invalid user-agent, invalid model overrides, and malformed bulkheads" do
     settings = InstanceSettings.ensure_singleton!()

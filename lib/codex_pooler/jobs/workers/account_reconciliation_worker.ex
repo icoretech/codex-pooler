@@ -14,28 +14,51 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
       period: {7, :days}
     ]
 
-  alias CodexPooler.Jobs.DevelopmentControls
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
+
+  @dev_features_build_enabled Application.compile_env(
+                                :codex_pooler,
+                                :dev_features_build_enabled,
+                                false
+                              )
 
   @impl Oban.Worker
   def timeout(%Oban.Job{}), do: :timer.minutes(20)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{
-        args:
-          %{
-            "pool_id" => pool_id,
-            "pool_upstream_assignment_id" => assignment_id
-          } = args
-      }) do
-    if DevelopmentControls.account_reconciliation_paused?() do
-      :ok
-    else
-      trigger_kind = Map.get(args, "trigger_kind", "manual")
+  if @dev_features_build_enabled do
+    alias CodexPooler.Jobs.DevelopmentControls
 
-      with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind) do
-        reconciliation_outcome(result)
+    def perform(%Oban.Job{
+          args:
+            %{
+              "pool_id" => pool_id,
+              "pool_upstream_assignment_id" => assignment_id
+            } = args
+        }) do
+      if DevelopmentControls.account_reconciliation_paused?() do
+        :ok
+      else
+        run_account_reconciliation(pool_id, assignment_id, args)
       end
+    end
+  else
+    def perform(%Oban.Job{
+          args:
+            %{
+              "pool_id" => pool_id,
+              "pool_upstream_assignment_id" => assignment_id
+            } = args
+        }) do
+      run_account_reconciliation(pool_id, assignment_id, args)
+    end
+  end
+
+  defp run_account_reconciliation(pool_id, assignment_id, args) do
+    trigger_kind = Map.get(args, "trigger_kind", "manual")
+
+    with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind) do
+      reconciliation_outcome(result)
     end
   end
 

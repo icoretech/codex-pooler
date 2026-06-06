@@ -42,7 +42,7 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     do: status |> Atom.to_string() |> status_chip_class()
 
   def status_chip_class(status) do
-    case to_string(status || "") do
+    case to_string(status) do
       status
       when status in ["active", "accepted", "succeeded", "eligible", "present", "known", "ok"] ->
         chip_class(:success)

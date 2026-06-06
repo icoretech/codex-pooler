@@ -491,6 +491,4 @@ defmodule CodexPooler.Mailer.Config do
       trimmed -> trimmed
     end
   end
-
-  defp blank_to_nil(nil), do: nil
 end

@@ -137,7 +137,6 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
   end
 
   defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
-  defp short_id(id), do: to_string(id)
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false

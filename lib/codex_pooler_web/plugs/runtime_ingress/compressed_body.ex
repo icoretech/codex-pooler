@@ -297,7 +297,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
        )
        when byte_size(pending) > 0 do
     chunk_size = min(@decompression_chunk_bytes, byte_size(pending))
-    <<chunk::binary-size(chunk_size), rest::binary>> = pending
+    chunk = binary_part(pending, 0, chunk_size)
+    rest = binary_part(pending, chunk_size, byte_size(pending) - chunk_size)
 
     {chunk,
      %DecompressionState{state | offset: offset, compressed_size: compressed_size, pending: rest}}

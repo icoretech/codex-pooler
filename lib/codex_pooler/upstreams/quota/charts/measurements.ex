@@ -191,7 +191,6 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
   end
 
   defp decimal_min(nil, value), do: value
-  defp decimal_min(value, nil), do: value
 
   defp decimal_min(%Decimal{} = left, %Decimal{} = right) do
     if Decimal.compare(left, right) == :gt, do: right, else: left

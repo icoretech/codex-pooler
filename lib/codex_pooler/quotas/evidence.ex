@@ -337,8 +337,6 @@ defmodule CodexPooler.Quotas.Evidence do
     DateTime.diff(timestamp, observed_at, :second) > freshness_ttl_seconds()
   end
 
-  defp future_observed_at?(nil, _timestamp), do: true
-
   defp future_observed_at?(observed_at, timestamp) do
     DateTime.diff(observed_at, timestamp, :second) > future_observed_skew_seconds()
   end

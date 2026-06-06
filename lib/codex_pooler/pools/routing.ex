@@ -33,7 +33,6 @@ defmodule CodexPooler.Pools.Routing do
   def v1_compatibility_enabled?(pool_id) when is_binary(pool_id) do
     case routing_settings_with_defaults(pool_id) do
       %RoutingSettings{v1_compatibility_enabled: enabled} -> enabled
-      nil -> true
     end
   end
 

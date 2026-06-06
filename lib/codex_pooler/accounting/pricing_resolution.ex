@@ -453,12 +453,8 @@ defmodule CodexPooler.Accounting.PricingResolution do
     get_in(metadata || %{}, ["pricing", key])
   end
 
-  defp metadata_pricing_value(_request, _key), do: nil
-
   defp details_value(%LedgerEntry{details: details}, key),
     do: Map.get(details || %{}, key)
-
-  defp details_value(_entry, _key), do: nil
 
   defp fallback(nil, value), do: value
   defp fallback(value, _fallback), do: value

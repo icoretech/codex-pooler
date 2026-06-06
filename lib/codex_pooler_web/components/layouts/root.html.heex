@@ -38,10 +38,6 @@
   </head>
   <body>
     {@inner_content}
-    <script
-      :if={CodexPoolerWeb.DevFeatures.impeccable_live_enabled?()}
-      src={CodexPoolerWeb.DevFeatures.impeccable_live_script_src()}
-    >
-    </script>
+    <.impeccable_live_script />
   </body>
 </html>

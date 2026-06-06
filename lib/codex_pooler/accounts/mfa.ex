@@ -259,7 +259,7 @@ defmodule CodexPooler.Accounts.MFA do
     counter_binary = <<counter::unsigned-big-integer-size(64)>>
     hmac = :crypto.mac(:hmac, :sha, key, counter_binary)
     offset = :binary.last(hmac) &&& 0x0F
-    <<_::binary-size(offset), part::binary-size(4), _::binary>> = hmac
+    part = binary_part(hmac, offset, 4)
     <<value::unsigned-big-integer-size(32)>> = part
     truncated = Bitwise.band(value, 0x7FFFFFFF)
 

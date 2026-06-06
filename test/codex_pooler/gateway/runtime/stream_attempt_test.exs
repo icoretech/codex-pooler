@@ -291,12 +291,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
 
     test "rejects non-binary stream chunks instead of returning an invalid write classification" do
       state = StreamAttempt.first_event_state()
+      invalid_chunk = dynamic_term(:not_a_stream_chunk)
 
       assert_raise FunctionClauseError, fn ->
-        StreamAttempt.classify_first_event(:not_a_stream_chunk, state)
+        StreamAttempt.classify_first_event(invalid_chunk, state)
       end
     end
   end
+
+  defp dynamic_term(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"

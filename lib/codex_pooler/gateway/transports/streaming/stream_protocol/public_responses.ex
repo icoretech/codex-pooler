@@ -44,7 +44,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     case sse_block_separator(data) do
       {index, separator_size} ->
         passthrough_size = index + separator_size
-        <<passthrough::binary-size(passthrough_size), rest::binary>> = data
+        passthrough = binary_part(data, 0, passthrough_size)
+        rest = binary_part(data, passthrough_size, byte_size(data) - passthrough_size)
 
         state = %{state | passthrough?: false, buffer: ""}
         {normalized_rest, state} = normalize_data(rest, state)
@@ -96,7 +97,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
       terminal_event?(type) ->
         {prefix, state} = terminal_prefix(decoded, state)
-        {[prefix, public_sse_block(type || "response.completed", decoded)], state}
+        {[prefix, public_sse_block(type, decoded)], state}
 
       is_binary(type) ->
         {[public_sse_block(type, decoded)], state}

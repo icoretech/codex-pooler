@@ -154,10 +154,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
       when event_type in @terminal_event_types do
     {:ok,
      %{
-       code: event.error_code || event.event_type || "upstream_terminal_failure",
-       upstream_code: event.upstream_error_code,
-       event_type: event.event_type,
-       data_type: event.data_type
+       code: Map.get(event, :error_code) || event_type,
+       upstream_code: Map.get(event, :upstream_error_code),
+       event_type: event_type,
+       data_type: Map.get(event, :data_type)
      }}
   end
 

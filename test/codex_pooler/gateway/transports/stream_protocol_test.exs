@@ -29,7 +29,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
         })
 
       split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
-      <<first::binary-size(split_at), second::binary>> = event
+      first = binary_part(event, 0, split_at)
+      second = binary_part(event, split_at, byte_size(event) - split_at)
 
       {first_out, state} =
         StreamProtocol.normalize_public_openai_responses_sse_data(first, state)

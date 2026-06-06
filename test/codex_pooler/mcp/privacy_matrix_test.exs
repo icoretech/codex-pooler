@@ -238,8 +238,12 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
   end
 
   test "projection rejects raw domain structs so future tools must present explicit maps" do
+    pool = dynamic_term(%CodexPooler.Pools.Pool{id: "pool_123", name: "Raw Pool"})
+
     assert_raise ArgumentError, ~r/raw domain structs are not MCP-safe/, fn ->
-      PrivacyMatrix.project!(:pools, %CodexPooler.Pools.Pool{id: "pool_123", name: "Raw Pool"})
+      PrivacyMatrix.project!(:pools, pool)
     end
   end
+
+  defp dynamic_term(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
 end

@@ -314,7 +314,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp owner_close_detail(_reason), do: {1011, "websocket owner unavailable"}
 
   defp log_owner_monitor_recovery({:ok, _result}, _state, _reason), do: :ok
-  defp log_owner_monitor_recovery(:ok, _state, _reason), do: :ok
 
   defp log_owner_monitor_recovery({:error, recovery_reason}, state, owner_reason) do
     Logger.warning(

@@ -489,9 +489,6 @@ defmodule CodexPooler.Access.Invites do
   defp normalize_pool(id) when is_binary(id), do: Pools.get_active_pool(id)
   defp normalize_pool(_pool_or_id), do: nil
 
-  defp parse_expires_at(nil), do: {:ok, nil}
-  defp parse_expires_at(""), do: {:ok, nil}
-
   defp parse_expires_at(%DateTime{} = expires_at),
     do: {:ok, DateTime.truncate(expires_at, :microsecond)}
 

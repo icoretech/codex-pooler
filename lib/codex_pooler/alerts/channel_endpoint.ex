@@ -34,7 +34,6 @@ defmodule CodexPooler.Alerts.ChannelEndpoint do
        }}
     else
       {:error, reason} -> {:error, reason}
-      _invalid -> {:error, :invalid_url}
     end
   end
 

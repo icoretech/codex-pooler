@@ -3,7 +3,6 @@ defmodule CodexPoolerWeb.DevFeatures do
 
   @build_enabled Application.compile_env(:codex_pooler, :dev_features_build_enabled, false)
   @script_src "http://localhost:8400/live.js"
-  @helper_origin "http://localhost:8400"
 
   alias CodexPooler.Jobs.DevelopmentControls
 
@@ -35,11 +34,16 @@ defmodule CodexPoolerWeb.DevFeatures do
   def impeccable_live_script_src, do: @script_src
 
   @spec browser_csp_extra_sources() :: keyword([String.t()])
-  def browser_csp_extra_sources do
-    if impeccable_live_enabled?() do
-      [script_src: [@helper_origin], connect_src: [@helper_origin], img_src: ["blob:"]]
-    else
-      []
+  if @build_enabled do
+    def browser_csp_extra_sources do
+      if impeccable_live_enabled?() do
+        helper_origin = "http://localhost:8400"
+        [script_src: [helper_origin], connect_src: [helper_origin], img_src: ["blob:"]]
+      else
+        []
+      end
     end
+  else
+    def browser_csp_extra_sources, do: []
   end
 end

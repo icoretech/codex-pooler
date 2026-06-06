@@ -13,7 +13,6 @@ defmodule CodexPooler.Jobs do
     AlertEvaluationWorker,
     CatalogSyncWorker,
     DailyRollupRebuildWorker,
-    DevelopmentControls,
     Options,
     PricingImportWorker,
     ReadModel,
@@ -29,6 +28,11 @@ defmodule CodexPooler.Jobs do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @default_alert_evaluation_fanout_limit 500
+  @dev_features_build_enabled Application.compile_env(
+                                :codex_pooler,
+                                :dev_features_build_enabled,
+                                false
+                              )
 
   @type pool_ref :: Pool.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
   @type alert_rule_ref :: AlertRule.t() | %{required(:id) => Ecto.UUID.t()} | Ecto.UUID.t()
@@ -190,17 +194,33 @@ defmodule CodexPooler.Jobs do
   end
 
   @spec enqueue_account_reconciliation_for_active_pools(keyword()) :: batch_insert_result()
-  def enqueue_account_reconciliation_for_active_pools(opts \\ []) do
-    unless DevelopmentControls.account_reconciliation_paused?() do
-      AccountReconciliation.discard_stale_jobs(
-        DateTime.utc_now(),
-        worker_name(AccountReconciliationWorker)
-      )
-    end
+  if @dev_features_build_enabled do
+    alias CodexPooler.Jobs.DevelopmentControls
 
-    active_pools_for_account_reconciliation()
-    |> Enum.map(&enqueue_account_reconciliations(&1, opts))
-    |> split_insert_results()
+    def enqueue_account_reconciliation_for_active_pools(opts \\ []) do
+      unless DevelopmentControls.account_reconciliation_paused?() do
+        discard_stale_account_reconciliation_jobs()
+      end
+
+      active_pools_for_account_reconciliation()
+      |> Enum.map(&enqueue_account_reconciliations(&1, opts))
+      |> split_insert_results()
+    end
+  else
+    def enqueue_account_reconciliation_for_active_pools(opts \\ []) do
+      discard_stale_account_reconciliation_jobs()
+
+      active_pools_for_account_reconciliation()
+      |> Enum.map(&enqueue_account_reconciliations(&1, opts))
+      |> split_insert_results()
+    end
+  end
+
+  defp discard_stale_account_reconciliation_jobs do
+    AccountReconciliation.discard_stale_jobs(
+      DateTime.utc_now(),
+      worker_name(AccountReconciliationWorker)
+    )
   end
 
   @spec enqueue_alert_evaluation(alert_rule_ref(), keyword()) :: job_insert_result()
@@ -308,12 +328,18 @@ defmodule CodexPooler.Jobs do
     end)
   end
 
-  defp active_pools_for_account_reconciliation do
-    if DevelopmentControls.account_reconciliation_paused?() do
-      []
-    else
-      Pools.list_active_pools()
+  if @dev_features_build_enabled do
+    alias CodexPooler.Jobs.DevelopmentControls
+
+    defp active_pools_for_account_reconciliation do
+      if DevelopmentControls.account_reconciliation_paused?() do
+        []
+      else
+        Pools.list_active_pools()
+      end
     end
+  else
+    defp active_pools_for_account_reconciliation, do: Pools.list_active_pools()
   end
 
   defp evaluation_window_started_at(%DateTime{} = now) do

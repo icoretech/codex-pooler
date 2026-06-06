@@ -4,6 +4,12 @@ defmodule CodexPoolerWeb.Layouts do
   """
   use CodexPoolerWeb, :html
 
+  @dev_features_build_enabled Application.compile_env(
+                                :codex_pooler,
+                                :dev_features_build_enabled,
+                                false
+                              )
+
   embed_templates "layouts/*"
 
   @doc """
@@ -89,6 +95,23 @@ defmodule CodexPoolerWeb.Layouts do
   defp app_version, do: :codex_pooler |> Application.spec(:vsn) |> to_string()
 
   defp copyright_year, do: Date.utc_today().year
+
+  if @dev_features_build_enabled do
+    defp impeccable_live_script(assigns) do
+      ~H"""
+      <script
+        :if={CodexPoolerWeb.DevFeatures.impeccable_live_enabled?()}
+        src={CodexPoolerWeb.DevFeatures.impeccable_live_script_src()}
+      >
+      </script>
+      """
+    end
+  else
+    defp impeccable_live_script(assigns) do
+      ~H"""
+      """
+    end
+  end
 
   attr :id, :string, required: true
   attr :class, :any, default: nil

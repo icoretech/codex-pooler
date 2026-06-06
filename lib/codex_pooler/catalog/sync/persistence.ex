@@ -224,7 +224,7 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
   end
 
   defp sanitize_sync_error(%{message: message}), do: sanitize_sync_error(message)
-  defp sanitize_sync_error(%{code: _code} = error), do: sanitize_sync_error(error.message)
+  defp sanitize_sync_error(%{code: _code}), do: "model catalog sync failed"
 
   defp sanitize_sync_error(message) when is_binary(message) do
     sensitive_markers = [

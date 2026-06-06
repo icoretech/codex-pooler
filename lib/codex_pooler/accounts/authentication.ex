@@ -524,8 +524,6 @@ defmodule CodexPooler.Accounts.Authentication do
 
   defp normalize_transaction_error({:error, reason}), do: {:error, reason}
 
-  defp normalize_email(nil), do: ""
-
   defp normalize_email(email) do
     email
     |> to_string()
