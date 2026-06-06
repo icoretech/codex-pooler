@@ -32,10 +32,14 @@ The generated `.env` contains release secrets, encryption roots, database settin
 
 For real installs, run an explicit release image tag instead of a floating tag. The tag should identify the exact image you meant to deploy.
 
+{/* x-release-please-start-version */}
+
 ```bash
 CODEX_POOLER_IMAGE=ghcr.io/icoretech/codex-pooler
-CODEX_POOLER_IMAGE_TAG=v0.1.0
+CODEX_POOLER_IMAGE_TAG=0.0.1
 ```
+
+{/* x-release-please-end */}
 
 ## Start Codex Pooler
 

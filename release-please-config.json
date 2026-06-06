@@ -6,7 +6,25 @@
       "package-name": "codex-pooler",
       "release-type": "simple",
       "include-v-in-tag": true,
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "mix.exs"
+        },
+        {
+          "type": "generic",
+          "path": "charts/codex-pooler/Chart.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "docs-site/src/content/docs/deployment/docker-compose.mdx"
+        },
+        {
+          "type": "generic",
+          "path": "docs-site/src/content/docs/deployment/helm.mdx"
+        }
+      ]
     }
   }
 }

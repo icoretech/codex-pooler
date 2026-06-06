@@ -3,4 +3,6 @@ name: codex-pooler
 description: Helm chart for the Codex Pooler Phoenix release and operational jobs
 type: application
 version: 0.1.24
-appVersion: 0.1.0
+# x-release-please-start-version
+appVersion: 0.0.1
+# x-release-please-end

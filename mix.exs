@@ -4,7 +4,9 @@ defmodule CodexPooler.MixProject do
   def project do
     [
       app: :codex_pooler,
-      version: "0.1.0",
+      # x-release-please-start-version
+      version: "0.0.1",
+      # x-release-please-end
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,

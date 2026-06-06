@@ -22,12 +22,16 @@ All roles use the same image repository and tag. Only the app role serves HTTP. 
 
 Set an explicit immutable image tag for real deployments. Don't rely on `latest` outside local scaffolding or temporary testing.
 
+{/* x-release-please-start-version */}
+
 ```yaml
 image:
   repository: ghcr.io/icoretech/codex-pooler
-  tag: v0.1.0
+  tag: 0.0.1
   pullPolicy: IfNotPresent
 ```
+
+{/* x-release-please-end */}
 
 The chart `appVersion` is informational. Treat `image.tag` as the deployable release version.
 
@@ -193,14 +197,18 @@ Only set `allowUnsafeMultiReplica: true` after you have verified the topology yo
 
 Render manifests locally before applying them:
 
+{/* x-release-please-start-version */}
+
 ```bash
 helm template codex-pooler ./charts/codex-pooler \
   --set image.repository=ghcr.io/icoretech/codex-pooler \
-  --set image.tag=v0.1.0 \
+  --set image.tag=0.0.1 \
   --set config.host=pooler.example.com \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=pooler.example.com
 ```
+
+{/* x-release-please-end */}
 
 Inspect the output for the expected app, worker, scheduler, migration, Secret reference, Service, and Ingress resources. The rendered app Deployment should serve HTTP. Worker, scheduler, and migration resources should not.
 
