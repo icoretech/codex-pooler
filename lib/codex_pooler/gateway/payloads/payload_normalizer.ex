@@ -66,16 +66,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
-  defp multipart_payload(payload, model, %RequestOptions{} = request_options) do
+  defp multipart_payload(payload, _model, %RequestOptions{} = request_options) do
     upload = request_options.payload_context.media_upload
 
     fields =
       [
-        {"model", model.upstream_model_id},
-        {"language", Map.get(payload, "language")},
-        {"prompt", Map.get(payload, "prompt")},
-        {"response_format", Map.get(payload, "response_format")},
-        {"temperature", Map.get(payload, "temperature")}
+        {"prompt", Map.get(payload, "prompt")}
       ]
       |> Enum.reject(fn {_key, value} -> blank?(value) end)
       |> Enum.map(fn {key, value} -> {key, to_string(value)} end)

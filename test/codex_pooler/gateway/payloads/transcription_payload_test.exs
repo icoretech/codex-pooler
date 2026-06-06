@@ -48,7 +48,7 @@ defmodule CodexPooler.Gateway.Payloads.TranscriptionPayloadTest do
 
       assert media_opts.payload_context.media_upload == %{
                path: upload.path,
-               redacted_filename: "upload",
+               redacted_filename: "audio.wav",
                content_type: "audio/wav",
                size: 15
              }

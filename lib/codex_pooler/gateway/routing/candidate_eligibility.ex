@@ -511,7 +511,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
        ) do
     case source_assignment_model_metadata(model, assignment) do
       %{} = metadata ->
-        endpoint_compatible?(endpoint, metadata) and streaming_compatible?(payload, metadata) and
+        endpoint_compatible?(endpoint, metadata, request_options) and
+          streaming_compatible?(payload, metadata) and
           image_input_compatible?(payload, metadata) and tools_compatible?(payload, metadata) and
           reasoning_compatible?(payload, metadata) and
           service_tier_compatible?(payload, request_options, metadata, enforce_service_tier?)
@@ -525,12 +526,20 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     get_in(model.metadata || %{}, ["source_assignment_models", assignment.id])
   end
 
-  defp endpoint_compatible?("/backend-api/transcribe", metadata) do
+  defp endpoint_compatible?(
+         "/backend-api/transcribe",
+         _metadata,
+         %RequestOptions{payload_context: %{forced_transcription_model: model}}
+       )
+       when is_binary(model),
+       do: true
+
+  defp endpoint_compatible?("/backend-api/transcribe", metadata, _request_options) do
     not ModelMetadata.has_capability_evidence?(metadata) or
       ModelMetadata.supports_audio_transcription?(metadata)
   end
 
-  defp endpoint_compatible?(_endpoint, metadata) do
+  defp endpoint_compatible?(_endpoint, metadata, _request_options) do
     not ModelMetadata.metadata_falsey?(ModelMetadata.metadata_map(metadata, "capabilities"), [
       "responses"
     ])

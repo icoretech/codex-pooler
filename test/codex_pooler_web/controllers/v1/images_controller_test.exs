@@ -68,6 +68,42 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     refute inspect(request.request_metadata) =~ "B64_GENERATED"
   end
 
+  test "POST /v1/images/generations routes through a visible host model when image model is not listed",
+       %{conn: conn} do
+    upstream = start_upstream(image_success_stream("B64_HIDDEN", "hidden prompt"))
+
+    setup =
+      upstream
+      |> gateway_setup()
+      |> allow_models!(["gpt-image-2"])
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/images/generations", %{
+        "model" => "gpt-image-2",
+        "prompt" => "synthetic hidden image request",
+        "size" => "1024x1024",
+        "quality" => "low",
+        "n" => 1
+      })
+
+    assert %{"data" => [%{"b64_json" => "B64_HIDDEN", "revised_prompt" => "hidden prompt"}]} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["model"] == setup.model.upstream_model_id
+    assert [%{"type" => "image_generation", "model" => "gpt-image-2"}] = captured.json["tools"]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.request_metadata["requested_model"] == "gpt-image-2"
+    assert request.request_metadata["effective_model"] == "gpt-image-2"
+    refute inspect(request.request_metadata) =~ "synthetic hidden image request"
+    refute inspect(request.request_metadata) =~ "B64_HIDDEN"
+  end
+
   test "POST /v1/images/edits sends uploaded image as transient input_image", %{conn: conn} do
     upstream = start_upstream(image_success_stream("B64_EDITED", "edited prompt"))
     setup = upstream |> gateway_setup() |> use_image_model!("gpt-image-1")
@@ -151,6 +187,15 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp allow_models!(setup, allowed_model_identifiers) do
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(%{allowed_model_identifiers: allowed_model_identifiers})
+      |> Repo.update!()
+
+    %{setup | api_key: api_key}
   end
 
   defp image_success_stream(result, revised_prompt) do

@@ -71,7 +71,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     with :ok <- authorize_model_policy(auth, model, endpoint, payload, request_options),
          {:ok, request_options} <-
            SessionContinuity.attach_file_affinity(auth, endpoint, payload, request_options),
-         :ok <- ensure_model_supports(model, endpoint, payload),
+         :ok <- ensure_model_supports(model, endpoint, payload, request_options),
          :ok <- StrictSchema.validate(payload),
          :ok <- InputShape.validate(payload),
          {:ok, candidate_snapshots} <-
@@ -123,7 +123,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp authorize_model_policy(auth, %Model{} = model, endpoint, payload, %RequestOptions{} = opts) do
     policy = opts.routing.api_key_policy
 
-    case Access.authorize_api_key_policy(policy, %{model_identifier: model.exposed_model_id}) do
+    model_identifier = opts.routing.effective_model || model.exposed_model_id
+
+    case Access.authorize_api_key_policy(policy, %{model_identifier: model_identifier}) do
       {:ok, _policy} ->
         :ok
 
@@ -132,7 +134,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp ensure_model_supports(%Model{} = model, "/backend-api/transcribe", _payload) do
+  defp ensure_model_supports(
+         %Model{},
+         "/backend-api/transcribe",
+         _payload,
+         %RequestOptions{payload_context: %{forced_transcription_model: model}}
+       )
+       when is_binary(model),
+       do: :ok
+
+  defp ensure_model_supports(%Model{} = model, "/backend-api/transcribe", _payload, _opts) do
     if ModelMetadata.has_capability_evidence?(model) and
          not ModelMetadata.supports_audio_transcription?(model) do
       {:error,
@@ -147,7 +158,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp ensure_model_supports(%Model{} = model, _endpoint, payload) do
+  defp ensure_model_supports(%Model{} = model, _endpoint, payload, _opts) do
     cond do
       not model.supports_responses ->
         {:error,

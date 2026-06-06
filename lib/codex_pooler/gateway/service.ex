@@ -123,7 +123,7 @@ defmodule CodexPooler.Gateway.Service do
         request_options =
           policy_request_opts(request_options, policy, model_name, effective_model_name)
 
-        case visible_model_context(auth.pool, effective_model_name) do
+        case visible_model_context(auth.pool, effective_model_name, request_options) do
           %{visible_model: %Model{} = model} = visible_model_data ->
             execute_visible_model(
               auth,
@@ -428,8 +428,48 @@ defmodule CodexPooler.Gateway.Service do
     )
   end
 
-  defp visible_model_context(pool, requested_model),
-    do: CandidateEligibility.visible_model_context(pool, requested_model)
+  defp visible_model_context(pool, requested_model, %RequestOptions{} = request_options) do
+    case CandidateEligibility.visible_model_context(pool, requested_model) do
+      %{visible_model: %Model{}} = context ->
+        context
+
+      nil ->
+        media_host_model_context(pool, requested_model, request_options)
+    end
+  end
+
+  defp media_host_model_context(pool, requested_model, %RequestOptions{} = request_options) do
+    hydration = CandidateEligibility.hydrate_model_visibility(pool)
+
+    hydration.visible_models
+    |> Enum.find(&media_host_model?(&1, request_options))
+    |> case do
+      %Model{} = model ->
+        Map.merge(hydration, %{
+          requested_model: requested_model,
+          effective_model: requested_model,
+          visible_model: model,
+          candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
+        })
+
+      nil ->
+        nil
+    end
+  end
+
+  defp media_host_model?(%Model{} = model, %RequestOptions{
+         openai_compatibility: %{collect_openai_image_stream: true}
+       }) do
+    model.supports_responses and model.supports_streaming and model.supports_tools
+  end
+
+  defp media_host_model?(%Model{}, %RequestOptions{
+         payload_context: %{forced_transcription_model: model}
+       })
+       when is_binary(model),
+       do: true
+
+  defp media_host_model?(%Model{}, %RequestOptions{}), do: false
 
   defp requested_model(payload) do
     case Map.get(payload, "model") || Map.get(payload, :model) do

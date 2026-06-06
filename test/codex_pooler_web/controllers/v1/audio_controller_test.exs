@@ -35,10 +35,11 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/transcribe"
-    assert captured.body =~ setup.model.upstream_model_id
     assert captured.body =~ prompt
+    refute captured.body =~ setup.model.upstream_model_id
+    refute captured.body =~ Service.backend_transcription_model()
     refute captured.body =~ "audio-secret.wav"
-    assert captured.body =~ ~s(filename="upload")
+    assert captured.body =~ ~s(filename="audio.wav")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/transcribe"
@@ -46,6 +47,45 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert request.request_metadata["upload_bytes"] == byte_size(audio_bytes)
     refute inspect(request.request_metadata) =~ transcript
     refute inspect(request.request_metadata) =~ prompt
+    refute inspect(request.request_metadata) =~ audio_bytes
+  end
+
+  test "POST /v1/audio/transcriptions routes when the public audio model is not listed", %{
+    conn: conn
+  } do
+    transcript = "hidden transcription"
+    audio_bytes = "hidden audio bytes"
+    upstream = start_upstream(FakeUpstream.json_response(%{"text" => transcript}))
+
+    setup =
+      upstream
+      |> gateway_setup()
+      |> allow_models!([Service.backend_transcription_model()])
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/audio/transcriptions", %{
+        "model" => Service.backend_transcription_model(),
+        "file" => upload_fixture("hidden-audio.wav", "audio/wav", audio_bytes)
+      })
+
+    assert %{"text" => ^transcript} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/transcribe"
+    refute captured.body =~ Service.backend_transcription_model()
+    refute captured.body =~ setup.model.upstream_model_id
+    refute captured.body =~ "language"
+    refute captured.body =~ "response_format"
+    refute captured.body =~ "temperature"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/transcribe"
+    assert request.status == "succeeded"
+    assert request.request_metadata["requested_model"] == Service.backend_transcription_model()
+    assert request.request_metadata["effective_model"] == Service.backend_transcription_model()
+    assert request.request_metadata["upload_bytes"] == byte_size(audio_bytes)
     refute inspect(request.request_metadata) =~ audio_bytes
   end
 
@@ -85,6 +125,15 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp allow_models!(setup, allowed_model_identifiers) do
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(%{allowed_model_identifiers: allowed_model_identifiers})
+      |> Repo.update!()
+
+    %{setup | api_key: api_key}
   end
 
   defp upload_fixture(filename, content_type, contents) do

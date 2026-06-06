@@ -61,7 +61,7 @@ defmodule CodexPooler.Gateway.Payloads.TranscriptionPayload do
   defp media_upload(upload, size) do
     %{
       path: upload.path,
-      redacted_filename: "upload",
+      redacted_filename: "audio.wav",
       content_type: upload.content_type || "application/octet-stream",
       size: size
     }

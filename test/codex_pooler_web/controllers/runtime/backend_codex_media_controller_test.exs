@@ -93,11 +93,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/transcribe"
-      assert captured.body =~ setup.model.upstream_model_id
+      refute captured.body =~ setup.model.upstream_model_id
+      refute captured.body =~ Service.backend_transcription_model()
       refute captured.body =~ requested_model
       assert captured.body =~ prompt
       refute captured.body =~ filename
-      assert captured.body =~ ~s(filename="upload")
+      assert captured.body =~ ~s(filename="audio.wav")
+      refute captured.body =~ "language"
+      refute captured.body =~ "response_format"
+      refute captured.body =~ "temperature"
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/backend-api/transcribe"
@@ -131,7 +135,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       assert %{"text" => "backend ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.body =~ setup.model.upstream_model_id
+      refute captured.body =~ setup.model.upstream_model_id
+      refute captured.body =~ Service.backend_transcription_model()
     end
 
     test "POST /backend-api/transcribe succeeds for transcription-only models", %{conn: conn} do
