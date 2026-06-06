@@ -700,9 +700,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                 "description" => "1.5x speed, increased usage"
               },
               %{
-                "id" => "ultrafast",
-                "name" => "Ultrafast",
-                "description" => "The fastest available responses for latency-sensitive work."
+                "id" => "latency_preview",
+                "name" => "Latency preview",
+                "description" => "Preview routing tier advertised by the upstream catalog."
               }
             ]
           }
@@ -721,9 +721,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "description" => "1.5x speed, increased usage"
              },
              %{
-               "id" => "ultrafast",
-               "name" => "Ultrafast",
-               "description" => "The fastest available responses for latency-sensitive work."
+               "id" => "latency_preview",
+               "name" => "Latency preview",
+               "description" => "Preview routing tier advertised by the upstream catalog."
              }
            ]
 
@@ -744,7 +744,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     pro_upstream =
       start_upstream(
         FakeUpstream.json_response(%{
-          "id" => "resp_ultrafast_tier",
+          "id" => "resp_latency_preview_tier",
           "object" => "response",
           "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
         })
@@ -754,9 +754,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     pro =
       active_upstream_assignment_fixture(setup.pool, %{
-        chatgpt_account_id: "acct_ultrafast_tier",
+        chatgpt_account_id: "acct_latency_preview_tier",
         metadata: %{"base_url" => FakeUpstream.url(pro_upstream)},
-        access_token: "ultrafast-tier-token"
+        access_token: "latency-preview-tier-token"
       })
 
     prime_routing_quota!(pro.identity)
@@ -771,9 +771,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "id" => setup.model.upstream_model_id,
       "service_tiers" => [
         %{
-          "id" => "ultrafast",
-          "name" => "Ultrafast",
-          "description" => "The fastest available responses for latency-sensitive work."
+          "id" => "latency_preview",
+          "name" => "Latency preview",
+          "description" => "Preview routing tier advertised by the upstream catalog."
         }
       ],
       "capabilities" => %{"responses" => true, "streaming" => true}
@@ -805,26 +805,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"id" => default_response_id} = json_response(default_conn, 200)
-    assert default_response_id in ["resp_free_tier", "resp_ultrafast_tier"]
+    assert default_response_id in ["resp_free_tier", "resp_latency_preview_tier"]
 
-    free_count_before_ultrafast = FakeUpstream.count(free_upstream)
-    pro_count_before_ultrafast = FakeUpstream.count(pro_upstream)
-    assert free_count_before_ultrafast + pro_count_before_ultrafast == 1
+    free_count_before_latency_preview = FakeUpstream.count(free_upstream)
+    pro_count_before_latency_preview = FakeUpstream.count(pro_upstream)
+    assert free_count_before_latency_preview + pro_count_before_latency_preview == 1
 
     conn =
       build_conn()
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "use ultrafast mode",
-        "service_tier" => "ultrafast"
+        "input" => "use latency preview mode",
+        "service_tier" => "latency_preview"
       })
 
-    assert %{"id" => "resp_ultrafast_tier"} = json_response(conn, 200)
-    assert FakeUpstream.count(free_upstream) == free_count_before_ultrafast
-    assert FakeUpstream.count(pro_upstream) == pro_count_before_ultrafast + 1
+    assert %{"id" => "resp_latency_preview_tier"} = json_response(conn, 200)
+    assert FakeUpstream.count(free_upstream) == free_count_before_latency_preview
+    assert FakeUpstream.count(pro_upstream) == pro_count_before_latency_preview + 1
     captured = pro_upstream |> FakeUpstream.requests() |> List.last()
-    assert captured.json["service_tier"] == "ultrafast"
+    assert captured.json["service_tier"] == "latency_preview"
   end
 
   test "POST /backend-api/codex/v1/responses proxies to canonical backend responses and records the canonical endpoint",
