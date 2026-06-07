@@ -347,6 +347,373 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "owner-forwarded immediate response create retargets socket owner runtime before spawning" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_immediate_retarget_anchor",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_immediate_retarget_success",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, target_state} = owner_socket(auth, "ws-owner-retarget-anchor", "retarget-target")
+
+    target_state =
+      try do
+        anchor_payload =
+          websocket_payload(setup, "owner retarget anchor", %{
+            "request_id" => "ws-owner-retarget-anchor"
+          })
+
+        assert {:ok, target_state} =
+                 CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
+
+        assert {:push, {:text, anchor_frame}, target_state} =
+                 receive_owner_socket_push(target_state)
+
+        assert %{"id" => "resp_owner_immediate_retarget_anchor"} = Jason.decode!(anchor_frame)
+        assert {:ok, target_state} = receive_socket_done(target_state)
+        target_state
+      after
+        CodexResponsesSocket.terminate(:closed, target_state)
+      end
+
+    target_session = target_state.codex_session
+
+    {:ok, origin_state} = owner_socket(auth, "ws-owner-retarget-origin", "retarget-origin")
+    origin_session = origin_state.codex_session
+
+    retargeted_state =
+      try do
+        continuation_payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => [
+              %{
+                "type" => "message",
+                "role" => "user",
+                "content" => "owner retarget continuation"
+              }
+            ],
+            "stream" => true,
+            "generate" => true,
+            "previous_response_id" => "resp_owner_immediate_retarget_anchor",
+            "request_id" => "ws-owner-retarget-continuation"
+          })
+
+        assert {:ok, retargeted_state} =
+                 CodexResponsesSocket.handle_in(
+                   {continuation_payload, [opcode: :text]},
+                   origin_state
+                 )
+
+        assert retargeted_state.codex_session.id == target_session.id
+        refute retargeted_state.codex_session.id == origin_session.id
+        assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
+        assert retargeted_state.websocket_owner_downstream.epoch > 0
+
+        assert {:push, {:text, retarget_frame}, retargeted_state} =
+                 receive_owner_socket_push(retargeted_state)
+
+        assert %{"id" => "resp_owner_immediate_retarget_success"} = Jason.decode!(retarget_frame)
+        assert {:ok, _retargeted_state} = receive_socket_done(retargeted_state)
+
+        assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
+
+        assert anchor_request.websocket_connection_id ==
+                 retargeted_request.websocket_connection_id
+
+        assert retargeted_request.json["previous_response_id"] ==
+                 "resp_owner_immediate_retarget_anchor"
+
+        assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
+        assert anchor_log.status == "succeeded"
+        assert retargeted_log.status == "succeeded"
+        assert retargeted_log.correlation_id == "ws-owner-retarget-continuation"
+
+        owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
+        assert owner_metadata["enabled"] == true
+        assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
+        assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+
+        retargeted_state
+      after
+        CodexResponsesSocket.terminate(:closed, origin_state)
+      end
+
+    CodexResponsesSocket.terminate(:closed, retargeted_state)
+  end
+
+  test "owner-forwarded retarget ignores stale origin downstream and cleans up target owner" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_retarget_cleanup_anchor",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_retarget_cleanup_success",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, target_state} =
+      owner_socket(auth, "ws-owner-retarget-cleanup-anchor", "retarget-cleanup-target")
+
+    target_state =
+      try do
+        anchor_payload =
+          websocket_payload(setup, "owner retarget cleanup anchor", %{
+            "request_id" => "ws-owner-retarget-cleanup-anchor"
+          })
+
+        assert {:ok, target_state} =
+                 CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
+
+        assert {:push, {:text, anchor_frame}, target_state} =
+                 receive_owner_socket_push(target_state)
+
+        assert %{"id" => "resp_owner_retarget_cleanup_anchor"} = Jason.decode!(anchor_frame)
+        assert {:ok, target_state} = receive_socket_done(target_state)
+        target_state
+      after
+        CodexResponsesSocket.terminate(:closed, target_state)
+      end
+
+    target_session = target_state.codex_session
+    {:ok, target_owner_pid} = WebsocketOwnerSession.lookup(target_session.id)
+    assert %{downstream: nil} = :sys.get_state(target_owner_pid)
+
+    {:ok, origin_state} =
+      owner_socket(auth, "ws-owner-retarget-cleanup-origin", "retarget-cleanup-origin")
+
+    origin_session = origin_state.codex_session
+    origin_downstream = origin_state.websocket_owner_downstream
+    {:ok, origin_owner_pid} = WebsocketOwnerSession.lookup(origin_session.id)
+
+    retargeted_state =
+      try do
+        continuation_payload =
+          websocket_payload(setup, "owner retarget cleanup continuation", %{
+            "previous_response_id" => "resp_owner_retarget_cleanup_anchor",
+            "request_id" => "ws-owner-retarget-cleanup-continuation"
+          })
+
+        assert {:ok, retargeted_state} =
+                 CodexResponsesSocket.handle_in(
+                   {continuation_payload, [opcode: :text]},
+                   origin_state
+                 )
+
+        assert retargeted_state.codex_session.id == target_session.id
+        refute retargeted_state.codex_session.id == origin_session.id
+        assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
+        assert retargeted_state.websocket_owner_downstream.epoch > 0
+        assert :sys.get_state(origin_owner_pid).downstream == origin_downstream
+
+        assert :sys.get_state(target_owner_pid).downstream ==
+                 retargeted_state.websocket_owner_downstream
+
+        {retargeted_state, stale_logs} =
+          with_log([level: :warning], fn ->
+            assert_stale_owner_downstream_ignored(
+              origin_owner_pid,
+              origin_downstream,
+              retargeted_state
+            )
+          end)
+
+        assert stale_logs == ""
+        assert_no_leak!("stale origin downstream logs", stale_logs)
+
+        assert {:push, {:text, retarget_frame}, retargeted_state} =
+                 receive_owner_socket_push(retargeted_state)
+
+        assert %{"id" => "resp_owner_retarget_cleanup_success"} = Jason.decode!(retarget_frame)
+        assert {:ok, retargeted_state} = receive_socket_done(retargeted_state)
+        retargeted_state
+      after
+        {_, origin_cleanup_logs} =
+          with_log([level: :warning], fn ->
+            assert :ok = CodexResponsesSocket.terminate(:closed, origin_state)
+          end)
+
+        assert origin_cleanup_logs == ""
+        assert_no_leak!("stale origin cleanup logs", origin_cleanup_logs)
+      end
+
+    {_, target_cleanup_logs} =
+      with_log([level: :warning], fn ->
+        assert :ok = CodexResponsesSocket.terminate(:closed, retargeted_state)
+      end)
+
+    assert target_cleanup_logs == ""
+    assert_no_leak!("retarget cleanup logs", target_cleanup_logs)
+    assert %{downstream: nil} = :sys.get_state(target_owner_pid)
+    assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
+    assert anchor_request.websocket_connection_id == retargeted_request.websocket_connection_id
+
+    assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
+    assert anchor_log.status == "succeeded"
+    assert retargeted_log.status == "succeeded"
+    assert retargeted_log.correlation_id == "ws-owner-retarget-cleanup-continuation"
+    refute inspect(request_logs(setup.pool.id)) =~ "owner_unavailable"
+    refute inspect(request_logs(setup.pool.id)) =~ "owner_drained"
+  end
+
+  test "owner-forwarded retarget refuses cross-pool previous response aliases before dispatch" do
+    origin_upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    target_upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    origin_setup = gateway_setup(origin_upstream)
+    target_setup = gateway_setup(target_upstream)
+    previous_response_id = "#{@sentinel}-cross-pool-alias"
+
+    {:ok, origin_auth} = Access.authenticate_authorization_header(origin_setup.authorization)
+    {:ok, target_auth} = Access.authenticate_authorization_header(target_setup.authorization)
+
+    {:ok, target_state} =
+      owner_socket(target_auth, "ws-owner-cross-scope-target", "cross-scope-target")
+
+    try do
+      ensure_previous_response_alias!(
+        target_state.codex_session,
+        target_setup.api_key,
+        previous_response_id
+      )
+    after
+      CodexResponsesSocket.terminate(:closed, target_state)
+    end
+
+    {:ok, origin_state} =
+      owner_socket(origin_auth, "ws-owner-cross-scope-origin", "cross-scope-origin")
+
+    origin_session = origin_state.codex_session
+    origin_lease_token = origin_state.websocket_owner_lease_token
+    origin_downstream = origin_state.websocket_owner_downstream
+
+    try do
+      payload =
+        websocket_payload(origin_setup, @sentinel, %{
+          "previous_response_id" => previous_response_id,
+          "request_id" => "ws-owner-cross-scope-refused"
+        })
+
+      assert {:ok, refused_state} =
+               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, origin_state)
+
+      assert refused_state.codex_session.id == origin_session.id
+      assert refused_state.websocket_owner_lease_token == origin_lease_token
+      assert refused_state.websocket_owner_downstream == origin_downstream
+
+      assert {:push, {:text, error_frame}, refused_state} = receive_socket_done(refused_state)
+
+      assert %{
+               "status" => 503,
+               "error" => %{
+                 "code" => "owner_unavailable",
+                 "message" => "websocket owner is unavailable"
+               }
+             } = Jason.decode!(error_frame)
+
+      assert refused_state.codex_session.id == origin_session.id
+      assert refused_state.websocket_owner_lease_token == origin_lease_token
+      assert refused_state.websocket_owner_downstream == origin_downstream
+      assert {:ok, _origin_owner_pid} = WebsocketOwnerSession.lookup(origin_session.id)
+
+      assert {:ok, _target_owner_pid} =
+               WebsocketOwnerSession.lookup(target_state.codex_session.id)
+
+      assert FakeUpstream.count(origin_upstream) == 0
+      assert FakeUpstream.count(target_upstream) == 0
+      assert FakeUpstream.websocket_connection_count(origin_upstream) == 0
+      assert FakeUpstream.websocket_connection_count(target_upstream) == 0
+      assert [] = request_logs(origin_setup.pool.id)
+      assert [] = request_logs(target_setup.pool.id)
+      assert_no_leak!("cross-scope retarget error frame", error_frame)
+      assert_no_leak_in_persistence!(origin_setup.pool.id)
+      assert_no_leak_in_persistence!(target_setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, origin_state)
+    end
+  end
+
+  test "owner-forwarded retarget refuses stale previous response aliases without local fallback" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    previous_response_id = "#{@sentinel}-stale-alias"
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-stale-alias", "stale-alias-origin")
+    session = state.codex_session
+    lease_token = state.websocket_owner_lease_token
+    downstream = state.websocket_owner_downstream
+
+    stale_alias = ensure_previous_response_alias!(session, setup.api_key, previous_response_id)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    stale_alias
+    |> BridgeSessionAlias.changeset(%{
+      status: "expired",
+      expires_at: DateTime.add(now, -1, :second),
+      updated_at: now
+    })
+    |> Repo.update!()
+
+    try do
+      payload =
+        websocket_payload(setup, @sentinel, %{
+          "previous_response_id" => previous_response_id,
+          "request_id" => "ws-owner-stale-alias-refused"
+        })
+
+      assert {:ok, refused_state} =
+               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+      assert refused_state.codex_session.id == session.id
+      assert refused_state.websocket_owner_lease_token == lease_token
+      assert refused_state.websocket_owner_downstream == downstream
+
+      assert {:push, {:text, error_frame}, refused_state} = receive_socket_done(refused_state)
+
+      assert %{
+               "status" => 503,
+               "error" => %{
+                 "code" => "owner_unavailable",
+                 "message" => "websocket owner is unavailable"
+               }
+             } = Jason.decode!(error_frame)
+
+      assert refused_state.codex_session.id == session.id
+      assert refused_state.websocket_owner_lease_token == lease_token
+      assert refused_state.websocket_owner_downstream == downstream
+      assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
+      assert FakeUpstream.count(upstream) == 0
+      assert FakeUpstream.websocket_connection_count(upstream) == 0
+      assert [] = request_logs(setup.pool.id)
+      assert_no_leak!("stale alias retarget error frame", error_frame)
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   test "tool-output continuation after reconnect is forwarded through the owner" do
     upstream =
       start_upstream(
@@ -583,6 +950,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
       assert %{"id" => "resp_owner_queue_first"} = Jason.decode!(first_frame)
       assert {:ok, _first_state} = receive_socket_done(first_state)
+
+      ensure_previous_response_alias!(
+        first_state.codex_session,
+        setup.api_key,
+        "resp_owner_queue_first"
+      )
     after
       CodexResponsesSocket.terminate(:closed, first_state)
     end
@@ -646,6 +1019,219 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.status == "succeeded"))
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.response_status_code == 200))
+  end
+
+  test "queued owner-forwarded continuations retarget only when popped to start" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_queue_alias_anchor_a",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_queue_alias_anchor_b",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_queue_alias_a",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_queue_alias_b",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, target_a_state} =
+      owner_socket(auth, "ws-owner-queue-alias-anchor-a", "queue-alias-target-a")
+
+    target_a_session =
+      try do
+        anchor_a_payload =
+          websocket_payload(setup, "owner queue alias anchor a", %{
+            "request_id" => "ws-owner-queue-alias-anchor-a"
+          })
+
+        assert {:ok, target_a_state} =
+                 CodexResponsesSocket.handle_in(
+                   {anchor_a_payload, [opcode: :text]},
+                   target_a_state
+                 )
+
+        assert {:push, {:text, anchor_a_frame}, target_a_state} =
+                 receive_owner_socket_push(target_a_state)
+
+        assert %{"id" => "resp_owner_queue_alias_anchor_a"} = Jason.decode!(anchor_a_frame)
+        assert {:ok, _target_a_state} = receive_socket_done(target_a_state)
+
+        ensure_previous_response_alias!(
+          target_a_state.codex_session,
+          setup.api_key,
+          "resp_owner_queue_alias_anchor_a"
+        )
+
+        target_a_state.codex_session
+      after
+        CodexResponsesSocket.terminate(:closed, target_a_state)
+      end
+
+    {:ok, target_b_state} =
+      owner_socket(auth, "ws-owner-queue-alias-anchor-b", "queue-alias-target-b")
+
+    target_b_session =
+      try do
+        anchor_b_payload =
+          websocket_payload(setup, "owner queue alias anchor b", %{
+            "request_id" => "ws-owner-queue-alias-anchor-b"
+          })
+
+        assert {:ok, target_b_state} =
+                 CodexResponsesSocket.handle_in(
+                   {anchor_b_payload, [opcode: :text]},
+                   target_b_state
+                 )
+
+        assert {:push, {:text, anchor_b_frame}, target_b_state} =
+                 receive_owner_socket_push(target_b_state)
+
+        assert %{"id" => "resp_owner_queue_alias_anchor_b"} = Jason.decode!(anchor_b_frame)
+        assert {:ok, _target_b_state} = receive_socket_done(target_b_state)
+
+        ensure_previous_response_alias!(
+          target_b_state.codex_session,
+          setup.api_key,
+          "resp_owner_queue_alias_anchor_b"
+        )
+
+        target_b_state.codex_session
+      after
+        CodexResponsesSocket.terminate(:closed, target_b_state)
+      end
+
+    {:ok, origin_state} =
+      owner_socket(auth, "ws-owner-queue-alias-active", "queue-alias-origin",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    origin_session = origin_state.codex_session
+    origin_lease_token = origin_state.websocket_owner_lease_token
+    origin_downstream = origin_state.websocket_owner_downstream
+
+    {queued_a_state, queued_b_state} =
+      try do
+        active_payload =
+          websocket_payload(setup, "owner queue alias active", %{
+            "request_id" => "ws-owner-queue-alias-active"
+          })
+
+        queued_a_payload =
+          websocket_payload(setup, "owner queue alias continuation a", %{
+            "previous_response_id" => "resp_owner_queue_alias_anchor_a",
+            "request_id" => "ws-owner-queue-alias-a"
+          })
+
+        queued_b_payload =
+          websocket_payload(setup, "owner queue alias continuation b", %{
+            "previous_response_id" => "resp_owner_queue_alias_anchor_b",
+            "request_id" => "ws-owner-queue-alias-b"
+          })
+
+        assert {:ok, origin_state} =
+                 CodexResponsesSocket.handle_in({active_payload, [opcode: :text]}, origin_state)
+
+        assert_receive {:blocking_owner_upstream_received, active_worker_pid, ^release_ref}
+
+        assert {:ok, origin_state} =
+                 CodexResponsesSocket.handle_in({queued_a_payload, [opcode: :text]}, origin_state)
+
+        assert origin_state.codex_session.id == origin_session.id
+        assert origin_state.websocket_owner_lease_token == origin_lease_token
+        assert origin_state.websocket_owner_downstream == origin_downstream
+        assert MapSet.size(origin_state.tasks) == 1
+        assert :queue.len(Map.get(origin_state, :queued_response_payloads, :queue.new())) == 1
+
+        assert {:ok, origin_state} =
+                 CodexResponsesSocket.handle_in({queued_b_payload, [opcode: :text]}, origin_state)
+
+        assert origin_state.codex_session.id == origin_session.id
+        assert origin_state.websocket_owner_lease_token == origin_lease_token
+        assert origin_state.websocket_owner_downstream == origin_downstream
+        assert MapSet.size(origin_state.tasks) == 1
+        assert :queue.len(Map.get(origin_state, :queued_response_payloads, :queue.new())) == 2
+        assert length(FakeUpstream.requests(upstream)) == 2
+
+        send(active_worker_pid, {:blocking_owner_upstream_release, release_ref})
+        assert {:ok, queued_a_state} = receive_socket_done(origin_state)
+        assert queued_a_state.codex_session.id == target_a_session.id
+        refute queued_a_state.codex_session.id == origin_session.id
+        assert :queue.len(Map.get(queued_a_state, :queued_response_payloads, :queue.new())) == 1
+
+        assert {:push, {:text, queued_a_frame}, queued_a_state} =
+                 receive_owner_socket_push(queued_a_state)
+
+        assert %{"id" => "resp_owner_queue_alias_a"} = Jason.decode!(queued_a_frame)
+        assert {:ok, queued_b_state} = receive_socket_done(queued_a_state)
+        assert queued_b_state.codex_session.id == target_b_session.id
+        refute queued_b_state.codex_session.id == target_a_session.id
+        refute queued_b_state.codex_session.id == origin_session.id
+
+        assert {:push, {:text, queued_b_frame}, queued_b_state} =
+                 receive_owner_socket_push(queued_b_state)
+
+        assert %{"id" => "resp_owner_queue_alias_b"} = Jason.decode!(queued_b_frame)
+        assert {:ok, queued_b_state} = receive_socket_done(queued_b_state)
+
+        {queued_a_state, queued_b_state}
+      after
+        CodexResponsesSocket.terminate(:closed, origin_state)
+      end
+
+    CodexResponsesSocket.terminate(:closed, queued_a_state)
+    CodexResponsesSocket.terminate(:closed, queued_b_state)
+
+    assert [anchor_a_request, anchor_b_request, queued_a_request, queued_b_request] =
+             await_upstream_requests(upstream, 4)
+
+    assert anchor_a_request.websocket_connection_id == queued_a_request.websocket_connection_id
+    assert anchor_b_request.websocket_connection_id == queued_b_request.websocket_connection_id
+
+    assert queued_a_request.json["previous_response_id"] ==
+             "resp_owner_queue_alias_anchor_a"
+
+    assert queued_b_request.json["previous_response_id"] ==
+             "resp_owner_queue_alias_anchor_b"
+
+    assert [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log] =
+             request_logs(setup.pool.id)
+
+    assert Enum.map(
+             [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log],
+             & &1.correlation_id
+           ) == [
+             "ws-owner-queue-alias-anchor-a",
+             "ws-owner-queue-alias-anchor-b",
+             "ws-owner-queue-alias-active",
+             "ws-owner-queue-alias-a",
+             "ws-owner-queue-alias-b"
+           ]
+
+    assert Enum.all?(
+             [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log],
+             &(&1.status == "succeeded")
+           )
+
+    assert active_log.request_metadata["codex_session_id"] == origin_session.id
+    assert queued_a_log.request_metadata["codex_session_id"] == target_a_session.id
+    assert queued_b_log.request_metadata["codex_session_id"] == target_b_session.id
   end
 
   test "owner-forwarded response processed close while in flight is not pre-request lifecycle" do
@@ -935,6 +1521,84 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert FakeUpstream.count(upstream) == 0
     after
       CodexResponsesSocket.terminate(:closed, Map.delete(state, :websocket_owner_downstream))
+    end
+  end
+
+  test "owner transport session mismatch rejects response.create before upstream submit" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-guard-create", "owner-guard-create")
+    {:ok, other_state} = owner_socket(auth, "ws-owner-guard-create-other", "owner-guard-other")
+
+    stale_state = %{state | codex_session: other_state.codex_session}
+
+    try do
+      payload = websocket_payload(setup, "owner transport guard create")
+
+      assert {:ok, stale_state} =
+               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, stale_state)
+
+      assert {:push, {:text, error_frame}, _state} = receive_socket_done(stale_state)
+
+      assert %{
+               "status" => 409,
+               "error" => %{
+                 "code" => "stale_owner",
+                 "message" => "websocket owner lease is stale"
+               }
+             } = Jason.decode!(error_frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert FakeUpstream.websocket_connection_count(upstream) == 0
+
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "failed"
+      assert request.response_status_code == 409
+      assert request.last_error_code == "stale_owner"
+
+      assert [attempt] = Repo.all(from a in Attempt, where: a.request_id == ^request.id)
+      assert attempt.status == "failed"
+      assert attempt.network_error_code == "stale_owner"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+      CodexResponsesSocket.terminate(:closed, other_state)
+    end
+  end
+
+  test "owner transport session mismatch rejects response.processed without local fallback" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-guard-processed", "owner-guard-processed")
+    {:ok, other_state} = owner_socket(auth, "ws-owner-guard-processed-other", "owner-guard-other")
+
+    stale_state = %{state | codex_session: other_state.codex_session}
+
+    try do
+      processed_payload =
+        Jason.encode!(%{
+          "type" => "response.processed",
+          "response_id" => "resp_owner_guard_processed"
+        })
+
+      assert {:ok, stale_state} =
+               CodexResponsesSocket.handle_in({processed_payload, [opcode: :text]}, stale_state)
+
+      assert {:push, {:text, error_frame}, _state} = receive_socket_done(stale_state)
+
+      assert %{
+               "status" => 502,
+               "error" => %{"code" => "upstream_websocket_forward_failed", "message" => message}
+             } = Jason.decode!(error_frame)
+
+      assert message =~ "stale_owner"
+      assert FakeUpstream.count(upstream) == 0
+      assert FakeUpstream.websocket_connection_count(upstream) == 0
+      assert [] = request_logs(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+      CodexResponsesSocket.terminate(:closed, other_state)
     end
   end
 
@@ -3038,6 +3702,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     |> Jason.encode!()
   end
 
+  defp ensure_previous_response_alias!(
+         %CodexSession{} = session,
+         %APIKey{} = api_key,
+         response_id
+       ) do
+    alias_hash = :crypto.hash(:sha256, response_id)
+
+    case Repo.get_by(BridgeSessionAlias,
+           pool_id: session.pool_id,
+           api_key_id: api_key.id,
+           alias_kind: "previous_response_id",
+           alias_hash: alias_hash,
+           status: "active"
+         ) do
+      %BridgeSessionAlias{} = alias_record ->
+        alias_record
+
+      nil ->
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+        %BridgeSessionAlias{}
+        |> BridgeSessionAlias.changeset(%{
+          codex_session_id: session.id,
+          pool_id: session.pool_id,
+          api_key_id: api_key.id,
+          alias_kind: "previous_response_id",
+          alias_hash: alias_hash,
+          alias_preview: "synthetic-prev",
+          status: "active",
+          expires_at: DateTime.add(now, 300, :second),
+          last_seen_at: now,
+          metadata: %{},
+          created_at: now,
+          updated_at: now
+        })
+        |> Repo.insert!()
+    end
+  end
+
   defp capture_info_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
     Logger.configure(level: :info)
@@ -3497,6 +4200,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp assert_process_messages_hidden!(_pid, 0), do: flunk("sensitive process exposed mailbox")
+
+  defp assert_stale_owner_downstream_ignored(owner_pid, stale_downstream, state) do
+    stale_payload = Jason.encode!(%{"id" => "resp_owner_retarget_stale_origin_frame"})
+
+    stale_message =
+      {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
+       {:data, stale_payload}}
+
+    case WebsocketOwnerSession.push_downstream(owner_pid, {:data, stale_payload}) do
+      :ok ->
+        assert_receive ^stale_message
+
+      {:error, reason} ->
+        assert reason in [:duplicate_downstream, :owner_unavailable, :stale_downstream]
+    end
+
+    case CodexResponsesSocket.handle_info(stale_message, state) do
+      {:ok, state} ->
+        state
+
+      {:push, _frame, _state} ->
+        flunk("stale origin downstream frame was accepted after retarget")
+    end
+  end
 
   defp downstream_target(correlation_id),
     do: %{pid: self(), epoch: 1, correlation_id: correlation_id}

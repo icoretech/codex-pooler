@@ -251,6 +251,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  defp clear_websocket_owner_monitor(state) do
+    if owner_monitor = Map.get(state, :websocket_owner_monitor) do
+      Process.demonitor(owner_monitor, [:flush])
+    end
+
+    state
+    |> Map.delete(:websocket_owner_pid)
+    |> Map.delete(:websocket_owner_monitor)
+  end
+
   defp owner_monitor_down_reason(:stale_owner), do: :stale_owner
   defp owner_monitor_down_reason({:shutdown, :stale_owner}), do: :stale_owner
   defp owner_monitor_down_reason(:normal), do: :owner_drained
@@ -397,12 +407,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_tracked_response_task(payload, state) do
-    state = maybe_mark_request_response_work_started(state, payload)
-    parent = self()
-    {:ok, pid} = start_response_task(parent, payload, state)
-    monitor = Process.monitor(pid)
+    case maybe_retarget_owner_runtime_before_start(payload, state) do
+      {:ok, state} ->
+        state = maybe_mark_request_response_work_started(state, payload)
+        parent = self()
+        {:ok, pid} = start_response_task(parent, payload, state)
+        monitor = Process.monitor(pid)
 
-    track_response_task(state, pid, monitor)
+        track_response_task(state, pid, monitor)
+
+      {:error, reason} ->
+        start_owner_retarget_error_task(reason, state)
+    end
   end
 
   defp queue_response_payload(state, payload) do
@@ -412,6 +428,77 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       :queue.from_list([payload]),
       &:queue.in(payload, &1)
     )
+  end
+
+  @spec maybe_retarget_owner_runtime_before_start(binary(), map()) ::
+          {:ok, map()} | {:error, WebsocketOwnerContract.owner_error()}
+  defp maybe_retarget_owner_runtime_before_start(
+         payload,
+         %{websocket_owner_downstream: downstream} = state
+       )
+       when is_binary(payload) and is_map(downstream) do
+    with {:ok, %{} = decoded_payload} <- Jason.decode(payload),
+         {:ok, runtime} <-
+           Websocket.retarget_websocket_owner_runtime(
+             state.auth,
+             owner_runtime_state(state),
+             decoded_payload,
+             Map.get(state, :opts, %{})
+           ) do
+      {:ok, maybe_put_retargeted_owner_runtime_state(state, runtime)}
+    else
+      {:error, %Jason.DecodeError{}} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_retarget_owner_runtime_before_start(_payload, state),
+    do: {:ok, state}
+
+  defp owner_runtime_state(state) do
+    %{
+      codex_session: Map.get(state, :codex_session),
+      websocket_owner_lease_token: Map.get(state, :websocket_owner_lease_token),
+      websocket_owner_downstream: Map.get(state, :websocket_owner_downstream),
+      websocket_owner_active_turn_reconnect?:
+        Map.get(state, :websocket_owner_active_turn_reconnect?, false)
+    }
+  end
+
+  defp maybe_put_retargeted_owner_runtime_state(state, runtime) do
+    if runtime == owner_runtime_state(state) do
+      state
+    else
+      put_retargeted_owner_runtime_state(state, runtime)
+    end
+  end
+
+  defp put_retargeted_owner_runtime_state(
+         state,
+         %{
+           codex_session: session,
+           websocket_owner_lease_token: owner_lease_token,
+           websocket_owner_downstream: downstream
+         } = runtime
+       ) do
+    state
+    |> clear_websocket_owner_monitor()
+    |> Map.put(:codex_session, session)
+    |> Map.put(:websocket_owner_lease_token, owner_lease_token)
+    |> Map.put(:websocket_owner_downstream, downstream)
+    |> Map.put(
+      :websocket_owner_active_turn_reconnect?,
+      Map.get(runtime, :websocket_owner_active_turn_reconnect?, false)
+    )
+    |> put_websocket_owner_monitor(session)
+  end
+
+  defp start_owner_retarget_error_task(reason, state) do
+    parent = self()
+    {:ok, pid} = start_response_task(parent, {:owner_retarget_error, reason}, state)
+    monitor = Process.monitor(pid)
+
+    track_response_task(state, pid, monitor)
   end
 
   @spec maybe_mark_request_response_work_started(map(), term()) :: map()
@@ -433,8 +520,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       _payload -> false
     end
   end
-
-  defp request_row_producing_response_payload?(_payload), do: false
 
   defp continuity_ordered_payload?(payload) when is_binary(payload) do
     case Jason.decode(payload) do
@@ -497,6 +582,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {monitor, Map.put(state, :task_monitors, task_monitors)}
   end
 
+  defp safe_run_response(_parent, {:owner_retarget_error, reason}, _state) do
+    owner_retarget_error_payload(reason)
+  end
+
   defp safe_run_response(parent, payload, state) do
     opts = response_task_opts(state)
 
@@ -523,6 +612,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp accept_owner_downstream_message(_message, _state), do: :drop
+
+  defp owner_retarget_error_payload(reason) do
+    case WebsocketOwnerContract.safe_error_payload(reason, nil) do
+      {:ok, payload} -> {:error, payload}
+      {:error, _reason} -> {:error, reason}
+    end
+  end
 
   defp response_task_opts(state) do
     if Map.has_key?(state, :websocket_owner_downstream) do
@@ -713,8 +809,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:error, _reason} -> {:ok, payload, opts}
     end
   end
-
-  defp maybe_coerce_public_v1_response_create(payload, opts), do: {:ok, payload, opts}
 
   defp public_v1_response_create_frame?(%{"type" => "response.create"} = payload),
     do: not Map.has_key?(payload, "generate")

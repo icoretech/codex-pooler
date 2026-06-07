@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{ContinuityPayload, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Service
@@ -27,6 +27,8 @@ defmodule CodexPooler.Gateway.Websocket do
   @type payload :: map()
   @type session_result :: {:ok, CodexSession.t()} | {:error, term()}
   @type turn_result :: {:ok, CodexTurn.t()} | {:error, term()}
+  @type owner_runtime_retarget_result ::
+          {:ok, websocket_runtime()} | {:error, WebsocketOwnerContract.owner_error()}
   @type websocket_runtime :: %{
           required(:codex_session) => CodexSession.t(),
           optional(:upstream_websocket_session) => pid(),
@@ -252,6 +254,93 @@ defmodule CodexPooler.Gateway.Websocket do
 
   def recover_websocket_owner_response_options(%RequestOptions{}),
     do: {:error, :owner_unavailable}
+
+  @spec retarget_websocket_owner_runtime(auth(), websocket_runtime(), payload(), opts()) ::
+          owner_runtime_retarget_result()
+  def retarget_websocket_owner_runtime(auth, runtime, payload, opts \\ %{})
+
+  def retarget_websocket_owner_runtime(auth, runtime, payload, opts)
+      when is_map(runtime) and is_map(payload) do
+    case ContinuityPayload.previous_response_id(payload) do
+      nil ->
+        {:ok, runtime}
+
+      previous_response_id ->
+        retarget_websocket_owner_runtime_from_previous_response_id(
+          auth,
+          runtime,
+          previous_response_id,
+          opts
+        )
+    end
+  end
+
+  def retarget_websocket_owner_runtime(_auth, runtime, _payload, _opts) when is_map(runtime),
+    do: {:ok, runtime}
+
+  @spec retarget_websocket_owner_runtime_from_previous_response_id(
+          auth(),
+          websocket_runtime(),
+          String.t(),
+          opts()
+        ) :: owner_runtime_retarget_result()
+  defp retarget_websocket_owner_runtime_from_previous_response_id(
+         auth,
+         %{codex_session: %CodexSession{} = current_session} = runtime,
+         previous_response_id,
+         opts
+       )
+       when is_binary(previous_response_id) do
+    retarget_opts = owner_retarget_websocket_opts(opts, runtime, previous_response_id)
+
+    with :ok <- require_websocket_owner_forwarding_enabled(),
+         {:ok, %CodexSession{} = target_session} <-
+           start_owner_session_from_previous_response_id(auth, retarget_opts) do
+      if target_session.id == current_session.id do
+        {:ok, runtime}
+      else
+        prepare_owner_websocket_session_with_recovery(target_session, retarget_opts, true)
+        |> owner_runtime_retarget_result()
+      end
+    end
+  end
+
+  defp retarget_websocket_owner_runtime_from_previous_response_id(
+         _auth,
+         _runtime,
+         _previous_response_id,
+         _opts
+       ),
+       do: {:error, :owner_unavailable}
+
+  @spec owner_retarget_websocket_opts(opts(), websocket_runtime(), String.t()) ::
+          RequestOptions.t()
+  defp owner_retarget_websocket_opts(opts, _runtime, previous_response_id) do
+    opts
+    |> owner_websocket_opts()
+    |> RequestOptions.put_continuity(previous_response_id: previous_response_id)
+  end
+
+  @spec start_owner_session_from_previous_response_id(auth(), RequestOptions.t()) ::
+          {:ok, CodexSession.t()} | {:error, WebsocketOwnerContract.owner_error()}
+  defp start_owner_session_from_previous_response_id(auth, %RequestOptions{} = opts) do
+    case SessionContinuity.start_codex_session_from_previous_response_id(auth, opts) do
+      {:ok, %CodexSession{} = session} -> {:ok, session}
+      {:error, reason} -> owner_retarget_error(reason)
+    end
+  end
+
+  @spec owner_runtime_retarget_result({:ok, websocket_runtime()} | {:error, term()}) ::
+          owner_runtime_retarget_result()
+  defp owner_runtime_retarget_result({:ok, runtime}), do: {:ok, runtime}
+  defp owner_runtime_retarget_result({:error, reason}), do: owner_retarget_error(reason)
+
+  @spec owner_retarget_error(term()) :: {:error, WebsocketOwnerContract.owner_error()}
+  defp owner_retarget_error(reason) do
+    if WebsocketOwnerContract.owner_error?(reason),
+      do: {:error, reason},
+      else: {:error, :owner_unavailable}
+  end
 
   @spec monitor_websocket_owner(CodexSession.t() | nil) ::
           {:ok, pid(), reference()} | {:error, :owner_unavailable}

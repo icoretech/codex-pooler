@@ -5,11 +5,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -27,6 +29,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"
 
   @type header :: {String.t(), String.t()}
+  @type owner_transport ::
+          {:ok, CodexSession.t(), String.t(), map(), keyword()}
+          | :local
+          | {:error, WebsocketOwnerContract.owner_error()}
 
   defmodule Request do
     @moduledoc false
@@ -241,6 +247,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
       :local ->
         direct_websocket_request(request_options, upstream_request, identity, request)
+
+      {:error, reason} ->
+        owner_request_result({:error, reason}, identity, request)
     end
   end
 
@@ -280,6 +289,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
         :local ->
           forward_response_processed_direct(payload, request_options)
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -301,21 +313,120 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp response_processed_upstream_payload(payload) when is_map(payload),
     do: Map.drop(payload, ["request_id", :request_id])
 
-  defp owner_transport(%RequestOptions{
-         transport: %{
-           websocket_owner_forwarding_enabled?: true,
-           websocket_owner_session: session,
-           websocket_owner_lease_token: owner_lease_token,
-           websocket_owner_downstream: downstream,
-           websocket_owner_forwarder_opts: forwarder_opts
-         }
-       })
-       when not is_nil(session) and is_binary(owner_lease_token) and is_map(downstream) and
-              is_list(forwarder_opts) do
-    {:ok, session, owner_lease_token, downstream, forwarder_opts}
+  @spec owner_transport(RequestOptions.t()) :: owner_transport()
+  defp owner_transport(
+         %RequestOptions{
+           transport: %{websocket_owner_forwarding_enabled?: true}
+         } = request_options
+       ) do
+    owner_forwarded_transport(request_options)
   end
 
-  defp owner_transport(_request_options), do: :local
+  defp owner_transport(%RequestOptions{transport: transport}) do
+    if owner_transport_bundle_present?(transport),
+      do: {:error, :owner_forwarding_disabled},
+      else: :local
+  end
+
+  defp owner_forwarded_transport(%RequestOptions{
+         continuity: %{codex_session: continuity_session},
+         transport: %{
+           websocket_owner_session: owner_session,
+           websocket_owner_lease_token: owner_lease_token,
+           websocket_owner_downstream: downstream,
+           websocket_owner_downstream_epoch: downstream_epoch,
+           websocket_owner_proxy_instance_id: proxy_instance_id,
+           websocket_owner_instance_id: owner_instance_id,
+           websocket_owner_forwarder_opts: forwarder_opts
+         }
+       }) do
+    with :ok <- validate_owner_sessions(continuity_session, owner_session, owner_lease_token),
+         :ok <- validate_owner_downstream(downstream, downstream_epoch),
+         :ok <- validate_owner_instances(proxy_instance_id, owner_instance_id, owner_session),
+         :ok <- validate_owner_forwarder_opts(forwarder_opts) do
+      {:ok, owner_session, owner_lease_token, downstream, forwarder_opts}
+    end
+  end
+
+  defp validate_owner_sessions(continuity_session, owner_session, owner_lease_token) do
+    cond do
+      not match?(%CodexSession{}, continuity_session) ->
+        {:error, :stale_owner}
+
+      not match?(%CodexSession{}, owner_session) ->
+        {:error, :stale_owner}
+
+      continuity_session.id != owner_session.id ->
+        {:error, :stale_owner}
+
+      not clean_binary?(owner_lease_token) ->
+        {:error, :stale_owner}
+
+      clean_string(owner_session.owner_lease_token) != clean_string(owner_lease_token) ->
+        {:error, :stale_owner}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_owner_downstream(downstream, downstream_epoch) do
+    cond do
+      not owner_downstream?(downstream) ->
+        {:error, :stale_owner}
+
+      not owner_downstream_epoch_matches?(downstream_epoch, downstream) ->
+        {:error, :stale_owner}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_owner_instances(proxy_instance_id, owner_instance_id, owner_session) do
+    cond do
+      not clean_binary?(proxy_instance_id) ->
+        {:error, :stale_owner}
+
+      not owner_instance_matches?(owner_instance_id, owner_session) ->
+        {:error, :stale_owner}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_owner_forwarder_opts(forwarder_opts) when is_list(forwarder_opts), do: :ok
+
+  defp validate_owner_forwarder_opts(_forwarder_opts), do: {:error, :stale_owner}
+
+  defp owner_transport_bundle_present?(transport) do
+    not is_nil(transport.websocket_owner_session) or
+      clean_binary?(transport.websocket_owner_lease_token) or
+      is_map(transport.websocket_owner_downstream) or
+      is_integer(transport.websocket_owner_downstream_epoch) or
+      clean_binary?(transport.websocket_owner_proxy_instance_id) or
+      clean_binary?(transport.websocket_owner_instance_id)
+  end
+
+  defp owner_downstream?(%{pid: pid, correlation_id: correlation_id}),
+    do: is_pid(pid) and clean_binary?(correlation_id)
+
+  defp owner_downstream?(_downstream), do: false
+
+  defp owner_downstream_epoch_matches?(epoch, %{epoch: epoch})
+       when is_integer(epoch) and epoch > 0,
+       do: true
+
+  defp owner_downstream_epoch_matches?(_epoch, _downstream), do: false
+
+  defp owner_instance_matches?(owner_instance_id, %CodexSession{
+         owner_instance_id: owner_instance_id
+       })
+       when is_binary(owner_instance_id),
+       do: clean_binary?(owner_instance_id)
+
+  defp owner_instance_matches?(_owner_instance_id, _owner_session), do: false
 
   defp owner_request_result(:ok, identity, request) do
     {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []}}
@@ -514,6 +625,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       _missing -> {:error, :missing_response_id}
     end
   end
+
+  defp clean_binary?(value), do: is_binary(clean_string(value))
 
   defp clean_string(value) when is_binary(value) do
     value = String.trim(value)
