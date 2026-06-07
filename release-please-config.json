@@ -5,6 +5,7 @@
     ".": {
       "package-name": "codex-pooler",
       "release-type": "simple",
+      "bump-patch-for-minor-pre-major": true,
       "include-v-in-tag": true,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
