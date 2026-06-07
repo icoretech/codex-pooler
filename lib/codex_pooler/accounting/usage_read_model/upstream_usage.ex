@@ -116,7 +116,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
 
     {:ok,
      %{
-       plan_type: identity.plan_family || plan_label(identity.plan_label),
+       plan_type: identity.plan_family || "unknown",
        rate_limit: UsageResponses.codex_rate_limit(primary, secondary),
        credits: UsageResponses.codex_credits(primary, secondary),
        additional_rate_limits: additional_rate_limits

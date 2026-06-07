@@ -6,7 +6,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   alias CodexPooler.Accounting
   alias CodexPooler.Catalog
   alias CodexPooler.Events
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Quota
@@ -346,12 +346,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     do: "unprimed"
 
   defp account_primary_usable_window?(window, timestamp) do
-    quota_scope = window.quota_scope || "account"
-    quota_family = window.quota_family || "account"
-
-    quota_scope == "account" and quota_family in ["account", "primary"] and
-      window.window_kind == "primary" and
-      window.window_minutes == 300 and
+    (WindowClassifier.primary_5h?(window) or WindowClassifier.monthly_primary?(window)) and
       QuotaWindows.usable_window?(window, timestamp)
   end
 

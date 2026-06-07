@@ -354,6 +354,44 @@ defmodule CodexPooler.Admin.StatsTest do
     assert account.secondary.used_percent == 25.0
   end
 
+  test "monthly-only primary quota evidence is available with a separate 30d projection" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-monthly-plan", name: "Stats Monthly Plan"})
+    %{identity: identity} = upstream_assignment_fixture(pool, %{plan_family: "free"})
+    now = now()
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 window_kind: "primary",
+                 window_minutes: 43_200,
+                 used_percent: Decimal.new("42.5"),
+                 reset_at: DateTime.add(now, 30, :day),
+                 source: "codex_usage",
+                 source_precision: "authoritative",
+                 quota_scope: "account",
+                 quota_family: "account"
+               }
+             ])
+
+    assert {:ok, dashboard} = Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h"})
+    assert dashboard.kpis.quota_health.state == :available
+    assert dashboard.kpis.quota_health.available == 1
+    assert dashboard.kpis.quota_health.missing_evidence == 0
+    assert dashboard.kpis.quota_health.exhausted == 0
+    assert dashboard.kpis.quota_health.weekly_only_evidence == 0
+
+    assert [account] = dashboard.quota.accounts
+    assert account.state == :available
+    assert is_nil(account.primary_5h)
+    assert is_nil(account.secondary)
+    assert account.primary_30d.window_kind == "primary"
+    assert account.primary_30d.window_minutes == 43_200
+    assert account.primary_30d.used_percent == 42.5
+    assert account.primary_30d.routing_usable? == true
+  end
+
   test "dashboard data is metadata-only and does not expose raw prompts, bodies, tokens, or idempotency keys" do
     scope = owner_scope()
     pool = pool_fixture(%{slug: "stats-redaction", name: "Stats Redaction"})

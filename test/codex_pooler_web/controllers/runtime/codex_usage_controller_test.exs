@@ -6,6 +6,9 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
   import Ecto.Query
   import CodexPooler.PoolerFixtures
 
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [monthly_only_account_primary_quota_window_attrs: 1]
+
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Repo
@@ -298,6 +301,62 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
              "plan_type" => "free",
              "rate_limit" => %{"primary_window" => %{"used_percent" => 91}}
            } = json_response(conn, 200)
+  end
+
+  test "GET /api/codex/usage returns monthly-only primary window seconds without secondary synthesis",
+       %{
+         conn: conn
+       } do
+    pool = pool_fixture()
+    now = ~U[2026-06-07 12:00:00Z]
+    account_id = "monthly-account-#{System.unique_integer([:positive])}"
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        account_label: "Monthly usage account",
+        plan_label: "Free-looking label"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(identity, %{
+               secret_kind: "access_token",
+               plaintext: "monthly-usage-token"
+             })
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               monthly_only_account_primary_quota_window_attrs(%{
+                 observed_at: now,
+                 last_sync_at: now,
+                 reset_at: DateTime.add(now, 30, :day)
+               })
+             ])
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer monthly-usage-token")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+
+    assert %{
+             "plan_type" => "unknown",
+             "rate_limit" =>
+               %{
+                 "primary_window" =>
+                   %{
+                     "limit_window_seconds" => 2_592_000
+                   } = primary_window
+               } = rate_limit,
+             "credits" => %{"balance" => nil}
+           } = json_response(conn, 200)
+
+    assert primary_window["used_percent"] == 43
+    assert is_nil(rate_limit["secondary_window"])
+
+    response_text = conn.resp_body
+    refute response_text =~ "1134"
+    refute response_text =~ "Free-looking label"
   end
 
   test "GET /api/codex/usage returns a statusful gateway error for inactive ChatGPT account usage",

@@ -1,7 +1,7 @@
 defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
   @moduledoc false
 
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
 
   @fresh "fresh"
@@ -10,7 +10,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
   @spec selection_data_from_windows([Quota.AccountQuotaWindow.t()], keyword()) :: map()
   def selection_data_from_windows(windows, opts \\ []) when is_list(windows) do
     timestamp = Keyword.get(opts, :at, now())
-    routing_windows = Enum.filter(windows, &window_in_model_scope?(&1, opts))
+
+    routing_windows =
+      windows
+      |> Enum.filter(&window_in_model_scope?(&1, opts))
+      |> select_current_account_primary_variant(timestamp)
 
     %{
       windows: windows,
@@ -183,12 +187,31 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
   end
 
   defp account_primary_window?(%Quota.AccountQuotaWindow{} = window) do
-    quota_scope = window.quota_scope || "account"
-    quota_family = window.quota_family || "account"
+    WindowClassifier.primary_5h?(window) or WindowClassifier.monthly_primary?(window)
+  end
 
-    window.quota_key == @account_quota_key and quota_scope == "account" and
-      quota_family in ["account", "primary"] and window.window_kind == "primary" and
-      window.window_minutes == 300
+  defp select_current_account_primary_variant(routing_windows, timestamp) do
+    case routing_windows
+         |> Enum.filter(&(account_primary_window?(&1) and usable_window?(&1, timestamp))) do
+      [] ->
+        routing_windows
+
+      usable_primary_windows ->
+        current_primary =
+          Enum.max_by(usable_primary_windows, &account_primary_variant_precedence/1)
+
+        Enum.reject(routing_windows, fn window ->
+          account_primary_window?(window) and window != current_primary
+        end)
+    end
+  end
+
+  defp account_primary_variant_precedence(%Quota.AccountQuotaWindow{} = window) do
+    case WindowClassifier.classify(window) do
+      :monthly_primary -> 2
+      :primary_5h -> 1
+      _descriptor -> 0
+    end
   end
 
   defp quota_routing_warnings(selection, _timestamp, :weekly_only_probe) do

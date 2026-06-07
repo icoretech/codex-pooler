@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
   @as_of ~U[2026-05-30 12:00:00Z]
   @future_reset ~U[2026-05-30 12:15:00Z]
   @weekly_reset ~U[2026-06-06 12:00:00Z]
+  @monthly_reset ~U[2026-06-29 12:00:00Z]
   @expected_keys MapSet.new([
                    :state,
                    :label,
@@ -15,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                    :routing_ready_now?,
                    :reason_codes,
                    :primary_window,
+                   :primary_30d_window,
                    :weekly_window
                  ])
 
@@ -30,8 +32,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: true,
                reason_codes: [],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection = UpstreamQuotaReadiness.from_windows([primary], @as_of)
+
+      assert_exact_keys(projection)
+    end
+
+    test "maps fresh reset-bearing monthly account primary evidence to ready" do
+      monthly = account_monthly_primary_window()
+
+      assert %{
+               state: "ready",
+               label: "Quota ready",
+               tone: :success,
+               border_class: "border-l-success",
+               routing_ready_now?: true,
+               reason_codes: [],
+               primary_window: ^monthly,
+               primary_30d_window: ^monthly,
+               weekly_window: nil
+             } = projection = UpstreamQuotaReadiness.from_windows([monthly], @as_of)
 
       assert_exact_keys(projection)
     end
@@ -47,6 +68,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: true,
                reason_codes: ["quota_account_primary_unknown"],
                primary_window: nil,
+               primary_30d_window: nil,
                weekly_window: ^weekly
              } = projection = UpstreamQuotaReadiness.from_windows([weekly], @as_of)
 
@@ -64,10 +86,44 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_window_unusable", "exhausted"],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection = UpstreamQuotaReadiness.from_windows([primary], @as_of)
 
       assert_exact_keys(projection)
+    end
+
+    test "maps unusable monthly primary evidence to blocked states without false readiness" do
+      exhausted = account_monthly_primary_window(used_percent: Decimal.new("100"))
+      stale = account_monthly_primary_window(freshness_state: "stale")
+      resetless = account_monthly_primary_window(reset_at: nil)
+
+      assert %{
+               state: "exhausted",
+               label: "Quota exhausted",
+               routing_ready_now?: false,
+               reason_codes: ["quota_window_unusable", "exhausted"],
+               primary_window: ^exhausted,
+               primary_30d_window: ^exhausted
+             } = UpstreamQuotaReadiness.from_windows([exhausted], @as_of)
+
+      assert %{
+               state: "stale",
+               label: "Quota refresh needed",
+               routing_ready_now?: false,
+               reason_codes: ["quota_window_unusable", "not_fresh"],
+               primary_window: ^stale,
+               primary_30d_window: ^stale
+             } = UpstreamQuotaReadiness.from_windows([stale], @as_of)
+
+      assert %{
+               state: "missing_evidence",
+               label: "Quota missing",
+               routing_ready_now?: false,
+               reason_codes: ["quota_window_unusable", "reset_missing"],
+               primary_window: ^resetless,
+               primary_30d_window: ^resetless
+             } = UpstreamQuotaReadiness.from_windows([resetless], @as_of)
     end
 
     test "maps stale selected account evidence to stale" do
@@ -81,6 +137,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_window_unusable", "not_fresh"],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection = UpstreamQuotaReadiness.from_windows([primary], @as_of)
 
@@ -98,6 +155,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_evidence_missing"],
                primary_window: nil,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection
 
@@ -115,6 +173,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_window_unusable", "reset_missing"],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection = UpstreamQuotaReadiness.from_windows([primary], @as_of)
 
@@ -139,6 +198,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_window_unusable", "not_fresh"],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } =
                projection =
@@ -164,6 +224,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                state: "ready",
                reason_codes: [],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection
 
@@ -186,6 +247,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_evidence_missing"],
                primary_window: nil,
+               primary_30d_window: nil,
                weekly_window: nil
              } = projection
 
@@ -203,6 +265,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_window_unusable", "exhausted"],
                primary_window: ^primary,
+               primary_30d_window: nil,
                weekly_window: ^weekly
              } = projection = UpstreamQuotaReadiness.from_windows([primary, weekly], @as_of)
 
@@ -219,6 +282,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
                routing_ready_now?: false,
                reason_codes: ["quota_weekly_exhausted", "exhausted"],
                primary_window: nil,
+               primary_30d_window: nil,
                weekly_window: ^weekly
              } = projection = UpstreamQuotaReadiness.from_windows([weekly], @as_of)
 
@@ -268,6 +332,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
           freshness_state: "fresh",
           observed_at: @as_of,
           last_sync_at: @as_of
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp account_monthly_primary_window(attrs \\ []) do
+    account_primary_window(
+      Keyword.merge(
+        [
+          window_minutes: 43_200,
+          used_percent: Decimal.new("42.5"),
+          reset_at: @monthly_reset
         ],
         attrs
       )

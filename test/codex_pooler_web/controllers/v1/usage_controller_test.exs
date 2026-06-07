@@ -6,6 +6,9 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
   import Ecto.Query
   import CodexPooler.PoolerFixtures
 
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [monthly_only_account_primary_quota_window_attrs: 1]
+
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting.{DailyRollup, Request}
   alias CodexPooler.Accounting.UsageReadModel.UpstreamUsage
@@ -248,6 +251,45 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
              )
 
     assert metadata_request.api_key_id == setup.api_key.id
+  end
+
+  test "GET /v1/usage labels monthly-only account primary limits as 30d without fake capacity", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
+    now = ~U[2026-06-07 12:00:00Z]
+
+    %{identity: identity} =
+      active_upstream_assignment_fixture(pool, %{account_label: "Monthly-only usage upstream"})
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               monthly_only_account_primary_quota_window_attrs(%{
+                 observed_at: now,
+                 last_sync_at: now,
+                 reset_at: DateTime.add(now, 30, :day)
+               })
+             ])
+
+    conn = conn |> auth(setup) |> get("/v1/usage")
+
+    assert %{
+             "upstream_limits" => [monthly_limit]
+           } = json_response(conn, 200)
+
+    assert monthly_limit["limit_type"] == "percent"
+    assert monthly_limit["limit_window"] == "30d"
+    assert monthly_limit["max_value"] == nil
+    assert monthly_limit["current_value"] == nil
+    assert monthly_limit["remaining_value"] == nil
+    assert monthly_limit["model_filter"] == nil
+    assert monthly_limit["source"] == "upstream_usage"
+
+    response_text = conn.resp_body
+    refute response_text =~ "1134"
+    refute response_text =~ "free"
+    refute response_text =~ "secondary_window"
   end
 
   test "upstream usage selection ranks credit-backed probes between precise and weekly probes" do

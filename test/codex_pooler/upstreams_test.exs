@@ -30,6 +30,12 @@ defmodule CodexPooler.UpstreamsTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [
+      monthly_only_account_primary_quota_payload: 1,
+      monthly_only_account_primary_quota_window_attrs: 1
+    ]
+
   describe "upstream identity lifecycle" do
     test "creates, activates, updates, and reuses upstream account identities" do
       assert {:ok, identity} =
@@ -2867,6 +2873,124 @@ defmodule CodexPooler.UpstreamsTest do
              ]
 
       assert QuotaWindows.quota_window_selection_data(identity).usable?
+    end
+
+    test "stores monthly-only account primary quota without synthetic secondary window" do
+      identity = active_identity_fixture()
+      observed_at = ~U[2026-04-27 13:00:00Z]
+      reset_at = DateTime.add(observed_at, 30, :day)
+
+      assert {:ok, [window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 monthly_only_account_primary_quota_window_attrs(%{
+                   observed_at: observed_at,
+                   reset_at: reset_at
+                 })
+               ])
+
+      assert window.quota_key == "account"
+      assert window.quota_scope == "account"
+      assert window.quota_family == "account"
+      assert window.window_kind == "primary"
+      assert window.window_minutes == 43_200
+      assert Decimal.equal?(window.used_percent, Decimal.new("42.5"))
+      assert window.source == "codex_usage_api"
+      assert window.source_precision == "observed"
+      assert window.freshness_state == "fresh"
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+
+      assert Enum.map(
+               QuotaWindows.list_quota_windows(identity),
+               &{&1.quota_key, &1.window_kind, &1.window_minutes}
+             ) == [{"account", "primary", 43_200}]
+    end
+
+    test "persists monthly-only usage payload as raw account primary evidence" do
+      identity = active_identity_fixture()
+      observed_at = ~U[2026-04-27 13:00:00Z]
+      reset_at = DateTime.add(observed_at, 30, :day)
+
+      payload =
+        monthly_only_account_primary_quota_payload(%{})
+        |> put_in(["rate_limit", "primary_window", "reset_at"], DateTime.to_iso8601(reset_at))
+
+      assert {:ok, [window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload,
+                 observed_at
+               )
+
+      assert window.quota_key == "account"
+      assert window.quota_scope == "account"
+      assert window.quota_family == "account"
+      assert window.window_kind == "primary"
+      assert window.window_minutes == 43_200
+      assert Decimal.equal?(window.used_percent, Decimal.new("42.5"))
+      assert window.source == "codex_usage_api"
+      assert window.source_precision == "observed"
+      assert window.freshness_state == "fresh"
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+      assert DateTime.compare(window.observed_at, observed_at) == :eq
+      assert DateTime.compare(window.last_sync_at, observed_at) == :eq
+      assert window.active_limit == nil
+      assert window.credits == nil
+      assert window.metadata["limit_window_seconds"] == 2_592_000
+
+      assert Enum.map(
+               QuotaWindows.list_quota_windows(identity),
+               &{&1.quota_key, &1.window_kind, &1.window_minutes}
+             ) == [{"account", "primary", 43_200}]
+    end
+
+    test "preserves unknown long primary usage windows without remapping them" do
+      identity = active_identity_fixture()
+      observed_at = ~U[2026-04-27 13:00:00Z]
+      unknown_window_seconds = 1_209_600
+      unknown_window_minutes = 20_160
+      reset_after_seconds = 1_800
+
+      payload =
+        monthly_only_account_primary_quota_payload(%{})
+        |> put_in(["rate_limit", "primary_window", "used_percent"], 37.25)
+        |> put_in(
+          ["rate_limit", "primary_window", "limit_window_seconds"],
+          unknown_window_seconds
+        )
+        |> put_in(
+          ["rate_limit", "primary_window", "reset_after_seconds"],
+          reset_after_seconds
+        )
+
+      assert {:ok, [window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload,
+                 observed_at
+               )
+
+      assert window.quota_key == "account"
+      assert window.quota_scope == "account"
+      assert window.quota_family == "account"
+      assert window.window_kind == "primary"
+      assert window.window_minutes == unknown_window_minutes
+      refute window.window_minutes in [300, 10_080, 43_200]
+      assert Decimal.equal?(window.used_percent, Decimal.from_float(37.25))
+      assert window.source == "codex_usage_api"
+      assert window.source_precision == "observed"
+      assert window.freshness_state == "fresh"
+      assert window.metadata["limit_window_seconds"] == unknown_window_seconds
+      assert window.metadata["reset_after_seconds"] == reset_after_seconds
+
+      assert DateTime.compare(
+               window.reset_at,
+               DateTime.add(observed_at, reset_after_seconds, :second)
+             ) == :eq
+
+      assert Enum.map(
+               QuotaWindows.list_quota_windows(identity),
+               &{&1.quota_key, &1.window_kind, &1.window_minutes}
+             ) == [{"account", "primary", unknown_window_minutes}]
     end
 
     test "stores additional model quota windows alongside account windows" do

@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Audit
   alias CodexPooler.Pools
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
@@ -86,7 +86,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:bar_value) => float(),
           required(:reset_at) => DateTime.t() | nil,
           required(:freshness_state) => String.t(),
-          required(:reason_codes) => [String.t()]
+          required(:reason_codes) => [String.t()],
+          required(:primary_5h) => map() | nil,
+          required(:primary_30d) => map() | nil,
+          required(:weekly) => map() | nil
         }
   @type quota_health_kpis :: %{
           required(:assignment_count) => non_neg_integer(),
@@ -564,10 +567,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp quota_health_item(assignment, readiness, as_of) do
-    primary = readiness.primary_window
+    primary_5h = classified_window(readiness.primary_window, :primary_5h)
+    primary_30d = readiness.primary_30d_window
     weekly = readiness.weekly_window
     state = quota_assignment_state(readiness)
-    display_window = primary || weekly
+    display_window = primary_5h || primary_30d || weekly
     measurements = quota_measurements(display_window)
 
     %{}
@@ -591,9 +595,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     |> Map.put(:remaining_percent, measurements.remaining_percent)
     |> Map.put(:remaining_percent_value, decimal_to_float(measurements.remaining_percent))
     |> Map.put(:bar_value, decimal_to_float(measurements.remaining_percent) || 0.0)
-    |> Map.put(:primary_5h, quota_window_contract(primary, as_of))
+    |> Map.put(:primary_5h, quota_window_contract(primary_5h, as_of))
+    |> Map.put(:primary_30d, quota_window_contract(primary_30d, as_of))
     |> Map.put(:weekly, quota_window_contract(weekly, as_of))
   end
+
+  defp classified_window(%Quota.AccountQuotaWindow{} = window, descriptor) do
+    if WindowClassifier.classify(window) == descriptor, do: window, else: nil
+  end
+
+  defp classified_window(_window, _descriptor), do: nil
 
   defp quota_health_kpis(items) do
     counts = Enum.frequencies_by(items, & &1.state)

@@ -7,6 +7,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
       model_quota_window_attrs: 3,
+      monthly_only_account_primary_quota_window_attrs: 1,
       primary_quota_window_attrs: 1,
       weekly_quota_window_attrs: 1
     ]
@@ -212,6 +213,50 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert window.routing_unusable_reason == nil
   end
 
+  test "read model preserves monthly-only account primary semantics", %{scope: scope} do
+    pool = pool_fixture()
+    %{identity: identity} = upstream_assignment_fixture(pool)
+    reset_at = DateTime.add(DateTime.utc_now(), 30, :day) |> DateTime.truncate(:second)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               monthly_only_account_primary_quota_window_attrs(%{
+                 active_limit: nil,
+                 credits: nil,
+                 reset_at: reset_at,
+                 used_percent: Decimal.new("42.5")
+               })
+             ])
+
+    assert %{items: [account]} = ReadModel.list_accounts(scope)
+    assert [window] = account.quota_windows
+    assert_dto_keys(window)
+    assert window.quota_kind == "account_primary"
+    assert window.quota_scope == "account"
+    assert window.quota_family == "account"
+    assert window.model == nil
+    assert window.upstream_model == nil
+    assert window.window_minutes == 43_200
+    assert window.active_limit == nil
+    assert window.remaining_value == nil
+    assert window.credits == nil
+    assert window.used_percent == 42.5
+    assert_iso8601_utc(window.reset_at, reset_at)
+    assert window.freshness_status == "fresh"
+    assert window.routing_usable == true
+    assert window.routing_unusable_reason == nil
+    assert window.source_precision == "observed"
+
+    assert account.quota_summary == %{
+             window_count: 1,
+             truncated: false,
+             freshness_status: "fresh",
+             routing_usable: true,
+             has_unknown: false,
+             has_stale: false
+           }
+  end
+
   test "read model reports reset only evidence without invented limits", %{scope: scope} do
     pool = pool_fixture()
     %{identity: identity} = upstream_assignment_fixture(pool)
@@ -341,6 +386,92 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert window["active_limit"] == 100
     assert Enum.all?(Map.keys(account), &is_binary/1)
     assert Enum.all?(Map.keys(window), &is_binary/1)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "quota metadata tool exposes monthly primary evidence without capacity or raw material", %{
+    auth: auth
+  } do
+    pool = pool_fixture()
+    raw_metadata = Redaction.forbidden_sentinel!(:raw_metadata)
+    provider_payload = Redaction.forbidden_sentinel!(:provider_payload)
+    raw_evidence = Redaction.forbidden_sentinel!(:raw_evidence)
+    auth_json = Redaction.forbidden_sentinel!(:upstream_auth_json)
+    reset_at = DateTime.add(DateTime.utc_now(), 30, :day) |> DateTime.truncate(:second)
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Monthly quota account",
+        chatgpt_account_id: "acct-monthly-quota",
+        identity_metadata: %{
+          "auth_json" => auth_json,
+          "raw_metadata" => raw_metadata,
+          "provider_payload" => provider_payload
+        },
+        plan_family: nil
+      })
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               monthly_only_account_primary_quota_window_attrs(%{
+                 active_limit: nil,
+                 credits: nil,
+                 reset_at: reset_at,
+                 used_percent: Decimal.new("42.5"),
+                 metadata: %{
+                   "raw_metadata" => raw_metadata,
+                   "raw_evidence" => raw_evidence,
+                   "provider_payload" => provider_payload
+                 }
+               })
+             ])
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_upstream_quota", %{"selector" => identity.id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    structured = result["structuredContent"]
+    serialized_structured = Jason.encode!(structured)
+
+    for forbidden <- [raw_metadata, provider_payload, raw_evidence, auth_json] do
+      refute serialized_structured =~ forbidden
+      refute text =~ forbidden
+    end
+
+    assert structured["status"] == "ok"
+    account = structured["item"]
+    assert account["stored_account_id"] == "acct-monthly-quota"
+    assert account["quota_summary"]["freshness_status"] == "fresh"
+    assert account["quota_summary"]["routing_usable"] == true
+
+    assert [window] = account["quota_windows"]
+    assert window["quota_kind"] == "account_primary"
+    assert window["window_minutes"] == 43_200
+    assert window["model"] == nil
+    assert window["upstream_model"] == nil
+    assert window["active_limit"] == nil
+    assert window["remaining_value"] == nil
+    assert window["credits"] == nil
+    assert window["used_percent"] == 42.5
+    assert_iso8601_utc(window["reset_at"], reset_at)
+    assert window["freshness_status"] == "fresh"
+    assert window["routing_usable"] == true
+    assert window["routing_unusable_reason"] == nil
+
+    assert text =~ "account Monthly quota account status active account acct-monthly-quota plan"
+    assert text =~ "account_primary: unknown remaining, 42.5% used"
+    refute text =~ "/100 remaining"
+    refute serialized_structured =~ ~s("active_limit":100)
+    refute serialized_structured =~ ~s("remaining_value":100)
+    refute serialized_structured =~ ~s("credits":100)
+    refute serialized_structured =~ ~s("metadata")
+    refute serialized_structured =~ ~s("evidence")
+
+    assert :ok = Redaction.assert_structured_content_safe!(structured)
+    assert :ok = Redaction.assert_text_content_safe!(text)
     assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 

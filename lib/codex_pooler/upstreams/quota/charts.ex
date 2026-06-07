@@ -5,7 +5,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
   import Ecto.Query
 
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.{
@@ -99,7 +99,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
         on:
           window.upstream_identity_id == identity.id and window.quota_scope == "account" and
             window.quota_key == @account_quota_key and
-            ((window.window_kind == "primary" and window.window_minutes == 300) or
+            ((window.window_kind == "primary" and window.window_minutes in [300, 43_200]) or
                window.window_kind == "secondary"),
         where: assignment.pool_id in ^pool_ids and assignment.status != ^@deleted,
         order_by: [asc: assignment.pool_id, asc: assignment.created_at, asc: assignment.id],
@@ -147,22 +147,14 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
   defp quota_remaining_chart_row(_row, _timestamp), do: nil
 
-  defp quota_remaining_chart_key(%Quota.AccountQuotaWindow{
-         quota_scope: "account",
-         quota_key: @account_quota_key,
-         window_kind: "primary",
-         window_minutes: 300
-       }),
-       do: :primary_5h
-
-  defp quota_remaining_chart_key(%Quota.AccountQuotaWindow{
-         quota_scope: "account",
-         quota_key: @account_quota_key,
-         window_kind: "secondary"
-       }),
-       do: :weekly
-
-  defp quota_remaining_chart_key(%Quota.AccountQuotaWindow{}), do: nil
+  defp quota_remaining_chart_key(%Quota.AccountQuotaWindow{} = window) do
+    case WindowClassifier.classify(window) do
+      :primary_5h -> :primary_5h
+      :monthly_primary -> :primary_30d
+      :weekly_secondary -> :weekly
+      _descriptor -> nil
+    end
+  end
 
   defp quota_remaining_plan_label(%UpstreamIdentity{plan_label: label})
        when is_binary(label) and label != "",
@@ -187,10 +179,11 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
         assignment_count
       )
 
-    primary_chart_rows = Enum.filter(rows, &(&1.chart_key == :primary_5h))
+    primary_5h_chart_rows = Enum.filter(rows, &(&1.chart_key == :primary_5h))
+    primary_30d_chart_rows = Enum.filter(rows, &(&1.chart_key == :primary_30d))
 
-    primary_rows =
-      primary_chart_rows
+    primary_5h_rows =
+      primary_5h_chart_rows
       |> quota_remaining_winners()
       |> Enum.map(
         &Measurements.apply_weekly_cap(
@@ -204,8 +197,16 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
         quota_remaining_chart(
           :primary_5h,
           "5h quota",
-          primary_chart_rows,
-          primary_rows,
+          primary_5h_chart_rows,
+          primary_5h_rows,
+          assignment_count
+        ),
+      primary_30d:
+        quota_remaining_chart(
+          :primary_30d,
+          "30d quota",
+          primary_30d_chart_rows,
+          quota_remaining_winners(primary_30d_chart_rows),
           assignment_count
         ),
       weekly: weekly
@@ -215,6 +216,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
   defp quota_remaining_empty_pool_charts(_pool_id) do
     %{
       primary_5h: quota_remaining_chart(:primary_5h, "5h quota", [], [], 0),
+      primary_30d: quota_remaining_chart(:primary_30d, "30d quota", [], [], 0),
       weekly: quota_remaining_chart(:weekly, "Weekly quota", [], [], 0)
     }
   end

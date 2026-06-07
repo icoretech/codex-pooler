@@ -885,7 +885,50 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert missing_item.remaining_percent_value == nil
     assert missing_item.reset_at == nil
     assert missing_item.primary_5h == nil
+    assert missing_item.primary_30d == nil
     assert missing_item.weekly == nil
+  end
+
+  @tag :quota_health
+  test "read model treats fresh monthly primary evidence as ready 30d quota", %{scope: scope} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    monthly_reset = DateTime.add(now, 30, :day)
+
+    monthly =
+      quota_cockpit!(scope, "monthly-primary", [
+        %{
+          window_kind: "primary",
+          window_minutes: 43_200,
+          used_percent: Decimal.new("42.5"),
+          reset_at: monthly_reset,
+          observed_at: now
+        }
+      ])
+
+    assert monthly.charts.quota_health.state == "fresh"
+    assert monthly.charts.quota_health.kpis.assignment_count == 1
+    assert monthly.charts.quota_health.kpis.routing_usable_count == 1
+    assert monthly.charts.quota_health.kpis.fresh_count == 1
+    assert monthly.charts.quota_health.kpis.missing_evidence_count == 0
+    assert monthly.flags.missing_quota? == false
+
+    assert [%{state: "fresh", state_label: "Fresh", routing_usable?: true} = monthly_item] =
+             monthly.charts.quota_health.items
+
+    assert monthly_item.window_kind == "primary"
+    assert monthly_item.window_minutes == 43_200
+    assert monthly_item.remaining == nil
+    assert monthly_item.capacity == nil
+    assert monthly_item.used == nil
+    assert monthly_item.remaining_percent_value == 57.5
+    assert monthly_item.used_percent_value == 42.5
+    assert monthly_item.bar_value == 57.5
+    assert monthly_item.reason_codes == []
+    assert monthly_item.primary_5h == nil
+    assert monthly_item.primary_30d.routing_usable? == true
+    assert monthly_item.primary_30d.window_minutes == 43_200
+    assert monthly_item.primary_30d.reason_codes == ["unknown_unusable"]
+    assert monthly_item.weekly == nil
   end
 
   @tag :quota_health_blocked

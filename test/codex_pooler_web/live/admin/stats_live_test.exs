@@ -355,6 +355,39 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       refute render(blocked_view) =~ hidden_c.raw_key
     end
 
+    test "renders monthly-only primary quota evidence as available", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "stats-monthly-ui", name: "Stats Monthly UI"})
+
+      %{identity: identity} = upstream_assignment_fixture(pool)
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   used_percent: Decimal.new("42.5"),
+                   reset_at: DateTime.add(now, 30, :day),
+                   source: "codex_usage",
+                   source_precision: "authoritative",
+                   quota_scope: "account",
+                   quota_family: "account"
+                 }
+               ])
+
+      {:ok, view, _html} = live(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=5h")
+
+      assert has_element?(view, "#stats-kpi-quota-health", "Available")
+      assert has_element?(view, "#stats-kpi-quota-health", "1 usable")
+      assert has_element?(view, "#stats-kpi-quota-health", "0 missing quota")
+      refute has_element?(view, "#stats-kpi-quota-health", "Missing evidence")
+    end
+
     test "unassigned admin sees empty scoped stats with no pool subscriptions", %{
       conn: conn,
       scope: scope

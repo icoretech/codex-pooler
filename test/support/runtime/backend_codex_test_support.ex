@@ -566,6 +566,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     )
   end
 
+  def monthly_only_account_primary_quota_window_attrs(overrides \\ %{}) do
+    Map.merge(
+      %{
+        quota_key: "account",
+        window_kind: "primary",
+        window_minutes: 43_200,
+        used_percent: Decimal.new("42.5"),
+        reset_at: DateTime.add(DateTime.utc_now(), 30, :day) |> DateTime.truncate(:second),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        quota_scope: "account",
+        quota_family: "account",
+        freshness_state: "fresh"
+      },
+      overrides
+    )
+  end
+
+  def monthly_only_account_primary_quota_payload(overrides \\ %{}) do
+    Map.merge(
+      %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 42.5,
+            "limit_window_seconds" => 2_592_000
+          }
+        }
+      },
+      overrides
+    )
+  end
+
   def model_quota_window_attrs(model, window_kind, overrides)
       when window_kind in ["primary", "secondary"] do
     window_minutes = if window_kind == "primary", do: 300, else: 10_080

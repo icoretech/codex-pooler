@@ -4,6 +4,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.MCP.PrivacyMatrix
   alias CodexPooler.Pools
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -197,7 +198,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   defp quota_kind(%Quota.AccountQuotaWindow{} = window) do
     tokens = quota_kind_tokens(window)
     model? = model_scoped_window?(window)
-    secondary? = secondary_quota_window?(window, tokens)
+    secondary? = secondary_quota_window?(window, tokens, model?)
 
     cond do
       quota_kind_token?(tokens, "additional") -> @quota_kind_additional
@@ -213,8 +214,12 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
     present_string?(window.model) or present_string?(window.upstream_model)
   end
 
-  defp secondary_quota_window?(%Quota.AccountQuotaWindow{} = window, tokens) do
+  defp secondary_quota_window?(%Quota.AccountQuotaWindow{} = window, tokens, true) do
     quota_kind_token?(tokens, "secondary") or long_quota_window?(window.window_minutes)
+  end
+
+  defp secondary_quota_window?(%Quota.AccountQuotaWindow{} = window, tokens, false) do
+    quota_kind_token?(tokens, "secondary") or WindowClassifier.weekly_secondary?(window)
   end
 
   defp long_quota_window?(window_minutes) when is_integer(window_minutes),

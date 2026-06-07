@@ -7524,6 +7524,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "weekly_only_probe"
   end
 
+  test "POST /backend-api/codex/responses routes monthly-only account primary quota evidence",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_monthly_primary_only",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream, quota?: false)
+
+    assert {:ok, [_monthly]} =
+             QuotaWindows.upsert_quota_windows(setup.identity, [
+               monthly_only_account_primary_quota_window_attrs()
+             ])
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "monthly account primary only"
+      })
+
+    assert %{"id" => "resp_monthly_primary_only"} = json_response(conn, 200)
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert get_in(request.request_metadata, ["quota_decision", "routing_state"]) == "precise"
+    assert get_in(request.request_metadata, ["quota_decision", "precise_candidate_count"]) == 1
+    refute inspect(request.request_metadata) =~ "quota_account_primary_missing"
+  end
+
   test "POST /backend-api/codex/responses refreshes stale reset-bearing quota before rejecting",
        %{conn: conn} do
     reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)

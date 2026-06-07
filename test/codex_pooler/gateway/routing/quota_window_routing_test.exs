@@ -125,6 +125,126 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                )
     end
 
+    test "monthly account primary evidence routes as precise quota when fresh reset-bearing and not exhausted" do
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{
+                 primary: %AccountQuotaWindow{window_kind: "primary", window_minutes: 43_200},
+                 secondary: nil,
+                 blocked_windows: []
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [monthly_account_primary_window()],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "fresh monthly account primary evidence supersedes stale legacy 5h primary evidence" do
+      stale_5h_observed_at =
+        DateTime.add(
+          @observed_at,
+          -Evidence.freshness_ttl_seconds() - 1,
+          :second
+        )
+
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{
+                 primary: %AccountQuotaWindow{window_kind: "primary", window_minutes: 43_200},
+                 blocked_windows: [],
+                 routing_windows: [
+                   %AccountQuotaWindow{window_kind: "primary", window_minutes: 43_200}
+                 ]
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(observed_at: stale_5h_observed_at),
+                   monthly_account_primary_window()
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "monthly account primary exhaustion is rejected as exhausted instead of missing primary" do
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   code: "quota_window_unusable",
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   reason_codes: ["exhausted"]
+                 }
+               ],
+               selection: %{
+                 primary: %AccountQuotaWindow{window_minutes: 43_200},
+                 blocked_windows: [%AccountQuotaWindow{window_minutes: 43_200}]
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [monthly_account_primary_window(used_percent: Decimal.new("100"))],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "monthly account primary routing blocks stale resetless and expired quota evidence" do
+      stale_observed_at =
+        DateTime.add(
+          @observed_at,
+          -Evidence.freshness_ttl_seconds() - 1,
+          :second
+        )
+
+      scenarios = [
+        {monthly_account_primary_window(reset_at: nil), ["reset_missing"]},
+        {monthly_account_primary_window(observed_at: stale_observed_at), ["not_fresh"]},
+        {monthly_account_primary_window(freshness_state: "stale"), ["not_fresh"]},
+        {monthly_account_primary_window(reset_at: DateTime.add(@observed_at, -60, :second)),
+         ["expired", "not_fresh"]}
+      ]
+
+      for {window, reason_codes} <- scenarios do
+        assert %{
+                 eligible?: false,
+                 routing_state: :blocked,
+                 exclusions: [
+                   %{
+                     code: "quota_window_unusable",
+                     quota_key: "account",
+                     window_kind: "primary",
+                     reason_codes: ^reason_codes
+                   }
+                 ],
+                 selection: %{primary: %AccountQuotaWindow{window_minutes: 43_200}}
+               } =
+                 Windows.routing_quota_eligibility_from_windows(
+                   [window],
+                   at: @observed_at,
+                   model: "sample-codex-standard",
+                   requested_model: "sample-codex-standard",
+                   upstream_model: "sample-codex-standard-upstream"
+                 )
+      end
+    end
+
     test "account primary routing blocks stale and unknown freshness quota evidence" do
       for freshness_state <- ["stale", "unknown"] do
         assert %{
@@ -297,6 +417,20 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
           quota_family: "account",
           freshness_state: "fresh",
           observed_at: @observed_at
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp monthly_account_primary_window(attrs \\ []) do
+    account_primary_window(
+      Keyword.merge(
+        [
+          window_minutes: 43_200,
+          used_percent: Decimal.new("42.5"),
+          reset_at: DateTime.add(@observed_at, 30, :day),
+          source: "codex_usage_api"
         ],
         attrs
       )

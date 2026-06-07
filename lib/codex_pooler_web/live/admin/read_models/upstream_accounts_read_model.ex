@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Jobs
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.Quota
@@ -317,7 +318,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       quota_limit_row(
         :primary_5h,
         "5h",
-        quota_account_window(windows, "primary", 300),
+        quota_account_window(windows, :primary_5h),
+        datetime_preferences
+      ),
+      quota_limit_row(
+        :primary_30d,
+        "30d",
+        quota_account_window(windows, :monthly_primary),
         datetime_preferences
       ),
       quota_limit_row(
@@ -337,15 +344,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp account_quota_window?(%Quota.AccountQuotaWindow{}), do: false
 
-  defp quota_account_window(windows, window_kind, window_minutes) do
+  defp quota_account_window(windows, descriptor) do
+    Enum.find(windows, &(WindowClassifier.classify(&1) == descriptor))
+  end
+
+  defp quota_account_window(windows, "secondary", nil) do
     Enum.find(windows, fn
       %Quota.AccountQuotaWindow{
         quota_key: "account",
         quota_scope: "account",
-        window_kind: ^window_kind,
-        window_minutes: minutes
+        window_kind: "secondary"
       } ->
-        is_nil(window_minutes) or minutes == window_minutes
+        true
 
       _window ->
         false

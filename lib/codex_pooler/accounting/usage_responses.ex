@@ -3,6 +3,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
   Codex-compatible usage-limit response shaping for accounting reads.
   """
 
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams.Quota
 
   @spec self_usage_limits([map()], integer(), integer(), integer(), DateTime.t()) :: [map()]
@@ -168,6 +169,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp codex_limit_from_quota_window(%Quota.AccountQuotaWindow{} = window, _as_of) do
     active_limit = window.active_limit
+    limit_window = limit_window_label(window)
     used_percent = percent_integer(window.used_percent)
     reset_at = window.reset_at && DateTime.to_iso8601(window.reset_at)
 
@@ -177,7 +179,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
       else
         %{
           limit_type: "percent",
-          limit_window: if(window.window_kind == "secondary", do: "7d", else: "5h"),
+          limit_window: limit_window,
           max_value: nil,
           current_value: nil,
           remaining_value: nil,
@@ -206,7 +208,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
 
       %{
         limit_type: "credits",
-        limit_window: if(window.window_kind == "secondary", do: "7d", else: "5h"),
+        limit_window: limit_window,
         max_value: active_limit,
         current_value: min(max(current, 0), active_limit),
         remaining_value: max(active_limit - min(max(current, 0), active_limit), 0),
@@ -241,6 +243,25 @@ defmodule CodexPooler.Accounting.UsageResponses do
     }
   end
 
+  defp limit_window_label(%Quota.AccountQuotaWindow{} = window) do
+    case WindowClassifier.classify(window) do
+      :primary_5h -> "5h"
+      :weekly_secondary -> "7d"
+      :monthly_primary -> "30d"
+      _descriptor -> duration_label(window.window_minutes)
+    end
+  end
+
+  defp duration_label(minutes) when is_integer(minutes) and minutes > 0 do
+    cond do
+      rem(minutes, 1_440) == 0 -> "#{div(minutes, 1_440)}d"
+      rem(minutes, 60) == 0 -> "#{div(minutes, 60)}h"
+      true -> "#{minutes}m"
+    end
+  end
+
+  defp duration_label(_minutes), do: "unknown"
+
   defp percent_integer(%Decimal{} = percent) do
     percent
     |> Decimal.round(0)
@@ -267,8 +288,24 @@ defmodule CodexPooler.Accounting.UsageResponses do
 
   defp window_seconds("5h"), do: 18_000
   defp window_seconds("7d"), do: 604_800
+  defp window_seconds("30d"), do: 2_592_000
   defp window_seconds("daily"), do: 86_400
+  defp window_seconds(window) when is_binary(window), do: duration_seconds(window)
   defp window_seconds(_), do: 0
+
+  defp duration_seconds(window) do
+    with {amount, suffix} <- Integer.parse(window),
+         true <- amount > 0 do
+      case suffix do
+        "m" -> amount * 60
+        "h" -> amount * 3_600
+        "d" -> amount * 86_400
+        _suffix -> 0
+      end
+    else
+      _invalid -> 0
+    end
+  end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

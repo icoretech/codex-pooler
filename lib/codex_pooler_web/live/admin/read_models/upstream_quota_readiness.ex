@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
   Shared admin projection for account-level upstream quota readiness.
   """
 
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
@@ -19,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
           required(:routing_ready_now?) => boolean(),
           required(:reason_codes) => [String.t()],
           required(:primary_window) => window() | nil,
+          required(:primary_30d_window) => window() | nil,
           required(:weekly_window) => window() | nil
         }
 
@@ -30,6 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       QuotaWindows.routing_quota_eligibility_from_windows(account_windows, at: as_of)
 
     primary_window = get_in(eligibility, [:selection, :primary])
+    primary_30d_window = primary_30d_window(primary_window)
     weekly_window = get_in(eligibility, [:selection, :secondary])
     reason_codes = reason_codes(eligibility, account_windows, as_of)
     state = readiness_state(account_windows, eligibility, [primary_window, weekly_window], as_of)
@@ -39,9 +42,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
     |> Map.merge(%{
       reason_codes: reason_codes,
       primary_window: primary_window,
+      primary_30d_window: primary_30d_window,
       weekly_window: weekly_window
     })
   end
+
+  @spec primary_30d_window(window() | nil) :: window() | nil
+  defp primary_30d_window(%Quota.AccountQuotaWindow{} = window) do
+    if WindowClassifier.monthly_primary?(window), do: window, else: nil
+  end
+
+  defp primary_30d_window(_window), do: nil
 
   @spec readiness_state([window()], map(), [window() | nil], DateTime.t()) :: String.t()
   defp readiness_state([], _eligibility, _selected_windows, _as_of), do: "missing_evidence"
@@ -83,6 +94,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: true,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end
@@ -96,6 +108,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: true,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end
@@ -109,6 +122,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: false,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end
@@ -122,6 +136,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: false,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end
@@ -135,6 +150,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: false,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end
@@ -148,6 +164,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
       routing_ready_now?: false,
       reason_codes: [],
       primary_window: nil,
+      primary_30d_window: nil,
       weekly_window: nil
     }
   end

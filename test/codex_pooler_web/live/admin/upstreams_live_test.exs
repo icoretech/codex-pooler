@@ -2809,6 +2809,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         routing_ready_now?: false,
         reason_codes: [],
         primary_window: nil,
+        primary_30d_window: nil,
         weekly_window: nil
       },
       quota_limits: []
@@ -2910,6 +2911,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       false -> assert is_nil(account.quota_readiness.primary_window)
     end
 
+    assert is_nil(account.quota_readiness.primary_30d_window)
+
     case Keyword.fetch!(opts, :weekly_window?) do
       true -> assert match?(%AccountQuotaWindow{}, account.quota_readiness.weekly_window)
       false -> assert is_nil(account.quota_readiness.weekly_window)
@@ -2918,7 +2921,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     [assignment] = account.assignments
     assert assignment.quota_priming_status == Keyword.fetch!(opts, :priming_status)
     assert assignment.quota_priming_label == Keyword.fetch!(opts, :priming_label)
-    assert Enum.map(account.quota_limits, & &1.label) == ["5h", "Weekly"]
+    assert Enum.map(account.quota_limits, & &1.label) == ["5h", "30d", "Weekly"]
   end
 
   defp runtime_secret(label),
