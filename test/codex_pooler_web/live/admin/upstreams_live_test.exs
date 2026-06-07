@@ -135,14 +135,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-account-form")
     refute has_element?(view, "#upstream-account-submit")
     assert has_element?(view, "#upstream-page-actions.join")
-    assert has_element?(view, "#upstream-page-import-auth-json-action", "Import auth.json")
+
+    assert has_element?(
+             view,
+             "#upstream-page-create-invite-action[href='/admin/invites?create=1'].btn.btn-primary.join-item",
+             "Invite account"
+           )
+
     assert has_element?(view, "#upstream-page-actions-menu[aria-label='More upstream actions']")
 
     assert has_element?(
              view,
-             "#upstream-page-create-invite-action[href='/admin/invites?create=1']",
-             "Invite account"
+             "#upstream-page-actions-menu-items #upstream-page-import-auth-json-action",
+             "Import auth.json"
            )
+
+    assert upstream_page_action_order(render(view)) == [
+             "upstream-page-create-invite-action",
+             "upstream-page-import-auth-json-action"
+           ]
 
     refute has_element?(view, "#auth-json-import-dialog")
     refute has_element?(view, "#pool-invite-dialog")
@@ -2963,6 +2974,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     view
     |> element("#upstream-page-import-auth-json-action")
     |> render_click()
+  end
+
+  defp upstream_page_action_order(html) do
+    ~r/id="(upstream-page-(?:create-invite|import-auth-json)-action)"/
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
   end
 
   defp assert_admin_dialog_docs_link(view, footer_id) do

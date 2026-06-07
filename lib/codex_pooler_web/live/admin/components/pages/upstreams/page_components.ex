@@ -221,15 +221,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   defp upstream_page_actions(assigns) do
     ~H"""
     <div id="upstream-page-actions" class="join w-full sm:w-auto">
-      <button
-        id="upstream-page-import-auth-json-action"
-        type="button"
+      <.link
+        id="upstream-page-create-invite-action"
+        navigate={~p"/admin/invites?create=1"}
         class="btn btn-primary join-item min-w-0 flex-1 gap-2 px-5 sm:flex-none"
-        phx-click="open_import_auth_json"
       >
-        <.icon name="hero-document-arrow-up" class="size-4 shrink-0" />
-        <span class="truncate">Import auth.json</span>
-      </button>
+        <.icon name="hero-user-plus" class="size-4 shrink-0" />
+        <span class="truncate">Invite account</span>
+      </.link>
       <details class="dropdown dropdown-end join-item">
         <summary
           id="upstream-page-actions-menu"
@@ -245,10 +244,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         >
           <li>
             <AdminComponents.dropdown_action_item
-              id="upstream-page-create-invite-action"
-              icon="hero-user-plus"
-              label="Invite account"
-              navigate={~p"/admin/invites?create=1"}
+              id="upstream-page-import-auth-json-action"
+              icon="hero-document-arrow-up"
+              label="Import auth.json"
+              phx-click="open_import_auth_json"
             />
           </li>
         </ul>
