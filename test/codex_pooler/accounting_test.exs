@@ -2,7 +2,7 @@ defmodule CodexPooler.AccountingTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{DailyRollup, LedgerEntry, Rollups}
+  alias CodexPooler.Accounting.{Attempt, DailyRollup, LedgerEntry, Rollups}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Repo
@@ -187,6 +187,37 @@ defmodule CodexPooler.AccountingTest do
       metadata_text = inspect(persisted_after.request_metadata)
       refute metadata_text =~ "raw prompt"
       refute metadata_text =~ "sk-cxp-secret"
+    end
+
+    test "create_attempt is idempotent when a database retry replays the generated id" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "input" => "metadata only"},
+                 %{correlation_id: "corr-attempt-pkey-retry"}
+               )
+
+      attempt_id = Ecto.UUID.generate()
+      attrs = %{id: attempt_id, response_metadata: %{"retry_kind" => "db_replay"}}
+
+      assert {:ok, first_attempt} =
+               Accounting.create_attempt(reserved.request, setup.assignment, attrs)
+
+      assert first_attempt.id == attempt_id
+
+      assert {:ok, retried_attempt} =
+               Accounting.create_attempt(reserved.request, setup.assignment, attrs)
+
+      assert retried_attempt.id == first_attempt.id
+      assert retried_attempt.attempt_number == first_attempt.attempt_number
+
+      assert Repo.aggregate(
+               from(attempt in Attempt, where: attempt.request_id == ^reserved.request.id),
+               :count
+             ) == 1
     end
 
     test "timeout before headers finalizes as failed with unknown usage" do

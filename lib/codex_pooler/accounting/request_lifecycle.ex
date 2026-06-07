@@ -97,6 +97,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
     attempt_changes =
       %Attempt{
+        id: Map.get(attrs, :id),
         request_id: request.id,
         attempt_number: attempt_number,
         pool_upstream_assignment_id: assignment.id,
@@ -112,7 +113,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :response_metadata, %{}))
       }
 
-    case Repo.insert(attempt_changes) do
+    case Repo.insert(attempt_changes,
+           on_conflict: {:replace, [:id]},
+           conflict_target: :id,
+           returning: true
+         ) do
       {:ok, attempt} ->
         IdentitySnapshot.persist_request_identity_snapshot(request, assignment, attrs)
         {:ok, attempt}
