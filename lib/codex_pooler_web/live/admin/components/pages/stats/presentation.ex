@@ -160,14 +160,13 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
             <tr>
               <th>Upstream</th>
               <th>Status</th>
-              <th>Quota</th>
               <th class="text-right">Requests</th>
               <th class="text-right">Tokens</th>
             </tr>
           </thead>
           <tbody>
             <tr :if={@rows == []} id="stats-upstream-empty-row">
-              <td colspan="5" class="text-center text-sm text-base-content/60">
+              <td colspan="4" class="text-center text-sm text-base-content/60">
                 No upstream assignments in this scope.
               </td>
             </tr>
@@ -182,11 +181,6 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <td>
                 <span class={AdminBadges.status_chip_class(row.status)}>
                   {row.status || "unknown"}
-                </span>
-              </td>
-              <td>
-                <span class={AdminBadges.status_chip_class(row.quota_state)}>
-                  {quota_state_label(row.quota_state)}
                 </span>
               </td>
               <td class="text-right font-mono tabular-nums">
