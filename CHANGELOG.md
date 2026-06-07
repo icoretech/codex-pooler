@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.2...codex-pooler-v0.0.3) (2026-06-07)
+
+
+### Bug Fixes
+
+* **accounting:** make attempt inserts idempotent ([5edbc20](https://github.com/icoretech/codex-pooler/commit/5edbc20313adcae2da10e6aee0450e8458b01960))
+* **admin:** hide legacy workspace context ([d335406](https://github.com/icoretech/codex-pooler/commit/d3354068b8ca21c062fb69f1c1aeddc6c949d5d9))
+* **admin:** make upstream invite the primary action ([f793320](https://github.com/icoretech/codex-pooler/commit/f793320edddec2f2f91ec64559632b89d467544e))
+* **quota:** recognize monthly-only account primary windows ([7fb5643](https://github.com/icoretech/codex-pooler/commit/7fb5643e6ee6b111ecf0de7030129e9d0de5870c))
+* remove stats upstream quota column ([78bb465](https://github.com/icoretech/codex-pooler/commit/78bb4654e790d5b99091cd5a511da90774a09ca2))
+* **websocket:** align owner forwarding with alias continuity ([bd9fb8c](https://github.com/icoretech/codex-pooler/commit/bd9fb8c5a6ef6f7562c5be54c999649e5951d777))
+* **websocket:** order tool continuations after processed frames ([cc7c988](https://github.com/icoretech/codex-pooler/commit/cc7c988541f7da341ff1c8c2fb779148b9fb1f67))
+* **websocket:** resolve frame previous response aliases ([065b6f3](https://github.com/icoretech/codex-pooler/commit/065b6f36100b505709186ceae3703a9ba896be86))
+* **websocket:** suppress replayed owner reconnects ([3601e5a](https://github.com/icoretech/codex-pooler/commit/3601e5adb505fc727e227742e1bd54a4ae5be213))
+* **websocket:** treat owner busy as transient ([458685a](https://github.com/icoretech/codex-pooler/commit/458685a8964d3e51cf4ee3981a28c7de3be49449))
+
 ## [0.0.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.1...codex-pooler-v0.0.2) (2026-06-07)
 
 
