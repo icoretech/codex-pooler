@@ -91,7 +91,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   def safe_error_payload(:owner_busy, _unsafe_context) do
     {:ok,
      payload(
-       status: 409,
+       status: 503,
        code: "owner_busy",
        message: "websocket owner is busy",
        reason: "owner_busy_backpressure"
