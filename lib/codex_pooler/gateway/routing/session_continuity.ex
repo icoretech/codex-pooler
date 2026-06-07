@@ -25,19 +25,22 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @spec attach_codex_session(auth(), payload(), RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, gateway_error()}
   def attach_codex_session(
-        _auth,
+        auth,
         payload,
         %RequestOptions{continuity: %{codex_session: %CodexSession{id: session_id}}} =
           request_options
       ) do
     request_options = ContinuityPayload.put_previous_response_id(request_options, payload)
 
-    case Repo.get(CodexSession, session_id) do
-      %CodexSession{} = session ->
+    case start_previous_response_codex_session(auth, request_options) do
+      {:ok, %CodexSession{} = session} ->
         {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
 
-      nil ->
-        {:ok, request_options}
+      {:error, :session_not_found} ->
+        attach_existing_codex_session(session_id, request_options)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -50,6 +53,24 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       end
     else
       {:ok, request_options}
+    end
+  end
+
+  defp start_previous_response_codex_session(auth, %RequestOptions{} = request_options) do
+    if previous_response_id?(request_options) do
+      ContinuityStore.start_codex_session_from_previous_response_id(auth, request_options)
+    else
+      {:error, :session_not_found}
+    end
+  end
+
+  defp attach_existing_codex_session(session_id, request_options) do
+    case Repo.get(CodexSession, session_id) do
+      %CodexSession{} = session ->
+        {:ok, RequestOptions.put_continuity(request_options, codex_session: session)}
+
+      nil ->
+        {:ok, request_options}
     end
   end
 

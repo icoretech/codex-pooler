@@ -469,6 +469,48 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
                setup.other.assignment.id
              ]
     end
+
+    test "frame previous_response_id aliases override an already attached websocket session" do
+      setup = active_pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+      previous_response_id = "resp_prev_#{System.unique_integer([:positive])}"
+
+      alias_session =
+        setup
+        |> codex_session_fixture(setup.pinned.assignment, api_key.api_key)
+        |> register_previous_response_alias!(api_key.api_key, previous_response_id)
+
+      attached_session = codex_session_fixture(setup, setup.other.assignment, api_key.api_key)
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      payload = %{
+        "model" => model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_ws_frame_alias",
+            "output" => "sample output"
+          }
+        ],
+        "stream" => true,
+        "previous_response_id" => previous_response_id
+      }
+
+      opts =
+        %{api_key_policy: auth.api_key}
+        |> RequestOptions.build(@endpoint, payload)
+        |> RequestOptions.put_continuity(codex_session: attached_session)
+
+      assert {:ok, %{request_options: prepared_opts, candidates: candidates}} =
+               PreDispatch.prepare(auth, @endpoint, payload, opts, model)
+
+      assert prepared_opts.continuity.codex_session.id == alias_session.id
+      assert prepared_opts.continuity.previous_response_id == previous_response_id
+      assert candidate_assignment_ids(candidates) == [setup.pinned.assignment.id]
+    end
   end
 
   defp active_pinned_assignment_setup do

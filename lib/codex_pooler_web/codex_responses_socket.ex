@@ -382,7 +382,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp maybe_start_queued_response_task(state) do
-    if not active_response_task?(state) do
+    if active_response_task?(state) do
+      state
+    else
       case Map.get(state, :queued_response_payloads, :queue.new()) |> :queue.out() do
         {{:value, payload}, queue} ->
           state = Map.put(state, :queued_response_payloads, queue)
@@ -391,8 +393,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:empty, _queue} ->
           state
       end
-    else
-      state
     end
   end
 
@@ -453,8 +453,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         false
     end
   end
-
-  defp continuity_ordered_payload?(_payload), do: false
 
   defp owner_forwarded_socket?(state), do: is_map(Map.get(state, :websocket_owner_downstream))
 

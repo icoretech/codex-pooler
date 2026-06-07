@@ -65,6 +65,50 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     |> unwrap_transaction()
   end
 
+  @spec start_codex_session_from_previous_response_id(auth(), opts()) ::
+          session_result() | {:error, :session_not_found}
+  def start_codex_session_from_previous_response_id(auth, %RequestOptions{} = opts) do
+    case blank_to_nil(opts.continuity.previous_response_id) do
+      nil ->
+        {:error, :session_not_found}
+
+      previous_response_id ->
+        start_codex_session_from_previous_response_id(auth, opts, previous_response_id)
+    end
+  end
+
+  defp start_codex_session_from_previous_response_id(auth, opts, previous_response_id) do
+    now = now()
+    owner = owner_instance_id(opts)
+
+    Repo.transaction(fn ->
+      auth
+      |> previous_response_session_for_update(previous_response_id, now)
+      |> start_previous_response_session!(auth, opts, owner, now)
+    end)
+    |> unwrap_transaction()
+  end
+
+  defp previous_response_session_for_update(auth, previous_response_id, now) do
+    active_alias_session_for_update(
+      auth.pool.id,
+      auth.api_key.id,
+      "previous_response_id",
+      previous_response_id,
+      now
+    )
+  end
+
+  defp start_previous_response_session!(%CodexSession{} = session, auth, opts, owner, now) do
+    session = update_existing_session!(session, auth, opts, owner, now)
+    lease = acquire_bridge_owner_lease!(session, auth, opts, owner, now)
+    register_session_aliases!(session, auth, opts, now)
+    persist_session_lease!(session, lease, now)
+  end
+
+  defp start_previous_response_session!(nil, _auth, _opts, _owner, _now),
+    do: Repo.rollback(:session_not_found)
+
   @spec register_codex_session_continuity(
           CodexSession.t(),
           payload(),

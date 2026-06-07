@@ -1562,7 +1562,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Gateway.register_codex_session_continuity(
                session,
                %{},
-               %{"id" => previous_response_id}
+               Jason.encode!(%{"id" => previous_response_id})
              )
 
     request_id =
@@ -3307,6 +3307,115 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ setup.raw_key
       assert_owner_lease_not_replaced!(session.id, lease_before)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  @tag :websocket_pinned_reauth_recovery
+  test "websocket frame previous_response_id recovers pinned session before using fresh socket session" do
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_frame_alias_pinned_should_not_dispatch",
+          "object" => "response"
+        })
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_frame_alias_fallback_should_not_dispatch",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream)
+
+    fallback =
+      gateway_upstream(
+        setup.pool,
+        fallback_upstream,
+        "upstream-token-ws-frame-alias-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    source_turn_state = "turn-ws-frame-alias-source-#{System.unique_integer([:positive])}"
+    fresh_turn_state = "turn-ws-frame-alias-fresh-#{System.unique_integer([:positive])}"
+    previous_response_id = "resp_ws_frame_alias_#{System.unique_integer([:positive])}"
+    visible_tool_output = "visible websocket frame alias output must not persist"
+
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: source_turn_state})
+    session = pin_session_to_assignment!(session, setup.assignment)
+
+    assert :ok =
+             Gateway.register_codex_session_continuity(
+               session,
+               %{},
+               Jason.encode!(%{"id" => previous_response_id})
+             )
+
+    mark_pinned_assignment_reauth_required!(setup)
+
+    assert {:ok, state} =
+             CodexResponsesSocket.init(%{
+               auth: auth,
+               opts: %{
+                 request_id: "ws-frame-alias-pinned-reauth",
+                 accepted_turn_state: fresh_turn_state,
+                 client_ip: "127.0.0.1"
+               }
+             })
+
+    try do
+      assert state.codex_session.id != session.id
+
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [
+            %{
+              "type" => "future_tool_call_output",
+              "call_id" => "call_ws_frame_alias",
+              "output" => visible_tool_output
+            }
+          ],
+          "stream" => true,
+          "generate" => true,
+          "previous_response_id" => previous_response_id
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      assert {:push, {:text, error_frame}, _state_after} = receive_socket_done(state)
+
+      assert_pinned_reauth_websocket_frame!(error_frame)
+      refute error_frame =~ previous_response_id
+      refute error_frame =~ visible_tool_output
+      refute error_frame =~ setup.authorization
+      refute error_frame =~ setup.raw_key
+      refute error_frame =~ "Bearer "
+
+      assert FakeUpstream.count(pinned_upstream) == 0
+      assert FakeUpstream.count(fallback_upstream) == 0
+      assert_pinned_reauth_rejected_request!("ws-frame-alias-pinned-reauth")
+      assert Repo.aggregate(Attempt, :count) == 0
+
+      metadata_text = inspect(Accounting.list_request_logs(setup.pool))
+      refute metadata_text =~ previous_response_id
+      refute metadata_text =~ visible_tool_output
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ setup.raw_key
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
