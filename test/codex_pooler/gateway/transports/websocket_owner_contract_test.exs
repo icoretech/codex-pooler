@@ -32,7 +32,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
     test "maps owner_busy to the exact backpressure contract" do
       assert {:ok, payload} = WebsocketOwnerContract.safe_error_payload(:owner_busy, @sentinel)
 
-      assert payload.status == 503
+      assert payload.status == 409
       assert payload.code == "owner_busy"
       assert payload.request_status == "failed"
       assert payload.attempt_status == "failed"

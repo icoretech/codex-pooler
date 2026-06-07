@@ -37,7 +37,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @type downstream :: %{
           required(:pid) => pid(),
           required(:epoch) => pos_integer(),
-          required(:correlation_id) => binary()
+          required(:correlation_id) => binary(),
+          optional(:active_turn_reconnect?) => boolean()
         }
 
   @type start_result :: {:ok, pid()} | {:ok, pid(), :existing} | {:error, term()}
@@ -238,7 +239,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     epoch = next_downstream_epoch(state.downstream)
     monitor = Process.monitor(pid)
-    downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
+
+    downstream = %{
+      pid: pid,
+      epoch: epoch,
+      correlation_id: correlation_id,
+      active_turn_reconnect?: active_turn?(state)
+    }
+
     state = put_active_turn_downstream(state, downstream)
 
     {:reply, {:ok, downstream}, %{state | downstream: downstream, downstream_monitor: monitor}}
@@ -583,6 +591,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp active_turn?(%{active_turn: active_turn}), do: is_map(active_turn)
 
   defp next_downstream_epoch(nil), do: 1
   defp next_downstream_epoch(%{epoch: epoch}), do: epoch + 1

@@ -302,7 +302,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     gateway_opts = %{websocket_owner_forwarder_opts: opts}
 
-    assert :ok =
+    assert :detached_stale_downstream =
              Gateway.detach_websocket_owner_downstream(
                session,
                token,
@@ -310,7 +310,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                gateway_opts
              )
 
-    assert :ok =
+    assert :detached_stale_downstream =
              Gateway.detach_websocket_owner_downstream(
                session,
                token,

@@ -31,7 +31,8 @@ defmodule CodexPooler.Gateway.Websocket do
           required(:codex_session) => CodexSession.t(),
           optional(:upstream_websocket_session) => pid(),
           optional(:websocket_owner_lease_token) => String.t(),
-          optional(:websocket_owner_downstream) => WebsocketOwnerSession.downstream()
+          optional(:websocket_owner_downstream) => WebsocketOwnerSession.downstream(),
+          optional(:websocket_owner_active_turn_reconnect?) => boolean()
         }
 
   @spec websocket_owner_forwarding_enabled?() :: boolean()
@@ -189,7 +190,8 @@ defmodule CodexPooler.Gateway.Websocket do
        %{
          codex_session: session,
          websocket_owner_lease_token: session.owner_lease_token,
-         websocket_owner_downstream: downstream
+         websocket_owner_downstream: downstream,
+         websocket_owner_active_turn_reconnect?: active_turn_reconnect?(downstream)
        }}
     end
   end
@@ -305,7 +307,7 @@ defmodule CodexPooler.Gateway.Websocket do
           String.t() | nil,
           WebsocketOwnerSession.downstream() | nil,
           opts()
-        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+        ) :: :ok | :detached_stale_downstream | {:error, WebsocketOwnerContract.owner_error()}
   def detach_websocket_owner_downstream(
         %CodexSession{} = session,
         owner_lease_token,
@@ -335,9 +337,12 @@ defmodule CodexPooler.Gateway.Websocket do
 
   defp owner_detach_result(:ok), do: :ok
   defp owner_detach_result({:error, :stale_owner}), do: :ok
-  defp owner_detach_result({:error, :stale_downstream}), do: :ok
-  defp owner_detach_result({:error, :duplicate_downstream}), do: :ok
+  defp owner_detach_result({:error, :stale_downstream}), do: :detached_stale_downstream
+  defp owner_detach_result({:error, :duplicate_downstream}), do: :detached_stale_downstream
   defp owner_detach_result({:error, reason}), do: owner_detach_error(reason)
+
+  defp active_turn_reconnect?(%{active_turn_reconnect?: true}), do: true
+  defp active_turn_reconnect?(_downstream), do: false
 
   defp owner_attach_error(reason) do
     if WebsocketOwnerContract.owner_error?(reason),

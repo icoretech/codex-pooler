@@ -28,8 +28,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          codex_session: session,
          websocket_owner_lease_token: owner_lease_token,
          websocket_owner_downstream: downstream
-       }} ->
-        {:ok, put_owner_runtime_state(state, session, owner_lease_token, downstream)}
+       } = runtime} ->
+        {:ok, put_owner_runtime_state(state, session, owner_lease_token, downstream, runtime)}
 
       {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} ->
         {:ok,
@@ -68,7 +68,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:push, {:text, Jason.encode!(websocket_error(payload))}, state}
 
       {:ok, :complete} ->
-        {:ok, state}
+        {:ok, Map.put(state, :websocket_owner_active_turn_reconnect?, false)}
 
       :drop ->
         {:ok, state}
@@ -207,7 +207,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp failure_reason(%module{}), do: inspect(module)
   defp failure_reason(_reason), do: "unknown"
 
-  defp put_owner_runtime_state(state, session, owner_lease_token, downstream) do
+  defp put_owner_runtime_state(state, session, owner_lease_token, downstream, runtime) do
     state
     |> put_socket_lifecycle_state()
     |> Map.put(:tasks, MapSet.new())
@@ -215,6 +215,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:codex_session, session)
     |> Map.put(:websocket_owner_lease_token, owner_lease_token)
     |> Map.put(:websocket_owner_downstream, downstream)
+    |> Map.put(
+      :websocket_owner_active_turn_reconnect?,
+      Map.get(runtime, :websocket_owner_active_turn_reconnect?, false)
+    )
     |> put_websocket_owner_monitor(session)
   end
 
@@ -364,7 +368,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     if owner_forwarded_socket?(state) and active_response_task?(state) do
       queue_owner_payload(state, payload)
     else
-      start_tracked_response_task(payload, state)
+      if suppress_owner_reconnect_replay?(payload, state) do
+        state
+      else
+        start_tracked_response_task(payload, state)
+      end
     end
   end
 
@@ -426,6 +434,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp owner_forwarded_socket?(state), do: is_map(Map.get(state, :websocket_owner_downstream))
 
   defp active_response_task?(state), do: MapSet.size(Map.get(state, :tasks, MapSet.new())) > 0
+
+  defp suppress_owner_reconnect_replay?(payload, state) do
+    owner_forwarded_socket?(state) and
+      Map.get(state, :websocket_owner_active_turn_reconnect?) == true and
+      request_row_producing_response_payload?(payload)
+  end
 
   defp track_response_task(state, pid, monitor) when is_pid(pid) and is_reference(monitor) do
     state
@@ -529,6 +543,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp log_owner_detach_failure(:ok, _state, _recovery_result), do: :ok
+  defp log_owner_detach_failure(:detached_stale_downstream, _state, _recovery_result), do: :ok
 
   defp log_owner_detach_failure({:error, reason}, state, {:ok, recovery}) do
     if interrupted_turn_count(recovery) > 0 do

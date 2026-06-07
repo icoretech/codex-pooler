@@ -399,6 +399,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              })
 
     assert second_downstream.epoch == 2
+    assert second_downstream.active_turn_reconnect? == true
 
     assert WebsocketOwnerSession.submit_frame(owner, second_downstream, "overlap-frame") ==
              {:error, :owner_busy}

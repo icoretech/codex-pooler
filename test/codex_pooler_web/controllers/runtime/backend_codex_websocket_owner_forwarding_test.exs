@@ -713,6 +713,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert first_log.status == "succeeded"
   end
 
+  test "active owner reconnect suppresses replayed response create and preserves active turn" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-ws-owner-active-reconnect"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-owner-active-reconnect-first", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    first_payload =
+      websocket_payload(setup, "first owner active reconnect turn", %{
+        "request_id" => "ws-owner-active-reconnect-first"
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:blocking_owner_upstream_received, owner_worker_pid, ^release_ref}
+
+    {:ok, second_state} = owner_socket(auth, "ws-owner-active-reconnect-second", turn_state)
+    assert second_state.websocket_owner_downstream.epoch == 2
+    assert second_state.websocket_owner_active_turn_reconnect? == true
+
+    try do
+      assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
+
+      assert [in_progress_request] = request_logs(setup.pool.id)
+      assert in_progress_request.correlation_id == "ws-owner-active-reconnect-first"
+      assert in_progress_request.status == "in_progress"
+
+      assert {:ok, second_state} =
+               CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, second_state)
+
+      assert second_state.websocket_owner_active_turn_reconnect? == true
+      assert MapSet.size(second_state.tasks) == 0
+      assert length(request_logs(setup.pool.id)) == 1
+
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
+
+      assert {:ok, second_state} = receive_owner_socket_complete(second_state)
+      assert second_state.websocket_owner_active_turn_reconnect? == false
+      assert_receive {:codex_response_done, _pid, :ok}
+
+      assert [request_log] = request_logs(setup.pool.id)
+      assert request_log.correlation_id == "ws-owner-active-reconnect-first"
+      assert request_log.status == "succeeded"
+      assert request_log.response_status_code == 200
+      assert request_log.last_error_code == nil
+
+      owner_metadata = request_log.request_metadata["websocket_owner_forwarding"]
+      assert owner_metadata["downstream_epoch"] == 1
+    after
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
+      CodexResponsesSocket.terminate(:closed, second_state)
+    end
+  end
+
   test "owner forwarding does not acquire a second proxy websocket admission slot" do
     with_single_proxy_websocket_slot(fn ->
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_admission"}))
