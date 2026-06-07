@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.0.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.1...codex-pooler-v0.0.2) (2026-06-07)
+
+
+### Features
+
+* **docs:** add Plausible analytics ([6786b7a](https://github.com/icoretech/codex-pooler/commit/6786b7a48f4bd1507016b98765d870d6fa4d4f8c))
+
+
+### Bug Fixes
+
+* **admin:** align pool visibility counts ([487088d](https://github.com/icoretech/codex-pooler/commit/487088d1adb8baf99301150d976b7a7f9294ad21))
+* **deps:** replace tzdata with zoneinfo ([8757704](https://github.com/icoretech/codex-pooler/commit/87577049be112a0ae31f355d1a168a2e354195d8))
+* **dev:** force compile before make dev startup ([b112165](https://github.com/icoretech/codex-pooler/commit/b112165a7beecf06110c4872beeaa8d684815cfb))
+* **release:** normalize component release tags ([00feabb](https://github.com/icoretech/codex-pooler/commit/00feabbcf7a3aebc0ac269c82514d20dee8a836b))
+
 ## 0.0.1 (2026-06-06)
 
 
