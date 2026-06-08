@@ -258,7 +258,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, translate chat-style role=tool continuation messages into function_call_output input items before validation, and keep chat input fallback plus Responses additional_tools support narrow and non-executable"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, and keep chat input fallback plus Responses additional_tools support narrow and non-executable"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -511,6 +511,15 @@ defmodule CodexPooler.CompatibilityMatrix do
         input_role: "tool",
         id_fields: ["tool_call_id", "call_id"],
         translated_type: "function_call_output",
+        requires_previous_response_id: true,
+        metadata_only: true
+      },
+      hermes_assistant_tool_call_replay: %{
+        input_role: "assistant",
+        source_field: "tool_calls",
+        translated_type: "function_call",
+        id_fields: ["call_id", "id"],
+        tool_content_output_field: "output",
         requires_previous_response_id: true,
         metadata_only: true
       },
