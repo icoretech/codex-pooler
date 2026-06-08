@@ -5,7 +5,7 @@ defmodule CodexPooler.MixProject do
     [
       app: :codex_pooler,
       # x-release-please-start-version
-      version: "0.0.3",
+      version: "0.0.4",
       # x-release-please-end
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),

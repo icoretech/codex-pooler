@@ -49,7 +49,7 @@ Set an explicit immutable image tag for real deployments. Don't rely on `latest`
 ```yaml
 image:
   repository: ghcr.io/icoretech/codex-pooler
-  tag: 0.0.3
+  tag: 0.0.4
   pullPolicy: IfNotPresent
 ```
 
@@ -224,9 +224,9 @@ Render manifests locally before applying them:
 
 ```bash
 helm template codex-pooler icoretech/codex-pooler \
-  --version 0.0.3 \
+  --version 0.0.4 \
   --set image.repository=ghcr.io/icoretech/codex-pooler \
-  --set image.tag=0.0.3 \
+  --set image.tag=0.0.4 \
   --set config.host=pooler.example.com \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=pooler.example.com

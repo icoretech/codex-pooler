@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.3...codex-pooler-v0.0.4) (2026-06-08)
+
+
+### Bug Fixes
+
+* **accounting:** restore request log sse costs ([924df6d](https://github.com/icoretech/codex-pooler/commit/924df6dd5de10fbb21cf7ebd6e3fdff94dcdddc4))
+* **deps:** update dependency bandit to 1.12.0 ([abf5288](https://github.com/icoretech/codex-pooler/commit/abf52881f72d6e35a77b1c66c772bd45f7735999))
+* **deps:** update dependency daisyui to ^5.5.23 ([#28](https://github.com/icoretech/codex-pooler/issues/28)) ([cdf21cc](https://github.com/icoretech/codex-pooler/commit/cdf21cc4a1b6d0931e93b80e838c6c5d4d1fa5b1))
+
+
+### Performance Improvements
+
+* **accounting:** project request log facts ([ed5271e](https://github.com/icoretech/codex-pooler/commit/ed5271e096a5e9f6679e44051b7e1e1de28b0291))
+
 ## [0.0.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.2...codex-pooler-v0.0.3) (2026-06-07)
 
 
