@@ -2461,104 +2461,116 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   @tag :feature_control_plane_alpha_search
   test "POST /backend-api/codex/alpha/search proxies exact upstream path and keeps logs metadata-only",
        %{conn: conn} do
-    upstream_response = %{"encrypted_output" => "encrypted-alpha-search-result"}
+    upstream_responses = [
+      %{"output" => "alpha-search-result", "encrypted_output" => "encrypted-alpha-search-result"},
+      %{"output" => "alpha-search-result"}
+    ]
 
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response_with_headers(
-          upstream_response,
-          [
-            {"request-id", "req_alpha_search_fixture"},
-            {"x-request-id", "xreq_alpha_search_fixture"},
-            {"set-cookie", "upstream_session=secret"},
-            {"connection", "close"},
-            {"x-upstream-secret", "do-not-forward"}
-          ]
+    for upstream_response <- upstream_responses do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response_with_headers(
+            upstream_response,
+            [
+              {"request-id", "req_alpha_search_fixture"},
+              {"x-request-id", "xreq_alpha_search_fixture"},
+              {"set-cookie", "upstream_session=secret"},
+              {"connection", "close"},
+              {"x-upstream-secret", "do-not-forward"}
+            ]
+          )
         )
-      )
 
-    setup = gateway_setup(upstream)
-    search_marker = "alpha-search-body-sentinel-do-not-log"
-    raw_idempotency_key = "alpha-search-idempotency-secret"
+      setup = gateway_setup(upstream)
+      search_marker = "alpha-search-body-sentinel-do-not-log"
+      raw_idempotency_key = "alpha-search-idempotency-secret"
 
-    payload = %{
-      "id" => "search_alpha_fixture",
-      "input" => search_marker,
-      "commands" => %{"search_query" => [%{"q" => "synthetic search query"}]},
-      "settings" => %{"search_context_size" => "medium"}
-    }
+      payload = %{
+        "id" => "search_alpha_fixture",
+        "input" => search_marker,
+        "commands" => %{"search_query" => [%{"q" => "synthetic search query"}]},
+        "settings" => %{"search_context_size" => "medium"}
+      }
 
-    conn =
-      conn
-      |> auth(setup)
-      |> put_req_header("user-agent", "alpha-search-test-agent")
-      |> put_req_header("cookie", "session=secret")
-      |> put_req_header("idempotency-key", raw_idempotency_key)
-      |> put_req_header("x-openai-client-user-agent", "should-not-forward-openai")
-      |> put_req_header("x-codex-session-id", "should-not-forward-codex")
-      |> post_json_runtime(
-        "/backend-api/codex/alpha/search?source=codex&repeat=1&repeat=2",
-        payload
-      )
+      conn =
+        conn
+        |> auth(setup)
+        |> put_req_header("user-agent", "alpha-search-test-agent")
+        |> put_req_header("cookie", "session=secret")
+        |> put_req_header("idempotency-key", raw_idempotency_key)
+        |> put_req_header("x-openai-client-user-agent", "should-not-forward-openai")
+        |> put_req_header("x-codex-session-id", "should-not-forward-codex")
+        |> post_json_runtime(
+          "/backend-api/codex/alpha/search?source=codex&repeat=1&repeat=2",
+          payload
+        )
 
-    assert json_response(conn, 200) == upstream_response
-    assert get_resp_header(conn, "request-id") == ["req_alpha_search_fixture"]
-    assert get_resp_header(conn, "x-request-id") == ["xreq_alpha_search_fixture"]
-    assert get_resp_header(conn, "set-cookie") == []
-    assert get_resp_header(conn, "connection") == []
-    assert get_resp_header(conn, "x-upstream-secret") == []
+      assert json_response(conn, 200) == upstream_response
+      assert get_resp_header(conn, "request-id") == ["req_alpha_search_fixture"]
+      assert get_resp_header(conn, "x-request-id") == ["xreq_alpha_search_fixture"]
+      assert get_resp_header(conn, "set-cookie") == []
+      assert get_resp_header(conn, "connection") == []
+      assert get_resp_header(conn, "x-upstream-secret") == []
 
-    assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.method == "POST"
-    assert captured.path == "/alpha/search"
-    assert captured.query_string == "source=codex&repeat=1&repeat=2"
-    assert captured.json == payload
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "POST"
+      assert captured.path == "/alpha/search"
+      assert captured.query_string == "source=codex&repeat=1&repeat=2"
+      assert captured.json == payload
 
-    captured_headers = Map.new(captured.headers)
-    assert captured_headers["authorization"] == "Bearer upstream-token"
-    assert captured_headers["accept"] == "application/json"
-    assert captured_headers["content-type"] == "application/json"
-    assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
-    assert is_binary(captured_headers["x-request-id"])
-    refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
-    refute Map.has_key?(captured_headers, "x-codex-session-id")
-    refute inspect(captured.headers) =~ setup.raw_key
-    refute inspect(captured.headers) =~ "session=secret"
-    refute inspect(captured.headers) =~ raw_idempotency_key
+      captured_headers = Map.new(captured.headers)
+      assert captured_headers["authorization"] == "Bearer upstream-token"
+      assert captured_headers["accept"] == "application/json"
+      assert captured_headers["content-type"] == "application/json"
+      assert captured_headers["user-agent"] == "codex_cli_rs/0.0.0"
+      assert is_binary(captured_headers["x-request-id"])
+      refute Map.has_key?(captured_headers, "x-openai-client-user-agent")
+      refute Map.has_key?(captured_headers, "x-codex-session-id")
+      refute inspect(captured.headers) =~ setup.raw_key
+      refute inspect(captured.headers) =~ "session=secret"
+      refute inspect(captured.headers) =~ raw_idempotency_key
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.endpoint == "/backend-api/codex/alpha/search"
-    assert request.transport == "http_json"
-    assert request.status == "succeeded"
-    assert request.response_status_code == 200
-    assert request.retry_count == 0
-    assert_control_plane_route_metadata(request, setup)
-    assert request.request_metadata["request"]["body_bytes"] == byte_size(Jason.encode!(payload))
-    assert request.request_metadata["request"]["content_type"] == "application/json"
-    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/alpha/search"
+      assert request.transport == "http_json"
+      assert request.status == "succeeded"
+      assert request.response_status_code == 200
+      assert request.retry_count == 0
+      assert_control_plane_route_metadata(request, setup)
 
-    metadata_text = inspect(request.request_metadata)
-    refute metadata_text =~ search_marker
-    refute metadata_text =~ setup.raw_key
-    refute metadata_text =~ "upstream-token"
-    refute metadata_text =~ "session=secret"
-    refute metadata_text =~ raw_idempotency_key
+      assert request.request_metadata["request"]["body_bytes"] ==
+               byte_size(Jason.encode!(payload))
 
-    logs = RequestLogs.list(setup.pool.id, limit: 10)
-    assert [item | _rest] = logs.items
-    assert item.endpoint == "/backend-api/codex/alpha/search"
-    assert item.status == "succeeded"
-    assert item.metadata["endpoint"] == "/backend-api/codex/alpha/search"
-    assert item.metadata["routing"]["route_class"] == "proxy_control"
-    assert item.metadata["request"]["body_bytes"] == byte_size(Jason.encode!(payload))
-    assert item.metadata["request"]["content_type"] == "application/json"
+      assert request.request_metadata["request"]["content_type"] == "application/json"
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
-    request_log_text = inspect(item)
-    refute request_log_text =~ search_marker
-    refute request_log_text =~ setup.raw_key
-    refute request_log_text =~ "upstream-token"
-    refute request_log_text =~ "session=secret"
-    refute request_log_text =~ raw_idempotency_key
+      metadata_text = inspect(request.request_metadata)
+      refute metadata_text =~ search_marker
+      refute metadata_text =~ "alpha-search-result"
+      refute metadata_text =~ "encrypted-alpha-search-result"
+      refute metadata_text =~ setup.raw_key
+      refute metadata_text =~ "upstream-token"
+      refute metadata_text =~ "session=secret"
+      refute metadata_text =~ raw_idempotency_key
+
+      logs = RequestLogs.list(setup.pool.id, limit: 10)
+      assert [item | _rest] = logs.items
+      assert item.endpoint == "/backend-api/codex/alpha/search"
+      assert item.status == "succeeded"
+      assert item.metadata["endpoint"] == "/backend-api/codex/alpha/search"
+      assert item.metadata["routing"]["route_class"] == "proxy_control"
+      assert item.metadata["request"]["body_bytes"] == byte_size(Jason.encode!(payload))
+      assert item.metadata["request"]["content_type"] == "application/json"
+
+      request_log_text = inspect(item)
+      refute request_log_text =~ search_marker
+      refute request_log_text =~ "alpha-search-result"
+      refute request_log_text =~ "encrypted-alpha-search-result"
+      refute request_log_text =~ setup.raw_key
+      refute request_log_text =~ "upstream-token"
+      refute request_log_text =~ "session=secret"
+      refute request_log_text =~ raw_idempotency_key
+    end
   end
 
   @tag :feature_control_plane_alpha_search
