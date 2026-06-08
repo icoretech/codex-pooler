@@ -97,6 +97,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   defp normalize_input_items(input) do
     Enum.reduce_while(input, {:ok, []}, fn item, {:ok, acc} ->
       case normalize_input_item(item) do
+        {:ok, items} when is_list(items) -> {:cont, {:ok, Enum.reverse(items) ++ acc}}
         {:ok, item} -> {:cont, {:ok, [item | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -108,6 +109,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   end
 
   defp normalize_input_item(%{"type" => "additional_tools"} = item), do: {:ok, item}
+
+  defp normalize_input_item(%{"role" => "assistant", "tool_calls" => tool_calls})
+       when is_list(tool_calls) do
+    normalize_assistant_tool_calls(tool_calls)
+  end
 
   defp normalize_input_item(%{"role" => "tool"} = item) do
     with {:ok, call_id} <- tool_call_id(item),
@@ -149,6 +155,50 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     end
   end
 
+  defp normalize_assistant_tool_calls(tool_calls) do
+    tool_calls
+    |> Enum.reduce_while({:ok, []}, fn tool_call, {:ok, acc} ->
+      case normalize_assistant_tool_call(tool_call) do
+        {:ok, item} -> {:cont, {:ok, [item | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.reverse(items)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_assistant_tool_call(
+         %{"function" => %{"name" => name, "arguments" => arguments}} = item
+       )
+       when is_binary(name) and is_binary(arguments) do
+    case clean_string(Map.get(item, "call_id")) || clean_string(Map.get(item, "id")) do
+      nil ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+      call_id ->
+        {:ok,
+         %{
+           "type" => "function_call",
+           "call_id" => call_id,
+           "name" => name,
+           "arguments" => arguments
+         }
+         |> put_optional_id(Map.get(item, "response_item_id"))}
+    end
+  end
+
+  defp normalize_assistant_tool_call(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp put_optional_id(item, value) do
+    case clean_string(value) do
+      nil -> item
+      id -> Map.put(item, "id", id)
+    end
+  end
+
   defp input_text_message(text) do
     %{
       "type" => "message",
@@ -181,6 +231,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   end
 
   defp tool_output(%{"content" => nil}), do: {:ok, ""}
+
+  defp tool_output(%{"content" => %{"output" => output}}) when is_binary(output),
+    do: {:ok, output}
 
   defp tool_output(%{"content" => _content}),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
