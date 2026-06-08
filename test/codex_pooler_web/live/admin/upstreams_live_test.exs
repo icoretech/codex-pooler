@@ -1535,10 +1535,36 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         )
       )
 
-    _ = :sys.get_state(view.pid)
+    execute_scheduled_upstreams_reload(view)
 
     assert has_element?(view, "#upstream-account-#{identity.id}", "realtime@example.com")
     refute has_element?(view, "#upstream-account-#{identity.id}", "acct_realtime")
+  end
+
+  test "coalesces upstream event bursts before reloading", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "upstream-event-burst", name: "Upstream Event Burst"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "quota_priming_updated", %{"sequence" => 1})
+
+    state = :sys.get_state(view.pid)
+    timer = state.socket.assigns[:upstreams_reload_timer]
+    assert is_reference(timer)
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "quota_priming_updated", %{"sequence" => 2})
+
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns[:upstreams_reload_timer] == timer
+
+    Process.cancel_timer(timer, async: false, info: false)
+    send(view.pid, :reload_upstreams_from_events)
+
+    state = :sys.get_state(view.pid)
+    assert is_nil(state.socket.assigns[:upstreams_reload_timer])
   end
 
   test "refreshes quota limits when upstream quota windows change outside the LiveView", %{
@@ -1598,7 +1624,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                }
              ])
 
-    _ = :sys.get_state(view.pid)
+    execute_scheduled_upstreams_reload(view)
 
     assert has_element?(
              view,
@@ -1670,7 +1696,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert {:ok, payload} = Events.event_to_postgres_payload(event)
     assert :ok = PostgresBridge.relay_payload(payload)
-    _ = :sys.get_state(view.pid)
+    execute_scheduled_upstreams_reload(view)
 
     assert has_element?(
              view,
@@ -1714,7 +1740,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                "finished_at" => DateTime.utc_now() |> DateTime.to_iso8601()
              })
 
-    _ = :sys.get_state(view.pid)
+    execute_scheduled_upstreams_reload(view)
 
     assert has_element?(
              view,
@@ -2977,6 +3003,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     view
     |> element("#upstream-page-import-auth-json-action")
     |> render_click()
+  end
+
+  defp execute_scheduled_upstreams_reload(view) do
+    state = :sys.get_state(view.pid)
+    timer = state.socket.assigns[:upstreams_reload_timer]
+
+    assert is_reference(timer)
+    Process.cancel_timer(timer, async: false, info: false)
+    send(view.pid, :reload_upstreams_from_events)
+    _ = :sys.get_state(view.pid)
   end
 
   defp upstream_page_action_order(html) do

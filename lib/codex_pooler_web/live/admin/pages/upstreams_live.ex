@@ -14,6 +14,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
+  @upstreams_reload_debounce_ms 1_000
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -33,7 +35,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         importing_auth_json: false,
         renaming_account: nil,
         rename_account_form: nil,
-        subscribed_pool_ids: MapSet.new()
+        subscribed_pool_ids: MapSet.new(),
+        upstreams_reload_timer: nil
       )
       |> allow_upload(:auth_json,
         accept: ~w(.json),
@@ -56,10 +59,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   @impl true
   def handle_info({Events, %{topics: topics}}, socket) do
     if "upstreams" in topics do
-      {:noreply, reload_upstreams(socket)}
+      {:noreply, schedule_upstreams_reload(socket)}
     else
       {:noreply, socket}
     end
+  end
+
+  @impl true
+  def handle_info(:reload_upstreams_from_events, socket) do
+    {:noreply,
+     socket
+     |> assign(:upstreams_reload_timer, nil)
+     |> reload_upstreams()}
   end
 
   @impl true
@@ -349,7 +360,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
       )
 
-    socket = maybe_subscribe_pool_events(socket, filtered_pools)
+    socket =
+      socket
+      |> cancel_upstreams_reload_timer()
+      |> maybe_subscribe_pool_events(filtered_pools)
 
     assign(socket,
       pools: pools,
@@ -364,6 +378,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   defp reload_upstreams(socket), do: load_upstreams(socket, socket.assigns.filter_values)
+
+  defp schedule_upstreams_reload(socket) do
+    if is_reference(socket.assigns[:upstreams_reload_timer]) do
+      socket
+    else
+      timer =
+        Process.send_after(
+          self(),
+          :reload_upstreams_from_events,
+          @upstreams_reload_debounce_ms
+        )
+
+      assign(socket, :upstreams_reload_timer, timer)
+    end
+  end
+
+  defp cancel_upstreams_reload_timer(socket) do
+    if is_reference(socket.assigns[:upstreams_reload_timer]) do
+      Process.cancel_timer(socket.assigns.upstreams_reload_timer, async: false, info: false)
+    end
+
+    assign(socket, :upstreams_reload_timer, nil)
+  end
 
   defp filtered_pools(pools, %{"pool_id" => pool_id}) when is_binary(pool_id) and pool_id != "" do
     Enum.filter(pools, &(&1.id == pool_id))
