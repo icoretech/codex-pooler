@@ -261,6 +261,57 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     end
 
     @tag :tool_result_previous_response
+    test "v1 Responses translates Hermes chat-style tool continuations before dispatch", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_hermes_tool_replay",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_hermes_previous",
+          "store" => false,
+          "input" => [
+            %{
+              "role" => "tool",
+              "tool_call_id" => "call_v1_hermes_lookup",
+              "content" => "synthetic hermes tool result"
+            }
+          ]
+        })
+
+      assert %{"id" => "resp_v1_hermes_tool_replay"} = json_response(response_conn, 200)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["previous_response_id"] == "resp_v1_hermes_previous"
+
+      assert [
+               %{
+                 "type" => "function_call_output",
+                 "call_id" => "call_v1_hermes_lookup",
+                 "output" => "synthetic hermes tool result"
+               }
+             ] = captured.json["input"]
+
+      metadata = persisted_gateway_metadata(setup.pool.id)
+      refute metadata =~ "synthetic hermes tool result"
+      refute metadata =~ "resp_v1_hermes_previous"
+      refute metadata =~ "call_v1_hermes_lookup"
+      refute metadata =~ "raw_request"
+    end
+
+    @tag :tool_result_previous_response
     test "v1 Responses rejects stale or malformed previous-response references before dispatch",
          _context do
       upstream =

@@ -18,6 +18,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   def normalize_input(payload), do: {:ok, payload}
 
+  def normalize_list_input(%{"input" => input} = payload) when is_list(input) do
+    with {:ok, input} <- normalize_input_items(input) do
+      {:ok, Map.put(payload, "input", input)}
+    end
+  end
+
+  def normalize_list_input(payload), do: {:ok, payload}
+
   def normalize_recoverable_opencode_replay_call_ids(%{"input" => input} = payload)
       when is_list(input) do
     {:ok, Map.put(payload, "input", normalize_recoverable_opencode_replay_items(input))}
@@ -101,6 +109,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   defp normalize_input_item(%{"type" => "additional_tools"} = item), do: {:ok, item}
 
+  defp normalize_input_item(%{"role" => "tool"} = item) do
+    with {:ok, call_id} <- tool_call_id(item),
+         {:ok, output} <- tool_output(item) do
+      {:ok, %{"type" => "function_call_output", "call_id" => call_id, "output" => output}}
+    end
+  end
+
   defp normalize_input_item(%{"content" => content} = item) when is_binary(content) do
     item =
       item
@@ -141,6 +156,66 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
       "content" => [%{"type" => "input_text", "text" => text}]
     }
   end
+
+  defp tool_call_id(item) do
+    case clean_string(Map.get(item, "tool_call_id")) || clean_string(Map.get(item, "call_id")) do
+      nil -> {:error, Error.invalid_request("input item shape is not translatable", "input")}
+      call_id -> {:ok, call_id}
+    end
+  end
+
+  defp tool_output(%{"content" => content}) when is_binary(content), do: {:ok, content}
+
+  defp tool_output(%{"content" => content}) when is_list(content) do
+    content
+    |> Enum.reduce_while({:ok, []}, fn part, {:ok, acc} ->
+      case normalize_tool_output_part(part) do
+        {:ok, part} -> {:cont, {:ok, [part | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, parts} -> {:ok, Enum.reverse(parts)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp tool_output(%{"content" => nil}), do: {:ok, ""}
+
+  defp tool_output(%{"content" => _content}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp tool_output(_item), do: {:ok, ""}
+
+  defp normalize_tool_output_part(part) when is_binary(part) do
+    {:ok, %{"type" => "input_text", "text" => part}}
+  end
+
+  defp normalize_tool_output_part(%{"type" => type, "text" => text})
+       when type in ["text", "input_text"] and is_binary(text) do
+    {:ok, %{"type" => "input_text", "text" => text}}
+  end
+
+  defp normalize_tool_output_part(%{"type" => "input_image", "image_url" => image_url})
+       when is_binary(image_url) do
+    {:ok, %{"type" => "input_image", "image_url" => image_url}}
+  end
+
+  defp normalize_tool_output_part(%{"type" => "image_url"} = part) do
+    case Map.get(part, "image_url") do
+      %{"url" => image_url} when is_binary(image_url) ->
+        {:ok, %{"type" => "input_image", "image_url" => image_url}}
+
+      image_url when is_binary(image_url) ->
+        {:ok, %{"type" => "input_image", "image_url" => image_url}}
+
+      _value ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+    end
+  end
+
+  defp normalize_tool_output_part(_part),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp normalize_message_role(%{"type" => "message", "role" => "system"} = item),
     do: Map.put(item, "role", "developer")

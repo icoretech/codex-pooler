@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Validation.require_model(payload),
          :ok <- reject_locally_unsupported_fields(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
+         {:ok, payload} <- Input.normalize_list_input(payload),
          :ok <- Input.validate_input(payload),
          :ok <- Input.validate_previous_response_continuation(payload),
          :ok <- validate_tools(payload),
