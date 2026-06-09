@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.5...codex-pooler-v0.0.6) (2026-06-09)
+
+
+### Bug Fixes
+
+* **responses:** accept Hermes assistant replay status ([dae80c4](https://github.com/icoretech/codex-pooler/commit/dae80c4c14f2df8738ea8922ff3059f5dd95f20c))
+* **responses:** accept OpenClaw replay shapes ([02c1812](https://github.com/icoretech/codex-pooler/commit/02c18121a9efb5f3991fc49a5e329263b5606d95))
+
 ## [0.0.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.4...codex-pooler-v0.0.5) (2026-06-09)
 
 
