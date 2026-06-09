@@ -114,6 +114,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.drop(["request_id"])
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
+    |> remove_backend_codex_encrypted_tool_schema_markers()
     |> maybe_put_websocket_responses_lite_client_metadata(request_options)
   end
 
@@ -145,7 +146,26 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
+    |> remove_backend_codex_encrypted_tool_schema_markers()
   end
+
+  defp remove_backend_codex_encrypted_tool_schema_markers(%{"tools" => tools} = payload)
+       when is_list(tools) do
+    Map.put(payload, "tools", Enum.map(tools, &remove_schema_encrypted_markers/1))
+  end
+
+  defp remove_backend_codex_encrypted_tool_schema_markers(payload), do: payload
+
+  defp remove_schema_encrypted_markers(%{} = value) do
+    value
+    |> Map.delete("encrypted")
+    |> Map.new(fn {key, value} -> {key, remove_schema_encrypted_markers(value)} end)
+  end
+
+  defp remove_schema_encrypted_markers(value) when is_list(value),
+    do: Enum.map(value, &remove_schema_encrypted_markers/1)
+
+  defp remove_schema_encrypted_markers(value), do: value
 
   defp maybe_drop_backend_codex_previous_response_id(payload, _opts) do
     if backend_codex_tool_result_continuation?(payload),

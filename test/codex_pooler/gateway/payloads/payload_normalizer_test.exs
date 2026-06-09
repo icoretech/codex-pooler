@@ -7,6 +7,80 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   describe "upstream_payload/4" do
+    test "removes backend Codex encrypted tool schema markers from HTTP upstream JSON" do
+      payload = encrypted_tool_schema_payload()
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+
+      assert get_in(upstream, ["tools", Access.at(0), "parameters", "properties", "message"]) ==
+               %{
+                 "description" => "Initial plain-text task for the new agent.",
+                 "type" => "string"
+               }
+
+      assert get_in(upstream, [
+               "tools",
+               Access.at(1),
+               "function",
+               "parameters",
+               "properties",
+               "message"
+             ]) ==
+               %{
+                 "description" => "Message text to queue on the target agent.",
+                 "type" => "string"
+               }
+    end
+
+    test "removes backend Codex encrypted tool schema markers from websocket upstream JSON" do
+      payload = encrypted_tool_schema_payload()
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+      assert upstream["type"] == "response.create"
+
+      refute Map.has_key?(
+               get_in(upstream, ["tools", Access.at(0), "parameters", "properties", "message"]),
+               "encrypted"
+             )
+
+      refute Map.has_key?(
+               get_in(upstream, [
+                 "tools",
+                 Access.at(1),
+                 "function",
+                 "parameters",
+                 "properties",
+                 "message"
+               ]),
+               "encrypted"
+             )
+    end
+
     test "omits absent, auto, and default service tiers while preserving concrete tiers upstream" do
       model = %Model{upstream_model_id: "provider-model"}
 
@@ -182,5 +256,52 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       assert Jason.decode!(encoded)["service_tier"] == "priority"
     end
+  end
+
+  defp encrypted_tool_schema_payload do
+    %{
+      "model" => "gpt-5.5",
+      "input" => [%{"role" => "user", "content" => "hello"}],
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "spawn_agent",
+          "strict" => false,
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{
+              "message" => %{
+                "type" => "string",
+                "description" => "Initial plain-text task for the new agent.",
+                "encrypted" => true
+              },
+              "task_name" => %{"type" => "string"}
+            },
+            "required" => ["task_name", "message"],
+            "additionalProperties" => false
+          }
+        },
+        %{
+          "type" => "function",
+          "function" => %{
+            "name" => "send_message",
+            "strict" => false,
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{
+                "message" => %{
+                  "type" => "string",
+                  "description" => "Message text to queue on the target agent.",
+                  "encrypted" => true
+                },
+                "target" => %{"type" => "string"}
+              },
+              "required" => ["target", "message"],
+              "additionalProperties" => false
+            }
+          }
+        }
+      ]
+    }
   end
 end
