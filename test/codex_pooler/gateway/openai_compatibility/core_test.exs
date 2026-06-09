@@ -1597,6 +1597,40 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert result.payload["tools"] == payload["tools"]
     end
 
+    test "Responses accepts namespace tools with nested function tools" do
+      namespace_tool = %{
+        "type" => "namespace",
+        "name" => "fixture_namespace",
+        "description" => "Synthetic namespace tools",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "lookup_namespaced_fixture",
+            "description" => "Lookup synthetic namespaced fixture",
+            "parameters" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{"value" => %{"type" => "string"}},
+              "required" => ["value"]
+            },
+            "strict" => true,
+            "defer_loading" => true
+          }
+        ]
+      }
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [namespace_tool],
+        "tool_choice" => %{"type" => "function", "name" => "lookup_namespaced_fixture"}
+      }
+
+      assert {:ok, result} = Responses.coerce(payload)
+      assert result.payload["tools"] == [namespace_tool]
+      assert result.payload["tool_choice"] == payload["tool_choice"]
+    end
+
     test "Chat accepts nested function tools and translates them to flat Responses tools" do
       payload = %{
         "model" => "gpt-fixture-text",
@@ -1623,6 +1657,60 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       Enum.each(invalid_payloads, fn {tool, expected_param} ->
         assert {:error, %{status: 400, code: "invalid_request", param: ^expected_param}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool]
+                 })
+      end)
+    end
+
+    test "Responses rejects malformed namespace tools" do
+      invalid_tools = [
+        %{"type" => "namespace", "name" => "", "description" => "Synthetic", "tools" => []},
+        %{"type" => "namespace", "name" => "fixture", "description" => "", "tools" => []},
+        %{"type" => "namespace", "name" => "fixture", "description" => "Synthetic"},
+        %{
+          "type" => "namespace",
+          "name" => "fixture",
+          "description" => "Synthetic",
+          "tools" => []
+        },
+        %{
+          "type" => "namespace",
+          "name" => "fixture",
+          "description" => "Synthetic",
+          "tools" => [%{"type" => "web_search_preview"}]
+        },
+        %{
+          "type" => "namespace",
+          "name" => "fixture",
+          "description" => "Synthetic",
+          "tools" => [%{"type" => "function", "name" => "", "parameters" => %{}}]
+        },
+        %{
+          "type" => "namespace",
+          "name" => "fixture",
+          "description" => "Synthetic",
+          "tools" => [%{"type" => "function", "name" => "lookup_fixture", "parameters" => []}]
+        },
+        %{
+          "type" => "namespace",
+          "name" => "fixture",
+          "description" => "Synthetic",
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "lookup_fixture",
+              "parameters" => %{},
+              "defer_loading" => "yes"
+            }
+          ]
+        }
+      ]
+
+      Enum.each(invalid_tools, fn tool ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
                  Responses.coerce(%{
                    "model" => "gpt-fixture-text",
                    "input" => "synthetic input",
@@ -1753,7 +1841,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
-    test "Responses rejects unsupported hosted built-in and namespace/deferred tools" do
+    test "Responses rejects unsupported hosted built-in and deferred tools" do
       rejected_tools = [
         %{"type" => "web_search_preview", "search_context_size" => "low"},
         %{"type" => "image_generation", "quality" => "high"},
@@ -1788,6 +1876,59 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                  })
       end)
     end
+  end
+
+  @tag :responses_coercion
+  test "store false replay continuations preserve raw Responses item ids" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "previous_response_id" => "resp_fixture_previous",
+      "store" => false,
+      "input" => [
+        %{
+          "type" => "reasoning",
+          "id" => "rs_fixture_replay",
+          "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+          "encrypted_content" => "synthetic-encrypted-reasoning"
+        },
+        %{
+          "type" => "message",
+          "role" => "assistant",
+          "id" => "msg_fixture_replay",
+          "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+        },
+        %{
+          "type" => "function_call",
+          "id" => "fc_fixture_replay",
+          "call_id" => "call_fixture_replay",
+          "name" => "lookup_fixture",
+          "namespace" => "fixture_namespace",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco_fixture_replay",
+          "call_id" => "call_fixture_replay",
+          "output" => "synthetic tool output"
+        },
+        %{"type" => "item_reference", "id" => "msg_fixture_reference"}
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload, collect_openai_response_stream: true)
+    assert result.payload["store"] == false
+    assert result.payload["previous_response_id"] == "resp_fixture_previous"
+
+    assert Enum.map(result.payload["input"], &Map.get(&1, "id")) == [
+             "rs_fixture_replay",
+             "msg_fixture_replay",
+             "fc_fixture_replay",
+             "fco_fixture_replay",
+             "msg_fixture_reference"
+           ]
+
+    assert Enum.at(result.payload["input"], 2)["call_id"] == "call_fixture_replay"
+    assert Enum.at(result.payload["input"], 3)["call_id"] == "call_fixture_replay"
   end
 
   @tag :responses_coercion

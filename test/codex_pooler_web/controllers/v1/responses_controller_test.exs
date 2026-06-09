@@ -964,6 +964,78 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
+  test "POST /v1/responses forwards namespace tools unchanged", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_http_namespace_tools",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "fixture_namespace",
+      "description" => "Synthetic namespace tools",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "lookup_namespaced_fixture",
+          "description" => "Lookup synthetic namespaced fixture",
+          "parameters" => %{
+            "type" => "object",
+            "additionalProperties" => false,
+            "properties" => %{"value" => %{"type" => "string"}},
+            "required" => ["value"]
+          },
+          "strict" => true,
+          "defer_loading" => true
+        }
+      ]
+    }
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic namespace request",
+        "tools" => [namespace_tool],
+        "tool_choice" => %{"type" => "function", "name" => "lookup_namespaced_fixture"}
+      })
+
+    assert %{"id" => "resp_v1_http_namespace_tools", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+    assert captured.json["tools"] == [namespace_tool]
+
+    assert captured.json["tool_choice"] == %{
+             "type" => "function",
+             "name" => "lookup_namespaced_fixture"
+           }
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+    metadata = inspect(request.request_metadata)
+    refute metadata =~ "synthetic namespace request"
+    refute metadata =~ "lookup_namespaced_fixture"
+  end
+
+  @tag :tool_result_previous_response
   test "POST /v1/responses forwards safe continuation shape and rejects malformed item references without echoing payloads",
        %{
          conn: conn
@@ -1060,6 +1132,93 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert FakeUpstream.count(upstream) == 1
     assert Repo.aggregate(Request, :count) == 1
     assert Repo.aggregate(Attempt, :count) == 1
+  end
+
+  @tag :tool_result_previous_response
+  test "POST /v1/responses keeps store false replay item ids at the raw Responses boundary", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_http_store_false_replay_ids",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_http_store_false_previous",
+        "store" => false,
+        "input" => [
+          %{
+            "type" => "reasoning",
+            "id" => "rs_v1_http_store_false_replay",
+            "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+            "encrypted_content" => "synthetic-encrypted-reasoning"
+          },
+          %{
+            "type" => "message",
+            "role" => "assistant",
+            "id" => "msg_v1_http_store_false_replay",
+            "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+          },
+          %{
+            "type" => "function_call",
+            "id" => "fc_v1_http_store_false_replay",
+            "call_id" => "call_v1_http_store_false_replay",
+            "name" => "lookup_fixture",
+            "namespace" => "fixture_namespace",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "id" => "fco_v1_http_store_false_replay",
+            "call_id" => "call_v1_http_store_false_replay",
+            "output" => "synthetic tool output"
+          },
+          %{"type" => "item_reference", "id" => "msg_v1_http_store_false_reference"}
+        ]
+      })
+
+    assert %{"id" => "resp_v1_http_store_false_replay_ids", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["store"] == false
+    assert captured.json["previous_response_id"] == "resp_v1_http_store_false_previous"
+
+    assert Enum.map(captured.json["input"], &Map.get(&1, "id")) == [
+             "rs_v1_http_store_false_replay",
+             "msg_v1_http_store_false_replay",
+             "fc_v1_http_store_false_replay",
+             "fco_v1_http_store_false_replay",
+             "msg_v1_http_store_false_reference"
+           ]
+
+    assert Enum.at(captured.json["input"], 2)["call_id"] == "call_v1_http_store_false_replay"
+    assert Enum.at(captured.json["input"], 3)["call_id"] == "call_v1_http_store_false_replay"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    metadata = inspect(request.request_metadata)
+    refute metadata =~ "synthetic summary"
+    refute metadata =~ "synthetic assistant replay"
+    refute metadata =~ "synthetic tool output"
+    refute metadata =~ "resp_v1_http_store_false_previous"
+    refute metadata =~ "call_v1_http_store_false_replay"
   end
 
   @tag :tool_result_previous_response

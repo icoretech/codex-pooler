@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
     |> Enum.reduce([], fn {tool, index}, acc ->
       case function_tool_target(tool, index) do
         nil -> acc
+        targets when is_list(targets) -> targets ++ acc
         target -> [target | acc]
       end
     end)
@@ -61,7 +62,38 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
     end
   end
 
+  defp function_tool_target(%{"type" => "namespace", "tools" => tools}, index)
+       when is_list(tools) do
+    tools
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {tool, tool_index} ->
+      case namespace_function_tool_target(tool, index, tool_index) do
+        nil -> []
+        target -> [target]
+      end
+    end)
+  end
+
   defp function_tool_target(_tool, _index), do: nil
+
+  defp namespace_function_tool_target(
+         %{"type" => "function", "name" => name} = tool,
+         namespace_index,
+         tool_index
+       ) do
+    if strict_function_tool?(name, tool, tool) do
+      path =
+        "tools." <>
+          Integer.to_string(namespace_index) <>
+          ".tools." <> Integer.to_string(tool_index) <> ".parameters"
+
+      {Map.get(tool, "parameters"), path, name}
+    else
+      nil
+    end
+  end
+
+  defp namespace_function_tool_target(_tool, _namespace_index, _tool_index), do: nil
 
   defp strict_function_tool?(name, function, tool) do
     is_binary(name) and name != "" and
