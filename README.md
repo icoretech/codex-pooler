@@ -533,6 +533,16 @@ For deployed instances, change `apiBase` to `https://codex-pooler.example.com/v1
 if you keep the optional operator MCP add-on, change the MCP `url` to
 `https://codex-pooler.example.com/mcp`.
 
+Check the headless CLI path after saving the config:
+
+```bash
+export CODEX_POOLER_API_KEY=<pool-api-key>
+npx -y @continuedev/cli@latest -p \
+  --config ~/.continue/config.yaml \
+  --silent \
+  'Reply with exactly: continue ok'
+```
+
 </details>
 
 <details>

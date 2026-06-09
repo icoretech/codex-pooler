@@ -38,4 +38,14 @@ mcpServers:
 
 For local setup, change `apiBase` to `http://localhost:4000/v1`. If you keep the optional operator MCP add-on locally, change the MCP `url` to `http://localhost:4000/mcp`.
 
+Check the headless CLI path after saving the config:
+
+```bash
+export CODEX_POOLER_API_KEY=<pool-api-key>
+npx -y @continuedev/cli@latest -p \
+  --config ~/.continue/config.yaml \
+  --silent \
+  'Reply with exactly: continue ok'
+```
+
 The Pool API key authenticates model requests. The MCP token authenticates only the operator metadata endpoint.
