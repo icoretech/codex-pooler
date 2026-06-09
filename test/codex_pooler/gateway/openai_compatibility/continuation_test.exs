@@ -535,6 +535,153 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       refute metadata =~ "raw_request"
     end
 
+    test "v1 Responses normalizes OpenClaw assistant thinking replay before dispatch", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_openclaw_assistant_thinking_replay",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "store" => false,
+          "input" => [
+            %{"role" => "user", "content" => "synthetic first turn"},
+            %{
+              "role" => "assistant",
+              "content" => [
+                %{
+                  "type" => "thinking",
+                  "thinking" => "",
+                  "thinkingSignature" => "synthetic-thinking-signature"
+                },
+                %{"type" => "text", "text" => "synthetic assistant replay"}
+              ]
+            },
+            %{"role" => "user", "content" => "synthetic follow-up"}
+          ]
+        })
+
+      assert %{"id" => "resp_v1_openclaw_assistant_thinking_replay"} =
+               json_response(response_conn, 200)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert [
+               %{"type" => "message", "role" => "user"},
+               %{
+                 "type" => "message",
+                 "role" => "assistant",
+                 "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+               },
+               %{"type" => "message", "role" => "user"}
+             ] = captured.json["input"]
+
+      refute inspect(captured.json["input"]) =~ "thinkingSignature"
+
+      metadata = persisted_gateway_metadata(setup.pool.id)
+      refute metadata =~ "synthetic assistant replay"
+      refute metadata =~ "synthetic-thinking-signature"
+      refute metadata =~ "raw_request"
+    end
+
+    test "v1 Responses accepts converted OpenClaw reasoning replay before dispatch", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_openclaw_converted_reasoning_replay",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "store" => false,
+          "input" => [
+            %{
+              "type" => "message",
+              "role" => "user",
+              "content" => [%{"type" => "input_text", "text" => "synthetic first turn"}]
+            },
+            %{
+              "type" => "reasoning",
+              "content" => [],
+              "encrypted_content" => "synthetic-openclaw-encrypted-reasoning",
+              "id" => "rs_v1_openclaw_converted_reasoning",
+              "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}]
+            },
+            %{
+              "type" => "message",
+              "role" => "assistant",
+              "content" => [
+                %{
+                  "type" => "output_text",
+                  "text" => "synthetic assistant replay",
+                  "annotations" => []
+                }
+              ],
+              "status" => "completed",
+              "id" => "msg_v1_openclaw_converted_assistant",
+              "phase" => "final_answer"
+            },
+            %{
+              "type" => "message",
+              "role" => "user",
+              "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+            }
+          ]
+        })
+
+      assert %{"id" => "resp_v1_openclaw_converted_reasoning_replay"} =
+               json_response(response_conn, 200)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert [
+               %{"type" => "message", "role" => "user"},
+               %{
+                 "type" => "reasoning",
+                 "encrypted_content" => "synthetic-openclaw-encrypted-reasoning",
+                 "id" => "rs_v1_openclaw_converted_reasoning"
+               },
+               %{
+                 "type" => "message",
+                 "role" => "assistant",
+                 "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
+                 "status" => "completed",
+                 "id" => "msg_v1_openclaw_converted_assistant",
+                 "phase" => "final_answer"
+               },
+               %{"type" => "message", "role" => "user"}
+             ] = captured.json["input"]
+
+      refute inspect(captured.json["input"]) =~ "annotations"
+
+      metadata = persisted_gateway_metadata(setup.pool.id)
+      refute metadata =~ "synthetic assistant replay"
+      refute metadata =~ "synthetic-openclaw-encrypted-reasoning"
+      refute metadata =~ "rs_v1_openclaw_converted_reasoning"
+      refute metadata =~ "raw_request"
+    end
+
     @tag :tool_result_previous_response
     test "v1 Responses rejects stale or malformed previous-response references before dispatch",
          _context do

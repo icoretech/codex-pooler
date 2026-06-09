@@ -122,12 +122,29 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     end
   end
 
+  defp normalize_input_item(%{"type" => "reasoning"} = item) do
+    {:ok, Map.drop(item, ["content"])}
+  end
+
+  defp normalize_input_item(%{"type" => "function_call"} = item), do: {:ok, item}
+  defp normalize_input_item(%{"type" => "function_call_output"} = item), do: {:ok, item}
+
   defp normalize_input_item(%{"role" => "assistant", "content" => content} = item)
        when is_binary(content) do
     {:ok,
      item
      |> Map.put("type", "message")
      |> Map.put("content", [%{"type" => "output_text", "text" => content}])}
+  end
+
+  defp normalize_input_item(%{"role" => "assistant", "content" => content} = item)
+       when is_list(content) do
+    with {:ok, content} <- normalize_assistant_replay_content(content) do
+      {:ok,
+       item
+       |> Map.put("type", "message")
+       |> Map.put("content", content)}
+    end
   end
 
   defp normalize_input_item(%{"content" => content} = item) when is_binary(content) do
@@ -151,9 +168,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   defp normalize_input_item(%{"type" => "input_file"} = item), do: {:ok, item}
   defp normalize_input_item(%{"type" => "item_reference"} = item), do: {:ok, item}
-  defp normalize_input_item(%{"type" => "reasoning"} = item), do: {:ok, item}
-  defp normalize_input_item(%{"type" => "function_call"} = item), do: {:ok, item}
-  defp normalize_input_item(%{"type" => "function_call_output"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{} = item) do
     if ToolResultShape.tool_result?(item) do
@@ -198,6 +212,40 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   end
 
   defp normalize_assistant_tool_call(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp normalize_assistant_replay_content(content) do
+    content
+    |> Enum.reduce_while({:ok, []}, fn part, {:ok, acc} ->
+      case normalize_assistant_replay_content_part(part) do
+        {:ok, nil} -> {:cont, {:ok, acc}}
+        {:ok, part} -> {:cont, {:ok, [part | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, []} -> {:ok, [%{"type" => "output_text", "text" => ""}]}
+      {:ok, parts} -> {:ok, Enum.reverse(parts)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_assistant_replay_content_part(%{"type" => "output_text", "text" => text})
+       when is_binary(text) do
+    {:ok, %{"type" => "output_text", "text" => text}}
+  end
+
+  defp normalize_assistant_replay_content_part(%{"type" => "text", "text" => text})
+       when is_binary(text) do
+    {:ok, %{"type" => "output_text", "text" => text}}
+  end
+
+  defp normalize_assistant_replay_content_part(%{"type" => "thinking", "thinking" => thinking})
+       when is_binary(thinking) do
+    {:ok, nil}
+  end
+
+  defp normalize_assistant_replay_content_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp put_optional_id(item, value) do

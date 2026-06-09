@@ -1045,6 +1045,105 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              ] = coerced["input"]
     end
 
+    test "OpenClaw ordinary replay normalizes assistant thinking content" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "store" => false,
+        "input" => [
+          %{"role" => "user", "content" => "synthetic first turn"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "thinking",
+                "thinking" => "",
+                "thinkingSignature" => "synthetic-thinking-signature"
+              },
+              %{"type" => "text", "text" => "synthetic assistant replay"}
+            ]
+          },
+          %{"role" => "user", "content" => "synthetic follow-up"}
+        ]
+      }
+
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+      assert [
+               %{"type" => "message", "role" => "user"},
+               %{
+                 "type" => "message",
+                 "role" => "assistant",
+                 "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
+               },
+               %{"type" => "message", "role" => "user"}
+             ] = coerced["input"]
+
+      refute inspect(coerced["input"]) =~ "thinkingSignature"
+    end
+
+    test "OpenClaw ordinary replay accepts converted reasoning and message items" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "store" => false,
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic first turn"}]
+          },
+          %{
+            "type" => "reasoning",
+            "content" => [],
+            "encrypted_content" => "synthetic-encrypted-reasoning",
+            "id" => "rs_synthetic_openclaw",
+            "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}]
+          },
+          %{
+            "type" => "message",
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "output_text",
+                "text" => "synthetic assistant replay",
+                "annotations" => []
+              }
+            ],
+            "status" => "completed",
+            "id" => "msg_synthetic_openclaw",
+            "phase" => "final_answer"
+          },
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+          }
+        ]
+      }
+
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+      assert [
+               %{"type" => "message", "role" => "user"},
+               %{
+                 "type" => "reasoning",
+                 "encrypted_content" => "synthetic-encrypted-reasoning",
+                 "id" => "rs_synthetic_openclaw"
+               },
+               %{
+                 "type" => "message",
+                 "role" => "assistant",
+                 "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
+                 "status" => "completed",
+                 "id" => "msg_synthetic_openclaw",
+                 "phase" => "final_answer"
+               },
+               %{"type" => "message", "role" => "user"}
+             ] = coerced["input"]
+
+      refute inspect(coerced["input"]) =~ "annotations"
+      refute inspect(coerced["input"]) =~ "content\" => []"
+    end
+
     test "opencode native replay repairs paired blank tool call ids only" do
       payload = %{
         "model" => "gpt-fixture-text",
