@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.7...codex-pooler-v0.0.8) (2026-06-09)
+
+
+### Bug Fixes
+
+* **gateway:** drop encrypted websocket agent messages ([096e394](https://github.com/icoretech/codex-pooler/commit/096e394e818a8303fb4a27dc1eda4cd03bf520fa))
+* **responses:** backfill empty chat completion output ([18a29be](https://github.com/icoretech/codex-pooler/commit/18a29beeb8177d6dad929d7fa19cf49042c00a15))
+
 ## [0.0.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.6...codex-pooler-v0.0.7) (2026-06-09)
 
 
