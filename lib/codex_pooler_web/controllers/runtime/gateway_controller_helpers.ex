@@ -207,6 +207,7 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpers do
 
   defp session_header(conn) do
     [
+      "x-codex-window-id",
       "x-codex-session-id",
       "session-id",
       "x-session-affinity",

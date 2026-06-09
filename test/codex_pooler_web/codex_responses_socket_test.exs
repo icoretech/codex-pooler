@@ -32,6 +32,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert recovery["anchor_removal"]["headers"] == [
              "x-codex-previous-response-id",
              "x-codex-turn-state",
+             "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
              "x-session-affinity",

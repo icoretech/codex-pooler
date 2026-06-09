@@ -66,6 +66,15 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpersTest do
 
     assert %{session_header: "local-session", session_header_source: "session-id"} =
              GatewayControllerHelpers.request_opts(conn)
+
+    conn =
+      Phoenix.ConnTest.build_conn(:post, "/backend-api/codex/responses")
+      |> put_req_header("x-codex-window-id", " window-session ")
+      |> put_req_header("x-codex-session-id", "codex-session")
+      |> put_req_header("session-id", "local-session")
+
+    assert %{session_header: "window-session", session_header_source: "x-codex-window-id"} =
+             GatewayControllerHelpers.request_opts(conn)
   end
 
   test "send_error renders pinned continuation recovery header and body fields", %{conn: conn} do
@@ -93,6 +102,7 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpersTest do
     assert recovery["anchor_removal"]["headers"] == [
              "x-codex-previous-response-id",
              "x-codex-turn-state",
+             "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
              "x-session-affinity",

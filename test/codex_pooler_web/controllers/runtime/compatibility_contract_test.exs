@@ -263,6 +263,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.websocket_contract == "narrow_responses_websocket_only"
 
       assert fixture.continuity_precedence == [
+               "x-codex-window-id",
                "x-codex-session-id",
                "session-id",
                "x-session-affinity",
@@ -288,6 +289,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  headers: [
                    "x-codex-previous-response-id",
                    "x-codex-turn-state",
+                   "x-codex-window-id",
                    "x-codex-session-id",
                    "session-id",
                    "x-session-affinity",

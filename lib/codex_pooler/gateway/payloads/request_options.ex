@@ -56,7 +56,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @websocket_responses_endpoint "/backend-api/codex/responses"
 
-  @session_header_sources ~w(x-codex-session-id session-id x-session-affinity session_id x-codex-conversation-id)
+  @session_header_sources ~w(x-codex-window-id x-codex-session-id session-id x-session-affinity session_id x-codex-conversation-id)
 
   @prompt_cache_key_routes [
     "/v1/responses",

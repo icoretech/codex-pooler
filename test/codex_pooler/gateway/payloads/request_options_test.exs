@@ -451,6 +451,13 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     end
 
     test "normalizes session header provenance to the compatibility allowlist" do
+      assert %{continuity: %{session_header_source: "x-codex-window-id"}} =
+               RequestOptions.build(
+                 %{session_header: "window-session", session_header_source: "X-Codex-Window-ID"},
+                 "/backend-api/codex/responses",
+                 %{"model" => "example-model"}
+               )
+
       assert %{continuity: %{session_header_source: "session-id"}} =
                RequestOptions.build(
                  %{session_header: "local-session", session_header_source: "Session-ID"},

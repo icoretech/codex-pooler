@@ -1775,7 +1775,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end
   end
 
-  test "POST /backend-api/codex/responses prefers x-codex-session-id over opencode continuity headers",
+  test "POST /backend-api/codex/responses prefers x-codex-window-id over broader continuity headers",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -1788,10 +1788,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream)
 
+    raw_window_id = "window-session-wins-fixture"
+    expected_session_key = hashed_window_session_key(raw_window_id)
+
     conn =
       conn
       |> auth(setup)
-      |> put_req_header("x-codex-session-id", "codex-session-wins-fixture")
+      |> put_req_header("x-codex-window-id", raw_window_id)
+      |> put_req_header("x-codex-session-id", "codex-session-lower-priority-fixture")
       |> put_req_header("session-id", "session-id-lower-priority-fixture")
       |> put_req_header("x-session-affinity", "session-affinity-lower-priority-fixture")
       |> put_req_header("session_id", "session-underscore-lower-priority-fixture")
@@ -1805,8 +1809,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %CodexSession{} =
              session =
-             Repo.get_by(CodexSession, session_key: "codex-session-wins-fixture")
+             Repo.get_by(CodexSession, session_key: expected_session_key)
 
+    refute Repo.get_by(CodexSession, session_key: "codex-session-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-id-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-affinity-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-underscore-lower-priority-fixture")
@@ -1814,7 +1819,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.request_metadata["codex_session_id"] == session.id
-    assert request.request_metadata["codex_session_key"] == "codex-session-wins-fixture"
+    assert request.request_metadata["codex_session_key"] == expected_session_key
 
     assert [captured] = FakeUpstream.requests(upstream)
     captured_headers = Map.new(captured.headers)
@@ -8812,6 +8817,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(captured.headers) =~ "lineage-unrelated"
   end
 
+  defp hashed_window_session_key(raw_window_id) do
+    digest =
+      :crypto.hash(:sha256, raw_window_id)
+      |> Base.encode16(case: :lower)
+
+    "x-codex-window-id:" <> digest
+  end
+
   defp assert_lineage_metadata_not_persisted!(setup, metadata) do
     requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
 
@@ -8958,6 +8971,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert recovery["anchor_removal"]["headers"] == [
              "x-codex-previous-response-id",
              "x-codex-turn-state",
+             "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
              "x-session-affinity",

@@ -864,9 +864,9 @@ limit checks, accounting, and account selection path. `/v1/realtime` and OpenAI
 Realtime SDK websocket or session routes are not supported.
 
 Continuity headers are local routing inputs. Codex Pooler chooses them in this
-order: `x-codex-session-id` > `session-id` > `x-session-affinity` >
-`session_id` > `x-codex-conversation-id`. `session-id` and
-`x-session-affinity` are not forwarded upstream. Local timing regressions showed
+order: `x-codex-window-id` > `x-codex-session-id` > `session-id` >
+`x-session-affinity` > `session_id` > `x-codex-conversation-id`. `session-id` and
+`x-session-affinity` are not forwarded upstream. The raw `x-codex-window-id` value is hashed before it becomes a local persisted session key. Local timing regressions showed
 `/v1/responses` HTTP streaming and Responses websocket paths stay inside the
 observed client budgets with the existing stream timeout settings, so no new
 route-specific timeout defaults are required.

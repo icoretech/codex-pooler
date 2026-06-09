@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.ContractsTest do
   @anchor_headers [
     "x-codex-previous-response-id",
     "x-codex-turn-state",
+    "x-codex-window-id",
     "x-codex-session-id",
     "session-id",
     "x-session-affinity",

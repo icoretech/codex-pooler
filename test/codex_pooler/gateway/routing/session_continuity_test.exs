@@ -165,6 +165,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     end
 
     for session_header_source <- [
+          "x-codex-window-id",
           "x-codex-session-id",
           "session-id",
           "x-session-affinity",

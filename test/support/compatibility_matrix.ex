@@ -535,6 +535,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         metadata_only: true
       },
       continuity_precedence: [
+        "x-codex-window-id",
         "x-codex-session-id",
         "session-id",
         "x-session-affinity",
@@ -555,6 +556,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           headers: [
             "x-codex-previous-response-id",
             "x-codex-turn-state",
+            "x-codex-window-id",
             "x-codex-session-id",
             "session-id",
             "x-session-affinity",

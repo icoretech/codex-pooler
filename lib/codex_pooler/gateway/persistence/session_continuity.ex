@@ -905,9 +905,27 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   defp session_key(%RequestOptions{} = request_options) do
     request_options.continuity.accepted_turn_state
     |> blank_to_nil()
-    |> Kernel.||(request_options.continuity.session_header |> blank_to_nil())
+    |> Kernel.||(session_header_session_key(request_options))
     |> Kernel.||(request_options.continuity.session_key |> blank_to_nil())
     |> Kernel.||(Ecto.UUID.generate())
+  end
+
+  defp session_header_session_key(%RequestOptions{
+         continuity: %{session_header_source: "x-codex-window-id", session_header: session_header}
+       }) do
+    case blank_to_nil(session_header) do
+      nil -> nil
+      value -> "x-codex-window-id:" <> safe_hash(value)
+    end
+  end
+
+  defp session_header_session_key(%RequestOptions{continuity: %{session_header: session_header}}) do
+    blank_to_nil(session_header)
+  end
+
+  defp safe_hash(value) when is_binary(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.encode16(case: :lower)
   end
 
   defp conversation_key(%RequestOptions{} = request_options) do
