@@ -519,6 +519,8 @@ defmodule CodexPooler.CompatibilityMatrix do
         source_field: "tool_calls",
         translated_type: "function_call",
         id_fields: ["call_id", "id"],
+        reasoning_replay_sequence: ["reasoning", "assistant", "function_call", "tool"],
+        empty_assistant_content_type: "output_text",
         tool_content_output_field: "output",
         requires_previous_response_id: true,
         metadata_only: true
