@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.4...codex-pooler-v0.0.5) (2026-06-09)
+
+
+### Bug Fixes
+
+* **admin:** debounce upstreams event reloads ([f5af1ed](https://github.com/icoretech/codex-pooler/commit/f5af1ed77f3d5745b9ddee3e52868f853aaac9e3))
+* **responses:** accept Hermes assistant tool replays ([fb5a6bb](https://github.com/icoretech/codex-pooler/commit/fb5a6bb7860a7573f69f0e5a5b8962106c744453))
+* **responses:** accept Hermes reasoning replays ([274c256](https://github.com/icoretech/codex-pooler/commit/274c2561c261697bc7e87c7415476ebb9cab23d0))
+* **responses:** accept Hermes tool continuations ([9b263aa](https://github.com/icoretech/codex-pooler/commit/9b263aa6a7bdbb7cbbe0eda6907731caed8e6e63))
+
 ## [0.0.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.3...codex-pooler-v0.0.4) (2026-06-08)
 
 
