@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.6...codex-pooler-v0.0.7) (2026-06-09)
+
+
+### Bug Fixes
+
+* **gateway:** drop encrypted tool schema markers ([39f96fc](https://github.com/icoretech/codex-pooler/commit/39f96fc222adfe5c98cb0ffa98eaf95e06678053))
+* **gateway:** keep refreshing identities route-visible ([74eaec1](https://github.com/icoretech/codex-pooler/commit/74eaec139ba19ccb2c81b19e2bef265efee656c7))
+* **gateway:** prefer Codex window continuity ([6441e83](https://github.com/icoretech/codex-pooler/commit/6441e83dc2396bc40b48550e289fe45d03ed3b74))
+* **responses:** accept namespace function tools ([d100796](https://github.com/icoretech/codex-pooler/commit/d100796f879f40df8edf215e98de6c66bc6513d3))
+
 ## [0.0.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.5...codex-pooler-v0.0.6) (2026-06-09)
 
 
