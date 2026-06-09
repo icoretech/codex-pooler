@@ -122,6 +122,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     end
   end
 
+  defp normalize_input_item(%{"role" => "assistant", "content" => content} = item)
+       when is_binary(content) do
+    {:ok,
+     item
+     |> Map.put("type", "message")
+     |> Map.put("content", [%{"type" => "output_text", "text" => content}])}
+  end
+
   defp normalize_input_item(%{"content" => content} = item) when is_binary(content) do
     item =
       item
