@@ -3,7 +3,7 @@ title: Goose
 description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 chat completions path and optional operator MCP metadata access.
 ---
 
-Goose's OpenAI provider supports OpenAI-compatible endpoints through `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
+Configure Goose's OpenAI provider with `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
 
 ```yaml
 GOOSE_PROVIDER: openai
@@ -13,6 +13,18 @@ OPENAI_BASE_PATH: v1/chat/completions
 ```
 
 For local setup, change `OPENAI_HOST` to `http://localhost:4000`.
+
+Check the headless CLI path with tool access enabled:
+
+```bash
+export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+goose run \
+  --no-session \
+  --provider openai \
+  --model gpt-5.5 \
+  --with-builtin developer \
+  --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
+```
 
 For optional operator MCP metadata access, add a remote Streamable HTTP extension. Codex Pooler model use does not require this. Goose stores remote extension headers in its config, so use a dedicated MCP token.
 

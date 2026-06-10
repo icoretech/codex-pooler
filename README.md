@@ -543,6 +543,9 @@ npx -y @continuedev/cli@latest -p \
   'Reply with exactly: continue ok'
 ```
 
+The Pool API key authenticates model requests. The MCP token authenticates only
+the operator metadata endpoint.
+
 </details>
 
 <details>
@@ -594,21 +597,35 @@ For deployed instances, change `--baseurl` to `https://codex-pooler.example.com/
 and, if you keep the optional operator MCP add-on, change the MCP `url` to
 `https://codex-pooler.example.com/mcp`.
 
+Use a Pool API key for `/v1` model requests and an operator MCP token for
+`/mcp`. Do not reuse the Pool API key for MCP.
+
 </details>
 
 <details>
 <summary><img src=".github/assets/goose-favicon.png" alt="Goose logo" width="16" height="16"> Goose <code>~/.config/goose/config.yaml</code></summary>
 
-Goose's OpenAI provider supports OpenAI-compatible endpoints through
-`OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the
-Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret
-storage.
+Configure Goose's OpenAI provider for Codex Pooler's OpenAI-compatible
+chat-completions path. Keep the Pool API key in `OPENAI_API_KEY` or Goose's
+secret storage.
 
 ```yaml
 GOOSE_PROVIDER: openai
 GOOSE_MODEL: gpt-5.5
 OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
+```
+
+Check the headless CLI path with tool access enabled:
+
+```bash
+export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+goose run \
+  --no-session \
+  --provider openai \
+  --model gpt-5.5 \
+  --with-builtin developer \
+  --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
 ```
 
 For optional operator MCP metadata access, add a remote Streamable HTTP
@@ -633,6 +650,9 @@ extensions:
 For deployed instances, change `OPENAI_HOST` to `https://codex-pooler.example.com`;
 if you keep the optional operator MCP add-on, change the extension `uri` to
 `https://codex-pooler.example.com/mcp`.
+
+Use a Pool API key for OpenAI-compatible model requests and an operator MCP token
+for `/mcp`. Do not reuse the Pool API key for MCP.
 
 </details>
 
