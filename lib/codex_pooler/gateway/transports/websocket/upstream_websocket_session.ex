@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession.Request
@@ -24,7 +25,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
           required(:body) => binary(),
           required(:reason) => term(),
           required(:headers) => response_headers(),
-          optional(:websocket_frame_headers) => map()
+          optional(:websocket_frame_headers) => map(),
+          optional(:transport_failure) => TransportFailureReason.transport_failure_metadata()
         }
   @type request_result :: {:ok, request_success()} | {:error, request_failure()}
   @type send_result :: {:ok, :sent} | {:error, term()}
@@ -59,8 +61,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
         result
 
       {:error, reason, state} ->
+        error = request_error(reason, state)
         close_state(state)
-        request_error(reason, state)
+        error
     end
   end
 
@@ -163,8 +166,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
         if reused_connection? and pre_response_reconnectable?(reason) do
           {:retry, state}
         else
+          result = request_error(reason, state)
           state = close_state(state)
-          {:ok, request_error(reason, state), state}
+          {:ok, result, state}
         end
     end
   end
@@ -178,8 +182,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
         {:ok, result, state}
 
       {:error, reason, state} ->
+        result = request_error(reason, state)
         state = close_state(state)
-        {:ok, request_error(reason, state), state}
+        {:ok, result, state}
     end
   end
 
@@ -204,15 +209,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
   defp connect_and_send_request(state, key, url, headers, timeouts, payload, receive_state) do
     case ensure_connection(state, key, url, headers, timeouts) do
-      {:ok, state} -> send_request_payload(state, payload, receive_state)
-      {:error, reason, state} -> {:error, reason, state}
+      {:ok, state} ->
+        send_request_payload(state, payload, receive_state)
+
+      {:error, reason, state} ->
+        {:error, reason, Map.put(state, :transport_failure_phase, :connect)}
     end
   end
 
   defp send_request_payload(state, payload, receive_state) do
     case send_text(state, payload) do
-      {:ok, state} -> await_sent_request(state, receive_state)
-      {:error, reason, state} -> {:error, reason, state}
+      {:ok, state} ->
+        await_sent_request(state, receive_state)
+
+      {:error, reason, state} ->
+        {:error, reason, Map.put(state, :transport_failure_phase, :send_payload)}
     end
   end
 
@@ -228,8 +239,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
        body: "",
        reason: reason,
        headers: Map.get(state, :headers, []),
-       websocket_frame_headers: %{}
+       websocket_frame_headers: %{},
+       transport_failure: request_error_transport_failure(reason, state)
      }}
+  end
+
+  defp request_error_transport_failure(reason, state) do
+    TransportFailureReason.transport_failure_metadata(reason, %{
+      phase: Map.get(state, :transport_failure_phase, :request),
+      pre_visible_output: true,
+      terminal_seen: false,
+      text_frame_count: 0
+    })
   end
 
   defp pre_response_reconnectable?({:error, %{body: "", reason: reason}}),
@@ -289,7 +310,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
             body: receive_body(receive_state),
             reason: :upstream_websocket_receive_timeout,
             headers: state.headers,
-            websocket_frame_headers: receive_state.websocket_frame_headers
+            websocket_frame_headers: receive_state.websocket_frame_headers,
+            transport_failure:
+              transport_failure_metadata(:upstream_websocket_receive_timeout, receive_state,
+                phase: :receive_timeout
+              )
           }}, state}
     end
   end
@@ -310,7 +335,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
             body: receive_body(receive_state),
             reason: reason,
             headers: state.headers,
-            websocket_frame_headers: receive_state.websocket_frame_headers
+            websocket_frame_headers: receive_state.websocket_frame_headers,
+            transport_failure: transport_failure_metadata(reason, receive_state, phase: :receive)
           }}, %{state | conn: conn}}
 
       :unknown ->
@@ -358,7 +384,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
             body: receive_body(receive_state),
             reason: reason,
             headers: state.headers,
-            websocket_frame_headers: receive_state.websocket_frame_headers
+            websocket_frame_headers: receive_state.websocket_frame_headers,
+            transport_failure:
+              transport_failure_metadata(reason, receive_state, phase: failure_phase(reason))
           }}, state}
     end
   end
@@ -379,7 +407,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
       {:error, websocket, reason} ->
         state = %{state | websocket: websocket}
-        {:failure, state, receive_state, reason}
+        {:failure, state, receive_state, {:websocket_decode_failed, reason}}
     end
   end
 
@@ -437,8 +465,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
       {:ping, payload}, {:continue, state, receive_state} ->
         case send_frame(state, {:pong, payload}) do
-          {:ok, state} -> {:cont, {:continue, state, receive_state}}
-          {:error, reason, state} -> {:halt, {:failure, state, receive_state, reason}}
+          {:ok, state} ->
+            {:cont, {:continue, state, receive_state}}
+
+          {:error, reason, state} ->
+            {:halt, {:failure, state, receive_state, {:websocket_control_send_failed, reason}}}
         end
 
       {:pong, _payload}, acc ->
@@ -461,6 +492,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
       raw_text
       |> maybe_put_terminal_upstream_error_code(receive_state)
       |> put_websocket_frame_headers(raw_text)
+      |> increment_text_frame_count()
       |> append_receive_body(text)
 
     case retryable_first_text_frame(raw_text, receive_state) do
@@ -475,10 +507,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
 
         case terminal_type(text) do
           nil -> {:cont, {:continue, state, receive_state}}
-          terminal -> {:halt, {:terminal, state, receive_state, terminal}}
+          terminal -> {:halt, {:terminal, state, mark_terminal_seen(receive_state), terminal}}
         end
     end
   end
+
+  defp transport_failure_metadata(reason, %ReceiveState{} = receive_state, attrs) do
+    TransportFailureReason.transport_failure_metadata(
+      reason,
+      Map.merge(
+        %{
+          pre_visible_output: not receive_state.downstream_output_started?,
+          terminal_seen: receive_state.terminal_seen?,
+          text_frame_count: receive_state.text_frame_count
+        },
+        Map.new(attrs)
+      )
+    )
+  end
+
+  defp failure_phase({:websocket_decode_failed, _reason}), do: :decode
+  defp failure_phase({:websocket_control_send_failed, _reason}), do: :send_control
+  defp failure_phase(:upstream_websocket_closed_before_terminal), do: :upstream_close
+  defp failure_phase(:unexpected_upstream_websocket_binary), do: :unexpected_frame
+  defp failure_phase(_reason), do: :receive
 
   defp retryable_first_text_frame(raw_text, %ReceiveState{downstream_output_started?: false}) do
     case StreamProtocol.first_complete_event(raw_text) do
@@ -513,6 +565,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebSocketSession do
       %{receive_state | downstream_output_started?: true}
     end
   end
+
+  defp increment_text_frame_count(%ReceiveState{text_frame_count: count} = receive_state) do
+    %{receive_state | text_frame_count: count + 1}
+  end
+
+  defp mark_terminal_seen(%ReceiveState{} = receive_state),
+    do: %{receive_state | terminal_seen?: true}
 
   defp maybe_put_terminal_upstream_error_code(raw_text, %ReceiveState{} = receive_state) do
     with nil <- receive_state.terminal_upstream_error_code,

@@ -201,11 +201,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.WebSocket do
         request_options,
         Map.get(finalization, :websocket_frame_headers, %{})
       )
+      |> maybe_put_transport_failure_metadata(finalization)
 
     with :ok <- Streaming.record_health_failure(code, code, context) do
       finalize_failed_after_health(context, finalization, code, metadata)
     end
   end
+
+  defp maybe_put_transport_failure_metadata(metadata, %{transport_failure: transport_failure})
+       when is_map(transport_failure) and map_size(transport_failure) > 0 do
+    Map.put(metadata, "transport_failure", transport_failure)
+  end
+
+  defp maybe_put_transport_failure_metadata(metadata, _finalization), do: metadata
 
   defp finalize_failed_after_health(
          %DispatchContext{allow_retry?: true, reserved: reserved, attempt: attempt},

@@ -2275,6 +2275,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert second_log.transport == "websocket"
       assert second_log.last_error_code == "upstream_stream_error"
 
+      assert [second_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^second_log.id))
+
+      assert second_attempt.status == "failed"
+
+      assert second_attempt.response_metadata["transport_failure"] == %{
+               "phase" => "upstream_close",
+               "pre_visible_output" => false,
+               "reason" => "upstream_websocket_closed_before_terminal",
+               "reason_class" => "upstream_websocket_closed_before_terminal",
+               "terminal_seen" => false,
+               "text_frame_count" => 1
+             }
+
+      metadata_text = inspect(second_attempt.response_metadata)
+      refute metadata_text =~ "partial"
+      refute metadata_text =~ "fake upstream closed after partial frame"
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ setup.raw_key
+      refute metadata_text =~ "Bearer "
+      refute metadata_text =~ "upstream-token"
+
       assert [demotion] = Repo.all(from(d in BridgeDemotion))
       assert demotion.pool_upstream_assignment_id == setup.assignment.id
       assert demotion.reason_code == "upstream_stream_error"
