@@ -83,7 +83,7 @@ defmodule CodexPooler.MixProject do
       {:credo, "== 1.7.19", only: [:dev, :test], runtime: false},
       {:dialyxir, "== 1.4.7", only: [:dev, :test], runtime: false},
       {:sobelow, "== 0.14.1", only: [:dev, :test], runtime: false},
-      {:six, "== 0.3.0", only: :test},
+      {:six, "== 0.3.1", only: :test},
       {:gettext, "== 1.0.2"},
       {:jason, "== 1.4.5"},
       {:dns_cluster, "== 0.2.0"},
