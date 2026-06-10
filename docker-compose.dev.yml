@@ -5,7 +5,7 @@ services:
     image: postgres:18
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-codex_pooler_dev}
+      POSTGRES_DB: codex_pooler_dev
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
@@ -13,7 +13,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-codex_pooler_dev}
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d codex_pooler_dev
       interval: 5s
       timeout: 5s
       retries: 20
