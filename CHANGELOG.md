@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.0.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.9...codex-pooler-v0.0.10) (2026-06-10)
+
+
+### Bug Fixes
+
+* **clients:** remove Roo Code references ([5ecee96](https://github.com/icoretech/codex-pooler/commit/5ecee96ab47d3c698d50b1ec6388c2d5cea7b398))
+* **transports:** classify safe transport failures ([8e9475a](https://github.com/icoretech/codex-pooler/commit/8e9475a47f7279c0c8f58a49ef7c54109671a56c))
+* **websocket:** persist upstream transport diagnostics ([812dcef](https://github.com/icoretech/codex-pooler/commit/812dcefe2c8609370335de514e2d7a83f835c95d))
+* **websocket:** preserve owner transport diagnostics ([0484d47](https://github.com/icoretech/codex-pooler/commit/0484d470df9e4cab26ce9e1ea47349f93b84dcb1))
+
 ## [0.0.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.8...codex-pooler-v0.0.9) (2026-06-10)
 
 
