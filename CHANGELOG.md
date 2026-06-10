@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.8...codex-pooler-v0.0.9) (2026-06-10)
+
+
+### Bug Fixes
+
+* **chat:** backfill streamed tool call ids ([f1ce55b](https://github.com/icoretech/codex-pooler/commit/f1ce55bdbd228c8f45f03c92d0b66d9c5426dd18))
+* **chat:** translate Cline tool continuations ([8a7063e](https://github.com/icoretech/codex-pooler/commit/8a7063e5d6cdaf0d4bcaf5893e0a8ea52d784635))
+* **dev:** pin postgres healthcheck database ([0d4f901](https://github.com/icoretech/codex-pooler/commit/0d4f901d00f1d9b342d97620c9790970ef6bf920))
+* **gateway:** suppress keepalives during partial public SSE ([5c14a59](https://github.com/icoretech/codex-pooler/commit/5c14a59f83890b4951be6be02172f97196864c25))
+* **responses:** backfill streamed output item ids ([17870cd](https://github.com/icoretech/codex-pooler/commit/17870cda1754af97f7868e77bcbaa2c39ab7bdcd))
+
 ## [0.0.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.7...codex-pooler-v0.0.8) (2026-06-09)
 
 
