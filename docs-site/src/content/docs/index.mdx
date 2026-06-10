@@ -117,7 +117,3 @@ No. Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SD
 ### Which base URL should an AI coding client use?
 
 Codex backend-compatible clients should use `https://codex-pooler.example.com/backend-api/codex`. Selected OpenAI SDK-compatible clients should use `https://codex-pooler.example.com/v1`. Operator metadata tools should use `https://codex-pooler.example.com/mcp` with an operator MCP token, not a Pool API key.
-
-### What data is safe to cite from Codex Pooler?
-
-Safe public examples can cite route family, endpoint path, method, status class, Pool label, upstream label, model name, retry count, duration, token count, safe error code, and timestamp. Raw prompts, completions, bodies, file bytes, media bytes, websocket frames, bearer tokens, cookies, Pool API keys, MCP tokens, upstream secrets, and `auth.json` material are not safe to include.

@@ -83,7 +83,7 @@ Open [Upstreams](http://localhost:4000/admin/upstreams) and import or connect a 
 
 Treat imported Codex account material as owned by Codex Pooler after import. Do not keep the same credential active in other automation unless you accept that provider refresh-token rotation can force one copy to reauthenticate.
 
-If you use a Pool invite instead of importing `auth.json`, the invited user must enable OpenAI's device-code approval for Codex before accepting the invite. For a personal ChatGPT account, open Settings, then Security, and turn on `Enable device code authorization for Codex`. For workspace-managed accounts, ask a workspace admin to enable device-code login for Codex in the workspace permissions. OpenAI's [Codex authentication docs](https://developers.openai.com/codex/auth) describe this prerequisite, and the hosted onboarding flow depends on it.
+If you use a Pool invite instead of importing `auth.json`, the invited user must enable OpenAI's device-code approval for Codex before accepting the invite. For a personal ChatGPT account, open Settings, then Security, and turn on `Enable device code authorization for Codex`. For workspace-managed accounts, ask a workspace admin to enable device-code login for Codex in the workspace permissions. OpenAI's [Login on headless devices](https://developers.openai.com/codex/auth#login-on-headless-devices) docs describe this prerequisite, and the hosted onboarding flow depends on it.
 
 After import, assign the upstream to the Pool you created. The upstream should show as usable before you expect client requests to route successfully.
 
