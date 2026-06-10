@@ -230,7 +230,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys?pool_id=#{primary_pool.id}")
 
     assert has_element?(view, "#api-key-active-pool-filter", "Filtered Primary")
-    assert has_element?(view, "#api-key-clear-pool-filter", "Show all API keys")
+    assert has_element?(view, "#api-key-clear-pool-filter", "Show all Pools")
     assert has_element?(view, "#api-key-pool-group-filtered-primary", "Filtered Primary")
     refute has_element?(view, "#api-key-pool-group-filtered-backup")
     assert has_element?(view, "#api-key-row-#{primary_key.id}", "Filtered primary key")

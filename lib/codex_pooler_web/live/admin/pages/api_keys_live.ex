@@ -26,9 +26,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        filter_values: %{"pool_id" => ""},
        selected_pool: nil,
        api_key_usage_summaries: %{},
+       api_key_model_policy_summaries: %{},
        api_key_form: nil,
        api_key_params: %{},
        api_key_pool_groups: [],
+       model_policy_filter: nil,
+       unavailable_model_policy_count: 0,
        api_key_wizard_step: "basics",
        api_key_model_selector_state: ApiKeysReadModel.empty_model_selector_state(),
        api_key_review_errors: [],
@@ -370,7 +373,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
           pools={@pools}
           groups={@api_key_pool_groups}
           usage_summaries={@api_key_usage_summaries}
+          model_policy_summaries={@api_key_model_policy_summaries}
           selected_pool={@selected_pool}
+          model_policy_filter={@model_policy_filter}
+          unavailable_model_policy_count={@unavailable_model_policy_count}
           can_manage_pools?={Pools.can_manage_pools?(@current_scope)}
         />
       </section>

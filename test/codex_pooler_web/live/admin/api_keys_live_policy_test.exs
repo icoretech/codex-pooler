@@ -167,6 +167,100 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert Repo.get!(APIKey, api_key.id).allowed_model_identifiers == ["legacy-removed-model"]
   end
 
+  test "model policy warnings identify and filter unavailable model references", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "model-policy", name: "Model Policy"})
+    insert_visible_model!(pool, "gpt-current")
+
+    {:ok, %{api_key: selected_key, raw_key: selected_raw_key}} =
+      Access.create_api_key(scope, pool, %{
+        display_name: "Selected stale key",
+        model_mode: "selected_models",
+        allowed_model_identifiers: ["gpt-current", "legacy-removed-model"]
+      })
+
+    {:ok, %{api_key: enforced_key, raw_key: enforced_raw_key}} =
+      Access.create_api_key(scope, pool, %{
+        display_name: "Enforced stale key",
+        enforced_model_identifier: "legacy-enforced-model"
+      })
+
+    {:ok, %{api_key: current_key, raw_key: current_raw_key}} =
+      Access.create_api_key(scope, pool, %{
+        display_name: "Current model key",
+        model_mode: "selected_models",
+        allowed_model_identifiers: ["gpt-current"]
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+
+    assert has_element?(view, "#api-key-model-policy-attention", "2 affected keys")
+
+    assert has_element?(
+             view,
+             "#api-key-row-#{selected_key.id}-model-policy-warning",
+             "1 selected model is unavailable"
+           )
+
+    assert has_element?(
+             view,
+             "#api-key-row-#{enforced_key.id}-model-policy-warning",
+             "Enforced model legacy-enforced-model is unavailable"
+           )
+
+    refute has_element?(view, "#api-key-row-#{current_key.id}-model-policy-warning")
+
+    view
+    |> element("#api-key-filter-unavailable-model-policies")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/api-keys?model_policy=unavailable")
+    assert has_element?(view, "#api-key-active-model-policy-filter", "2 affected keys")
+    assert has_element?(view, "#api-key-row-#{selected_key.id}", "Selected stale key")
+    assert has_element?(view, "#api-key-row-#{enforced_key.id}", "Enforced stale key")
+    refute has_element?(view, "#api-key-row-#{current_key.id}")
+
+    view
+    |> element("#api-key-clear-model-policy-filter")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/api-keys")
+    assert has_element?(view, "#api-key-row-#{current_key.id}", "Current model key")
+
+    html = render(view)
+    refute html =~ selected_raw_key
+    refute html =~ enforced_raw_key
+    refute html =~ current_raw_key
+  end
+
+  test "model editor warns when the enforced model is no longer routable", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "enforced-stale", name: "Enforced Stale"})
+    insert_visible_model!(pool, "gpt-current")
+
+    {:ok, %{api_key: api_key}} =
+      Access.create_api_key(scope, pool, %{
+        display_name: "Stale enforced editor key",
+        enforced_model_identifier: "legacy-enforced-model"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+    view |> element("#edit-api-key-#{api_key.id}") |> render_click()
+    select_api_key_section(view, :models)
+
+    assert has_element?(view, "#api-key-enforced-model-warning", "Enforced model unavailable")
+
+    assert has_element?(
+             view,
+             "#api-key-enforced-model-warning",
+             "runtime requests will fail until this is changed"
+           )
+  end
+
   test "catalog refresh while editor is open updates selector state without dropping form fields",
        %{
          conn: conn,
@@ -316,6 +410,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
       stats: %{}
     })
     |> Repo.insert!()
+  end
+
+  defp insert_visible_model!(pool, exposed_model_id) do
+    insert_sync_run!(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    model_fixture(pool, %{
+      exposed_model_id: exposed_model_id,
+      display_name: exposed_model_id,
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
   end
 
   defp api_key_payload(attrs) do

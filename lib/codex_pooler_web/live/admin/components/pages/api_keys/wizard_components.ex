@@ -233,6 +233,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           options={@service_tier_options}
         />
       </div>
+      <div
+        :if={@selector_state.enforced_unavailable_warning}
+        id="api-key-enforced-model-warning"
+        class="alert alert-warning items-start"
+      >
+        <.icon name="hero-exclamation-triangle" class="size-5" />
+        <div class="grid gap-1">
+          <p class="font-semibold">Enforced model unavailable</p>
+          <p class="text-sm">{@selector_state.enforced_unavailable_warning.message}</p>
+        </div>
+      </div>
       <p class="text-sm leading-6 text-base-content/60">
         Service tier is only enforced when selected. Auto lets the upstream choose, default requests
         standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the

@@ -149,7 +149,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   attr :pools, :list, required: true
   attr :groups, :list, required: true
   attr :usage_summaries, :map, required: true
+  attr :model_policy_summaries, :map, required: true
   attr :selected_pool, :any, default: nil
+  attr :model_policy_filter, :string, default: nil
+  attr :unavailable_model_policy_count, :integer, required: true
   attr :can_manage_pools?, :boolean, required: true
 
   def api_key_groups(assigns) do
@@ -169,10 +172,56 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         </div>
         <.link
           id="api-key-clear-pool-filter"
-          patch={~p"/admin/api-keys"}
+          patch={api_key_filter_path(nil, @model_policy_filter)}
           class="btn btn-ghost btn-xs"
         >
-          Show all API keys
+          Show all Pools
+        </.link>
+      </div>
+
+      <div
+        :if={@model_policy_filter == "unavailable"}
+        id="api-key-active-model-policy-filter"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-box border border-warning/25 bg-warning/10 px-4 py-3 text-sm shadow-sm"
+      >
+        <div class="flex items-center gap-2 text-base-content/75">
+          <.icon name="hero-exclamation-triangle" class="size-4 text-warning" />
+          <span>
+            Showing API keys with unavailable model references
+            <span class="font-medium text-base-content">
+              {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)}
+            </span>
+          </span>
+        </div>
+        <.link
+          id="api-key-clear-model-policy-filter"
+          patch={api_key_filter_path(@selected_pool, nil)}
+          class="btn btn-ghost btn-xs"
+        >
+          Show all model policies
+        </.link>
+      </div>
+
+      <div
+        :if={@model_policy_filter != "unavailable" and @unavailable_model_policy_count > 0}
+        id="api-key-model-policy-attention"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-box border border-warning/25 bg-warning/10 px-4 py-3 text-sm shadow-sm"
+      >
+        <div class="grid gap-1 text-base-content/75 sm:flex sm:items-center sm:gap-2">
+          <span class="flex items-center gap-2 font-semibold text-base-content">
+            <.icon name="hero-exclamation-triangle" class="size-4 text-warning" />
+            Model policy attention
+          </span>
+          <span>
+            {ApiKeysReadModel.unavailable_model_policy_count_label(@unavailable_model_policy_count)} reference models that are not in the current routable catalog.
+          </span>
+        </div>
+        <.link
+          id="api-key-filter-unavailable-model-policies"
+          patch={api_key_filter_path(@selected_pool, "unavailable")}
+          class="btn btn-warning btn-outline btn-xs"
+        >
+          Show affected keys
         </.link>
       </div>
 
@@ -275,6 +324,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     <span id={"api-key-row-#{api_key.id}-models"}>
                       Models: {ApiKeysReadModel.model_policy_label(api_key.allowed_model_identifiers)}
                     </span>
+                    <span
+                      :if={
+                        ApiKeysReadModel.model_policy_warning_label(
+                          Map.get(@model_policy_summaries, api_key.id)
+                        )
+                      }
+                      id={"api-key-row-#{api_key.id}-model-policy-warning"}
+                      class="inline-flex items-start gap-1.5 rounded-box border border-warning/25 bg-warning/10 px-2 py-1 text-xs font-medium leading-5 text-warning"
+                    >
+                      <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        {ApiKeysReadModel.model_policy_warning_label(
+                          Map.get(@model_policy_summaries, api_key.id)
+                        )}
+                      </span>
+                    </span>
                   </div>
                 </td>
                 <td class="w-16 align-middle text-center">
@@ -288,6 +353,29 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     </div>
     """
   end
+
+  defp api_key_filter_path(selected_pool, model_policy_filter) do
+    params =
+      %{}
+      |> maybe_put_pool_filter(selected_pool)
+      |> maybe_put_model_policy_filter(model_policy_filter)
+
+    if map_size(params) == 0 do
+      ~p"/admin/api-keys"
+    else
+      ~p"/admin/api-keys?#{params}"
+    end
+  end
+
+  defp maybe_put_pool_filter(params, %{id: pool_id}) when is_binary(pool_id),
+    do: Map.put(params, "pool_id", pool_id)
+
+  defp maybe_put_pool_filter(params, _selected_pool), do: params
+
+  defp maybe_put_model_policy_filter(params, "unavailable"),
+    do: Map.put(params, "model_policy", "unavailable")
+
+  defp maybe_put_model_policy_filter(params, _model_policy_filter), do: params
 
   attr :api_key, :any, required: true
 
