@@ -2918,6 +2918,71 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert event_item(events, "response.output_item.added")["type"] == "web_search_call"
   end
 
+  test "POST /v1/responses streaming synthesizes missing public output item ids", %{
+    conn: conn
+  } do
+    tool_item = %{
+      "type" => "function_call",
+      "call_id" => "call_v1_stream_public_tool_id",
+      "name" => "lookup_fixture",
+      "arguments" => "{}"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 0,
+             "item" => tool_item
+           }},
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 0,
+             "item" => tool_item
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_stream_public_tool_id",
+               "status" => "completed",
+               "output" => [tool_item],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic streaming tool request",
+        "stream" => true
+      })
+
+    events = public_sse_events(conn.resp_body)
+    added_item = event_item(events, "response.output_item.added")
+    done_item = event_item(events, "response.output_item.done")
+
+    assert added_item["id"] == "call_v1_stream_public_tool_id"
+    assert added_item["call_id"] == "call_v1_stream_public_tool_id"
+    assert done_item["id"] == "call_v1_stream_public_tool_id"
+    assert done_item["call_id"] == "call_v1_stream_public_tool_id"
+
+    assert %{"data" => %{"response" => %{"output" => [completed_item]}}} =
+             Enum.find(events, &(&1["event"] == "response.completed"))
+
+    assert completed_item["id"] == "call_v1_stream_public_tool_id"
+    assert completed_item["call_id"] == "call_v1_stream_public_tool_id"
+  end
+
   test "POST /v1/responses streaming synthesizes missing delta from terminal output", %{
     conn: conn
   } do

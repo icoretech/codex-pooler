@@ -84,6 +84,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
     type = event_type || decoded_string(decoded, "type")
+    decoded = normalize_public_event(type, decoded)
 
     cond do
       codex_public_event?(type) ->
@@ -172,6 +173,67 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("")
   end
+
+  defp normalize_public_event(type, %{} = decoded)
+       when type in ["response.output_item.added", "response.output_item.done"] do
+    case decoded do
+      %{"item" => %{} = item} -> Map.put(decoded, "item", ensure_output_item_id(item, decoded))
+      _event -> decoded
+    end
+  end
+
+  defp normalize_public_event(type, %{} = decoded) do
+    if terminal_event?(type) do
+      normalize_terminal_output_items(decoded)
+    else
+      decoded
+    end
+  end
+
+  defp normalize_terminal_output_items(%{"response" => %{} = response} = decoded) do
+    Map.put(decoded, "response", normalize_response_output_items(response))
+  end
+
+  defp normalize_terminal_output_items(%{} = decoded),
+    do: normalize_response_output_items(decoded)
+
+  defp normalize_response_output_items(%{"output" => output} = response) when is_list(output) do
+    output =
+      output
+      |> Enum.with_index()
+      |> Enum.map(fn {item, index} -> ensure_output_item_id(item, %{"output_index" => index}) end)
+
+    Map.put(response, "output", output)
+  end
+
+  defp normalize_response_output_items(response), do: response
+
+  defp ensure_output_item_id(%{} = item, context) do
+    case clean_string(Map.get(item, "id")) || clean_string(Map.get(item, "call_id")) ||
+           clean_string(Map.get(context, "item_id")) do
+      nil -> Map.put(item, "id", fallback_output_item_id(item, context))
+      id -> Map.put(item, "id", id)
+    end
+  end
+
+  defp ensure_output_item_id(item, _context), do: item
+
+  defp fallback_output_item_id(item, context) do
+    item_type = clean_string(Map.get(item, "type")) || "item"
+
+    case Map.get(context, "output_index") do
+      index when is_integer(index) and index >= 0 -> "#{item_type}_#{index}"
+      index when is_binary(index) and index != "" -> "#{item_type}_#{index}"
+      _index -> item_type
+    end
+  end
+
+  defp clean_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp clean_string(_value), do: nil
 
   defp stream_terminal?(blocks) do
     Enum.any?(blocks, fn block ->
