@@ -697,9 +697,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     request = %{request | writer: writer}
 
     case UpstreamWebSocketSession.request(upstream_pid, request) do
-      {:ok, result} -> {:ok, result}
-      {:error, %{reason: reason}} when is_atom(reason) -> {:error, reason}
-      {:error, response} when is_map(response) -> {:error, response}
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, %{transport_failure: transport_failure} = response}
+      when is_map(transport_failure) and map_size(transport_failure) > 0 ->
+        {:error, response}
+
+      {:error, %{reason: reason}} when is_atom(reason) ->
+        {:error, reason}
+
+      {:error, response} when is_map(response) ->
+        {:error, response}
     end
   end
 

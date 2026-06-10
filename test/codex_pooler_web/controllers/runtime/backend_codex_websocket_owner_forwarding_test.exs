@@ -182,6 +182,75 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "owner-forwarded upstream close before terminal persists safe transport metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close(
+          [
+            {"response.output_text.delta",
+             %{
+               "type" => "response.output_text.delta",
+               "response_id" => "resp_owner_transport_failure",
+               "output_index" => 0,
+               "content_index" => 0,
+               "delta" => @sentinel
+             }}
+          ],
+          reason: "owner upstream close reason sentinel"
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-transport-failure", "owner-transport-failure")
+
+    try do
+      payload =
+        websocket_payload(setup, "owner forwarded transport failure", %{
+          "request_id" => "ws-owner-transport-failure"
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
+
+      assert %{"type" => "response.output_text.delta", "delta" => @sentinel} =
+               Jason.decode!(partial_frame)
+
+      assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+
+      assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+               Jason.decode!(error_frame)
+
+      assert [request_log] = request_logs(setup.pool.id)
+      assert request_log.status == "failed"
+      assert request_log.transport == "websocket"
+      assert request_log.last_error_code == "upstream_stream_error"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_log.id))
+      assert attempt.status == "failed"
+
+      assert attempt.response_metadata["transport_failure"] == %{
+               "phase" => "upstream_close",
+               "pre_visible_output" => false,
+               "reason" => "upstream_websocket_closed_before_terminal",
+               "reason_class" => "upstream_websocket_closed_before_terminal",
+               "terminal_seen" => false,
+               "text_frame_count" => 1
+             }
+
+      metadata_text = inspect(attempt.response_metadata)
+      refute metadata_text =~ @sentinel
+      refute metadata_text =~ "owner upstream close reason sentinel"
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ setup.raw_key
+      refute metadata_text =~ "Bearer "
+      refute metadata_text =~ "upstream-token"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   @tag :feature_websocket_terminal_auth_refresh
   test "owner-forwarded websocket terminal auth refresh retries through the same owner session" do
     upstream =
