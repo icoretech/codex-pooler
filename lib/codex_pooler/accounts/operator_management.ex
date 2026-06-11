@@ -16,14 +16,10 @@ defmodule CodexPooler.Accounts.OperatorManagement do
     User
   }
 
+  alias CodexPooler.Accounts.{OperatorAssignments, OperatorRoles}
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.{Membership, OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
 
-  @role_instance_owner "instance_owner"
-  @role_instance_admin "instance_admin"
-  @status_active "active"
-  @status_revoked "revoked"
   @datetime_formats ~w(default short long iso8601)
 
   @type operator_result :: CodexPooler.Accounts.operator_result()
@@ -213,9 +209,9 @@ defmodule CodexPooler.Accounts.OperatorManagement do
              |> put_change(:updated_at, DateTime.utc_now())
              |> Repo.insert(),
            {:ok, role_summary} <-
-             ensure_operator_role_in_transaction(actor, user, lifecycle_attrs.role),
+             OperatorRoles.ensure_in_transaction(actor, user, lifecycle_attrs.role),
            {:ok, assignment_summary} <-
-             replace_operator_pool_assignments_in_transaction(
+             OperatorAssignments.replace_in_transaction(
                actor,
                user,
                lifecycle_attrs.role,
@@ -253,9 +249,9 @@ defmodule CodexPooler.Accounts.OperatorManagement do
            |> put_change(:updated_at, DateTime.utc_now())
            |> Repo.update(),
          {:ok, role_summary} <-
-           ensure_operator_role_in_transaction(actor, operator, lifecycle_attrs.role),
+           OperatorRoles.ensure_in_transaction(actor, operator, lifecycle_attrs.role),
          {:ok, assignment_summary} <-
-           replace_operator_pool_assignments_in_transaction(
+           OperatorAssignments.replace_in_transaction(
              actor,
              operator,
              lifecycle_attrs.role,
@@ -349,7 +345,7 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   defp deactivate_operator_target(actor, operator, attrs, metadata) do
     operator.id
     |> operator_for_update_transaction(fn operator ->
-      if final_active_owner?(operator) do
+      if OperatorRoles.final_active_owner?(operator) do
         Repo.rollback(:last_active_owner)
       else
         deactivate_operator_in_transaction(actor, operator, attrs, metadata)
@@ -485,284 +481,39 @@ defmodule CodexPooler.Accounts.OperatorManagement do
   end
 
   defp normalize_lifecycle_attrs(attrs) do
-    with {:ok, role} <- normalize_operator_role(map_value(attrs, :role) || @role_instance_admin),
-         {:ok, pool_ids} <- normalize_pool_ids(map_value(attrs, :pool_ids)),
-         :ok <- ensure_pool_ids_exist(pool_ids) do
-      {:ok, %{role: role, pool_ids: role_pool_ids(role, pool_ids)}}
+    with {:ok, role} <-
+           OperatorRoles.normalize(map_value(attrs, :role) || OperatorRoles.default()),
+         {:ok, pool_ids} <- OperatorAssignments.normalize_pool_ids(map_value(attrs, :pool_ids)),
+         :ok <- OperatorAssignments.ensure_pool_ids_exist(pool_ids) do
+      {:ok, %{role: role, pool_ids: OperatorAssignments.role_pool_ids(role, pool_ids)}}
     end
   end
 
   defp normalize_update_lifecycle_attrs(operator, attrs) do
     current_lifecycle = operator_lifecycle_snapshot(operator)
 
-    with {:ok, role} <- normalize_operator_role(map_value(attrs, :role) || current_lifecycle.role),
+    with {:ok, role} <- OperatorRoles.normalize(map_value(attrs, :role) || current_lifecycle.role),
          {:ok, pool_ids} <-
-           normalize_pool_ids(map_value(attrs, :pool_ids, current_lifecycle.assigned_pool_ids)),
-         :ok <- ensure_pool_ids_exist(pool_ids) do
-      {:ok, %{role: role, pool_ids: role_pool_ids(role, pool_ids)}}
-    end
-  end
-
-  defp normalize_operator_role(role) when role in [@role_instance_owner, @role_instance_admin],
-    do: {:ok, role}
-
-  defp normalize_operator_role(_role), do: {:error, :invalid_operator_role}
-
-  defp normalize_pool_ids(nil), do: {:ok, []}
-
-  defp normalize_pool_ids(pool_ids) when is_list(pool_ids) do
-    pool_ids
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.reduce_while({:ok, []}, fn pool_id, {:ok, acc} ->
-      case Ecto.UUID.cast(pool_id) do
-        {:ok, normalized_pool_id} -> {:cont, {:ok, [normalized_pool_id | acc]}}
-        :error -> {:halt, {:error, :invalid_pool_assignment}}
-      end
-    end)
-    |> case do
-      {:ok, normalized_pool_ids} -> {:ok, normalized_pool_ids |> Enum.reverse() |> Enum.uniq()}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp normalize_pool_ids(pool_id) when is_binary(pool_id), do: normalize_pool_ids([pool_id])
-  defp normalize_pool_ids(_pool_ids), do: {:error, :invalid_pool_assignment}
-
-  defp role_pool_ids(@role_instance_owner, _pool_ids), do: []
-  defp role_pool_ids(@role_instance_admin, pool_ids), do: pool_ids
-
-  defp ensure_pool_ids_exist([]), do: :ok
-
-  defp ensure_pool_ids_exist(pool_ids) do
-    found_count =
-      Repo.aggregate(
-        from(pool in Pool, where: pool.id in ^pool_ids),
-        :count,
-        :id
-      )
-
-    if found_count == length(pool_ids), do: :ok, else: {:error, :invalid_pool_assignment}
-  end
-
-  defp ensure_operator_role_in_transaction(actor, operator, role) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    memberships = lock_active_memberships_for_user(operator.id)
-    previous_role = strongest_role_from_memberships(memberships)
-
-    with :ok <- ensure_role_change_preserves_owner_authority(operator, memberships, role),
-         {:ok, revoked_roles} <- revoke_non_target_memberships(memberships, role, now),
-         {:ok, membership} <- ensure_target_membership(actor, operator, memberships, role, now) do
-      {:ok,
-       %{
-         previous_role: previous_role,
-         role: membership.role,
-         revoked_roles: revoked_roles
-       }}
-    end
-  end
-
-  defp lock_active_memberships_for_user(user_id) do
-    Repo.all(
-      from membership in Membership,
-        where: membership.user_id == ^user_id and membership.status == ^@status_active,
-        order_by: [asc: membership.created_at, asc: membership.id],
-        lock: "FOR UPDATE"
-    )
-  end
-
-  defp strongest_role_from_memberships(memberships) do
-    roles = Enum.map(memberships, & &1.role)
-
-    Enum.find(roles, &(&1 == @role_instance_owner)) ||
-      Enum.find(roles, &(&1 == @role_instance_admin))
-  end
-
-  defp ensure_role_change_preserves_owner_authority(operator, memberships, replacement_role) do
-    if replacement_role != @role_instance_owner and
-         Enum.any?(memberships, &(&1.role == @role_instance_owner)) do
-      ensure_not_final_active_owner(operator.id)
-    else
-      :ok
-    end
-  end
-
-  defp revoke_non_target_memberships(memberships, role, now) do
-    memberships
-    |> Enum.reject(&(&1.role == role))
-    |> Enum.reduce_while({:ok, []}, fn membership, {:ok, revoked_roles} ->
-      case membership
-           |> Membership.changeset(%{status: @status_revoked, revoked_at: now})
-           |> Repo.update() do
-        {:ok, revoked_membership} -> {:cont, {:ok, [revoked_membership.role | revoked_roles]}}
-        {:error, changeset} -> {:halt, {:error, changeset}}
-      end
-    end)
-    |> case do
-      {:ok, revoked_roles} -> {:ok, Enum.reverse(revoked_roles)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp ensure_target_membership(actor, operator, memberships, role, now) do
-    case Enum.find(memberships, &(&1.role == role)) do
-      %Membership{} = membership ->
-        {:ok, membership}
-
-      nil ->
-        %Membership{}
-        |> Membership.changeset(%{
-          user_id: operator.id,
-          role: role,
-          status: @status_active,
-          created_by_user_id: actor_user_id(actor),
-          created_at: now
-        })
-        |> Repo.insert()
-    end
-  end
-
-  defp replace_operator_pool_assignments_in_transaction(actor, operator, role, desired_pool_ids) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    desired_pool_ids = if role == @role_instance_admin, do: desired_pool_ids, else: []
-    assignments = lock_active_assignments_for_user(operator.id)
-    previous_pool_ids = Enum.map(assignments, & &1.pool_id)
-    desired_pool_id_set = MapSet.new(desired_pool_ids)
-
-    with {:ok, removed_pool_ids} <-
-           revoke_removed_assignments(assignments, desired_pool_id_set, now),
-         {:ok, added_pool_ids} <-
-           create_missing_assignments(
-             actor,
-             operator,
-             desired_pool_ids,
-             MapSet.new(previous_pool_ids),
-             now
-           ) do
-      {:ok,
-       %{
-         previous_pool_ids: previous_pool_ids,
-         assigned_pool_ids: desired_pool_ids,
-         added_pool_ids: added_pool_ids,
-         removed_pool_ids: removed_pool_ids
-       }}
-    end
-  end
-
-  defp lock_active_assignments_for_user(user_id) do
-    Repo.all(
-      from assignment in OperatorPoolAssignment,
-        where: assignment.user_id == ^user_id and assignment.status == ^@status_active,
-        order_by: [asc: assignment.created_at, asc: assignment.id],
-        lock: "FOR UPDATE"
-    )
-  end
-
-  defp revoke_removed_assignments(assignments, desired_pool_id_set, now) do
-    assignments
-    |> Enum.reject(&MapSet.member?(desired_pool_id_set, &1.pool_id))
-    |> Enum.reduce_while({:ok, []}, fn assignment, {:ok, removed_pool_ids} ->
-      case assignment
-           |> OperatorPoolAssignment.changeset(%{
-             status: @status_revoked,
-             revoked_at: now,
-             updated_at: now
-           })
-           |> Repo.update() do
-        {:ok, revoked_assignment} ->
-          {:cont, {:ok, [revoked_assignment.pool_id | removed_pool_ids]}}
-
-        {:error, changeset} ->
-          {:halt, {:error, changeset}}
-      end
-    end)
-    |> case do
-      {:ok, removed_pool_ids} -> {:ok, Enum.reverse(removed_pool_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp create_missing_assignments(actor, operator, desired_pool_ids, previous_pool_id_set, now) do
-    desired_pool_ids
-    |> Enum.reject(&MapSet.member?(previous_pool_id_set, &1))
-    |> Enum.reduce_while({:ok, []}, fn pool_id, {:ok, added_pool_ids} ->
-      case %OperatorPoolAssignment{}
-           |> OperatorPoolAssignment.changeset(%{
-             user_id: operator.id,
-             pool_id: pool_id,
-             status: @status_active,
-             created_by_user_id: actor_user_id(actor),
-             created_at: now,
-             updated_at: now
-           })
-           |> Repo.insert() do
-        {:ok, assignment} -> {:cont, {:ok, [assignment.pool_id | added_pool_ids]}}
-        {:error, changeset} -> {:halt, {:error, changeset}}
-      end
-    end)
-    |> case do
-      {:ok, added_pool_ids} -> {:ok, Enum.reverse(added_pool_ids)}
-      {:error, reason} -> {:error, reason}
+           OperatorAssignments.normalize_pool_ids(
+             map_value(attrs, :pool_ids, current_lifecycle.assigned_pool_ids)
+           ),
+         :ok <- OperatorAssignments.ensure_pool_ids_exist(pool_ids) do
+      {:ok, %{role: role, pool_ids: OperatorAssignments.role_pool_ids(role, pool_ids)}}
     end
   end
 
   defp operator_lifecycle_snapshot(%User{} = operator) do
-    role = current_operator_role(operator) || @role_instance_admin
+    role = OperatorRoles.current(operator) || OperatorRoles.default()
 
     %{
       role: role,
       assigned_pool_ids:
-        if(role == @role_instance_admin, do: current_operator_pool_ids(operator), else: [])
+        if(role == Pools.role(:instance_admin),
+          do: OperatorAssignments.current_pool_ids(operator),
+          else: []
+        )
     }
   end
-
-  defp current_operator_role(%User{id: user_id}) do
-    user_id
-    |> active_memberships_for_user()
-    |> strongest_role_from_memberships()
-  end
-
-  defp current_operator_pool_ids(%User{id: user_id}) do
-    Repo.all(
-      from assignment in OperatorPoolAssignment,
-        where: assignment.user_id == ^user_id and assignment.status == ^@status_active,
-        order_by: [asc: assignment.created_at, asc: assignment.id],
-        select: assignment.pool_id
-    )
-  end
-
-  defp active_memberships_for_user(user_id) do
-    Repo.all(
-      from membership in Membership,
-        where: membership.user_id == ^user_id and membership.status == ^@status_active,
-        order_by: [asc: membership.created_at, asc: membership.id]
-    )
-  end
-
-  defp ensure_not_final_active_owner(user_id) do
-    active_owner_user_ids = active_owner_user_ids_for_update()
-
-    if active_owner_user_ids == [user_id], do: {:error, :last_active_owner}, else: :ok
-  end
-
-  defp active_owner_user_ids_for_update do
-    Repo.all(
-      from membership in Membership,
-        join: user in User,
-        on: user.id == membership.user_id,
-        where:
-          membership.role == @role_instance_owner and membership.status == @status_active and
-            user.status == @status_active and is_nil(user.deleted_at),
-        order_by: [asc: membership.user_id],
-        lock: "FOR UPDATE",
-        select: membership.user_id
-    )
-    |> Enum.map(&normalize_uuid/1)
-    |> Enum.uniq()
-  end
-
-  defp actor_user_id(%Scope{user: %User{id: user_id}}), do: user_id
-  defp actor_user_id(%User{id: user_id}), do: user_id
-  defp actor_user_id(_actor), do: nil
 
   defp map_value(attrs, key), do: map_value(attrs, key, nil)
 
@@ -842,15 +593,6 @@ defmodule CodexPooler.Accounts.OperatorManagement do
       nil -> {:error, :invalid_operator}
     end
   end
-
-  defp final_active_owner?(%User{id: user_id, status: "active"}) do
-    active_owner_user_ids_for_update() == [user_id]
-  end
-
-  defp final_active_owner?(_user), do: false
-
-  defp normalize_uuid(<<_::128>> = raw_uuid), do: Ecto.UUID.load!(raw_uuid)
-  defp normalize_uuid(uuid), do: uuid
 
   defp revoke_active_sessions_for_user(user, now) do
     Repo.update_all(

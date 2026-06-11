@@ -49,6 +49,9 @@ defmodule CodexPooler.Pools do
   @spec role(Authorization.role_key()) :: String.t()
   defdelegate role(role_key), to: Authorization
 
+  @spec role_values() :: [String.t()]
+  defdelegate role_values(), to: Authorization
+
   @spec list_pools(term()) :: pools_result()
   def list_pools(%Scope{} = scope) do
     Authorization.list_pools_for_capability(scope, capability(:pool_operate), [@status_active])
@@ -461,38 +464,50 @@ defmodule CodexPooler.Pools do
   defp lock_membership(_membership_or_id),
     do: {:error, access_error(:membership_not_found, "membership was not found")}
 
-  defp normalize_membership_role(role) when role in ["instance_owner", "instance_admin"],
-    do: {:ok, role}
-
-  defp normalize_membership_role(_role),
-    do: {:error, access_error(:invalid_role, "role must be instance_owner or instance_admin")}
-
-  defp ensure_owner_authority_remains(
-         %Membership{role: "instance_owner", status: @status_active} = membership,
-         role: replacement_role
-       )
-       when replacement_role != "instance_owner" do
-    ensure_not_final_active_owner(membership)
+  defp normalize_membership_role(role) when is_binary(role) do
+    if role in Authorization.role_values() do
+      {:ok, role}
+    else
+      {:error, access_error(:invalid_role, "role must be instance_owner or instance_admin")}
+    end
   end
 
   defp ensure_owner_authority_remains(
-         %Membership{role: "instance_owner", status: @status_active} = membership,
-         status: replacement_status
-       )
-       when replacement_status != @status_active do
-    ensure_not_final_active_owner(membership)
+         %Membership{status: @status_active} = membership,
+         role: replacement_role
+       ) do
+    owner_role = Authorization.role(:instance_owner)
+
+    if membership.role == owner_role and replacement_role != owner_role do
+      ensure_not_final_active_owner(membership)
+    else
+      :ok
+    end
+  end
+
+  defp ensure_owner_authority_remains(
+         %Membership{status: @status_active} = membership,
+         status: @status_revoked
+       ) do
+    if membership.role == Authorization.role(:instance_owner) do
+      ensure_not_final_active_owner(membership)
+    else
+      :ok
+    end
   end
 
   defp ensure_owner_authority_remains(_membership, _attrs), do: :ok
 
   defp ensure_not_final_active_owner(%Membership{user_id: user_id}) do
+    owner_role = Authorization.role(:instance_owner)
+
     active_owner_user_ids =
       Repo.all(
         from membership in Membership,
           join: user in User,
           on: user.id == membership.user_id,
           where:
-            membership.role == "instance_owner" and membership.status == ^@status_active and
+            membership.role == ^owner_role and membership.status == ^@status_active and
               user.status == ^@status_active and is_nil(user.deleted_at),
           order_by: [asc: membership.user_id],
           lock: "FOR UPDATE",

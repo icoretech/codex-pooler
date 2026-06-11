@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPoolerWeb.Admin.OperatorComponents
 
@@ -57,7 +58,7 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
       "password" => "",
       "password_change_required" => "true",
       "send_email" => "true",
-      "role" => "instance_admin",
+      "role" => Pools.role(:instance_admin),
       "pool_ids" => []
     }
 
@@ -136,8 +137,8 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   @spec role_options() :: [{String.t(), String.t()}]
   def role_options do
     [
-      {"Instance admin", "instance_admin"},
-      {"Instance owner", "instance_owner"}
+      {"Instance admin", Pools.role(:instance_admin)},
+      {"Instance owner", Pools.role(:instance_owner)}
     ]
   end
 
@@ -196,8 +197,9 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
     }
   end
 
-  defp role_value("instance_owner"), do: "instance_owner"
-  defp role_value(_role), do: "instance_admin"
+  defp role_value(role) do
+    if role in Pools.role_values(), do: role, else: Pools.role(:instance_admin)
+  end
 
   defp pool_ids_value(params) do
     params
