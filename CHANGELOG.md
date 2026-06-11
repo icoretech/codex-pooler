@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.0.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.10...codex-pooler-v0.0.11) (2026-06-11)
+
+
+### Features
+
+* **admin:** add upstream account relink action ([843e188](https://github.com/icoretech/codex-pooler/commit/843e18827cb4792acdc48e1755290d13a8e87b8b))
+* **docs:** clarify OAuth device-code setup ([0257377](https://github.com/icoretech/codex-pooler/commit/025737761d5f7c68eb1630029016731735a1671f))
+* **upstreams:** add OpenAI OAuth linking ([a317aa2](https://github.com/icoretech/codex-pooler/commit/a317aa27f7ce6df097e44881599b661e799c2242))
+
+
+### Bug Fixes
+
+* **access:** preserve skipped invite email result ([a3793db](https://github.com/icoretech/codex-pooler/commit/a3793db3c9e4b58f934eb6ba66844fcb72a92d6c))
+* **accounting:** rebuild daily rollups set-wise ([a8baf70](https://github.com/icoretech/codex-pooler/commit/a8baf70e659ed48cb0e42e45a1ffe2e883e2f459))
+* **admin:** add invite dialog backdrop id ([d963688](https://github.com/icoretech/codex-pooler/commit/d9636880b61865497f53b4f218a21c2a0f6e83b1))
+* **admin:** clear recovered reconciliation alerts ([de16639](https://github.com/icoretech/codex-pooler/commit/de16639a3a2eee2d9ce4711455bc4f09d8f6b926))
+* **admin:** point Pool dialog docs to pools guide ([eb5d8b7](https://github.com/icoretech/codex-pooler/commit/eb5d8b7e1a575eacb10dd1f036f2365a310978df))
+* **admin:** recheck settings capability on save ([6a7c6b3](https://github.com/icoretech/codex-pooler/commit/6a7c6b33bcea43b716a0d4b1af7a4f0b3c82a6ee))
+* **admin:** rename upstream OAuth action ([911c4c2](https://github.com/icoretech/codex-pooler/commit/911c4c2b30a36450b669b09f9d790c27ff4753df))
+* **admin:** render percent-only quota bars ([b1e8a86](https://github.com/icoretech/codex-pooler/commit/b1e8a863292b554d3383f028325ebed4a38a2d43))
+* **admin:** surface unavailable API key models ([aa04a8f](https://github.com/icoretech/codex-pooler/commit/aa04a8f29bc952b1ccb9d7e34a4b1c0bcaf7f252))
+* dedupe reconciliation and classify hard-pinned recovery ([6383dcc](https://github.com/icoretech/codex-pooler/commit/6383dccf79696108c1eb6c291432fb49c1d59601))
+* **deps:** update astro monorepo to v6.4.5 ([7260919](https://github.com/icoretech/codex-pooler/commit/7260919655c01b0a247c431359bb31fca43c48c1))
+* **deps:** update dependency @astrojs/starlight to v0.40.0 ([#43](https://github.com/icoretech/codex-pooler/issues/43)) ([511ce7a](https://github.com/icoretech/codex-pooler/commit/511ce7ac758a1bf7238ffca607cc26000107d48e))
+* **deps:** update dependency starlight-page-actions to v0.6.1 ([#42](https://github.com/icoretech/codex-pooler/issues/42)) ([c1b2592](https://github.com/icoretech/codex-pooler/commit/c1b259234f08f2db0cbcc6f41663bf28d8f69cfc))
+* **deps:** update docs dependency group ([54be3c5](https://github.com/icoretech/codex-pooler/commit/54be3c5d1734ddc9b63d836b636b2045eae05433))
+* **jobs:** schedule token refresh recovery ([147d7e7](https://github.com/icoretech/codex-pooler/commit/147d7e70becfdb03b0ae76532f792ba9e8e2abd4))
+* **runtime:** match current Codex compatibility behavior ([29fe692](https://github.com/icoretech/codex-pooler/commit/29fe69265cb952f9b100114f9e09f422770373c7))
+
 ## [0.0.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.9...codex-pooler-v0.0.10) (2026-06-10)
 
 
