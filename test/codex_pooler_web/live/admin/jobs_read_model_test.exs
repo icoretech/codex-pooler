@@ -89,6 +89,15 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
 
     assert filter_options.queue |> Enum.map(& &1.value) == ["", "critical", "jobs"]
 
+    failure_summary = %{title: "Attempt 1", message: "stacktrace-with-[redacted]"}
+
+    assert projection.selected_job.failure_summary == failure_summary
+    assert overview.buckets.retry_pressure.newest.failure_summary == failure_summary
+    assert projection.worker_jobs_by_group.token_refresh.latest.failure_summary == failure_summary
+
+    assert projection.worker_jobs_by_group.token_refresh.latest_failure.failure_summary ==
+             failure_summary
+
     refute Enum.any?(projection.explorer.items, &(&1.id == completed_job.id))
     refute Map.has_key?(projection, :recent_jobs)
 

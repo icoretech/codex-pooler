@@ -19,8 +19,6 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
     :show_completed
   ]
 
-  @sensitive_projection_keys [:args, :meta, :errors, "args", "meta", "errors"]
-
   @type worker_jobs_by_group :: %{optional(atom()) => ReadModel.worker_job_summary()}
   @type filter_options :: %{
           required(:state) => [JobFilterForm.option()],
@@ -69,12 +67,16 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
     read_opts = read_opts_from_load_opts(opts)
 
     overview =
-      scope |> ReadModel.jobs_overview(explorer_filters, read_opts) |> sanitize_projection()
+      scope
+      |> ReadModel.jobs_overview(explorer_filters, read_opts)
+      |> ReadModel.sanitize_projection()
 
     explorer =
-      scope |> ReadModel.list_explorer_jobs(explorer_filters, read_opts) |> sanitize_projection()
+      scope
+      |> ReadModel.list_explorer_jobs(explorer_filters, read_opts)
+      |> ReadModel.sanitize_projection()
 
-    grouped_jobs = scope |> worker_jobs_by_group() |> sanitize_projection()
+    grouped_jobs = scope |> worker_jobs_by_group() |> ReadModel.sanitize_projection()
 
     %{
       overview: overview,
@@ -129,217 +131,4 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
       queue: JobFilterForm.queue_options(filter_values.queues, filters.queue)
     }
   end
-
-  defp sanitize_projection(value) when is_list(value), do: Enum.map(value, &sanitize_projection/1)
-
-  defp sanitize_projection(%DateTime{} = value), do: value
-  defp sanitize_projection(%NaiveDateTime{} = value), do: value
-  defp sanitize_projection(%Date{} = value), do: value
-
-  defp sanitize_projection(%{errors: errors} = value) when is_list(errors) do
-    value
-    |> Map.drop(@sensitive_projection_keys)
-    |> maybe_put_failure_summary(latest_error_by_attempt(errors))
-    |> Map.new(fn {key, nested_value} -> {key, sanitize_projection(nested_value)} end)
-  end
-
-  defp sanitize_projection(value) when is_map(value) do
-    value
-    |> Map.drop(@sensitive_projection_keys)
-    |> Map.new(fn {key, nested_value} -> {key, sanitize_projection(nested_value)} end)
-  end
-
-  defp sanitize_projection(value), do: value
-
-  defp maybe_put_failure_summary(value, latest_error) when is_map(latest_error),
-    do: Map.put(value, :failure_summary, failure_summary(latest_error))
-
-  defp maybe_put_failure_summary(value, _latest_error), do: value
-
-  defp failure_summary(error) do
-    %{
-      title: failure_title(error),
-      message: error |> Map.get("error") |> safe_failure_message()
-    }
-  end
-
-  defp latest_error_by_attempt(errors) do
-    errors
-    |> Enum.filter(&is_map/1)
-    |> Enum.max_by(&error_attempt_number/1, fn -> nil end)
-  end
-
-  defp error_attempt_number(%{"attempt" => attempt}) when is_integer(attempt), do: attempt
-
-  defp error_attempt_number(%{"attempt" => attempt}) when is_binary(attempt) do
-    case Integer.parse(attempt) do
-      {attempt, ""} -> attempt
-      _not_integer -> -1
-    end
-  end
-
-  defp error_attempt_number(_error), do: -1
-
-  defp failure_title(%{"error" => message} = error) when is_binary(message) do
-    [failure_attempt(error), operator_failure_title(message) || failure_kind(error)]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> "Failure detail"
-      parts -> Enum.join(parts, " · ")
-    end
-  end
-
-  defp failure_title(error) do
-    [failure_attempt(error), failure_kind(error)]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> "Failure detail"
-      parts -> Enum.join(parts, " · ")
-    end
-  end
-
-  defp failure_attempt(%{"attempt" => attempt}) when is_integer(attempt), do: "Attempt #{attempt}"
-  defp failure_attempt(%{"attempt" => attempt}) when is_binary(attempt), do: "Attempt #{attempt}"
-  defp failure_attempt(_error), do: nil
-
-  defp failure_kind(%{"kind" => kind}) when is_binary(kind) and kind != "", do: kind
-  defp failure_kind(_error), do: nil
-
-  defp safe_failure_message(message) when is_binary(message) do
-    message
-    |> String.replace(~r/[\r\n\t]+/, " ")
-    |> redact_failure_secrets()
-    |> unwrap_oban_failure_message()
-    |> operator_failure_message()
-    |> String.trim()
-    |> truncate_failure_message()
-    |> case do
-      "" -> "No diagnostic message recorded."
-      message -> message
-    end
-  end
-
-  defp safe_failure_message(_message), do: "No diagnostic message recorded."
-
-  defp redact_failure_secrets(message) do
-    message
-    |> String.replace(~r/(?i)bearer\s+[a-z0-9._~+\/=:-]+/, "Bearer [redacted]")
-    |> String.replace(~r/(?i)\bsecret[-_a-z0-9]*\b/, "[redacted]")
-    |> String.replace(
-      ~r/(?i)\b(authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|prompt|secret|token)\b\s*[:=]\s*[^,;\s]+/,
-      "[redacted]"
-    )
-  end
-
-  defp unwrap_oban_failure_message(message) do
-    cond do
-      match = Regex.run(~r/failed with \{:error, "([^"]+)"\}/, message) ->
-        [_full, inner] = match
-        inner
-
-      match = Regex.run(~r/failed with \{:error, %\{[^}]*message: "([^"]+)"/, message) ->
-        [_full, inner] = match
-        inner
-
-      oban_discard_failure?(message) ->
-        "The job stopped without additional diagnostics."
-
-      true ->
-        message
-    end
-  end
-
-  defp operator_failure_title(message) do
-    code = message |> unwrap_oban_failure_message() |> reconciliation_failure_code()
-    code = code || oban_map_failure_code(message)
-
-    cond do
-      oban_discard_failure?(message) ->
-        "Run discarded"
-
-      catalog_sync_invalid_trigger_kind?(message) ->
-        "Invalid catalog sync trigger"
-
-      catalog_sync_in_progress?(message) ->
-        "Catalog sync already running"
-
-      title = quota_failure_title(code) ->
-        title
-
-      is_binary(code) ->
-        humanize_failure_code(code)
-
-      true ->
-        nil
-    end
-  end
-
-  defp quota_failure_title("quota_refresh_auth_unavailable"), do: "Quota refresh blocked"
-  defp quota_failure_title("quota_refresh_unavailable"), do: "Quota unavailable"
-  defp quota_failure_title("quota_refresh_failed"), do: "Quota refresh failed"
-  defp quota_failure_title(_code), do: nil
-
-  defp operator_failure_message(message) do
-    cond do
-      catalog_sync_invalid_trigger_kind?(message) ->
-        "Manual catalog sync could not start because the enqueue action used an unsupported trigger kind."
-
-      catalog_sync_in_progress?(message) ->
-        "Catalog sync could not start because this pool already has a sync run marked as running."
-
-      true ->
-        case reconciliation_failure_code(message) do
-          "quota_refresh_auth_unavailable" ->
-            "Quota refresh needs account reauthentication."
-
-          "quota_refresh_unavailable" ->
-            "Quota data was not available from the upstream account."
-
-          "quota_refresh_failed" ->
-            "Quota refresh failed for the upstream account."
-
-          code when is_binary(code) ->
-            "Account reconciliation needs attention: #{humanize_failure_code(code)}."
-
-          nil ->
-            message
-        end
-    end
-  end
-
-  defp reconciliation_failure_code("account reconciliation partial: " <> code),
-    do: String.trim(code)
-
-  defp reconciliation_failure_code(_message), do: nil
-
-  defp oban_map_failure_code(message) do
-    case Regex.run(~r/failed with \{:error, %\{[^}]*code: :([a-z0-9_]+)/, message) do
-      [_full, code] -> code
-      _no_match -> nil
-    end
-  end
-
-  defp oban_discard_failure?(message), do: Regex.match?(~r/failed with :discard\b/, message)
-
-  defp catalog_sync_invalid_trigger_kind?(message) do
-    String.contains?(message, "CodexPooler.Jobs.CatalogSyncWorker") and
-      String.contains?(message, "trigger_kind:") and
-      String.contains?(message, "is invalid")
-  end
-
-  defp catalog_sync_in_progress?(message) do
-    String.contains?(message, "catalog sync already running") or
-      String.contains?(message, "code: :catalog_sync_in_progress")
-  end
-
-  defp humanize_failure_code(code) do
-    code
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
-
-  defp truncate_failure_message(message) when byte_size(message) > 240,
-    do: message |> binary_part(0, 240) |> String.trim() |> Kernel.<>("…")
-
-  defp truncate_failure_message(message), do: message
 end

@@ -22,6 +22,7 @@ defmodule CodexPooler.Jobs.ReadModel do
   @explorer_page_size 20
   @completed_state "completed"
   @overview_action_buckets [:active_failure, :retry_pressure, :stuck_executing, :backlog_pressure]
+  @sensitive_projection_keys [:args, :meta, :errors, "args", "meta", "errors"]
 
   @type job_summary :: map()
   @type explorer_job_summary :: map()
@@ -132,7 +133,7 @@ defmodule CodexPooler.Jobs.ReadModel do
 
       items =
         query
-        |> job_explorer_metadata_query()
+        |> job_metadata_query()
         |> order_by([job], desc: job.inserted_at, desc: job.id)
         |> limit(^limit)
         |> offset(^offset)
@@ -180,7 +181,7 @@ defmodule CodexPooler.Jobs.ReadModel do
       Repo.transaction(fn ->
         Oban.Job
         |> apply_overview_filters(filters)
-        |> job_explorer_metadata_query()
+        |> job_metadata_query()
         |> order_by([job], desc: job.inserted_at, desc: job.id)
         |> Repo.stream()
         |> Enum.reduce(empty_jobs_overview(), &collect_overview_job(&1, &2, now))
@@ -320,6 +321,28 @@ defmodule CodexPooler.Jobs.ReadModel do
     with_attention(results, opts)
   end
 
+  @spec sanitize_projection(term()) :: term()
+  def sanitize_projection(value) when is_list(value), do: Enum.map(value, &sanitize_projection/1)
+
+  def sanitize_projection(%DateTime{} = value), do: value
+  def sanitize_projection(%NaiveDateTime{} = value), do: value
+  def sanitize_projection(%Date{} = value), do: value
+
+  def sanitize_projection(%{errors: errors} = value) when is_list(errors) do
+    value
+    |> Map.drop(@sensitive_projection_keys)
+    |> maybe_put_failure_summary(latest_error_by_attempt(errors))
+    |> Map.new(fn {key, nested_value} -> {key, sanitize_projection(nested_value)} end)
+  end
+
+  def sanitize_projection(value) when is_map(value) do
+    value
+    |> Map.drop(@sensitive_projection_keys)
+    |> Map.new(fn {key, nested_value} -> {key, sanitize_projection(nested_value)} end)
+  end
+
+  def sanitize_projection(value), do: value
+
   defp reauth_required_reconciliation_failure?(%{worker: worker, target: target})
        when is_map(target) do
     worker == worker_name(AccountReconciliationWorker) and reauth_required_target?(target)
@@ -422,6 +445,51 @@ defmodule CodexPooler.Jobs.ReadModel do
     end)
   end
 
+  defmacrop job_summary_projection(
+              job,
+              pool,
+              assignment,
+              assignment_identity,
+              direct_identity,
+              api_key
+            ) do
+    quote do
+      %{
+        id: unquote(job).id,
+        worker: unquote(job).worker,
+        queue: unquote(job).queue,
+        state: unquote(job).state,
+        errors: unquote(job).errors,
+        attempt: unquote(job).attempt,
+        max_attempts: unquote(job).max_attempts,
+        inserted_at: unquote(job).inserted_at,
+        scheduled_at: unquote(job).scheduled_at,
+        attempted_at: unquote(job).attempted_at,
+        completed_at: unquote(job).completed_at,
+        discarded_at: unquote(job).discarded_at,
+        cancelled_at: unquote(job).cancelled_at,
+        target: %{
+          pool_id: fragment("?->>?", unquote(job).args, "pool_id"),
+          pool_name: unquote(pool).name,
+          pool_slug: unquote(pool).slug,
+          assignment_id: fragment("?->>?", unquote(job).args, "pool_upstream_assignment_id"),
+          assignment_label: unquote(assignment).assignment_label,
+          assignment_status: unquote(assignment).status,
+          assignment_identity_id: type(unquote(assignment).upstream_identity_id, :string),
+          upstream_identity_id: fragment("?->>?", unquote(job).args, "upstream_identity_id"),
+          assignment_identity_label: unquote(assignment_identity).account_label,
+          assignment_identity_status: unquote(assignment_identity).status,
+          direct_identity_label: unquote(direct_identity).account_label,
+          direct_identity_status: unquote(direct_identity).status,
+          api_key_id: fragment("?->>?", unquote(job).args, "api_key_id"),
+          api_key_label: unquote(api_key).display_name,
+          api_key_prefix: unquote(api_key).key_prefix,
+          rollup_date: fragment("?->>?", unquote(job).args, "rollup_date")
+        }
+      }
+    end
+  end
+
   defp grouped_job_metadata_query(grouped_query, order \\ nil) do
     queryable =
       from job in Oban.Job,
@@ -440,39 +508,15 @@ defmodule CodexPooler.Jobs.ReadModel do
            ] in grouped_job_target_metadata_query(queryable),
            select: %{
              group_index: grouped_job.group_index,
-             job: %{
-               id: job.id,
-               worker: job.worker,
-               queue: job.queue,
-               state: job.state,
-               errors: job.errors,
-               attempt: job.attempt,
-               max_attempts: job.max_attempts,
-               inserted_at: job.inserted_at,
-               scheduled_at: job.scheduled_at,
-               attempted_at: job.attempted_at,
-               completed_at: job.completed_at,
-               discarded_at: job.discarded_at,
-               cancelled_at: job.cancelled_at,
-               target: %{
-                 pool_id: fragment("?->>?", job.args, "pool_id"),
-                 pool_name: pool.name,
-                 pool_slug: pool.slug,
-                 assignment_id: fragment("?->>?", job.args, "pool_upstream_assignment_id"),
-                 assignment_label: assignment.assignment_label,
-                 assignment_status: assignment.status,
-                 assignment_identity_id: type(assignment.upstream_identity_id, :string),
-                 upstream_identity_id: fragment("?->>?", job.args, "upstream_identity_id"),
-                 assignment_identity_label: assignment_identity.account_label,
-                 assignment_identity_status: assignment_identity.status,
-                 direct_identity_label: direct_identity.account_label,
-                 direct_identity_status: direct_identity.status,
-                 api_key_id: fragment("?->>?", job.args, "api_key_id"),
-                 api_key_label: api_key.display_name,
-                 api_key_prefix: api_key.key_prefix,
-                 rollup_date: fragment("?->>?", job.args, "rollup_date")
-               }
-             }
+             job:
+               job_summary_projection(
+                 job,
+                 pool,
+                 assignment,
+                 assignment_identity,
+                 direct_identity,
+                 api_key
+               )
            }
 
     grouped_job_metadata_order(query, order)
@@ -983,7 +1027,7 @@ defmodule CodexPooler.Jobs.ReadModel do
     {:ok, {total, items}} =
       Repo.transaction(fn ->
         queryable
-        |> job_explorer_metadata_query()
+        |> job_metadata_query()
         |> order_by([job], desc: job.inserted_at, desc: job.id)
         |> Repo.stream()
         |> Enum.reduce({0, []}, fn job, {total, items} ->
@@ -1026,95 +1070,21 @@ defmodule CodexPooler.Jobs.ReadModel do
            direct_identity,
            api_key
          ] in job_target_metadata_query(queryable),
-         select: %{
-           id: job.id,
-           worker: job.worker,
-           queue: job.queue,
-           state: job.state,
-           errors: job.errors,
-           attempt: job.attempt,
-           max_attempts: job.max_attempts,
-           inserted_at: job.inserted_at,
-           scheduled_at: job.scheduled_at,
-           attempted_at: job.attempted_at,
-           completed_at: job.completed_at,
-           discarded_at: job.discarded_at,
-           cancelled_at: job.cancelled_at,
-           target: %{
-             pool_id: fragment("?->>?", job.args, "pool_id"),
-             pool_name: pool.name,
-             pool_slug: pool.slug,
-             assignment_id: fragment("?->>?", job.args, "pool_upstream_assignment_id"),
-             assignment_label: assignment.assignment_label,
-             assignment_status: assignment.status,
-             assignment_identity_id: type(assignment.upstream_identity_id, :string),
-             upstream_identity_id: fragment("?->>?", job.args, "upstream_identity_id"),
-             assignment_identity_label: assignment_identity.account_label,
-             assignment_identity_status: assignment_identity.status,
-             direct_identity_label: direct_identity.account_label,
-             direct_identity_status: direct_identity.status,
-             api_key_id: fragment("?->>?", job.args, "api_key_id"),
-             api_key_label: api_key.display_name,
-             api_key_prefix: api_key.key_prefix,
-             rollup_date: fragment("?->>?", job.args, "rollup_date")
-           }
-         }
-  end
-
-  defp job_explorer_metadata_query(queryable) do
-    from [
-           job,
-           pool,
-           assignment,
-           assignment_identity,
-           direct_identity,
-           api_key
-         ] in job_target_metadata_query(queryable),
-         select: %{
-           id: job.id,
-           worker: job.worker,
-           queue: job.queue,
-           state: job.state,
-           errors: job.errors,
-           attempt: job.attempt,
-           max_attempts: job.max_attempts,
-           inserted_at: job.inserted_at,
-           scheduled_at: job.scheduled_at,
-           attempted_at: job.attempted_at,
-           completed_at: job.completed_at,
-           discarded_at: job.discarded_at,
-           cancelled_at: job.cancelled_at,
-           target: %{
-             pool_id: fragment("?->>?", job.args, "pool_id"),
-             pool_name: pool.name,
-             pool_slug: pool.slug,
-             assignment_id: fragment("?->>?", job.args, "pool_upstream_assignment_id"),
-             assignment_label: assignment.assignment_label,
-             assignment_status: assignment.status,
-             assignment_identity_id: type(assignment.upstream_identity_id, :string),
-             upstream_identity_id: fragment("?->>?", job.args, "upstream_identity_id"),
-             assignment_identity_label: assignment_identity.account_label,
-             assignment_identity_status: assignment_identity.status,
-             direct_identity_label: direct_identity.account_label,
-             direct_identity_status: direct_identity.status,
-             api_key_id: fragment("?->>?", job.args, "api_key_id"),
-             api_key_label: api_key.display_name,
-             api_key_prefix: api_key.key_prefix,
-             rollup_date: fragment("?->>?", job.args, "rollup_date")
-           }
-         }
+         select:
+           job_summary_projection(
+             job,
+             pool,
+             assignment,
+             assignment_identity,
+             direct_identity,
+             api_key
+           )
   end
 
   defp sanitize_explorer_error_summaries(jobs),
-    do: Enum.map(jobs, &sanitize_explorer_error_summary/1)
+    do: sanitize_projection(jobs)
 
-  defp sanitize_explorer_error_summary(%{errors: errors} = job) when is_list(errors) do
-    job
-    |> Map.delete(:errors)
-    |> maybe_put_failure_summary(latest_error_by_attempt(errors))
-  end
-
-  defp sanitize_explorer_error_summary(job), do: Map.delete(job, :errors)
+  defp sanitize_explorer_error_summary(job), do: sanitize_projection(job)
 
   defp maybe_put_failure_summary(job, latest_error) when is_map(latest_error),
     do: Map.put(job, :failure_summary, failure_summary(latest_error))
