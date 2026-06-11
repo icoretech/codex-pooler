@@ -24,10 +24,10 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
       unsupported_input_image_file_id?(value) ->
         unsupported_input_image_error()
 
-      unsupported_input_image_url?(value) != nil ->
+      unsupported_input_image_url_reason(value) != nil ->
         unsupported_input_image_error()
 
-      unsupported_input_file_data?(value) != nil ->
+      unsupported_input_file_data_reason(value) != nil ->
         unsupported_input_file_error()
 
       true ->
@@ -47,7 +47,7 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
 
   defp unsupported_input_image_file_id?(_value), do: false
 
-  defp unsupported_input_image_url?(%{"type" => "input_image", "image_url" => image_url})
+  defp unsupported_input_image_url_reason(%{"type" => "input_image", "image_url" => image_url})
        when is_binary(image_url) do
     image_url
     |> String.trim()
@@ -58,9 +58,9 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
     end
   end
 
-  defp unsupported_input_image_url?(_value), do: nil
+  defp unsupported_input_image_url_reason(_value), do: nil
 
-  defp unsupported_input_file_data?(%{"type" => "input_file", "file_data" => file_data})
+  defp unsupported_input_file_data_reason(%{"type" => "input_file", "file_data" => file_data})
        when is_binary(file_data) do
     file_data
     |> String.trim()
@@ -71,7 +71,7 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
     end
   end
 
-  defp unsupported_input_file_data?(_value), do: nil
+  defp unsupported_input_file_data_reason(_value), do: nil
 
   defp valid_image_reference?(""), do: false
 
