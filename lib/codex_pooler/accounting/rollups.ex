@@ -8,9 +8,222 @@ defmodule CodexPooler.Accounting.Rollups do
   alias CodexPooler.Accounting.{DailyRollup, LedgerEntry, Request}
   alias CodexPooler.Repo
 
-  @entry_settlement "settlement"
-  @amount_recorded "recorded"
   @usage_known "usage_known"
+
+  @daily_rollup_rebuild_sql """
+  WITH source AS MATERIALIZED (
+    SELECT
+      entry.id AS ledger_entry_id,
+      entry.occurred_at,
+      entry.created_at,
+      request.pool_id AS request_pool_id,
+      request.api_key_id,
+      request.model_id,
+      request.status AS request_status,
+      COALESCE(request.retry_count, 0) AS retry_count,
+      entry.pool_upstream_assignment_id,
+      entry.upstream_identity_id,
+      COALESCE(entry.input_tokens, 0) AS input_tokens,
+      COALESCE(entry.cached_input_tokens, 0) AS cached_input_tokens,
+      COALESCE(entry.output_tokens, 0) AS output_tokens,
+      COALESCE(entry.reasoning_tokens, 0) AS reasoning_tokens,
+      COALESCE(entry.total_tokens, 0) AS total_tokens,
+      COALESCE(entry.estimated_cost_micros, 0::numeric) AS estimated_cost_micros,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.settled_cost_micros, 0::numeric)
+        ELSE 0::numeric
+      END AS settled_cost_micros
+    FROM public.ledger_entries AS entry
+    INNER JOIN public.requests AS request ON request.id = entry.request_id
+    WHERE entry.entry_kind = 'settlement'
+      AND entry.amount_status = 'recorded'
+      AND entry.occurred_at >= $2
+      AND entry.occurred_at < $3
+  ),
+  dims AS (
+    SELECT
+      'pool'::text AS dimension_kind,
+      request_pool_id AS rollup_pool_id,
+      request_pool_id AS candidate_pool_id,
+      NULL::uuid AS api_key_id,
+      NULL::uuid AS pool_upstream_assignment_id,
+      NULL::uuid AS upstream_identity_id,
+      NULL::uuid AS model_id,
+      ledger_entry_id,
+      occurred_at,
+      created_at,
+      request_status,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros
+    FROM source
+
+    UNION ALL
+
+    SELECT
+      'api_key'::text AS dimension_kind,
+      request_pool_id AS rollup_pool_id,
+      request_pool_id AS candidate_pool_id,
+      api_key_id,
+      NULL::uuid AS pool_upstream_assignment_id,
+      NULL::uuid AS upstream_identity_id,
+      NULL::uuid AS model_id,
+      ledger_entry_id,
+      occurred_at,
+      created_at,
+      request_status,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros
+    FROM source
+
+    UNION ALL
+
+    SELECT
+      'pool_upstream_assignment'::text AS dimension_kind,
+      request_pool_id AS rollup_pool_id,
+      request_pool_id AS candidate_pool_id,
+      NULL::uuid AS api_key_id,
+      pool_upstream_assignment_id,
+      NULL::uuid AS upstream_identity_id,
+      NULL::uuid AS model_id,
+      ledger_entry_id,
+      occurred_at,
+      created_at,
+      request_status,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros
+    FROM source
+    WHERE pool_upstream_assignment_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT
+      'upstream_identity'::text AS dimension_kind,
+      NULL::uuid AS rollup_pool_id,
+      request_pool_id AS candidate_pool_id,
+      NULL::uuid AS api_key_id,
+      NULL::uuid AS pool_upstream_assignment_id,
+      upstream_identity_id,
+      NULL::uuid AS model_id,
+      ledger_entry_id,
+      occurred_at,
+      created_at,
+      request_status,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros
+    FROM source
+    WHERE upstream_identity_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT
+      'model'::text AS dimension_kind,
+      request_pool_id AS rollup_pool_id,
+      request_pool_id AS candidate_pool_id,
+      NULL::uuid AS api_key_id,
+      NULL::uuid AS pool_upstream_assignment_id,
+      NULL::uuid AS upstream_identity_id,
+      model_id,
+      ledger_entry_id,
+      occurred_at,
+      created_at,
+      request_status,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros
+    FROM source
+    WHERE model_id IS NOT NULL
+  ),
+  inserted AS (
+    INSERT INTO public.daily_rollups (
+      rollup_date,
+      dimension_kind,
+      pool_id,
+      api_key_id,
+      pool_upstream_assignment_id,
+      upstream_identity_id,
+      model_id,
+      request_count,
+      success_count,
+      failure_count,
+      retry_count,
+      input_tokens,
+      cached_input_tokens,
+      output_tokens,
+      reasoning_tokens,
+      total_tokens,
+      estimated_cost_micros,
+      settled_cost_micros,
+      created_at,
+      updated_at
+    )
+    SELECT
+      $1,
+      dimension_kind,
+      CASE
+        WHEN dimension_kind = 'upstream_identity' THEN
+          (array_agg(candidate_pool_id ORDER BY occurred_at ASC, created_at ASC, ledger_entry_id ASC))[1]
+        ELSE rollup_pool_id
+      END AS pool_id,
+      api_key_id,
+      pool_upstream_assignment_id,
+      upstream_identity_id,
+      model_id,
+      count(*)::bigint AS request_count,
+      sum(CASE WHEN request_status = 'succeeded' THEN 1 ELSE 0 END)::bigint AS success_count,
+      sum(CASE WHEN request_status = 'succeeded' THEN 0 ELSE 1 END)::bigint AS failure_count,
+      sum(retry_count)::bigint AS retry_count,
+      sum(input_tokens)::bigint AS input_tokens,
+      sum(cached_input_tokens)::bigint AS cached_input_tokens,
+      sum(output_tokens)::bigint AS output_tokens,
+      sum(reasoning_tokens)::bigint AS reasoning_tokens,
+      sum(total_tokens)::bigint AS total_tokens,
+      sum(estimated_cost_micros) AS estimated_cost_micros,
+      sum(settled_cost_micros) AS settled_cost_micros,
+      $4,
+      $4
+    FROM dims
+    GROUP BY
+      dimension_kind,
+      rollup_pool_id,
+      api_key_id,
+      pool_upstream_assignment_id,
+      upstream_identity_id,
+      model_id
+    RETURNING 1
+  )
+  SELECT
+    (SELECT count(*) FROM source)::bigint AS settlement_count,
+    (SELECT count(*) FROM inserted)::bigint AS rollup_count
+  """
 
   @spec accumulate!(Request.t(), LedgerEntry.t()) :: :ok
   def accumulate!(%Request{} = request, %LedgerEntry{} = settlement) do
@@ -83,25 +296,15 @@ defmodule CodexPooler.Accounting.Rollups do
   def rebuild_for_date(%Date{} = date) do
     start_at = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
     end_at = DateTime.add(start_at, 1, :day)
+    now = now()
 
     Repo.transaction(fn ->
       Repo.delete_all(from r in DailyRollup, where: r.rollup_date == ^date)
 
-      settlements =
-        Repo.all(
-          from entry in LedgerEntry,
-            join: request in Request,
-            on: request.id == entry.request_id,
-            where:
-              entry.entry_kind == @entry_settlement and entry.amount_status == @amount_recorded and
-                entry.occurred_at >= ^start_at and entry.occurred_at < ^end_at,
-            select: {request, entry},
-            order_by: [asc: entry.occurred_at, asc: entry.created_at]
-        )
+      %{rows: [[settlement_count, _rollup_count]]} =
+        Repo.query!(@daily_rollup_rebuild_sql, [date, start_at, end_at, now])
 
-      Enum.each(settlements, fn {request, settlement} -> accumulate!(request, settlement) end)
-
-      length(settlements)
+      settlement_count
     end)
     |> unwrap_transaction()
   end

@@ -687,6 +687,135 @@ defmodule CodexPooler.AccountingTest do
       assert rollup.request_count == 2
       assert rollup.total_tokens == 24
     end
+
+    @tag :daily_rollup_rebuild_set_based_correctness
+    test "daily rollup rebuild matches incremental rollups across every dimension" do
+      date = ~D[2026-05-31]
+      fixture = daily_rollup_rebuild_fixture(date)
+
+      rebuild_expected_rollups!(date, fixture.settlements)
+      expected_rows = daily_rollup_rows(date)
+
+      assert {:ok, 3} = Accounting.rebuild_daily_rollups_for_date(date)
+      actual_rows = daily_rollup_rows(date)
+
+      assert actual_rows == expected_rows
+      assert MapSet.new(actual_rows, & &1.dimension_kind) == MapSet.new(daily_rollup_dimensions())
+      assert Enum.count(actual_rows) == 9
+
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).request_count == 2
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).success_count == 1
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).failure_count == 1
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).retry_count == 3
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).input_tokens == 10
+
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.primary.pool.id).settled_cost_micros ==
+               "90.25"
+
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.secondary.pool.id).request_count ==
+               1
+
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.secondary.pool.id).success_count ==
+               1
+
+      assert rollup_row(actual_rows, "pool", pool_id: fixture.secondary.pool.id).failure_count ==
+               0
+
+      identity_row =
+        rollup_row(actual_rows, "upstream_identity",
+          upstream_identity_id: fixture.primary.identity.id
+        )
+
+      assert identity_row.pool_id == fixture.secondary.pool.id
+      assert identity_row.request_count == 2
+      assert identity_row.success_count == 2
+      assert identity_row.retry_count == 2
+      assert identity_row.input_tokens == 15
+      assert identity_row.cached_input_tokens == 4
+      assert identity_row.output_tokens == 18
+      assert identity_row.reasoning_tokens == 6
+      assert identity_row.total_tokens == 42
+      assert identity_row.estimated_cost_micros == "130.5"
+      assert identity_row.settled_cost_micros == "115.375"
+
+      assert Enum.count(actual_rows, &(&1.dimension_kind == "pool_upstream_assignment")) == 2
+      assert Enum.count(actual_rows, &(&1.dimension_kind == "upstream_identity")) == 1
+      assert Enum.count(actual_rows, &(&1.dimension_kind == "model")) == 2
+
+      assert rollup_row(actual_rows, "api_key", api_key_id: fixture.primary.api_key.id).request_count ==
+               2
+
+      assert rollup_row(actual_rows, "api_key", api_key_id: fixture.primary.api_key.id).estimated_cost_micros ==
+               "150.625"
+
+      assert rollup_row(actual_rows, "model", model_id: fixture.primary.model.id).total_tokens ==
+               22
+
+      assert rollup_row(actual_rows, "model", model_id: fixture.secondary.model.id).total_tokens ==
+               20
+    end
+
+    @tag :daily_rollup_rebuild_boundaries
+    test "daily rollup rebuild clears stale empty-day rows" do
+      date = ~D[2026-06-01]
+      pool = pool_fixture()
+      insert_daily_rollup!(date, %{dimension_kind: "pool", pool_id: pool.id, request_count: 9})
+
+      assert {:ok, 0} = Accounting.rebuild_daily_rollups_for_date(date)
+      assert [] = daily_rollup_rows(date)
+    end
+
+    @tag :daily_rollup_rebuild_boundaries
+    test "daily rollup rebuild rolls back stale rows when replacement insert fails" do
+      date = ~D[2026-06-02]
+      fixture = daily_rollup_rebuild_fixture(date)
+
+      stale_rollup =
+        insert_daily_rollup!(date, %{dimension_kind: "pool", pool_id: fixture.primary.pool.id})
+
+      Repo.query!("""
+      ALTER TABLE daily_rollups
+      ADD CONSTRAINT daily_rollups_rebuild_failure_check CHECK (false) NOT VALID
+      """)
+
+      assert_raise Postgrex.Error, fn ->
+        Accounting.rebuild_daily_rollups_for_date(date)
+      end
+
+      assert Repo.get!(DailyRollup, stale_rollup.id).request_count == stale_rollup.request_count
+    end
+
+    @tag :daily_rollup_rebuild_boundaries
+    test "daily rollup rebuild query count is independent from settlement count" do
+      one_date = ~D[2026-06-03]
+      many_date = ~D[2026-06-04]
+      setup = accounting_setup()
+
+      insert_rollup_query_budget_settlements!(setup, one_date, 1)
+      insert_rollup_query_budget_settlements!(setup, many_date, 20)
+
+      {one_result, one_commands} =
+        count_repo_commands(fn -> Accounting.rebuild_daily_rollups_for_date(one_date) end)
+
+      {many_result, many_commands} =
+        count_repo_commands(fn -> Accounting.rebuild_daily_rollups_for_date(many_date) end)
+
+      assert {:ok, 1} = one_result
+      assert {:ok, 20} = many_result
+
+      assert command_count(one_commands, "daily_rollups", "SELECT") == 0
+      assert command_count(many_commands, "daily_rollups", "SELECT") == 0
+      assert command_count(one_commands, "daily_rollups", "UPDATE") == 0
+      assert command_count(many_commands, "daily_rollups", "UPDATE") == 0
+
+      one_total = total_repo_command_count(one_commands)
+      many_total = total_repo_command_count(many_commands)
+
+      assert one_total <= 4
+
+      assert many_total == one_total,
+             "daily rollup rebuild query count must be row-count independent; one settlement used #{one_total}, twenty settlements used #{many_total}"
+    end
   end
 
   defp count_repo_commands(fun) do
@@ -725,6 +854,8 @@ defmodule CodexPooler.AccountingTest do
 
   defp command_count(commands, source, command), do: Map.get(commands, {source, command}, 0)
 
+  defp total_repo_command_count(commands), do: commands |> Map.values() |> Enum.sum()
+
   defp command_name(query) when is_binary(query) do
     query
     |> String.trim_leading()
@@ -734,4 +865,276 @@ defmodule CodexPooler.AccountingTest do
   end
 
   defp command_name(_query), do: nil
+
+  defp daily_rollup_rebuild_fixture(date) do
+    primary = accounting_setup()
+    secondary_pool = pool_fixture()
+    secondary_key = active_api_key_fixture(secondary_pool)
+    secondary_model = model_fixture(secondary_pool, %{exposed_model_id: "gpt-rollup-secondary"})
+
+    {:ok, secondary_assignment} =
+      PoolAssignments.create_pool_assignment(
+        secondary_pool,
+        primary.identity,
+        %{
+          assignment_label: "Shared rollup upstream",
+          metadata: %{},
+          skip_quota_priming: true
+        }
+      )
+
+    {:ok, secondary_assignment} =
+      PoolAssignments.activate_pool_assignment(secondary_assignment, %{
+        skip_quota_priming: true
+      })
+
+    tied_at = DateTime.new!(date, ~T[10:00:00.000000], "Etc/UTC")
+    nil_dimension_at = DateTime.new!(date, ~T[11:00:00.000000], "Etc/UTC")
+
+    primary_request =
+      request_fixture(%{pool: primary.pool, api_key: primary.api_key}, %{
+        correlation_id: "daily-rollup-primary",
+        model_id: primary.model.id,
+        status: "succeeded",
+        retry_count: 2
+      })
+
+    nil_dimension_request =
+      request_fixture(%{pool: primary.pool, api_key: primary.api_key}, %{
+        correlation_id: "daily-rollup-nil-dimensions",
+        model_id: nil,
+        status: "failed",
+        usage_status: "usage_unknown",
+        retry_count: 1,
+        response_status_code: 500
+      })
+
+    secondary_request =
+      request_fixture(%{pool: secondary_pool, api_key: secondary_key.api_key}, %{
+        correlation_id: "daily-rollup-secondary",
+        model_id: secondary_model.id,
+        status: "succeeded",
+        retry_count: 0
+      })
+
+    primary_settlement =
+      insert_rollup_settlement!(primary_request, %{
+        id: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        pool_upstream_assignment_id: primary.assignment.id,
+        upstream_identity_id: primary.identity.id,
+        input_tokens: 10,
+        cached_input_tokens: 3,
+        output_tokens: 7,
+        reasoning_tokens: 2,
+        total_tokens: 22,
+        estimated_cost_micros: "100.125",
+        settled_cost_micros: "90.25",
+        occurred_at: tied_at,
+        created_at: tied_at
+      })
+
+    secondary_settlement =
+      insert_rollup_settlement!(secondary_request, %{
+        id: "00000000-0000-0000-0000-000000000001",
+        pool_upstream_assignment_id: secondary_assignment.id,
+        upstream_identity_id: primary.identity.id,
+        input_tokens: 5,
+        cached_input_tokens: 1,
+        output_tokens: 11,
+        reasoning_tokens: 4,
+        total_tokens: 20,
+        estimated_cost_micros: "30.375",
+        settled_cost_micros: "25.125",
+        occurred_at: tied_at,
+        created_at: tied_at
+      })
+
+    nil_dimension_settlement =
+      insert_rollup_settlement!(nil_dimension_request, %{
+        pool_upstream_assignment_id: nil,
+        upstream_identity_id: nil,
+        input_tokens: nil,
+        cached_input_tokens: nil,
+        output_tokens: nil,
+        reasoning_tokens: nil,
+        total_tokens: nil,
+        estimated_cost_micros: "50.5",
+        settled_cost_micros: "70.75",
+        usage_status: "usage_unknown",
+        occurred_at: nil_dimension_at,
+        created_at: nil_dimension_at
+      })
+
+    %{
+      primary: primary,
+      secondary: %{
+        pool: secondary_pool,
+        api_key: secondary_key.api_key,
+        assignment: secondary_assignment,
+        model: secondary_model
+      },
+      settlements: [primary_settlement, secondary_settlement, nil_dimension_settlement]
+    }
+  end
+
+  defp rebuild_expected_rollups!(date, settlements) do
+    Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^date)
+
+    settlements
+    |> Enum.sort_by(&{&1.occurred_at, &1.created_at, &1.id})
+    |> Enum.each(fn settlement ->
+      request = Repo.get!(CodexPooler.Accounting.Request, settlement.request_id)
+      assert :ok = Rollups.accumulate!(request, settlement)
+    end)
+  end
+
+  defp insert_rollup_query_budget_settlements!(setup, date, count) do
+    base_at = DateTime.new!(date, ~T[09:00:00.000000], "Etc/UTC")
+
+    Enum.map(1..count, fn index ->
+      request =
+        request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
+          correlation_id: "daily-rollup-budget-#{date}-#{index}",
+          model_id: setup.model.id,
+          status: "succeeded",
+          retry_count: rem(index, 3)
+        })
+
+      insert_rollup_settlement!(request, %{
+        pool_upstream_assignment_id: setup.assignment.id,
+        upstream_identity_id: setup.identity.id,
+        input_tokens: index,
+        cached_input_tokens: 0,
+        output_tokens: index + 1,
+        reasoning_tokens: 0,
+        total_tokens: index * 2 + 1,
+        estimated_cost_micros: index,
+        settled_cost_micros: index,
+        occurred_at: DateTime.add(base_at, index, :second),
+        created_at: DateTime.add(base_at, index, :second)
+      })
+    end)
+  end
+
+  defp insert_rollup_settlement!(request, attrs) do
+    %LedgerEntry{
+      id: Map.get(attrs, :id, Ecto.UUID.generate()),
+      request_id: request.id,
+      attempt_id: Map.get(attrs, :attempt_id),
+      pricing_snapshot_id: Map.get(attrs, :pricing_snapshot_id),
+      pool_id: request.pool_id,
+      api_key_id: request.api_key_id,
+      pool_upstream_assignment_id: Map.get(attrs, :pool_upstream_assignment_id),
+      upstream_identity_id: Map.get(attrs, :upstream_identity_id),
+      model_id: request.model_id,
+      entry_kind: Map.get(attrs, :entry_kind, "settlement"),
+      amount_status: Map.get(attrs, :amount_status, "recorded"),
+      usage_status: Map.get(attrs, :usage_status, "usage_known"),
+      transport: Map.get(attrs, :transport, request.transport),
+      currency_code: Map.get(attrs, :currency_code, "USD"),
+      input_tokens: Map.get(attrs, :input_tokens),
+      cached_input_tokens: Map.get(attrs, :cached_input_tokens),
+      output_tokens: Map.get(attrs, :output_tokens),
+      reasoning_tokens: Map.get(attrs, :reasoning_tokens),
+      total_tokens: Map.get(attrs, :total_tokens),
+      request_count: Map.get(attrs, :request_count, 1),
+      estimated_cost_micros: decimal_value(Map.get(attrs, :estimated_cost_micros, 0)),
+      settled_cost_micros: decimal_value(Map.get(attrs, :settled_cost_micros, 0)),
+      occurred_at: Map.fetch!(attrs, :occurred_at),
+      created_at: Map.get(attrs, :created_at, Map.fetch!(attrs, :occurred_at)),
+      details: Map.get(attrs, :details, %{})
+    }
+    |> Repo.insert!()
+  end
+
+  defp insert_daily_rollup!(date, attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    attrs =
+      Map.merge(
+        %{
+          rollup_date: date,
+          dimension_kind: "pool",
+          request_count: 1,
+          success_count: 0,
+          failure_count: 1,
+          retry_count: 0,
+          input_tokens: 0,
+          cached_input_tokens: 0,
+          output_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: 0,
+          estimated_cost_micros: Decimal.new(0),
+          settled_cost_micros: Decimal.new(0),
+          created_at: now,
+          updated_at: now
+        },
+        attrs
+      )
+
+    struct(DailyRollup, attrs)
+    |> Repo.insert!()
+  end
+
+  defp daily_rollup_rows(date) do
+    DailyRollup
+    |> where([rollup], rollup.rollup_date == ^date)
+    |> Repo.all()
+    |> Enum.map(&daily_rollup_row/1)
+    |> Enum.sort_by(&daily_rollup_sort_key/1)
+  end
+
+  defp daily_rollup_row(%DailyRollup{} = rollup) do
+    %{
+      rollup_date: rollup.rollup_date,
+      dimension_kind: rollup.dimension_kind,
+      pool_id: rollup.pool_id,
+      api_key_id: rollup.api_key_id,
+      pool_upstream_assignment_id: rollup.pool_upstream_assignment_id,
+      upstream_identity_id: rollup.upstream_identity_id,
+      model_id: rollup.model_id,
+      request_count: rollup.request_count,
+      success_count: rollup.success_count,
+      failure_count: rollup.failure_count,
+      retry_count: rollup.retry_count,
+      input_tokens: rollup.input_tokens,
+      cached_input_tokens: rollup.cached_input_tokens,
+      output_tokens: rollup.output_tokens,
+      reasoning_tokens: rollup.reasoning_tokens,
+      total_tokens: rollup.total_tokens,
+      estimated_cost_micros: decimal_string(rollup.estimated_cost_micros),
+      settled_cost_micros: decimal_string(rollup.settled_cost_micros)
+    }
+  end
+
+  defp daily_rollup_sort_key(row) do
+    {
+      row.dimension_kind,
+      row.pool_id,
+      row.api_key_id,
+      row.pool_upstream_assignment_id,
+      row.upstream_identity_id,
+      row.model_id
+    }
+  end
+
+  defp rollup_row(rows, dimension_kind, match) do
+    Enum.find(rows, fn row ->
+      row.dimension_kind == dimension_kind and
+        Enum.all?(match, fn {key, value} -> Map.fetch!(row, key) == value end)
+    end) || flunk("missing #{dimension_kind} rollup matching #{inspect(match)}")
+  end
+
+  defp daily_rollup_dimensions do
+    ["pool", "api_key", "pool_upstream_assignment", "upstream_identity", "model"]
+  end
+
+  defp decimal_value(%Decimal{} = value), do: value
+  defp decimal_value(value), do: Decimal.new(value)
+
+  defp decimal_string(%Decimal{} = value) do
+    value
+    |> Decimal.normalize()
+    |> Decimal.to_string(:normal)
+  end
 end

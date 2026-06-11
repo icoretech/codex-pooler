@@ -2,6 +2,7 @@ defmodule CodexPooler.JobsTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.DailyRollup
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.FakeUpstream
@@ -339,6 +340,45 @@ defmodule CodexPooler.JobsTest do
                perform_job(DailyRollupRebuildWorker, %{"rollup_date" => Date.to_iso8601(date)})
 
       assert {:ok, 0} = CodexPooler.Accounting.rebuild_daily_rollups_for_date(date)
+    end
+
+    @tag :daily_rollup_rebuild_boundaries
+    test "rebuilds non-empty daily rollups through Oban testing worker surface" do
+      setup = accounting_setup()
+      date = Date.utc_today()
+
+      request =
+        request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
+          correlation_id: "daily-rollup-worker-surface",
+          model_id: setup.model.id,
+          status: "succeeded",
+          retry_count: 1
+        })
+
+      ledger_entry_fixture(request, %{
+        pool_upstream_assignment_id: setup.assignment.id,
+        upstream_identity_id: setup.identity.id,
+        total_tokens: 17,
+        occurred_at: DateTime.new!(date, ~T[12:00:00.000000], "Etc/UTC")
+      })
+
+      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^date)
+
+      assert :ok =
+               perform_job(DailyRollupRebuildWorker, %{"rollup_date" => Date.to_iso8601(date)})
+
+      assert [rollup] =
+               Repo.all(
+                 from rollup in DailyRollup,
+                   where:
+                     rollup.rollup_date == ^date and rollup.dimension_kind == "api_key" and
+                       rollup.api_key_id == ^setup.api_key.id
+               )
+
+      assert rollup.request_count == 1
+      assert rollup.success_count == 1
+      assert rollup.retry_count == 1
+      assert rollup.total_tokens == 17
     end
 
     test "returns a tagged error for non-binary rollup dates" do
