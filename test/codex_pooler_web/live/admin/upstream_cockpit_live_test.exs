@@ -2028,6 +2028,53 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
   end
 
+  @tag :quota_health_percent_only
+  test "renders percent-only quota evidence with zero absolute capacity as an available bar", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "quota-percent-only-zero-capacity",
+        name: "Quota Percent Only Zero Capacity"
+      })
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Percent-only zero capacity Codex",
+        assignment_label: "Percent-only zero capacity assignment"
+      })
+
+    upsert_quota_window!(identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: 0,
+      credits: 0,
+      used_percent: Decimal.new("9"),
+      reset_at: DateTime.add(DateTime.utc_now(), 4, :hour)
+    })
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+
+    assert [%{bar_value: 91.0, remaining_percent_value: 91.0, used_percent_value: 9.0}] =
+             cockpit.charts.quota_health.items
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(
+             view,
+             "#quota-health-chart-item-#{assignment.id}[data-chart-value='91']",
+             "91% remaining"
+           )
+
+    assert has_element?(
+             view,
+             "#quota-health-chart-item-#{assignment.id}-bar[value='91'][max='100']"
+           )
+
+    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "9% used")
+  end
+
   @tag :chart_empty_zero
   test "chart sections keep shells and explicit zero semantics for empty all-zero data", %{
     conn: conn,

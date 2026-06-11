@@ -2805,6 +2805,51 @@ defmodule CodexPooler.UpstreamsTest do
       assert chart.used_percent == nil
     end
 
+    test "quota remaining charts treat zero absolute capacity with partial usage as percent-only evidence" do
+      now = ~U[2026-05-06 12:00:00Z]
+      reset_at = DateTime.add(now, 900, :second)
+      pool = pool_fixture(%{name: "Example Zero Capacity Percent Pool"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-zero-capacity-percent",
+          account_label: "Example Zero Capacity Percent Account",
+          assignment_label: "Example Zero Capacity Percent Account"
+        })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   active_limit: 0,
+                   credits: 0,
+                   used_percent: Decimal.new("9"),
+                   reset_at: reset_at,
+                   source: "codex_usage",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      chart =
+        Quota.Charts.quota_remaining_charts_by_pool_ids([pool.id], at: now)[pool.id].primary_5h
+
+      assert chart.state == "usable"
+      assert [item] = chart.items
+      assert item.label == "Example Zero Capacity Percent Account"
+      assert item.remaining == nil
+      assert item.capacity == nil
+      assert item.used == nil
+      assert_decimal_equal(item.used_percent, "9")
+      assert_decimal_equal(item.remaining_percent, "91")
+      assert chart.remaining_total == nil
+      assert chart.capacity_total == nil
+      assert chart.used_total == nil
+      assert chart.used_percent == nil
+    end
+
     test "quota remaining charts do not infer capacity from known plan for percent-only evidence" do
       now = ~U[2026-05-06 12:00:00Z]
       reset_at = DateTime.add(now, 900, :second)

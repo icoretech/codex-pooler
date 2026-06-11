@@ -77,6 +77,15 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
   defp item_assignment_id(item),
     do: Map.get(item, :window_assignment_id) || item.assignment_id
 
+  defp remaining(%Quota.AccountQuotaWindow{
+         active_limit: active_limit,
+         credits: 0,
+         used_percent: %Decimal{} = used_percent
+       })
+       when active_limit in [nil, 0] do
+    if Decimal.compare(used_percent, Decimal.new(100)) == :lt, do: nil, else: Decimal.new(0)
+  end
+
   defp remaining(%Quota.AccountQuotaWindow{credits: credits}) when is_integer(credits) do
     credits |> Decimal.new() |> decimal_non_negative()
   end
@@ -100,7 +109,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
   defp remaining(%Quota.AccountQuotaWindow{}), do: nil
 
   defp capacity(%Quota.AccountQuotaWindow{active_limit: active_limit}, _remaining)
-       when is_integer(active_limit) do
+       when is_integer(active_limit) and active_limit > 0 do
     active_limit |> Decimal.new() |> decimal_non_negative()
   end
 
