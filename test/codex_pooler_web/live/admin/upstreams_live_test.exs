@@ -161,7 +161,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-page-actions > #upstream-page-oauth-link-action[aria-label='Link OpenAI account'].btn.btn-primary",
-             "OAuth"
+             "Link"
            )
 
     refute has_element?(view, "#upstream-page-actions-menu")

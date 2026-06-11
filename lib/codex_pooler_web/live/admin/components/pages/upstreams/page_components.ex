@@ -250,7 +250,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         class="btn btn-primary min-w-0 justify-center gap-2 px-4"
       >
         <.icon name="hero-link" class="size-4 shrink-0" />
-        <span class="truncate">OAuth</span>
+        <span class="truncate">Link</span>
       </button>
       <.link
         id="upstream-page-create-invite-action"
