@@ -6,6 +6,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Audit
+  alias CodexPooler.MCP.ToolRegistry
   alias CodexPooler.MCP.Tools.DetailEnvelope
   alias CodexPooler.MCP.Tools.LogMetadata.{AuditLogPresenter, RequestLogPresenter}
   alias CodexPooler.Pools
@@ -82,12 +83,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     %{
       name: "codex_pooler_list_request_logs",
       title: "List request-log metadata",
-      description: """
-      Use when an operator needs a bounded, read-only MCP summary of runtime request logs for visible Pools.
-      Returns concise metadata rows with pool, route, status, model, usage, timing, retry, safe routing, and sanitized metadata summaries.
-      Never returns raw URLs with secrets, query strings, headers, cookies, request bodies, response bodies, prompts, files, websocket frames, bearer tokens, raw idempotency keys, upload URLs, raw IPs, raw emails, raw API keys, or raw gateway debug payloads.
-      Filters/limits: accepts optional pool_id, status, model, request_id, upstream_identity_id, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an operator needs a bounded, read-only MCP summary of runtime request logs for visible Pools",
+          returns:
+            "concise metadata rows with pool, route, status, model, usage, timing, retry, safe routing, and sanitized metadata summaries",
+          never_returns:
+            "raw URLs with secrets, query strings, files, websocket frames, raw idempotency keys, upload URLs, raw API keys, or raw gateway debug payloads",
+          filters_limits:
+            "accepts optional pool_id, status, model, request_id, upstream_identity_id, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first"
+        ),
       input_schema: request_logs_input_schema(),
       output_schema: request_logs_page_output_schema(),
       annotations: @read_only_annotations,
@@ -99,12 +105,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     %{
       name: "codex_pooler_list_audit_logs",
       title: "List audit-log metadata",
-      description: """
-      Use when an operator needs a bounded, read-only MCP summary of administrative audit events for visible Pools.
-      Returns concise metadata rows with actor class, masked actor identity, action, target, outcome, request correlation, pool, time, and re-sanitized detail summaries.
-      Never returns raw before/after blobs, dirty details blobs, secret settings, raw emails, raw IPs, headers, cookies, request bodies, response bodies, prompts, websocket frames, bearer tokens, raw idempotency keys, tokens, temporary passwords, TOTP secrets, recovery secrets, SMTP secrets, metrics HMACs, or fingerprints.
-      Filters/limits: accepts optional pool_id, outcome, actor_type, actor, action, target, request, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an operator needs a bounded, read-only MCP summary of administrative audit events for visible Pools",
+          returns:
+            "concise metadata rows with actor class, masked actor identity, action, target, outcome, request correlation, pool, time, and re-sanitized detail summaries",
+          never_returns:
+            "raw before/after blobs, dirty details blobs, secret settings, websocket frames, bearer tokens, raw idempotency keys, temporary passwords, TOTP secrets, recovery secrets, SMTP secrets, metrics HMACs, or fingerprints",
+          filters_limits:
+            "accepts optional pool_id, outcome, actor_type, actor, action, target, request, date_from, date_to, limit, and offset; limit is clamped to 1-50 and output is sorted newest first"
+        ),
       input_schema: audit_logs_input_schema(),
       output_schema: page_output_schema(),
       annotations: @read_only_annotations,
@@ -116,12 +127,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     %{
       name: "codex_pooler_get_request_log",
       title: "Get request-log metadata",
-      description: """
-      Use when an operator needs one exact request-log metadata record by id for a visible Pool.
-      Returns a concise found/not-found envelope with the same sanitized pool, route, status, model, usage, timing, retry, safe routing, and metadata summary fields as the bounded list tool.
-      Never returns raw URLs with secrets, query strings, headers, cookies, request bodies, response bodies, prompts, files, websocket frames, bearer tokens, raw idempotency keys, upload URLs, raw IPs, raw emails, raw API keys, or raw gateway debug payloads.
-      Filters/limits: requires id; lookup is exact, scoped to the authenticated operator's visible Pools, and returns at most one metadata row.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an operator needs one exact request-log metadata record by id for a visible Pool",
+          returns:
+            "a concise found/not-found envelope with the same sanitized pool, route, status, model, usage, timing, retry, safe routing, and metadata summary fields as the bounded list tool",
+          never_returns:
+            "raw URLs with secrets, query strings, files, websocket frames, raw idempotency keys, upload URLs, raw API keys, or raw gateway debug payloads",
+          filters_limits:
+            "requires id; lookup is exact, scoped to the authenticated operator's visible Pools, and returns at most one metadata row"
+        ),
       input_schema: detail_input_schema(),
       output_schema: detail_output_schema(),
       annotations: @read_only_annotations,
@@ -133,12 +149,17 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
     %{
       name: "codex_pooler_get_audit_log",
       title: "Get audit-log metadata",
-      description: """
-      Use when an operator needs one exact administrative audit-event metadata record by id for a visible Pool.
-      Returns a concise found/not-found envelope with the same sanitized actor, target, outcome, request correlation, pool, time, and re-sanitized detail summaries as the bounded list tool.
-      Never returns raw before/after blobs, dirty details blobs, secret settings, raw emails, raw IPs, headers, cookies, request bodies, response bodies, prompts, websocket frames, bearer tokens, raw idempotency keys, tokens, temporary passwords, TOTP secrets, recovery secrets, SMTP secrets, metrics HMACs, or fingerprints.
-      Filters/limits: requires id; lookup is exact, scoped to the authenticated operator's visible Pools, with owner-only system events, and returns at most one metadata row.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an operator needs one exact administrative audit-event metadata record by id for a visible Pool",
+          returns:
+            "a concise found/not-found envelope with the same sanitized actor, target, outcome, request correlation, pool, time, and re-sanitized detail summaries as the bounded list tool",
+          never_returns:
+            "raw before/after blobs, dirty details blobs, secret settings, websocket frames, bearer tokens, raw idempotency keys, temporary passwords, TOTP secrets, recovery secrets, SMTP secrets, metrics HMACs, or fingerprints",
+          filters_limits:
+            "requires id; lookup is exact, scoped to the authenticated operator's visible Pools, with owner-only system events, and returns at most one metadata row"
+        ),
       input_schema: detail_input_schema(),
       output_schema: detail_output_schema(),
       annotations: @read_only_annotations,

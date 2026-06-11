@@ -14,6 +14,7 @@ defmodule CodexPooler.MCP.ToolRegistry do
         }
 
   @description_sections ["Use when", "Returns", "Never returns", "Filters/limits"]
+  @common_never_returns "raw secrets, credentials, tokens, cookies, headers, prompts, request bodies, response bodies, raw emails, raw IPs, raw domain structs, or provider payloads"
   @family_modules [
     CodexPooler.MCP.Tools.Foundation,
     CodexPooler.MCP.Tools.PoolMetadata,
@@ -46,6 +47,16 @@ defmodule CodexPooler.MCP.ToolRegistry do
   @spec list_tools(map()) :: {:ok, %{tools: [map()], next_cursor: nil}}
   def list_tools(params) when is_map(params) do
     {:ok, %{tools: all_tools() |> Enum.map(&public_tool/1), next_cursor: nil}}
+  end
+
+  @spec metadata_description(keyword()) :: String.t()
+  def metadata_description(fields) when is_list(fields) do
+    """
+    Use when #{description_sentence(Keyword.fetch!(fields, :use_when))}
+    Returns #{description_sentence(Keyword.fetch!(fields, :returns))}
+    Never returns #{never_returns_sentence(Keyword.get(fields, :never_returns))}
+    Filters/limits: #{description_sentence(Keyword.fetch!(fields, :filters_limits))}
+    """
   end
 
   @spec validate_tools([tool()]) :: :ok | {:error, term()}
@@ -184,6 +195,24 @@ defmodule CodexPooler.MCP.ToolRegistry do
   end
 
   defp strict_object_schema?(_schema), do: false
+
+  defp never_returns_sentence(nil), do: @common_never_returns
+
+  defp never_returns_sentence(value) do
+    value
+    |> description_sentence()
+    |> case do
+      "" -> @common_never_returns
+      sentence -> "#{sentence}; also never returns #{@common_never_returns}"
+    end
+  end
+
+  defp description_sentence(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.trim_trailing(".")
+  end
 
   defp compact_description(description) do
     description

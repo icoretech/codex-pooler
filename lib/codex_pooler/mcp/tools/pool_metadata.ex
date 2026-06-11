@@ -6,6 +6,7 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
   alias CodexPooler.Access
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.MCP.PrivacyMatrix
+  alias CodexPooler.MCP.ToolRegistry
   alias CodexPooler.MCP.Tools.DetailEnvelope
   alias CodexPooler.MCP.Tools.ReadableText
   alias CodexPooler.Pools
@@ -379,12 +380,15 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_list_pools",
       title: "List Pools",
-      description: """
-      Use when an MCP client needs bounded Pool metadata discovery.
-      Returns sanitized Pool records with status, routing summary, upstream counts, and Pool API-key counts.
-      Never returns raw Pool API keys, key hashes, MCP tokens, token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: accepts optional query, status, and limit; limit is capped at #{@max_limit} records.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when: "an MCP client needs bounded Pool metadata discovery",
+          returns:
+            "sanitized Pool records with status, routing summary, upstream counts, and Pool API-key counts",
+          never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
+          filters_limits:
+            "accepts optional query, status, and limit; limit is capped at #{@max_limit} records"
+        ),
       input_schema: @list_schema,
       output_schema: @list_output_schema,
       annotations: @read_only_annotations,
@@ -396,12 +400,15 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_get_pool",
       title: "Get Pool",
-      description: """
-      Use when an MCP client needs one Pool metadata record by id, slug, or name.
-      Returns one sanitized Pool record or structured ambiguity candidates when the selector matches multiple records.
-      Never returns raw Pool API keys, key hashes, MCP tokens, token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: requires selector; exact id and slug are preferred, while duplicate names return ambiguity candidates.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when: "an MCP client needs one Pool metadata record by id, slug, or name",
+          returns:
+            "one sanitized Pool record or structured ambiguity candidates when the selector matches multiple records",
+          never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
+          filters_limits:
+            "requires selector; exact id and slug are preferred, while duplicate names return ambiguity candidates"
+        ),
       input_schema: @selector_schema,
       output_schema: @get_output_schema,
       annotations: @read_only_annotations,
@@ -413,12 +420,16 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_list_upstreams",
       title: "List upstreams",
-      description: """
-      Use when an MCP client needs bounded upstream account metadata discovery.
-      Returns sanitized upstream identity records with masked account emails and assignment summaries.
-      Never returns raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP tokens, token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: accepts optional query, status, pool_selector, and limit; limit is capped at #{@max_limit} records.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when: "an MCP client needs bounded upstream account metadata discovery",
+          returns:
+            "sanitized upstream identity records with masked account emails and assignment summaries",
+          never_returns:
+            "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
+          filters_limits:
+            "accepts optional query, status, pool_selector, and limit; limit is capped at #{@max_limit} records"
+        ),
       input_schema: @list_schema,
       output_schema: @list_output_schema,
       annotations: @read_only_annotations,
@@ -430,12 +441,17 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_get_upstream",
       title: "Get upstream",
-      description: """
-      Use when an MCP client needs one upstream account metadata record by id, stored account id, or label.
-      Returns one sanitized upstream identity record or structured ambiguity candidates when the selector matches multiple records.
-      Never returns raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP tokens, token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: requires selector; exact id and stored account id are preferred, while duplicate labels return ambiguity candidates.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an MCP client needs one upstream account metadata record by id, stored account id, or label",
+          returns:
+            "one sanitized upstream identity record or structured ambiguity candidates when the selector matches multiple records",
+          never_returns:
+            "raw Pool API keys, key hashes, auth.json, access tokens, refresh tokens, MCP token prefixes, setup snippets, or upstream secret material",
+          filters_limits:
+            "requires selector; exact id and stored account id are preferred, while duplicate labels return ambiguity candidates"
+        ),
       input_schema: @selector_schema,
       output_schema: @get_output_schema,
       annotations: @read_only_annotations,
@@ -447,12 +463,16 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_list_pool_api_keys",
       title: "List Pool API keys",
-      description: """
-      Use when an MCP client needs bounded Pool API key metadata discovery. Pool API keys, not MCP tokens.
-      Returns sanitized Pool API key records with Pool labels, status, prefixes, policy summaries, and usage summaries only.
-      Never returns raw Pool API keys, key hashes, MCP tokens, MCP token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: accepts optional query, status, pool_selector, and limit; limit is capped at #{@max_limit} records.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an MCP client needs bounded Pool API key metadata discovery. Pool API keys, not MCP tokens",
+          returns:
+            "sanitized Pool API key records with Pool labels, status, prefixes, policy summaries, and usage summaries only",
+          never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
+          filters_limits:
+            "accepts optional query, status, pool_selector, and limit; limit is capped at #{@max_limit} records"
+        ),
       input_schema: @list_schema,
       output_schema: @list_output_schema,
       annotations: @read_only_annotations,
@@ -464,12 +484,16 @@ defmodule CodexPooler.MCP.Tools.PoolMetadata do
     %{
       name: "codex_pooler_get_pool_api_key",
       title: "Get Pool API key",
-      description: """
-      Use when an MCP client needs one Pool API key metadata record by id, Pool API-key prefix, or display name. Pool API keys, not MCP tokens.
-      Returns one sanitized Pool API key record or structured ambiguity candidates when the selector matches multiple records.
-      Never returns raw Pool API keys, key hashes, MCP tokens, MCP token prefixes, setup snippets, credentials, headers, cookies, prompts, request bodies, upstream secret material, or raw domain structs.
-      Filters/limits: requires selector; exact id and Pool API-key prefix are preferred, while duplicate display names return ambiguity candidates.
-      """,
+      description:
+        ToolRegistry.metadata_description(
+          use_when:
+            "an MCP client needs one Pool API key metadata record by id, Pool API-key prefix, or display name. Pool API keys, not MCP tokens",
+          returns:
+            "one sanitized Pool API key record or structured ambiguity candidates when the selector matches multiple records",
+          never_returns: "raw Pool API keys, key hashes, MCP token prefixes, or setup snippets",
+          filters_limits:
+            "requires selector; exact id and Pool API-key prefix are preferred, while duplicate display names return ambiguity candidates"
+        ),
       input_schema: @selector_schema,
       output_schema: @get_output_schema,
       annotations: @read_only_annotations,

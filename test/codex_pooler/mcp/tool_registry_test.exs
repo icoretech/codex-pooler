@@ -309,6 +309,23 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
   defp handler_for_pool_api_key_tool("codex_pooler_list_pool_api_keys"), do: :list_pool_api_keys
   defp handler_for_pool_api_key_tool("codex_pooler_get_pool_api_key"), do: :get_pool_api_key
 
+  defmodule FutureUnavailableHandler do
+    def call(_arguments, %{tool: %{title: title}}) do
+      {:error, unavailable(title)}
+    end
+
+    def call(_arguments, _context) do
+      {:error, unavailable("Future metadata tool")}
+    end
+
+    defp unavailable(title) do
+      %{
+        code: :not_implemented,
+        message: "#{title} is reserved for future metadata coverage"
+      }
+    end
+  end
+
   defmodule FuturePoolsFamily do
     def tools do
       [future_tool("codex_pooler_list_future_pools", "List future pools")]
@@ -338,7 +355,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
           "idempotentHint" => true,
           "openWorldHint" => false
         },
-        handler: {CodexPooler.MCP.Tools.Placeholder, :call}
+        handler: {FutureUnavailableHandler, :call}
       }
     end
   end
