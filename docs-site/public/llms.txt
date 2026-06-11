@@ -20,6 +20,7 @@ Primary public docs:
 - https://docs.codex-pooler.com/clients/opencode/
 - https://docs.codex-pooler.com/clients/openclaw/
 - https://docs.codex-pooler.com/clients/hermes/
+- https://docs.codex-pooler.com/clients/windmill/
 - https://docs.codex-pooler.com/reference/runtime-routes/
 - https://docs.codex-pooler.com/reference/routing-strategies/
 - https://docs.codex-pooler.com/operators/admin-ui/
@@ -68,7 +69,7 @@ Privacy boundaries:
 Agent guidance:
 - Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex backend clients.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
-- Use the client-specific pages for Aider, Continue, Cline, Goose, OpenCode, OpenClaw, and Hermes setup snippets.
+- Use the client-specific pages for Aider, Continue, Cline, Goose, OpenCode, OpenClaw, Hermes, and Windmill setup snippets.
 - Use https://docs.codex-pooler.com/reference/routing-strategies/ when configuring Pools and routing behavior.
 - Use https://docs.codex-pooler.com/answers.md for short, citable answers about scope, routes, credentials, privacy, setup, and deployment.
 - Keep examples on http://localhost:4000 for local setup or https://codex-pooler.example.com for deployed product examples.

@@ -657,6 +657,62 @@ for `/mcp`. Do not reuse the Pool API key for MCP.
 </details>
 
 <details>
+<summary><img src=".github/assets/windmill-favicon.png" alt="Windmill logo" width="16" height="16"> Windmill AI <code>customai</code> workspace provider</summary>
+
+Windmill AI can use Codex Pooler through Windmill's `customai` provider. Point
+the resource at Codex Pooler's OpenAI-compatible `/v1` surface, store the Pool
+API key as a Windmill secret variable, and make the workspace AI settings use
+that resource for chat and metadata generation.
+
+Use a dedicated Pool API key for Windmill:
+
+```bash
+wmill variable add '<pool-api-key>' \
+  u/<owner>/codex_pooler_windmill_codegen \
+  --workspace <workspace>
+```
+
+Create a matching `customai` resource:
+
+```yaml
+description: Codex Pooler API credentials for Windmill AI
+value:
+  api_key: '$var:u/<owner>/codex_pooler_windmill_codegen'
+  base_url: http://localhost:4000/v1
+  headers: {}
+resource_type: customai
+```
+
+Then set the Windmill workspace AI config to use the resource:
+
+```yaml
+providers:
+  customai:
+    resource_path: u/<owner>/codex_pooler_windmill_codegen
+    models:
+      - gpt-5.5
+default_model:
+  provider: customai
+  model: gpt-5.5
+metadata_model:
+  provider: customai
+  model: gpt-5.5
+```
+
+For deployed Codex Pooler instances, change `base_url` to
+`https://codex-pooler.example.com/v1`. If Windmill is self-hosted and that URL
+resolves to a private or internal address from the Windmill app pod or server,
+set `ALLOW_PRIVATE_AI_BASE_URLS=true` on the Windmill app/server environment.
+
+Leave Windmill's code completion model unset unless you have separately
+configured a provider with fill-in-the-middle autocomplete support. Codex
+Pooler's `customai` setup is for Windmill chat, script/flow/app generation,
+fixes, summaries, metadata generation, and form-filling features that use chat
+completion style requests.
+
+</details>
+
+<details>
 <summary><img src=".github/assets/python-favicon.png" alt="Python logo" width="16" height="16"> OpenAI Python SDK</summary>
 
 OpenAI Python SDK clients can use the OpenAI-compatible `/v1` surface by setting

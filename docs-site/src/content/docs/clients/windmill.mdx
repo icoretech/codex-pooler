@@ -1,0 +1,151 @@
+---
+title: Windmill AI
+description: Configure Windmill AI with Codex Pooler's narrow OpenAI-compatible /v1 chat completions surface and a dedicated Pool API key.
+---
+
+Windmill AI can use Codex Pooler through Windmill's `customai` provider. This
+keeps Windmill on its OpenAI-compatible chat path while Codex Pooler handles Pool
+routing, upstream eligibility, limit checks, and request accounting.
+
+Use a dedicated Pool API key for Windmill. Do not reuse operator MCP tokens,
+browser sessions, upstream account tokens, or imported account material.
+
+## Runtime shape
+
+Windmill should call Codex Pooler's OpenAI-compatible `/v1` surface:
+
+```text
+https://codex-pooler.example.com/v1
+```
+
+For local setup, use:
+
+```text
+http://localhost:4000/v1
+```
+
+The setup uses Windmill's `customai` resource type. It is a chat-completions
+integration, not Codex backend compatibility and not full OpenAI API parity.
+
+## Store the Pool API key in Windmill
+
+Create a Windmill secret variable for the Pool API key. The path is only an
+example; use the owner or folder convention for your workspace.
+
+```bash
+wmill variable add '<pool-api-key>' \
+  u/<owner>/codex_pooler_windmill_codegen \
+  --workspace <workspace>
+```
+
+If you mirror Windmill resources with `wmill sync`, update the remote secret
+first and then pull the encrypted export. Do not put a raw Pool API key in a
+tracked `*.variable.yaml` file.
+
+## Create a `customai` resource
+
+Create a Windmill `customai` resource whose `base_url` points at Codex Pooler's
+`/v1` surface and whose `api_key` references the secret variable.
+
+```yaml
+description: Codex Pooler API credentials for Windmill AI
+value:
+  api_key: '$var:u/<owner>/codex_pooler_windmill_codegen'
+  base_url: https://codex-pooler.example.com/v1
+  headers: {}
+resource_type: customai
+```
+
+For local setup, change `base_url` to `http://localhost:4000/v1`.
+
+Use `headers` only for synthetic routing metadata required by your gateway or
+proxy. Do not put bearer tokens or account secrets in those headers.
+
+## Configure workspace AI
+
+In Windmill, open the workspace settings and configure Windmill AI with the
+`customai` provider. Use the `customai` resource path and model id your assigned
+Pool can serve.
+
+```yaml
+providers:
+  customai:
+    resource_path: u/<owner>/codex_pooler_windmill_codegen
+    models:
+      - gpt-5.5
+default_model:
+  provider: customai
+  model: gpt-5.5
+metadata_model:
+  provider: customai
+  model: gpt-5.5
+```
+
+This enables Windmill AI chat, navigation chat, script and flow assistance,
+fixes, summaries, metadata generation, and form-filling features that use chat
+completion style requests.
+
+## Self-hosted private URL guard
+
+Self-hosted Windmill validates AI provider base URLs before sending requests. If
+your deployed Codex Pooler hostname resolves to a private or internal address
+from the Windmill app/server runtime, Windmill rejects the request unless the
+server explicitly opts in.
+
+Set this environment variable on the Windmill app/server process:
+
+```bash
+ALLOW_PRIVATE_AI_BASE_URLS=true
+```
+
+For the Windmill Helm chart, put it on the app/server container environment:
+
+```yaml
+windmill:
+  app:
+    extraEnv:
+      - name: ALLOW_PRIVATE_AI_BASE_URLS
+        value: "true"
+```
+
+This setting belongs to Windmill, not Codex Pooler. Use it only when the
+Codex Pooler base URL is intentionally private from Windmill's point of view.
+
+## Smoke test through Windmill
+
+After saving the resource and workspace AI settings, call Windmill's AI proxy
+route. Use a Windmill user token for the Windmill API request and let Windmill
+resolve the Pool API key from its `customai` resource.
+
+```bash
+curl -sS -X POST \
+  -H "Authorization: Bearer <windmill-user-token>" \
+  -H "Content-Type: application/json" \
+  -H "X-Provider: customai" \
+  --data '{
+    "model": "gpt-5.5",
+    "messages": [
+      { "role": "user", "content": "Reply with only: ok" }
+    ],
+    "stream": false,
+    "max_tokens": 16
+  }' \
+  "$WINDMILL_URL/api/w/<workspace>/ai/proxy/chat/completions"
+```
+
+A working setup returns an OpenAI-shaped chat completion. If the response says
+the URL resolves to a private or internal IP address, set
+`ALLOW_PRIVATE_AI_BASE_URLS=true` on the Windmill app/server runtime and restart
+or roll out the app.
+
+## Compatibility notes
+
+Leave Windmill's code completion model unset unless you have separately
+configured a provider with fill-in-the-middle autocomplete support. Windmill's
+autocomplete path is distinct from chat/codegen, and generic chat-completions
+providers are not a drop-in replacement for a fill-in-the-middle completion
+endpoint.
+
+Codex Pooler's `/v1` surface is narrow OpenAI-compatible support over Codex Pool
+routing. It does not provide full OpenAI API parity, and OpenAI Realtime SDK
+routes are unsupported.
