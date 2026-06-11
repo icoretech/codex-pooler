@@ -97,7 +97,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         {[public_sse_block("response.output_text.delta", decoded)], %{state | text_delta?: true}}
 
       terminal_event?(type) ->
-        {prefix, state} = terminal_prefix(decoded, state)
+        {prefix, state} = terminal_prefix(type, decoded, state)
         {[prefix, public_sse_block(type, decoded)], state}
 
       is_binary(type) ->
@@ -108,7 +108,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
-  defp terminal_prefix(decoded, state) do
+  defp terminal_prefix(type, _decoded, %{created?: false, text_delta?: false} = state)
+       when type in ["response.failed", "response.incomplete", "error"],
+       do: {[], state}
+
+  defp terminal_prefix(_type, decoded, state) do
     {created_prefix, state} =
       if state.created? do
         {[], state}

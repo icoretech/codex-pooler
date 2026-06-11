@@ -128,7 +128,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         {[], state}
 
       terminal_event?(type) ->
-        terminal_stream_chunk(decoded, sync_response_state(state, decoded))
+        terminal_stream_chunk(type, decoded, state)
 
       moderation = moderation_metadata(decoded) ->
         moderation_stream_chunk(moderation, sync_response_state(state, decoded))
@@ -198,6 +198,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
     {chat_sse_chunk(delta, nil, state), state}
   end
+
+  defp terminal_stream_chunk(type, decoded, %{role_sent?: false} = state)
+       when type in ["response.failed", "error"] do
+    state = sync_response_state(state, decoded)
+    {["data: ", Jason.encode!(%{"error" => public_error(decoded)}), "\n\n"], state}
+  end
+
+  defp terminal_stream_chunk(_type, decoded, state), do: terminal_stream_chunk(decoded, state)
 
   defp terminal_stream_chunk(decoded, %{role_sent?: false} = state) do
     {prefix, state} = maybe_role_chunk(state)
@@ -406,6 +414,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp response_map(%{"response" => %{} = response}), do: response
   defp response_map(%{} = decoded), do: decoded
 
+  defp public_error(decoded) do
+    error = response_map(decoded)["error"] || Map.get(decoded, "error") || %{}
+
+    %{
+      "message" => safe_error_message(error),
+      "type" => Map.get(error, "type") || "invalid_request_error",
+      "code" => Map.get(error, "code") || "upstream_error",
+      "param" => Map.get(error, "param")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp safe_error_message(%{"message" => message}) when is_binary(message), do: message
+  defp safe_error_message(_error), do: "upstream request failed"
+
   defp tool_call_id(item, context, index) do
     decoded_string(item, "call_id") || decoded_string(item, "id") ||
       decoded_string(context, "item_id") || "call_#{index}"
@@ -430,7 +454,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   defp terminal_event?(type),
-    do: type in ["response.completed", "response.failed", "response.incomplete"]
+    do: type in ["response.completed", "response.failed", "response.incomplete", "error"]
 
   defp codex_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
 

@@ -6976,6 +6976,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
+             "x-session-id",
              "x-session-affinity",
              "session_id",
              "x-codex-conversation-id"

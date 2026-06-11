@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_chat,
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; compaction_trigger payloads pass through unchanged on backend Responses, while context-overflow recovery stays client/upstream-owned with no server-side compaction, hidden replay, or stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output, while malformed trigger placement is rejected before dispatch; context-overflow recovery stays client/upstream-owned with no server-side hidden replay or stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :backend_v1_alias_surface,
@@ -258,7 +258,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, emit early public streaming terminal errors without synthetic success prefixes, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -343,9 +343,29 @@ defmodule CodexPooler.CompatibilityMatrix do
       },
       compaction_recovery_boundary: %{
         backend_compaction_trigger: %{
-          route: "/backend-api/codex/responses",
-          behavior: "forwarded_unchanged",
-          local_retry: false
+          routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+          behavior: "terminal_trigger_bridges_to_compact",
+          compact_endpoint: "/backend-api/codex/responses/compact",
+          route_class: "proxy_compact",
+          transport: "http_compact_json",
+          valid_trigger: "exactly_one_final_input_item",
+          malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
+          strips: ["compaction_trigger", "stream", "include"],
+          preserves: [
+            "model",
+            "instructions",
+            "input",
+            "reasoning",
+            "store",
+            "service_tier",
+            "prompt_cache_key",
+            "previous_response_id",
+            "conversation"
+          ],
+          output_events: ["response.output_item.done", "response.completed", "[DONE]"],
+          output_item: %{"type" => "compaction", "encrypted_content" => "encrypted_content"},
+          websocket_bridge: false,
+          hidden_replay: false
         },
         context_overflow: %{
           recovery_owner: "client_or_upstream",
@@ -514,6 +534,23 @@ defmodule CodexPooler.CompatibilityMatrix do
         accepted_values: ["auto", "disabled"],
         forwarded_upstream: false
       },
+      instruction_lifting: %{
+        roles: ["system", "developer"],
+        destination: "instructions",
+        merge_order: ["existing_instructions", "input_order_instruction_text"],
+        residual_non_text_role: "user",
+        blank_text: "omitted",
+        malformed_content: "sanitized_invalid_request"
+      },
+      early_stream_errors: %{
+        responses_first_events: ["response.failed", "error"],
+        responses_suppresses_synthetic_success_prefix_before_output: true,
+        chat_first_chunk: "data_error_object",
+        chat_omits_assistant_role_before_output: true,
+        chat_omits_done_before_output: true,
+        late_failures_retry: false,
+        non_stream_errors: "json_error"
+      },
       chat_style_tool_continuation: %{
         input_role: "tool",
         id_fields: ["tool_call_id", "call_id"],
@@ -545,11 +582,12 @@ defmodule CodexPooler.CompatibilityMatrix do
         "x-codex-window-id",
         "x-codex-session-id",
         "session-id",
+        "x-session-id",
         "x-session-affinity",
         "session_id",
         "x-codex-conversation-id"
       ],
-      local_continuity_headers_not_forwarded: ["session-id", "x-session-affinity"],
+      local_continuity_headers_not_forwarded: ["session-id", "x-session-id", "x-session-affinity"],
       pinned_continuation_reauth: %{
         routes: [
           %{method: :post, path: "/v1/responses"},
@@ -566,6 +604,7 @@ defmodule CodexPooler.CompatibilityMatrix do
             "x-codex-window-id",
             "x-codex-session-id",
             "session-id",
+            "x-session-id",
             "x-session-affinity",
             "session_id",
             "x-codex-conversation-id"

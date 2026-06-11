@@ -6,8 +6,9 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Repo
 
   test "POST /v1/chat/completions non-streaming returns OpenAI chat shape", %{conn: conn} do
@@ -69,10 +70,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert captured.json["store"] == false
     assert captured.json["moderation"] == %{"model" => "omni-moderation-latest"}
 
-    assert [
-             %{"type" => "message", "role" => "developer"},
-             %{"type" => "message", "role" => "user"}
-           ] = captured.json["input"]
+    assert captured.json["instructions"] == "Synthetic system"
+    assert [%{"type" => "message", "role" => "user"}] = captured.json["input"]
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -86,10 +85,68 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
              "/backend-api/codex/responses"
 
-    refute inspect(request.request_metadata) =~ "Synthetic user"
+    persistence_text = inspect({request.request_metadata, RequestLogs.list(setup.pool)})
+    refute persistence_text =~ "Synthetic system"
+    refute persistence_text =~ "Synthetic user"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  test "POST /v1/chat/completions keeps x-session-id local without forwarding it", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_chat_x_session_id",
+               "status" => "completed",
+               "model" => "provider-gpt-test-model",
+               "output" => [
+                 %{
+                   "type" => "message",
+                   "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
+                 }
+               ],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 6, "total_tokens" => 10}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session_header = "chat-x-session-id-#{System.unique_integer([:positive])}"
+
+    conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", session_header)
+      |> put_req_header("x-session-affinity", "chat-lower-priority-affinity")
+      |> post("/v1/chat/completions", chat_payload(setup))
+
+    assert %{"id" => "resp_chat_x_session_id"} = json_response(conn, 200)
+
+    assert %CodexSession{} = session = Repo.get_by(CodexSession, session_key: session_header)
+    refute Repo.get_by(CodexSession, session_key: "chat-lower-priority-affinity")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.request_metadata["codex_session_id"] == session.id
+    assert request.request_metadata["codex_session_key"] == session_header
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             "/v1/chat/completions"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    captured_headers = Map.new(captured.headers)
+    refute Map.has_key?(captured_headers, "session-id")
+    refute Map.has_key?(captured_headers, "x-session-id")
+    refute Map.has_key?(captured_headers, "x-session-affinity")
   end
 
   test "POST /v1/chat/completions preserves json_object response format in the upstream text format",
@@ -285,6 +342,177 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
     assert request.status == "succeeded"
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions streaming emits early terminal errors as first chunk", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request_error",
+               "message" => "synthetic chat streaming validation"
+             },
+             "response" => %{
+               "id" => "resp_chat_stream_failed",
+               "status" => "failed",
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request_error",
+                 "message" => "synthetic chat streaming validation"
+               }
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        chat_payload(setup) |> Map.put("stream", true)
+      )
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert [%{"error" => error}] = chat_chunks(conn.resp_body)
+    assert error["type"] == "invalid_request_error"
+    assert error["code"] == "invalid_request_error"
+    assert error["message"] == "synthetic chat streaming validation"
+    refute conn.resp_body =~ "\"role\":\"assistant\""
+    refute conn.resp_body =~ "\"choices\""
+    refute conn.resp_body =~ "data: [DONE]\n\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "invalid_request_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions streaming emits early incomplete as length finish", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.incomplete",
+           %{
+             "type" => "response.incomplete",
+             "response" => %{
+               "id" => "resp_chat_stream_incomplete",
+               "status" => "incomplete",
+               "incomplete_details" => %{"reason" => "max_output_tokens"},
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        chat_payload(setup)
+        |> Map.put("stream", true)
+        |> Map.put("stream_options", %{"include_usage" => true})
+      )
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "\"role\":\"assistant\""
+    assert conn.resp_body =~ "\"finish_reason\":\"length\""
+    assert conn.resp_body =~ "\"choices\":[]"
+
+    assert conn.resp_body =~
+             "\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":4,\"total_tokens\":4}"
+
+    assert conn.resp_body =~ "data: [DONE]\n\n"
+    refute conn.resp_body =~ "\"error\""
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "max_output_tokens"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions streaming preserves late response.failed after output", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "partial chat text"}},
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request_error",
+               "message" => "synthetic late chat streaming validation"
+             },
+             "response" => %{
+               "id" => "resp_chat_stream_late_failed",
+               "status" => "failed",
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request_error",
+                 "message" => "synthetic late chat streaming validation"
+               }
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        chat_payload(setup) |> Map.put("stream", true)
+      )
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "\"role\":\"assistant\""
+    assert conn.resp_body =~ "\"content\":\"partial chat text\""
+    assert conn.resp_body =~ "\"finish_reason\":\"stop\""
+    assert conn.resp_body =~ "data: [DONE]\n\n"
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "invalid_request_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
   end
 
   @tag :streaming_chat
@@ -629,6 +857,32 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       refute response.resp_body =~ "completed"
     end)
 
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  test "POST /v1/chat/completions rejects malformed fallback instruction-role content before dispatch",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "role" => "developer",
+            "content" => [%{"type" => "input_image", "image_url" => %{"url" => nil}}]
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0

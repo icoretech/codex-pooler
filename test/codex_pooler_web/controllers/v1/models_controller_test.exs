@@ -136,7 +136,8 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
           "upstream_model" => %{
             "context_window" => 272_000,
             "max_context_window" => 272_000,
-            "auto_compact_token_limit" => nil
+            "auto_compact_token_limit" => nil,
+            "comp_hash" => "comp-fixture-hash"
           }
         }
       )
@@ -169,5 +170,6 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     refute Map.has_key?(model, "context_window")
     refute Map.has_key?(model, "max_context_window")
     refute Map.has_key?(model, "auto_compact_token_limit")
+    refute Map.has_key?(model, "comp_hash")
   end
 end

@@ -201,20 +201,45 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert v1_fixture.responses_truncation == responses_fixture.responses_truncation
     end
 
-    test "documents compaction and context-overflow recovery as client/upstream owned" do
+    test "documents compaction trigger bridge and context-overflow recovery boundary" do
       responses_chat = CompatibilityMatrix.by_slug!(:responses_chat)
       fixture = CompatibilityMatrix.fixture!(:responses_chat)
 
-      assert responses_chat.contract =~ "compaction_trigger payloads pass through unchanged"
+      assert responses_chat.contract =~ "terminal compaction_trigger backend payloads bridge"
+      assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
+      assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
       assert responses_chat.contract =~ "context-overflow recovery stays client/upstream-owned"
-      assert responses_chat.contract =~ "no server-side compaction"
+      assert responses_chat.contract =~ "no server-side hidden replay"
       assert responses_chat.contract =~ "stored prompt/frame reconstruction"
 
       assert fixture.compaction_recovery_boundary == %{
                backend_compaction_trigger: %{
-                 route: "/backend-api/codex/responses",
-                 behavior: "forwarded_unchanged",
-                 local_retry: false
+                 routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+                 behavior: "terminal_trigger_bridges_to_compact",
+                 compact_endpoint: "/backend-api/codex/responses/compact",
+                 route_class: "proxy_compact",
+                 transport: "http_compact_json",
+                 valid_trigger: "exactly_one_final_input_item",
+                 malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
+                 strips: ["compaction_trigger", "stream", "include"],
+                 preserves: [
+                   "model",
+                   "instructions",
+                   "input",
+                   "reasoning",
+                   "store",
+                   "service_tier",
+                   "prompt_cache_key",
+                   "previous_response_id",
+                   "conversation"
+                 ],
+                 output_events: ["response.output_item.done", "response.completed", "[DONE]"],
+                 output_item: %{
+                   "type" => "compaction",
+                   "encrypted_content" => "encrypted_content"
+                 },
+                 websocket_bridge: false,
+                 hidden_replay: false
                },
                context_overflow: %{
                  recovery_owner: "client_or_upstream",
@@ -246,11 +271,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "narrow GET /v1/responses Responses websocket compatibility only"
       assert feature.contract =~ "exclude broad /v1/realtime routes"
       assert feature.contract =~ "documented local precedence"
-      assert feature.contract =~ "without forwarding session-id or x-session-affinity upstream"
+
+      assert feature.contract =~
+               "without forwarding session-id, x-session-id, or x-session-affinity"
+
       assert feature.contract =~ "pinned /v1/responses continuations"
       assert feature.contract =~ "restart_with_full_context recovery guidance"
       assert feature.contract =~ "accept Responses truncation auto and disabled locally"
       assert feature.contract =~ "without forwarding it upstream"
+      assert feature.contract =~ "lift Responses system/developer input-message text"
+      assert feature.contract =~ "early public streaming terminal errors"
       assert feature.contract =~ "accept safe Hermes assistant replay status values"
       assert feature.contract =~ "translate OpenClaw assistant thinking replays before validation"
       assert feature.contract =~ "chat input fallback"
@@ -266,6 +296,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "x-codex-window-id",
                "x-codex-session-id",
                "session-id",
+               "x-session-id",
                "x-session-affinity",
                "session_id",
                "x-codex-conversation-id"
@@ -273,6 +304,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.local_continuity_headers_not_forwarded == [
                "session-id",
+               "x-session-id",
                "x-session-affinity"
              ]
 
@@ -292,6 +324,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    "x-codex-window-id",
                    "x-codex-session-id",
                    "session-id",
+                   "x-session-id",
                    "x-session-affinity",
                    "session_id",
                    "x-codex-conversation-id"
@@ -306,6 +339,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                idle_receive_timeout_ms: 150,
                idle_silent_gap_min_ms: 250,
                idle_error_code: "stream_idle_timeout"
+             }
+
+      assert fixture.instruction_lifting == %{
+               roles: ["system", "developer"],
+               destination: "instructions",
+               merge_order: ["existing_instructions", "input_order_instruction_text"],
+               residual_non_text_role: "user",
+               blank_text: "omitted",
+               malformed_content: "sanitized_invalid_request"
+             }
+
+      assert fixture.early_stream_errors == %{
+               responses_first_events: ["response.failed", "error"],
+               responses_suppresses_synthetic_success_prefix_before_output: true,
+               chat_first_chunk: "data_error_object",
+               chat_omits_assistant_role_before_output: true,
+               chat_omits_done_before_output: true,
+               late_failures_retry: false,
+               non_stream_errors: "json_error"
              }
 
       assert fixture.hermes_assistant_tool_call_replay.ordinary_replay_status_values == [

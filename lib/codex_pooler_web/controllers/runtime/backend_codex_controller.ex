@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   alias CodexPooler.Gateway.ControlPlaneProxy
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OpenAICompatibility.{Chat, ChatCompletions}
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Pools
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Runtime.ControlPlaneJson
@@ -222,6 +222,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       conn
       |> GatewayHelpers.request_opts()
 
+    case CompactionTrigger.prepare_bridge(local_endpoint, payload) do
+      :passthrough ->
+        proxy_gateway_json_payload(
+          conn,
+          local_endpoint,
+          upstream_endpoint,
+          accounting_endpoint,
+          auth,
+          payload,
+          opts
+        )
+
+      {:ok, compact_payload} ->
+        proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp proxy_gateway_json_payload(
+         conn,
+         local_endpoint,
+         upstream_endpoint,
+         accounting_endpoint,
+         auth,
+         payload,
+         opts
+       ) do
     request_options =
       opts
       |> RequestOptions.from_conn_metadata(local_endpoint, payload)
@@ -231,6 +260,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
 
     GatewayHelpers.admit(conn, route_class, %{endpoint: local_endpoint}, fn ->
       Gateway.execute(auth, accounting_endpoint, payload, request_options)
+    end)
+  end
+
+  defp proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts) do
+    compact_endpoint = "/backend-api/codex/responses/compact"
+
+    request_options =
+      opts
+      |> RequestOptions.from_conn_metadata(compact_endpoint, compact_payload)
+      |> RequestOptions.put_transport(upstream_endpoint: compact_endpoint)
+
+    route_class = RequestOptions.route_class(request_options)
+
+    GatewayHelpers.admit(conn, route_class, %{endpoint: local_endpoint}, fn ->
+      auth
+      |> Gateway.execute(compact_endpoint, compact_payload, request_options)
+      |> CompactionTrigger.adapt_gateway_result()
     end)
   end
 

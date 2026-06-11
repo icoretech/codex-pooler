@@ -122,25 +122,53 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "Responses system message input is normalized to developer role for Codex backend compatibility" do
+  test "Responses system and developer message input text lifts into instructions" do
     assert {:ok, result} =
              Responses.coerce(%{
                "model" => "gpt-fixture-text",
+               "instructions" => "Base synthetic instruction",
                "input" => [
                  %{
                    "type" => "message",
                    "role" => "system",
-                   "content" => [%{"type" => "input_text", "text" => "synthetic system"}]
+                   "content" => [%{"type" => "input_text", "text" => " synthetic system "}]
+                 },
+                 %{
+                   "type" => "message",
+                   "role" => "developer",
+                   "content" => [
+                     %{"type" => "input_text", "text" => "synthetic developer"},
+                     %{"type" => "text", "text" => " "},
+                     %{"type" => "input_image", "image_url" => "https://example.com/image.png"}
+                   ]
+                 },
+                 %{
+                   "type" => "message",
+                   "role" => "system",
+                   "content" => [
+                     %{"type" => "text", "text" => "synthetic second system"},
+                     %{"type" => "input_file", "file_id" => "file_fixture"}
+                   ]
                  },
                  %{"role" => "user", "content" => "synthetic input"}
                ]
              })
 
+    assert result.payload["instructions"] ==
+             "Base synthetic instruction\nsynthetic system\nsynthetic developer\nsynthetic second system"
+
     assert result.payload["input"] == [
              %{
                "type" => "message",
-               "role" => "developer",
-               "content" => [%{"type" => "input_text", "text" => "synthetic system"}]
+               "role" => "user",
+               "content" => [
+                 %{"type" => "input_image", "image_url" => "https://example.com/image.png"}
+               ]
+             },
+             %{
+               "type" => "message",
+               "role" => "user",
+               "content" => [%{"type" => "input_file", "file_id" => "file_fixture"}]
              },
              %{
                "type" => "message",
@@ -148,6 +176,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                "content" => [%{"type" => "input_text", "text" => "synthetic input"}]
              }
            ]
+  end
+
+  @tag :responses_coercion
+  test "Responses rejects malformed instruction-role content before dispatch" do
+    assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => [
+                 %{
+                   "role" => "developer",
+                   "content" => [%{"type" => "input_image", "image_url" => %{"url" => nil}}]
+                 }
+               ]
+             })
   end
 
   describe "Task 2 Responses additional_tools input item compatibility" do
@@ -342,12 +384,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert result.payload["stream"] == true
     assert result.payload["store"] == false
 
+    assert result.payload["instructions"] == "Synthetic system"
+
     assert [
-             %{
-               "type" => "message",
-               "role" => "developer",
-               "content" => [%{"type" => "input_text", "text" => "Synthetic system"}]
-             },
              %{
                "type" => "message",
                "role" => "user",
@@ -548,7 +587,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     payload = %{
       "model" => "gpt-fixture-text",
       "instructions" => "Use synthetic fixture instructions",
-      "input" => [%{"role" => "user", "content" => "synthetic fallback input"}],
+      "input" => [
+        %{"role" => "developer", "content" => "synthetic fallback instruction"},
+        %{"role" => "user", "content" => "synthetic fallback input"}
+      ],
       "tools" => [
         flat_function_tool("lookup_fixture", %{"type" => "object", "properties" => %{}}, nil)
       ],
@@ -565,7 +607,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              }
            ]
 
-    assert result.payload["instructions"] == "Use synthetic fixture instructions"
+    assert result.payload["instructions"] ==
+             "Use synthetic fixture instructions\nsynthetic fallback instruction"
+
     assert result.payload["tools"] == payload["tools"]
     assert result.payload["tool_choice"] == "auto"
     assert result.payload["stream"] == true
@@ -1117,9 +1161,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
       refute Map.has_key?(coerced, "previous_response_id")
+      assert coerced["instructions"] == "synthetic developer instruction"
 
       assert Enum.map(coerced["input"], & &1["type"]) == [
-               "message",
                "message",
                "reasoning",
                "message",
@@ -1128,12 +1172,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              ]
 
       assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
-               Enum.at(coerced["input"], 2)
+               Enum.at(coerced["input"], 1)
 
-      refute Map.has_key?(Enum.at(coerced["input"], 2), "id")
+      refute Map.has_key?(Enum.at(coerced["input"], 1), "id")
 
       assert %{"role" => "assistant", "phase" => "commentary"} =
-               Enum.at(coerced["input"], 3)
+               Enum.at(coerced["input"], 2)
     end
 
     test "Hermes ordinary replay accepts completed assistant message metadata" do

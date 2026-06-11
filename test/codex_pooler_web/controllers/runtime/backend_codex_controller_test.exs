@@ -489,6 +489,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "reasoning_summary_format" => "json",
             "supported_reasoning_levels" => ["max", "low", "focused"],
             "default_reasoning_level" => "focused",
+            "comp_hash" => " comp-fixture-hash ",
             "tool_mode" => "code_mode_only",
             "use_responses_lite" => true,
             "source_assignment_ids" => ["upstream-source-id"],
@@ -529,6 +530,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
            ]
 
     assert model["default_reasoning_level"] == "focused"
+    assert model["comp_hash"] == "comp-fixture-hash"
     assert model["tool_mode"] == "code_mode_only"
     assert model["use_responses_lite"] == true
     refute Map.has_key?(model, "upstream_model")
@@ -559,6 +561,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "model_messages" => ["unexpected"],
             "prefer_websockets" => "true",
             "reasoning_summary_format" => %{"format" => "json"},
+            "comp_hash" => ["unexpected"],
             "tool_mode" => "future_mode"
           }
         }
@@ -573,6 +576,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert is_nil(model["model_messages"])
     assert model["prefer_websockets"] == false
     assert is_nil(model["reasoning_summary_format"])
+    refute Map.has_key?(model, "comp_hash")
     assert is_nil(model["tool_mode"])
     assert FakeUpstream.count(upstream) == 0
   end
@@ -1237,6 +1241,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  test "POST /backend-api/codex/responses keeps instruction-role input messages backend-native",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_native_instruction_roles",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "instructions" => "synthetic backend top-level instruction",
+        "input" => [
+          %{"role" => "developer", "content" => "synthetic backend developer input"},
+          %{
+            "role" => "system",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic backend system input"}
+            ]
+          },
+          %{"role" => "user", "content" => "synthetic backend user input"}
+        ]
+      })
+
+    assert %{"id" => "resp_backend_native_instruction_roles"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["instructions"] == "synthetic backend top-level instruction"
+
+    assert captured.json["input"] == [
+             %{"role" => "developer", "content" => "synthetic backend developer input"},
+             %{
+               "role" => "system",
+               "content" => [
+                 %{"type" => "input_text", "text" => "synthetic backend system input"}
+               ]
+             },
+             %{"role" => "user", "content" => "synthetic backend user input"}
+           ]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    metadata_text = inspect({request.request_metadata, RequestLogs.list(setup.pool)})
+    refute metadata_text =~ "synthetic backend top-level instruction"
+    refute metadata_text =~ "synthetic backend developer input"
+    refute metadata_text =~ "synthetic backend system input"
+    refute metadata_text =~ "synthetic backend user input"
+  end
+
   test "POST /backend-api/codex/v1/chat/completions falls back to input without executable tool merging",
        %{conn: conn} do
     upstream =
@@ -1676,6 +1741,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> put_req_header("x-codex-session-id", " ")
       |> put_req_header("session-id", session_header)
+      |> put_req_header("x-session-id", "lower-priority-session-id-continuity-fixture")
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "session id continuity fixture"
@@ -1712,6 +1778,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       captured_headers = Map.new(captured.headers)
 
       refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-id")
+      refute Map.has_key?(captured_headers, "x-session-affinity")
+    end
+  end
+
+  test "POST /backend-api/codex/responses uses x-session-id for local continuity without forwarding it",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_x_session_id_continuity",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    session_header = "x-session-id-continuity-fixture"
+
+    first_conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", session_header)
+      |> put_req_header("x-session-affinity", "lower-priority-affinity-fixture")
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "x-session-id continuity fixture"
+      })
+
+    second_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("x-session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "x-session-id continuity reuse fixture"
+      })
+
+    assert %{"id" => "resp_x_session_id_continuity"} = json_response(first_conn, 200)
+    assert %{"id" => "resp_x_session_id_continuity"} = json_response(second_conn, 200)
+
+    assert %CodexSession{} = session = Repo.get_by(CodexSession, session_key: session_header)
+    refute Repo.get_by(CodexSession, session_key: "lower-priority-affinity-fixture")
+
+    requests =
+      Repo.all(
+        from r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+      )
+
+    assert length(requests) == 2
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_id"] == session.id))
+    assert Enum.all?(requests, &(&1.request_metadata["codex_session_key"] == session_header))
+
+    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+
+    for captured <- [first_upstream_request, second_upstream_request] do
+      captured_headers = Map.new(captured.headers)
+
+      refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
   end
@@ -1771,6 +1900,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       captured_headers = Map.new(captured.headers)
 
       refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
   end
@@ -1797,6 +1927,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-codex-window-id", raw_window_id)
       |> put_req_header("x-codex-session-id", "codex-session-lower-priority-fixture")
       |> put_req_header("session-id", "session-id-lower-priority-fixture")
+      |> put_req_header("x-session-id", "x-session-id-lower-priority-fixture")
       |> put_req_header("x-session-affinity", "session-affinity-lower-priority-fixture")
       |> put_req_header("session_id", "session-underscore-lower-priority-fixture")
       |> put_req_header("x-codex-conversation-id", "conversation-lower-priority-fixture")
@@ -1813,6 +1944,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     refute Repo.get_by(CodexSession, session_key: "codex-session-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-id-lower-priority-fixture")
+    refute Repo.get_by(CodexSession, session_key: "x-session-id-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-affinity-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "session-underscore-lower-priority-fixture")
     refute Repo.get_by(CodexSession, session_key: "conversation-lower-priority-fixture")
@@ -1825,6 +1957,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     captured_headers = Map.new(captured.headers)
 
     refute Map.has_key?(captured_headers, "session-id")
+    refute Map.has_key?(captured_headers, "x-session-id")
     refute Map.has_key?(captured_headers, "x-session-affinity")
   end
 
@@ -7108,6 +7241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream, compact?: true)
     session_id_header = "compact-session-id-#{System.unique_integer([:positive])}"
+    x_session_id_header = "compact-x-session-id-#{System.unique_integer([:positive])}"
     affinity_header = "compact-session-affinity-#{System.unique_integer([:positive])}"
 
     first_conn =
@@ -7124,6 +7258,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       build_conn()
       |> auth(setup)
       |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", x_session_id_header)
+      |> put_req_header("x-session-affinity", "compact-lower-priority-affinity")
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "compact x-session-id continuity fixture"
+      })
+
+    third_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", " ")
       |> put_req_header("x-session-affinity", affinity_header)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -7132,12 +7278,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"object" => "response.compaction"} = json_response(first_conn, 200)
     assert %{"object" => "response.compaction"} = json_response(second_conn, 200)
+    assert %{"object" => "response.compaction"} = json_response(third_conn, 200)
 
     assert %CodexSession{} =
              session_id_session = Repo.get_by(CodexSession, session_key: session_id_header)
 
     assert %CodexSession{} =
+             x_session_id_session = Repo.get_by(CodexSession, session_key: x_session_id_header)
+
+    assert %CodexSession{} =
              affinity_session = Repo.get_by(CodexSession, session_key: affinity_header)
+
+    refute Repo.get_by(CodexSession, session_key: "compact-lower-priority-affinity")
 
     requests =
       Repo.all(
@@ -7148,21 +7300,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert Enum.map(requests, & &1.request_metadata["codex_session_id"]) == [
              session_id_session.id,
+             x_session_id_session.id,
              affinity_session.id
            ]
 
     assert Enum.map(requests, & &1.request_metadata["codex_session_key"]) == [
              session_id_header,
+             x_session_id_header,
              affinity_header
            ]
 
-    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+    assert [first_upstream_request, second_upstream_request, third_upstream_request] =
+             FakeUpstream.requests(upstream)
 
-    for captured <- [first_upstream_request, second_upstream_request] do
+    for captured <- [first_upstream_request, second_upstream_request, third_upstream_request] do
       assert captured.path == "/backend-api/codex/responses/compact"
       captured_headers = Map.new(captured.headers)
 
       refute Map.has_key?(captured_headers, "session-id")
+      refute Map.has_key?(captured_headers, "x-session-id")
       refute Map.has_key?(captured_headers, "x-session-affinity")
     end
   end
@@ -8974,6 +9130,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
+             "x-session-id",
              "x-session-affinity",
              "session_id",
              "x-codex-conversation-id"

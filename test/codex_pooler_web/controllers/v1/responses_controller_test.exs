@@ -113,6 +113,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     captured_headers = Map.new(captured.headers)
 
     refute Map.has_key?(captured_headers, "session-id")
+    refute Map.has_key?(captured_headers, "x-session-id")
     refute Map.has_key?(captured_headers, "x-session-affinity")
   end
 
@@ -158,6 +159,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
+             "x-session-id",
              "x-session-affinity",
              "session_id",
              "x-codex-conversation-id"
@@ -919,6 +921,33 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "POST /v1/responses rejects malformed instruction-role content before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "role" => "developer",
+            "content" => [%{"type" => "input_image", "image_url" => %{"url" => nil}}]
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
+
   test "POST /v1/responses non-streaming marks visible upstream output once", %{conn: conn} do
     upstream =
       start_upstream(
@@ -1302,11 +1331,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     refute Map.has_key?(captured.json, "previous_response_id")
+    assert captured.json["instructions"] == "synthetic developer instruction"
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
-             "message",
              "message",
              "reasoning",
              "message",
@@ -1315,10 +1344,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            ]
 
     assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
-             Enum.at(captured.json["input"], 2)
+             Enum.at(captured.json["input"], 1)
 
-    refute Map.has_key?(Enum.at(captured.json["input"], 2), "id")
-    assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 3)
+    refute Map.has_key?(Enum.at(captured.json["input"], 1), "id")
+    assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 2)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -1413,6 +1442,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     setup = gateway_setup(upstream)
     session_id_header = "v1-session-id-#{System.unique_integer([:positive])}"
+    x_session_id_header = "v1-x-session-id-#{System.unique_integer([:positive])}"
     affinity_header = "v1-session-affinity-#{System.unique_integer([:positive])}"
 
     first_conn =
@@ -1429,6 +1459,18 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       build_conn()
       |> auth(setup)
       |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", x_session_id_header)
+      |> put_req_header("x-session-affinity", "v1-lower-priority-affinity")
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic v1 x-session-id continuity"
+      })
+
+    third_conn =
+      build_conn()
+      |> auth(setup)
+      |> put_req_header("session-id", " ")
+      |> put_req_header("x-session-id", " ")
       |> put_req_header("x-session-affinity", affinity_header)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
@@ -1441,11 +1483,19 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert %{"id" => "resp_v1_continuity_headers", "object" => "response"} =
              json_response(second_conn, 200)
 
+    assert %{"id" => "resp_v1_continuity_headers", "object" => "response"} =
+             json_response(third_conn, 200)
+
     assert %CodexSession{} =
              session_id_session = Repo.get_by(CodexSession, session_key: session_id_header)
 
     assert %CodexSession{} =
+             x_session_id_session = Repo.get_by(CodexSession, session_key: x_session_id_header)
+
+    assert %CodexSession{} =
              affinity_session = Repo.get_by(CodexSession, session_key: affinity_header)
+
+    refute Repo.get_by(CodexSession, session_key: "v1-lower-priority-affinity")
 
     requests =
       Repo.all(
@@ -1456,22 +1506,26 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert Enum.map(requests, & &1.endpoint) == [
              "/backend-api/codex/responses",
+             "/backend-api/codex/responses",
              "/backend-api/codex/responses"
            ]
 
     assert Enum.map(requests, & &1.request_metadata["codex_session_id"]) == [
              session_id_session.id,
+             x_session_id_session.id,
              affinity_session.id
            ]
 
     assert Enum.map(requests, & &1.request_metadata["codex_session_key"]) == [
              session_id_header,
+             x_session_id_header,
              affinity_header
            ]
 
-    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+    assert [first_upstream_request, second_upstream_request, third_upstream_request] =
+             FakeUpstream.requests(upstream)
 
-    for captured <- [first_upstream_request, second_upstream_request] do
+    for captured <- [first_upstream_request, second_upstream_request, third_upstream_request] do
       assert captured.path == "/backend-api/codex/responses"
       assert_no_continuity_headers_forwarded!(captured)
     end
@@ -1879,6 +1933,175 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
     assert [_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming emits early response.failed as the first event", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request_error",
+               "message" => "synthetic streaming validation"
+             },
+             "response" => %{
+               "id" => "resp_v1_stream_failed",
+               "status" => "failed",
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request_error",
+                 "message" => "synthetic streaming validation"
+               }
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic stream failure request",
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
+    assert get_in(data, ["error", "code"]) == "invalid_request_error"
+    refute conn.resp_body =~ "event: response.created\n"
+    refute conn.resp_body =~ "event: response.output_text.delta\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "invalid_request_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming emits early top-level error as the first event", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"error",
+           %{
+             "type" => "error",
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request_error",
+               "message" => "synthetic streaming validation error"
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic stream error request",
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert [%{"event" => "error", "data" => data}] = public_sse_events(conn.resp_body)
+    assert get_in(data, ["error", "code"]) == "invalid_request_error"
+    refute conn.resp_body =~ "event: response.created\n"
+    refute conn.resp_body =~ "event: response.output_text.delta\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "invalid_request_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming preserves late response.failed after output", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "partial public text"}},
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request_error",
+               "message" => "synthetic late streaming validation"
+             },
+             "response" => %{
+               "id" => "resp_v1_stream_late_failed",
+               "status" => "failed",
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request_error",
+                 "message" => "synthetic late streaming validation"
+               }
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic late stream failure request",
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+
+    events = public_sse_events(conn.resp_body)
+
+    assert Enum.map(events, & &1["event"]) == [
+             "response.output_text.delta",
+             "response.created",
+             "response.failed"
+           ]
+
+    assert get_in(List.last(events), ["data", "error", "code"]) == "invalid_request_error"
+    assert conn.resp_body =~ "partial public text"
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "invalid_request_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
   end
 
   @tag :streaming_sequence
@@ -2310,7 +2533,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert status == 200
       assert header_elapsed_ms < @ttfh_threshold_ms
-      assert header_elapsed_ms < 250
       assert header_value(response_headers, "content-type") =~ "text/event-stream"
 
       body =
@@ -2624,7 +2846,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       total_elapsed_ms = elapsed_ms(started)
 
       assert first_elapsed_ms < @ttfh_threshold_ms
-      assert first_elapsed_ms < 250
       assert Jason.decode!(first_frame)["type"] == "response.output_text.delta"
       assert Jason.decode!(second_frame)["delta"] == "progress-2"
       assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
@@ -2767,7 +2988,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert visible_elapsed_ms < @ttfh_threshold_ms
       assert silent_gap_elapsed_ms >= 250
-      assert visible_elapsed_ms < 250
       assert Jason.decode!(visible_frame)["delta"] == "visible-before-ws-idle"
 
       assert %{

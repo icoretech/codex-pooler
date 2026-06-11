@@ -12,7 +12,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   def normalize_input(%{"input" => input} = payload) when is_list(input) do
     with {:ok, input} <- normalize_input_items(input) do
-      {:ok, Map.put(payload, "input", input)}
+      {:ok, payload |> Map.put("input", input) |> lift_instruction_messages()}
     end
   end
 
@@ -261,6 +261,91 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
       "role" => "user",
       "content" => [%{"type" => "input_text", "text" => text}]
     }
+  end
+
+  defp lift_instruction_messages(%{"input" => input} = payload) when is_list(input) do
+    {input, instruction_texts} =
+      Enum.reduce(input, {[], []}, fn item, {items, instruction_texts} ->
+        case lift_instruction_item(item) do
+          {:ok, texts, nil} ->
+            {items, instruction_texts ++ texts}
+
+          {:ok, texts, residual_item} ->
+            {[residual_item | items], instruction_texts ++ texts}
+
+          :ignore ->
+            {[item | items], instruction_texts}
+        end
+      end)
+
+    payload
+    |> Map.put("input", Enum.reverse(input))
+    |> put_lifted_instruction_text(instruction_texts)
+  end
+
+  defp lift_instruction_messages(payload), do: payload
+
+  defp lift_instruction_item(%{"type" => "message", "role" => role, "content" => content} = item)
+       when role in ["system", "developer"] do
+    {texts, preserved_content} = lift_instruction_content(content)
+
+    residual_item =
+      case preserved_content do
+        [] -> nil
+        content -> item |> Map.put("role", "user") |> Map.put("content", content)
+      end
+
+    {:ok, texts, residual_item}
+  end
+
+  defp lift_instruction_item(_item), do: :ignore
+
+  defp lift_instruction_content(content) when is_binary(content) do
+    case clean_string(content) do
+      nil -> {[], []}
+      text -> {[text], []}
+    end
+  end
+
+  defp lift_instruction_content(content) when is_list(content) do
+    content
+    |> Enum.reduce({[], []}, fn part, {texts, preserved_content} ->
+      case instruction_content_text(part) do
+        {:ok, nil} -> {texts, preserved_content}
+        {:ok, text} -> {texts ++ [text], preserved_content}
+        :error -> {texts, preserved_content ++ [part]}
+      end
+    end)
+  end
+
+  defp lift_instruction_content(content), do: {[], [content]}
+
+  defp instruction_content_text(%{"type" => type, "text" => text})
+       when type in ["input_text", "text"] and is_binary(text) do
+    {:ok, clean_string(text)}
+  end
+
+  defp instruction_content_text(text) when is_binary(text), do: {:ok, clean_string(text)}
+  defp instruction_content_text(_part), do: :error
+
+  defp put_lifted_instruction_text(payload, []), do: payload
+
+  defp put_lifted_instruction_text(payload, instruction_texts) do
+    existing_text =
+      payload
+      |> Map.get("instructions")
+      |> clean_string()
+
+    instructions =
+      [existing_text | instruction_texts]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    if instructions == "" do
+      payload
+    else
+      Map.put(payload, "instructions", instructions)
+    end
   end
 
   defp tool_call_id(item) do

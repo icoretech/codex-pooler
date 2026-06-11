@@ -465,6 +465,13 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
                  %{"model" => "example-model"}
                )
 
+      assert %{continuity: %{session_header_source: "x-session-id"}} =
+               RequestOptions.build(
+                 %{session_header: "local-session", session_header_source: "X-Session-ID"},
+                 "/backend-api/codex/responses",
+                 %{"model" => "example-model"}
+               )
+
       assert %{continuity: %{session_header_source: "x-session-affinity"}} =
                RequestOptions.build(
                  %{session_header: "affinity", session_header_source: :"x-session-affinity"},

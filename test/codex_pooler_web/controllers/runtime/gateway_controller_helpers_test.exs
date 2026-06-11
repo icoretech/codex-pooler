@@ -62,6 +62,7 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpersTest do
     conn =
       Phoenix.ConnTest.build_conn(:post, "/backend-api/codex/responses")
       |> put_req_header("session-id", " local-session ")
+      |> put_req_header("x-session-id", "lower-priority-session")
       |> put_req_header("x-session-affinity", "affinity-local")
 
     assert %{session_header: "local-session", session_header_source: "session-id"} =
@@ -69,9 +70,18 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpersTest do
 
     conn =
       Phoenix.ConnTest.build_conn(:post, "/backend-api/codex/responses")
+      |> put_req_header("x-session-id", " local-session ")
+      |> put_req_header("x-session-affinity", "affinity-local")
+
+    assert %{session_header: "local-session", session_header_source: "x-session-id"} =
+             GatewayControllerHelpers.request_opts(conn)
+
+    conn =
+      Phoenix.ConnTest.build_conn(:post, "/backend-api/codex/responses")
       |> put_req_header("x-codex-window-id", " window-session ")
       |> put_req_header("x-codex-session-id", "codex-session")
       |> put_req_header("session-id", "local-session")
+      |> put_req_header("x-session-id", "lower-priority-session")
 
     assert %{session_header: "window-session", session_header_source: "x-codex-window-id"} =
              GatewayControllerHelpers.request_opts(conn)
@@ -105,6 +115,7 @@ defmodule CodexPoolerWeb.Runtime.GatewayControllerHelpersTest do
              "x-codex-window-id",
              "x-codex-session-id",
              "session-id",
+             "x-session-id",
              "x-session-affinity",
              "session_id",
              "x-codex-conversation-id"

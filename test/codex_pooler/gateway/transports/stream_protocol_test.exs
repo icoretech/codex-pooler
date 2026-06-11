@@ -84,6 +84,49 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert chunk =~ "split terminal text"
       refute Process.get({:openai_responses_stream_state, "resp_explicit_state"})
     end
+
+    test "emits early response.failed without synthetic success prefix" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      failed =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "invalid_request_error",
+            "message" => "synthetic stream rejection"
+          },
+          "response" => %{"id" => "resp_early_failed", "status" => "failed"}
+        })
+
+      assert {chunk, _state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(failed, state)
+
+      assert String.starts_with?(chunk, "event: response.failed\n")
+      refute chunk =~ "event: response.created\n"
+      refute chunk =~ "event: response.output_text.delta\n"
+    end
+
+    test "emits early top-level error without synthetic success prefix" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      error =
+        sse_event("error", %{
+          "type" => "error",
+          "error" => %{
+            "type" => "server_error",
+            "code" => "server_error",
+            "message" => "synthetic stream error"
+          }
+        })
+
+      assert {chunk, _state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(error, state)
+
+      assert String.starts_with?(chunk, "event: error\n")
+      refute chunk =~ "event: response.created\n"
+      refute chunk =~ "event: response.output_text.delta\n"
+    end
   end
 
   describe "wrapped websocket/direct JSON terminal error frames" do
