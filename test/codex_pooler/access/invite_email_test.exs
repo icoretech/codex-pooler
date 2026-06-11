@@ -85,6 +85,23 @@ defmodule CodexPooler.Access.InviteEmailTest do
     assert_email_sent(to: {"", "flags@example.com"}, subject: "Codex Pooler Pool invite")
   end
 
+  test "maybe_deliver_pool_invite marks skipped email delivery without sending" do
+    pool = pool_fixture(%{slug: "skip-email-pool", name: "Skip Email Pool"})
+    scope = fixture_owner_scope()
+    invite_url = "https://codex-pooler.example.com/onboarding/invites/skip-email-token"
+
+    {:ok, %{invite: invite} = result} =
+      Access.create_invite(scope, pool, %{"invited_email" => "skip-email@example.com"})
+
+    assert %{emailed?: false, email_error?: false, invite: %Invite{} = unchanged_invite} =
+             InviteEmail.maybe_deliver_pool_invite(result, false, invite_url, pool, scope.user)
+
+    assert unchanged_invite.id == invite.id
+    refute unchanged_invite.email_sent_at
+    refute Repo.reload!(invite).email_sent_at
+    assert_no_email_sent()
+  end
+
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture()
     Scope.for_user(user, ["instance_owner"])

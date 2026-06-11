@@ -18,13 +18,20 @@ defmodule CodexPooler.Access do
   @type api_key_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | access_error()}
   @type policy_result :: {:ok, map()} | {:error, atom() | access_error()}
   @type invite_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | access_error()}
+  @type pool_invite_email_result :: InviteEmail.pool_invite_result()
 
   @spec create_invite(Scope.t(), Pool.t() | Ecto.UUID.t(), map()) ::
           invite_result()
   defdelegate create_invite(scope, pool_or_id, attrs \\ %{}), to: Invites
 
-  @spec maybe_deliver_pool_invite_email(map(), boolean(), binary(), Pool.t(), Scope.t()) ::
-          map()
+  @spec maybe_deliver_pool_invite_email(
+          pool_invite_email_result(),
+          boolean(),
+          binary(),
+          Pool.t(),
+          Scope.t()
+        ) ::
+          pool_invite_email_result()
   def maybe_deliver_pool_invite_email(result, send_email?, invite_url, pool, %Scope{} = scope),
     do: InviteEmail.maybe_deliver_pool_invite(result, send_email?, invite_url, pool, scope.user)
 

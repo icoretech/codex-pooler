@@ -17,6 +17,12 @@ defmodule CodexPooler.Access.InviteEmail do
   @subject "Codex Pooler Pool invite"
 
   @type delivery_result :: {:ok, term()} | {:error, term()}
+  @type pool_invite_result :: %{
+          required(:invite) => Invite.t(),
+          optional(:emailed?) => boolean(),
+          optional(:email_error?) => boolean(),
+          optional(atom()) => term()
+        }
 
   @spec pool_invite_email(Invite.t(), binary(), Pool.t(), User.t()) :: Swoosh.Email.t()
   def pool_invite_email(
@@ -50,7 +56,8 @@ defmodule CodexPooler.Access.InviteEmail do
   def deliver_pool_invite(_invite, _invite_url, _pool, _inviter),
     do: {:error, :missing_invited_email}
 
-  @spec maybe_deliver_pool_invite(map(), boolean(), binary(), Pool.t(), User.t()) :: map()
+  @spec maybe_deliver_pool_invite(pool_invite_result(), boolean(), binary(), Pool.t(), User.t()) ::
+          pool_invite_result()
   def maybe_deliver_pool_invite(result, false, _invite_url, _pool, _inviter)
       when is_map(result) do
     result
