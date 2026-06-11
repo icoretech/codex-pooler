@@ -258,8 +258,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
         aria-label="close event details"
         class="drawer-overlay"
         phx-click="close_audit_event"
-      >
-      </label>
+      ></label>
       <aside
         id="audit-event-details-sidebar"
         class="flex min-h-full w-full max-w-md flex-col border-l border-base-300 bg-base-100 shadow-2xl"

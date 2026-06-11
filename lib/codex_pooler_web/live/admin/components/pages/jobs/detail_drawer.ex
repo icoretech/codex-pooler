@@ -26,8 +26,7 @@ defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
         aria-label="Close job details"
         class="drawer-overlay"
         phx-click="close_job"
-      >
-      </label>
+      ></label>
 
       <AdminComponents.object_inspector
         id="job-detail-sidebar"
