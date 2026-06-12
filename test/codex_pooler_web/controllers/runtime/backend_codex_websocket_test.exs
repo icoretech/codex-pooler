@@ -7,7 +7,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
@@ -633,6 +634,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       {"x-codex-turn-metadata", lineage_metadata},
       {"x-codex-window-id", "ws-forwarded-metadata-window"},
       {"x-codex-parent-thread-id", "ws-forwarded-metadata-parent"},
+      {"x-codex-installation-id", "ws-forwarded-metadata-installation"},
       {"x-openai-subagent", "ws-forwarded-metadata-subagent"},
       {"x-codex-extra-websocket", "ws-forwarded-metadata-extra"}
     ]
@@ -695,9 +697,88 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute persistence_text =~ lineage_id
     refute persistence_text =~ "ws-forwarded-metadata-window"
     refute persistence_text =~ "ws-forwarded-metadata-parent"
+    refute persistence_text =~ "ws-forwarded-metadata-installation"
     refute persistence_text =~ "ws-forwarded-metadata-subagent"
     refute persistence_text =~ "ws-forwarded-metadata-extra"
     refute persistence_text =~ setup.authorization
+  end
+
+  @tag :client_metadata
+  test "websocket dispatch preserves canonical turn metadata while adding Responses Lite marker" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_client_metadata_responses_lite",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup =
+      upstream
+      |> gateway_setup()
+      |> put_setup_model_source_metadata!(%{"use_responses_lite" => true})
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-client-metadata"})
+
+    metadata = client_metadata_fixture("websocket")
+
+    forwarded_headers = [
+      {"x-codex-turn-metadata", "ws-client-metadata-forwarded-turn"},
+      {"x-codex-installation-id", "ws-client-metadata-forwarded-installation"}
+    ]
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true,
+                 "client_metadata" => metadata.client_metadata
+               }),
+               %{
+                 request_id: "ws-client-metadata-responses-lite",
+                 client_ip: "127.0.0.1",
+                 codex_session: session,
+                 forwarded_headers: forwarded_headers
+               },
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_client_metadata_responses_lite"} = Jason.decode!(frame)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert captured.json["client_metadata"]["x-codex-turn-metadata"] ==
+             metadata.turn_metadata
+
+    assert captured.json["client_metadata"]["existing_client_metadata"] ==
+             "existing-client-metadata-websocket"
+
+    assert captured.json["client_metadata"][
+             "ws_request_header_x_openai_internal_codex_responses_lite"
+           ] ==
+             "true"
+
+    for {name, value} <- forwarded_headers do
+      refute Enum.any?(captured.headers, fn {header_name, header_value} ->
+               header_name == name or header_value == value
+             end)
+    end
+
+    assert_client_metadata_not_persisted!(setup, metadata)
+
+    request_text = inspect(Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id)))
+    refute request_text =~ "ws-client-metadata-forwarded"
   end
 
   test "websocket dispatch sends trusted Responses Lite marker as per-request client metadata" do
@@ -7148,6 +7229,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp client_metadata_fixture(label) do
+    forked_thread_id = "client-metadata-fork-#{label}"
+    window_id = "client-metadata-window-#{label}"
+    sentinel = "client-metadata-sentinel-#{label}"
+
+    turn_metadata =
+      Jason.encode!(%{
+        "forked_from_thread_id" => forked_thread_id,
+        "window_id" => window_id,
+        "sentinel" => sentinel
+      })
+
+    %{
+      turn_metadata: turn_metadata,
+      forked_thread_id: forked_thread_id,
+      window_id: window_id,
+      sentinel: sentinel,
+      client_metadata: %{
+        "x-codex-turn-metadata" => turn_metadata,
+        "existing_client_metadata" => "existing-client-metadata-#{label}"
+      }
+    }
+  end
+
+  defp assert_client_metadata_not_persisted!(setup, metadata) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    sessions = Repo.all(from(s in CodexSession))
+    turns = Repo.all(from(t in CodexTurn))
+    audit_events = Repo.all(from(e in AuditEvent))
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    persistence_text =
+      inspect({requests, attempts, sessions, turns, audit_events, logs.items})
+
+    refute persistence_text =~ metadata.turn_metadata
+    refute persistence_text =~ metadata.forked_thread_id
+    refute persistence_text =~ metadata.window_id
+    refute persistence_text =~ metadata.sentinel
+    refute persistence_text =~ "existing-client-metadata"
   end
 
   defp refute_rate_limit_event_windows(identity) do

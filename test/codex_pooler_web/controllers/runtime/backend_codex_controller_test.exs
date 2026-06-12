@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
   alias CodexPooler.Gateway.Metadata
@@ -914,6 +915,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.status == "succeeded"
   end
 
+  @tag :installation_id_metadata
   test "POST /backend-api/codex/responses forwards only approved lineage metadata headers",
        %{conn: conn} do
     upstream =
@@ -949,6 +951,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_approved_lineage_headers_forwarded!(captured, metadata)
     assert_disallowed_client_headers_not_forwarded!(captured, setup)
     assert_lineage_metadata_not_persisted!(setup, metadata)
+  end
+
+  @tag :client_metadata
+  test "POST /backend-api/codex/responses preserves canonical turn metadata in client_metadata",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_client_metadata",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    metadata = client_metadata_fixture("http")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic client metadata request",
+        "client_metadata" => metadata.client_metadata
+      })
+
+    assert %{"id" => "resp_backend_client_metadata"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["client_metadata"] == metadata.client_metadata
+    assert captured.json["client_metadata"]["x-codex-turn-metadata"] == metadata.turn_metadata
+
+    assert_client_metadata_not_persisted!(setup, metadata)
   end
 
   test "POST /backend-api/codex/responses sends trusted Responses Lite marker from selected model metadata",
@@ -1029,6 +1067,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
+  @tag :installation_id_metadata
   test "POST /backend-api/codex/v1/responses forwards approved lineage metadata headers and configured user-agent",
        %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
@@ -7464,6 +7503,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  @tag :installation_id_metadata
   test "POST /backend-api/codex/responses/compact forwards approved lineage metadata headers and redacts metadata",
        %{conn: conn} do
     upstream =
@@ -7501,6 +7541,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
+             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent
            }
 
@@ -7545,6 +7586,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-internal-unapproved")
   end
 
+  @tag :installation_id_metadata
   test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata headers and configured user-agent",
        %{conn: conn} do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
@@ -7595,6 +7637,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              "x-codex-turn-metadata" => metadata.turn_metadata,
              "x-codex-window-id" => metadata.window_id,
              "x-codex-parent-thread-id" => metadata.parent_thread_id,
+             "x-codex-installation-id" => metadata.installation_id,
              "x-openai-subagent" => metadata.subagent
            }
 
@@ -8875,6 +8918,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp lineage_metadata_fixture(forked_thread_id) do
     request_kind = "task3-lineage-request-#{forked_thread_id}"
     window_id = "window-#{forked_thread_id}"
+    installation_id = "installation-#{forked_thread_id}"
     compaction_source_window_id = "compaction-source-#{forked_thread_id}"
     compaction_target_window_id = "compaction-target-#{forked_thread_id}"
     compaction_strategy = "task3-synthetic-summary"
@@ -8896,12 +8940,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       forked_thread_id: forked_thread_id,
       request_kind: request_kind,
       window_id: window_id,
+      installation_id: installation_id,
       parent_thread_id: "parent-#{forked_thread_id}",
       subagent: "subagent-#{forked_thread_id}",
       compaction_source_window_id: compaction_source_window_id,
       compaction_target_window_id: compaction_target_window_id,
       compaction_strategy: compaction_strategy,
       compaction_trigger: compaction_trigger
+    }
+  end
+
+  defp client_metadata_fixture(label) do
+    forked_thread_id = "client-metadata-fork-#{label}"
+    window_id = "client-metadata-window-#{label}"
+    sentinel = "client-metadata-sentinel-#{label}"
+
+    turn_metadata =
+      Jason.encode!(%{
+        "forked_from_thread_id" => forked_thread_id,
+        "window_id" => window_id,
+        "sentinel" => sentinel
+      })
+
+    %{
+      turn_metadata: turn_metadata,
+      forked_thread_id: forked_thread_id,
+      window_id: window_id,
+      sentinel: sentinel,
+      client_metadata: %{
+        "x-codex-turn-metadata" => turn_metadata,
+        "existing_client_metadata" => "existing-client-metadata-#{label}"
+      }
     }
   end
 
@@ -8942,6 +9011,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {"x-codex-turn-metadata", metadata.turn_metadata},
       {"x-codex-window-id", metadata.window_id},
       {"x-codex-parent-thread-id", metadata.parent_thread_id},
+      {"x-codex-installation-id", metadata.installation_id},
       {"x-openai-subagent", metadata.subagent},
       {"x-openai-internal-codex-responses-lite", "lineage-spoofed-lite"},
       {"x-codex-unapproved", "lineage-unapproved-codex"},
@@ -8955,6 +9025,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "x-codex-turn-metadata",
       "x-codex-window-id",
       "x-codex-parent-thread-id",
+      "x-codex-installation-id",
       "x-openai-subagent"
     ]
   end
@@ -8972,6 +9043,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-codex-turn-metadata"] =~ metadata.compaction_target_window_id
     assert captured_headers["x-codex-window-id"] == metadata.window_id
     assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
+    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
     assert captured_headers["x-openai-subagent"] == metadata.subagent
   end
 
@@ -9027,17 +9099,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute_lineage_text!(inspect(logs.items), metadata)
   end
 
+  defp assert_client_metadata_not_persisted!(setup, metadata) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    sessions = Repo.all(from(s in CodexSession))
+    turns = Repo.all(from(t in CodexTurn))
+    audit_events = Repo.all(from(e in AuditEvent))
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    persistence_text =
+      inspect({requests, attempts, sessions, turns, audit_events, logs.items})
+
+    refute_client_metadata_text!(persistence_text, metadata)
+  end
+
   defp refute_lineage_text!(text, metadata) do
     refute text =~ metadata.turn_metadata
     refute text =~ metadata.forked_thread_id
     refute text =~ metadata.request_kind
     refute text =~ metadata.window_id
+    refute text =~ metadata.installation_id
     refute text =~ metadata.parent_thread_id
     refute text =~ metadata.subagent
     refute text =~ metadata.compaction_source_window_id
     refute text =~ metadata.compaction_target_window_id
     refute text =~ metadata.compaction_strategy
     refute text =~ metadata.compaction_trigger
+  end
+
+  defp refute_client_metadata_text!(text, metadata) do
+    refute text =~ metadata.turn_metadata
+    refute text =~ metadata.forked_thread_id
+    refute text =~ metadata.window_id
+    refute text =~ metadata.sentinel
+    refute text =~ "existing-client-metadata"
   end
 
   defp post_json_runtime(conn, path, payload) do
