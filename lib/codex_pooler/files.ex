@@ -13,7 +13,8 @@ defmodule CodexPooler.Files do
     FileState,
     RequestLog,
     RequestMetadata,
-    UploadLifecycle
+    UploadLifecycle,
+    UploadUrlPolicy
   }
 
   alias CodexPooler.Gateway.OperationalSettings
@@ -64,7 +65,8 @@ defmodule CodexPooler.Files do
     now = now(opts)
 
     with {:ok, upstream_file_id} <- CreateValidation.upstream_file_id(body),
-         :ok <- CreateValidation.upload_url_present(body) do
+         :ok <- CreateValidation.upload_url_present(body),
+         :ok <- UploadUrlPolicy.validate(Map.get(body, "upload_url")) do
       expires_at = DateTime.add(now, file_ttl_seconds(), :second)
       request_opts = create_file_request_opts(opts)
 

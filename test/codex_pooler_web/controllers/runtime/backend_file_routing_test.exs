@@ -215,6 +215,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     filename = "assignment-continuity-private.txt"
     file_contents = "synthetic assignment continuity bytes"
     file_size = byte_size(file_contents)
+    upload_url = stub_upload_put(file_id)
 
     fallback_upstream =
       start_upstream(
@@ -240,7 +241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
         file_id: file_id,
         file_name: filename,
         mime_type: "text/plain",
-        upload_url: FakeUpstream.url(selected_upstream) <> "/upload/#{file_id}"
+        upload_url: upload_url
       )
     )
 
@@ -303,14 +304,11 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     assert file.status == "uploaded"
     assert file.finalize_status == "succeeded"
 
-    assert [create_request, put_request, finalize_request] =
-             FakeUpstream.requests(selected_upstream)
+    assert [create_request, finalize_request] = FakeUpstream.requests(selected_upstream)
 
     assert create_request.path == "/backend-api/files"
-    assert put_request.method == "PUT"
-    assert put_request.path == "/upload/#{file_id}"
-    assert put_request.body == file_contents
     assert finalize_request.path == "/backend-api/files/#{file_id}/uploaded"
+    assert_upload_put(file_id, "/upload/#{file_id}", file_contents, "text/plain")
     assert FakeUpstream.requests(fallback_upstream) == []
 
     public_create_request =
@@ -779,6 +777,43 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     File.write!(path, contents)
     on_exit(fn -> File.rm(path) end)
     %Plug.Upload{path: path, filename: filename, content_type: content_type}
+  end
+
+  defp stub_upload_put(file_id) do
+    stub_name = {__MODULE__, :upload_put, file_id}
+    test_pid = self()
+
+    Req.Test.stub(stub_name, fn conn ->
+      send(test_pid, {
+        :upload_put,
+        file_id,
+        conn.method,
+        conn.request_path,
+        Req.Test.raw_body(conn),
+        conn.req_headers
+      })
+
+      conn
+      |> Plug.Conn.put_status(201)
+      |> Req.Test.text("")
+    end)
+
+    current_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      Keyword.merge(current_bridge_config, upload_req_options: [plug: {Req.Test, stub_name}])
+    )
+
+    "https://fake-upload.invalid/upload/#{file_id}?sig=fake-upload"
+  end
+
+  defp assert_upload_put(file_id, path, body, content_type) do
+    assert_receive {:upload_put, ^file_id, "PUT", ^path, ^body, headers}, 1_000
+    assert header!(headers, "content-type") == content_type
+    assert header!(headers, "x-ms-blob-type") == "BlockBlob"
+    refute Enum.any?(headers, fn {name, _value} -> name in ["authorization", "cookie"] end)
   end
 
   defp header!(headers, name) do

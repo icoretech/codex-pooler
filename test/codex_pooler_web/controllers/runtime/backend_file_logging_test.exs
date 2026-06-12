@@ -37,6 +37,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileLoggingTest do
   end
 
   @tag :file_bridge_safe_logging
+  @tag :file_bridge_upload_transport
   test "request logs and audit surfaces keep file bodies and bridge secrets out", %{
     conn: conn
   } do

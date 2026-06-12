@@ -19,6 +19,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   }
   @finalize_retry_timeout_ms :timer.seconds(30)
   @finalize_retry_interval_ms 250
+  @upload_req_option_allowlist [:adapter, :plug]
+  @upload_request_step_denylist [:put_user_agent]
 
   @type auth :: CodexPooler.Access.auth_context()
   @type payload :: map()
@@ -64,14 +66,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       when is_binary(upload_url) do
     with {:ok, body} <- readable_file_stream(path) do
       upload_url
-      |> Req.put(
-        body: body,
-        headers: [
-          {"content-type", content_type || "application/octet-stream"},
-          {"x-ms-blob-type", "BlockBlob"}
-        ],
-        retry: false
-      )
+      |> upload_request()
+      |> Req.put(upload_req_options(body, content_type))
       |> normalize_upload_response(opts)
     end
   rescue
@@ -268,6 +264,43 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   defp path_within?(path, root) do
     path == root or String.starts_with?(path, root <> "/")
+  end
+
+  defp upload_req_options(body, content_type) do
+    configured_upload_req_options()
+    |> Keyword.merge(
+      body: body,
+      headers: [
+        {"content-type", content_type || "application/octet-stream"},
+        {"x-ms-blob-type", "BlockBlob"}
+      ],
+      redirect: false,
+      retry: false
+    )
+  end
+
+  @spec upload_request(String.t()) :: Req.Request.t()
+  defp upload_request(upload_url) do
+    [url: upload_url]
+    |> Req.new()
+    |> without_request_steps(@upload_request_step_denylist)
+  end
+
+  @spec without_request_steps(Req.Request.t(), [atom()]) :: Req.Request.t()
+  defp without_request_steps(%Req.Request{} = request, step_names) when is_list(step_names) do
+    %{
+      request
+      | request_steps: Keyword.drop(request.request_steps, step_names),
+        current_request_steps:
+          Enum.reject(request.current_request_steps, fn step_name -> step_name in step_names end)
+    }
+  end
+
+  defp configured_upload_req_options do
+    case Keyword.get(config(), :upload_req_options, []) do
+      opts when is_list(opts) -> Keyword.take(opts, @upload_req_option_allowlist)
+      _opts -> []
+    end
   end
 
   # Caller validates the resolved Plug.Upload path before opening it.

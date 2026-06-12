@@ -44,6 +44,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     file_id = "file_v1_lifecycle_#{System.unique_integer([:positive])}"
     file_contents = "synthetic v1 file bytes"
     file_size = byte_size(file_contents)
+    upload_url = stub_upload_put(file_id)
 
     upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
 
@@ -53,7 +54,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
         file_id: file_id,
         file_name: "v1-lifecycle.txt",
         mime_type: "text/plain",
-        upload_url: FakeUpstream.url(upstream) <> "/upload/#{file_id}"
+        upload_url: upload_url
       )
     )
 
@@ -80,7 +81,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
            } = create_body = json_response(create_conn, 200)
 
     refute Map.has_key?(create_body, "upload_url")
-    refute inspect(create_body) =~ "fake-upload"
+    refute inspect(create_body) =~ upload_url
 
     file = Repo.get_by!(FileRecord, file_id: file_id)
     assert file.pool_id == setup.pool.id
@@ -90,7 +91,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert file.finalize_status == "succeeded"
     assert file.byte_size == file_size
     refute inspect(file) =~ file_contents
-    refute inspect(file) =~ "fake-upload"
+    refute inspect(file) =~ upload_url
 
     show_conn = build_conn() |> auth(setup) |> get("/v1/files/#{file_id}")
     assert json_response(show_conn, 200)["id"] == file_id
@@ -113,12 +114,10 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     delete_conn = build_conn() |> auth(setup) |> delete("/v1/files/#{file_id}")
     assert json_response(delete_conn, 404)["error"]["code"] == "unsupported_endpoint"
 
-    assert [create_request, put_request, finalize_request] = FakeUpstream.requests(upstream)
+    assert [create_request, finalize_request] = FakeUpstream.requests(upstream)
     assert create_request.path == "/backend-api/files"
-    assert put_request.method == "PUT"
-    assert put_request.path == "/upload/#{file_id}"
-    assert put_request.body == file_contents
     assert finalize_request.path == "/backend-api/files/#{file_id}/uploaded"
+    assert_upload_put(file_id, "/upload/#{file_id}", file_contents, "text/plain")
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
 
@@ -138,7 +137,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert Enum.any?(requests, &(&1.endpoint == "/v1/files/delete" and &1.status == "failed"))
     refute inspect(requests) =~ file_contents
     refute inspect(requests) =~ setup.raw_key
-    refute inspect(requests) =~ "fake-upload"
+    refute inspect(requests) =~ upload_url
   end
 
   @tag :unauthorized_file
@@ -150,6 +149,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     second = active_api_key_fixture(first.pool)
     file_id = "file_v1_owned_#{System.unique_integer([:positive])}"
     file_contents = "owned v1 file bytes"
+    upload_url = stub_upload_put(file_id)
 
     upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
 
@@ -158,7 +158,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       FakeUpstream.file_protocol_success(
         file_id: file_id,
         file_name: "owned.txt",
-        upload_url: FakeUpstream.url(upstream) <> "/upload/#{file_id}"
+        upload_url: upload_url
       )
     )
 
@@ -177,6 +177,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       })
 
     assert json_response(create_conn, 200)["id"] == file_id
+    assert_upload_put(file_id, "/upload/#{file_id}", file_contents, "text/plain")
 
     denied_show = build_conn() |> auth(second) |> get("/v1/files/#{file_id}")
     assert_openai_error(denied_show, 404, code: "file_not_found", message: "file was not found")
@@ -242,10 +243,12 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert FakeUpstream.requests(upstream) == []
   end
 
+  @tag :file_bridge_upload_transport
   test "upstream direct PUT failure records failed public create and abandons file", %{conn: conn} do
     setup = active_api_key_fixture()
     file_id = "file_v1_put_failure_#{System.unique_integer([:positive])}"
     file_contents = "synthetic put failure bytes"
+    upload_url = stub_upload_put(file_id, status: 415, response_body: "unsupported media type")
 
     upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
 
@@ -253,9 +256,7 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       upstream,
       FakeUpstream.file_protocol_success(
         file_id: file_id,
-        upload_url: FakeUpstream.url(upstream) <> "/upload/#{file_id}",
-        upload_status: 415,
-        upload_body: "unsupported media type"
+        upload_url: upload_url
       )
     )
 
@@ -278,15 +279,16 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       message: "upstream file upload failed with status 415"
     )
 
-    assert [create_request, put_request] = FakeUpstream.requests(upstream)
+    assert [create_request] = FakeUpstream.requests(upstream)
     assert create_request.path == "/backend-api/files"
-    assert put_request.method == "PUT"
-    assert put_request.path == "/upload/#{file_id}"
-    assert put_request.body == file_contents
+    assert_upload_put(file_id, "/upload/#{file_id}", file_contents, "text/plain")
 
     file = Repo.get_by!(FileRecord, file_id: file_id)
     assert file.status == "abandoned"
     assert file.finalize_status == "failed"
+    refute inspect(file) =~ file_contents
+    refute inspect(file) =~ upload_url
+    refute inspect(file) =~ "unsupported media type"
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
     refute Enum.any?(requests, &(&1.endpoint == "/v1/files" and &1.status == "succeeded"))
@@ -299,13 +301,30 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
     refute inspect(requests) =~ file_contents
     refute inspect(requests) =~ setup.raw_key
+    refute inspect(requests) =~ upload_url
     refute inspect(requests) =~ "unsupported media type"
   end
 
-  test "upstream direct PUT transport errors stay upstream failures", %{conn: conn} do
+  @tag :file_bridge_upload_transport
+  test "direct upload does not follow 307 redirect to http loopback", %{conn: conn} do
+    assert_upload_redirect_not_followed(conn, 307, "http")
+  end
+
+  @tag :file_bridge_upload_transport
+  test "direct upload does not follow 302 redirect to https loopback", %{conn: conn} do
+    assert_upload_redirect_not_followed(conn, 302, "https")
+  end
+
+  @tag :file_bridge_upload_transport
+  test "direct upload sends only safe headers and bytes to public HTTPS upload URL", %{
+    conn: conn
+  } do
     setup = active_api_key_fixture()
-    file_id = "file_v1_put_transport_#{System.unique_integer([:positive])}"
-    file_contents = "synthetic put transport bytes"
+    file_id = "file_v1_safe_upload_headers_#{System.unique_integer([:positive])}"
+    upload_path = "/upload/#{file_id}"
+    file_contents = ~s({"safe":"upload","bytes":true})
+    access_token = "v1-file-safe-upload-upstream-token"
+    upload_url = stub_upload_put(file_id)
 
     upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
 
@@ -313,14 +332,71 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       upstream,
       FakeUpstream.file_protocol_success(
         file_id: file_id,
-        upload_url: "http://127.0.0.1:1/upload/#{file_id}"
+        upload_url: upload_url
       )
     )
 
     active_upstream_assignment_fixture(setup.pool, %{
-      chatgpt_account_id: "acct_v1_file_put_transport",
+      chatgpt_account_id: "acct_v1_file_safe_upload_headers",
       metadata: %{"base_url" => FakeUpstream.url(upstream)},
-      access_token: "v1-file-put-transport-token"
+      access_token: access_token
+    })
+
+    conn =
+      conn
+      |> put_req_header("cookie", "client-cookie-sentinel=1")
+      |> put_req_header("x-raw-client-header", "raw-client-header-sentinel")
+      |> put_req_header("x-pool-api-key", setup.raw_key)
+      |> put_req_header("x-upstream-access-token", access_token)
+      |> auth(setup)
+      |> post("/v1/files", %{
+        "purpose" => "user_data",
+        "file" => upload_fixture("safe-upload.json", "application/json", file_contents)
+      })
+
+    assert %{"id" => ^file_id, "status" => "uploaded"} = json_response(conn, 200)
+
+    assert_receive {:upload_put, ^file_id, "PUT", ^upload_path, ^file_contents, headers},
+                   1_000
+
+    assert_exact_safe_upload_headers(headers, "application/json")
+
+    header_text = inspect(headers)
+    refute header_text =~ setup.raw_key
+    refute header_text =~ access_token
+    refute header_text =~ "client-cookie-sentinel"
+    refute header_text =~ "raw-client-header-sentinel"
+
+    assert [create_request, finalize_request] = FakeUpstream.requests(upstream)
+    assert create_request.path == "/backend-api/files"
+    assert finalize_request.path == "/backend-api/files/#{file_id}/uploaded"
+  end
+
+  @tag :upload_url_policy
+  test "unsafe upstream upload URL create response fails before direct PUT or file row", %{
+    conn: conn
+  } do
+    setup = active_api_key_fixture()
+    file_id = "file_v1_unsafe_upload_url_#{System.unique_integer([:positive])}"
+    file_contents = "synthetic unsafe upload url bytes"
+    injected_header = "Host:127.0.0.1"
+    unsafe_upload_url = "https://upload.example.invalid/upload/#{file_id}\r\n#{injected_header}"
+    stub_upload_put(file_id)
+
+    upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
+
+    FakeUpstream.set_mode(
+      upstream,
+      FakeUpstream.file_protocol_success(
+        file_id: file_id,
+        upload_url: unsafe_upload_url
+      )
+    )
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      chatgpt_account_id: "acct_v1_file_unsafe_upload_url",
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "v1-file-unsafe-upload-url-token"
     })
 
     {conn, log} =
@@ -333,33 +409,35 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
         })
       end)
 
-    assert log =~ "file bridge transport failed"
-    assert log =~ "operation=upload"
-    assert log =~ "endpoint=/v1/files/upload"
+    refute log =~ "file bridge transport failed"
+    refute log =~ "operation=upload"
+    refute log =~ "endpoint=/v1/files/upload"
     refute log =~ file_contents
     refute log =~ setup.raw_key
+    refute log =~ unsafe_upload_url
+    refute log =~ injected_header
 
     assert_openai_error(conn, 502,
-      code: "upstream_file_upload_failed",
-      message: "upstream file upload failed"
+      code: "upstream_file_bridge_invalid_response",
+      message: "upstream file create returned an invalid upload_url"
     )
 
     assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
+    refute_received {:upload_put, ^file_id, _method, _path, _body, _headers}
 
-    file = Repo.get_by!(FileRecord, file_id: file_id)
-    assert file.status == "abandoned"
-    assert file.finalize_status == "failed"
+    refute Repo.get_by(FileRecord, file_id: file_id)
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
 
-    assert Enum.any?(requests, fn request ->
-             request.endpoint == "/v1/files" and request.status == "failed" and
-               request.response_status_code == 502 and
-               request.request_metadata["error_code"] == "upstream_file_upload_failed"
-           end)
+    refute Enum.any?(
+             requests,
+             &(&1.endpoint == "/v1/files" and &1.status == "succeeded")
+           )
 
     refute inspect(requests) =~ file_contents
     refute inspect(requests) =~ setup.raw_key
+    refute inspect(requests) =~ unsafe_upload_url
+    refute inspect(requests) =~ injected_header
   end
 
   defp upload_fixture(filename, content_type, contents) do
@@ -369,6 +447,188 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     File.write!(path, contents)
     on_exit(fn -> File.rm(path) end)
     %Plug.Upload{path: path, filename: filename, content_type: content_type}
+  end
+
+  defp stub_upload_put(file_id, opts \\ []) do
+    response_status = Keyword.get(opts, :status, 201)
+    response_body = Keyword.get(opts, :response_body, "")
+    stub_name = {__MODULE__, :upload_put, file_id}
+    test_pid = self()
+
+    Req.Test.stub(stub_name, fn conn ->
+      send(test_pid, {
+        :upload_put,
+        file_id,
+        conn.method,
+        conn.request_path,
+        Req.Test.raw_body(conn),
+        conn.req_headers
+      })
+
+      conn
+      |> Plug.Conn.put_status(response_status)
+      |> Req.Test.text(response_body)
+    end)
+
+    current_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      Keyword.merge(current_bridge_config, upload_req_options: [plug: {Req.Test, stub_name}])
+    )
+
+    "https://upload.example.invalid/upload/#{file_id}?sig=fake-upload"
+  end
+
+  defp stub_upload_redirect(file_id, status, location) do
+    stub_name = {__MODULE__, :upload_redirect, file_id}
+    test_pid = self()
+
+    Req.Test.stub(stub_name, fn conn ->
+      case conn.request_path do
+        "/upload/" <> _ ->
+          send(test_pid, {
+            :upload_redirect,
+            file_id,
+            conn.method,
+            conn.scheme,
+            conn.host,
+            conn.request_path,
+            Req.Test.raw_body(conn),
+            conn.req_headers
+          })
+
+          conn
+          |> Plug.Conn.put_status(status)
+          |> Plug.Conn.put_resp_header("location", location)
+          |> Req.Test.text("redirect target blocked")
+
+        "/private/" <> _ ->
+          send(test_pid, {
+            :upload_private_target,
+            file_id,
+            conn.method,
+            conn.scheme,
+            conn.host,
+            conn.request_path,
+            Req.Test.raw_body(conn),
+            conn.req_headers
+          })
+
+          conn
+          |> Plug.Conn.put_status(204)
+          |> Req.Test.text("")
+
+        _path ->
+          send(test_pid, {:upload_unexpected_path, file_id, conn.request_path})
+
+          conn
+          |> Plug.Conn.put_status(404)
+          |> Req.Test.text("")
+      end
+    end)
+
+    current_bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      Keyword.merge(current_bridge_config, upload_req_options: [plug: {Req.Test, stub_name}])
+    )
+
+    "https://upload.example.invalid/upload/#{file_id}?sig=fake-upload"
+  end
+
+  defp assert_upload_put(file_id, path, body, content_type) do
+    assert_receive {:upload_put, ^file_id, "PUT", ^path, ^body, headers}, 1_000
+    assert header!(headers, "content-type") == content_type
+    assert header!(headers, "x-ms-blob-type") == "BlockBlob"
+    refute Enum.any?(headers, fn {name, _value} -> name in ["authorization", "cookie"] end)
+  end
+
+  defp assert_upload_redirect_not_followed(conn, status, scheme) do
+    setup = active_api_key_fixture()
+    file_id = "file_v1_upload_redirect_#{status}_#{System.unique_integer([:positive])}"
+    upload_path = "/upload/#{file_id}"
+    file_contents = "synthetic redirect upload bytes #{status}"
+    private_location = "#{scheme}://127.0.0.1/private/#{file_id}"
+    upload_url = stub_upload_redirect(file_id, status, private_location)
+
+    upstream = start_upstream(FakeUpstream.file_protocol_success(file_id: file_id))
+
+    FakeUpstream.set_mode(
+      upstream,
+      FakeUpstream.file_protocol_success(
+        file_id: file_id,
+        upload_url: upload_url
+      )
+    )
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      chatgpt_account_id: "acct_v1_file_upload_redirect_#{status}",
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "v1-file-upload-redirect-token-#{status}"
+    })
+
+    conn =
+      conn
+      |> put_req_header("cookie", "redirect-cookie-sentinel=1")
+      |> put_req_header("x-raw-client-header", "redirect-client-header-sentinel")
+      |> auth(setup)
+      |> post("/v1/files", %{
+        "purpose" => "user_data",
+        "file" => upload_fixture("redirect.txt", "text/plain", file_contents)
+      })
+
+    assert_openai_error(conn, 502,
+      code: "upstream_file_upload_failed",
+      message: "upstream file upload failed with status #{status}"
+    )
+
+    assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid",
+                    ^upload_path, ^file_contents, headers},
+                   1_000
+
+    assert_exact_safe_upload_headers(headers, "text/plain")
+
+    refute_received {:upload_private_target, ^file_id, _method, _scheme, _host, _path, _body,
+                     _headers}
+
+    assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
+
+    file = Repo.get_by!(FileRecord, file_id: file_id)
+    assert file.status == "abandoned"
+    assert file.finalize_status == "failed"
+
+    requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+    refute Enum.any?(requests, &(&1.endpoint == "/v1/files" and &1.status == "succeeded"))
+    refute inspect(requests) =~ file_contents
+    refute inspect(requests) =~ setup.raw_key
+    refute inspect(requests) =~ upload_url
+    refute inspect(requests) =~ private_location
+  end
+
+  defp assert_exact_safe_upload_headers(headers, content_type) do
+    assert headers |> Enum.map(&elem(&1, 0)) |> Enum.sort() == [
+             "content-type",
+             "x-ms-blob-type"
+           ]
+
+    assert header!(headers, "content-type") == content_type
+    assert header!(headers, "x-ms-blob-type") == "BlockBlob"
+  end
+
+  defp header!(headers, name) do
+    headers
+    |> Enum.find_value(fn
+      {^name, value} -> value
+      _other -> nil
+    end)
+    |> case do
+      nil -> flunk("missing header #{name}")
+      value -> value
+    end
   end
 
   defp assert_openai_error(conn, status, opts) do
