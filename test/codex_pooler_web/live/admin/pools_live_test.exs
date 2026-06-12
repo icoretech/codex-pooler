@@ -182,6 +182,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 1,
              request_count_5h: 0,
              tokens_per_second: nil,
+             estimated_cost_micros_24h: 0,
              routing_strategy: "deterministic_rotation"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == pool_id))
 
@@ -191,13 +192,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 0,
              request_count_5h: 0,
              tokens_per_second: nil,
+             estimated_cost_micros_24h: 0,
              routing_strategy: "bridge_ring"
            } = Enum.find(state.socket.assigns.pools, &(&1.pool.id == other_pool_id))
 
     assert has_element?(view, "#pool-row-#{pool.id}-upstream-account-count", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-api-key-count", "2")
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput-5h", "0 / 0")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "0")
+    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost-24h", "$0.00")
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Deterministic rotation")
 
     assert has_element?(
@@ -242,8 +246,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
        "/admin/upstreams?pool_id=#{pool.id}", "Upstreams", "1"},
       {"pool-api-key-count-cell", "pool-row-#{pool.id}-api-key-count",
        "/admin/api-keys?pool_id=#{pool.id}", "API keys", "2"},
-      {"pool-request-count-cell", "pool-row-#{pool.id}-request-count-5h",
-       "/admin/request-logs?pool_id=#{pool.id}", "Requests 5h", "0"}
+      {"pool-request-count-cell", "pool-row-#{pool.id}-request-throughput-5h",
+       "/admin/request-logs?pool_id=#{pool.id}", "Req/TPS 5h", "0 / 0"}
     ]
 
     for {role, value_id, href, label, value} <- metric_links do
@@ -264,12 +268,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              )
     end
 
-    assert has_element?(view, "#pool-row-#{pool.id} > footer [data-role='pool-tps-cell']")
+    assert has_element?(view, "#pool-row-#{pool.id} > footer [data-role='pool-cost-24h-cell']")
 
     assert has_element?(
              view,
-             "#pool-row-#{pool.id} > footer [data-role='pool-tps-cell'] dt",
-             "TPS 5h"
+             "#pool-row-#{pool.id} > footer [data-role='pool-cost-24h-cell'] dt",
+             "Cost 24h"
            )
 
     assert has_element?(view, "#pool-metric-requests", "0")
@@ -294,8 +298,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{other_pool.id}-upstream-account-count", "0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-api-key-count", "0")
+    assert has_element?(view, "#pool-row-#{other_pool.id}-request-throughput-5h", "0 / 0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-request-count-5h", "0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-tokens-per-sec", "0")
+    assert has_element?(view, "#pool-row-#{other_pool.id}-estimated-cost-24h", "$0.00")
     assert has_element?(view, "#pool-row-#{other_pool.id}-routing-strategy", "Bridge ring")
     assert has_element?(view, "#pool-row-#{other_pool.id}-status", "disabled")
     assert has_element?(view, "#pool-row-#{other_pool.id}-activity")
@@ -373,14 +379,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       total_tokens: 100,
       input_tokens: 60,
       cached_input_tokens: 20,
-      output_tokens: 40
+      output_tokens: 40,
+      estimated_cost_micros: 1_234_567
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
 
     assert has_element?(view, "#pool-metric-requests", "1")
     refute has_element?(view, "#pool-metric-requests", "Last 5h requests")
-    assert has_element?(view, "#pool-metric-tokens-per-sec", "50.0")
+    assert has_element?(view, "#pool-metric-tokens-per-sec", "50")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "TPS 5h")
 
     refute has_element?(
@@ -389,8 +396,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "5h settled tokens / upstream latency"
            )
 
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput-5h", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h", "1")
-    assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50.0")
+    assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50")
+    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost-24h", "$1.23")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "Traffic 24h")
 
     refute has_element?(
@@ -480,8 +489,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{pool.id}-upstream-account-count")
     assert has_element?(view, "#pool-row-#{pool.id}-api-key-count")
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput-5h")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec")
+    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost-24h")
 
     assert has_element?(
              view,
@@ -1288,8 +1299,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{pool.id}-api-key-count", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-upstream-account-count", "0")
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput-5h", "0 / 0")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "0")
+    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost-24h", "$0.00")
 
     %{api_key: api_key} = api_key_fixture(pool, %{scope: scope})
     _ = :sys.get_state(view.pid)
@@ -1319,16 +1332,19 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       upstream_identity_id: assignment.upstream_identity_id,
       total_tokens: 100,
       input_tokens: 60,
-      output_tokens: 40
+      output_tokens: 40,
+      estimated_cost_micros: 2_500_000
     })
 
     assert {:ok, _event} = Events.broadcast_usage(pool.id, "usage_updated", %{})
     _ = :sys.get_state(view.pid)
 
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput-5h", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count-5h", "1")
-    assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50.0")
+    assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50")
+    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost-24h", "$2.50")
     assert has_element?(view, "#pool-metric-requests", "1")
-    assert has_element?(view, "#pool-metric-tokens-per-sec", "50.0")
+    assert has_element?(view, "#pool-metric-tokens-per-sec", "50")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "1 request")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")

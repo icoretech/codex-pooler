@@ -251,7 +251,8 @@ defmodule CodexPooler.Admin.StatsTest do
       total_tokens: 100,
       input_tokens: 60,
       cached_input_tokens: 20,
-      output_tokens: 40
+      output_tokens: 40,
+      estimated_cost_micros: 1_500_000
     })
     |> set_ledger_time!(occurred_at)
 
@@ -271,6 +272,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[pool.id].token_usage_5h.total_tokens == 100
     assert metrics[pool.id].token_usage_5h.cached_input_tokens == 20
     assert metrics[pool.id].token_usage_weekly.total_tokens == 100
+    assert metrics[pool.id].estimated_cost_micros_24h == 1_500_000
     assert length(metrics[pool.id].token_histogram_24h) == 24
     assert Enum.any?(metrics[pool.id].token_histogram_24h, &(&1.total_tokens == 100))
     assert Enum.sum(Enum.map(metrics[pool.id].token_histogram_24h, & &1.total_tokens)) == 100
@@ -282,6 +284,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[other_pool.id].tokens_per_second == nil
     assert metrics[other_pool.id].token_usage_5h.total_tokens == 0
     assert metrics[other_pool.id].token_usage_weekly.total_tokens == 50
+    assert metrics[other_pool.id].estimated_cost_micros_24h == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].token_histogram_24h, & &1.total_tokens)) == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].request_histogram_24h, & &1.requests)) == 1
   end

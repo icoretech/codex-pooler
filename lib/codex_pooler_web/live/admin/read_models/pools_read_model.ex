@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:token_usage_weekly) => token_usage(),
           required(:token_histogram_24h) => [map()],
           required(:request_histogram_24h) => [map()],
+          required(:estimated_cost_micros_24h) => non_neg_integer(),
           required(:routing_strategy) => String.t()
         }
   @type page_state :: %{
@@ -73,13 +74,29 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   def format_metric_integer(nil), do: "0"
   def format_metric_integer(value) when is_integer(value), do: Integer.to_string(value)
 
-  @spec format_metric_float(number() | nil) :: String.t()
-  def format_metric_float(nil), do: "0"
+  @spec format_metric_rate(number() | nil) :: String.t()
+  def format_metric_rate(nil), do: "0"
 
-  def format_metric_float(value) when is_float(value),
-    do: :erlang.float_to_binary(value, decimals: 1)
+  def format_metric_rate(value) when is_number(value),
+    do: value |> round() |> Integer.to_string()
 
-  def format_metric_float(value) when is_integer(value), do: Integer.to_string(value)
+  @spec format_request_throughput(non_neg_integer() | nil, number() | nil) :: String.t()
+  def format_request_throughput(request_count, tokens_per_second) do
+    "#{format_metric_integer(request_count)} / #{format_metric_rate(tokens_per_second)}"
+  end
+
+  @spec format_estimated_cost_micros(non_neg_integer() | nil) :: String.t()
+  def format_estimated_cost_micros(nil), do: "$0.00"
+
+  def format_estimated_cost_micros(micros) when is_integer(micros) do
+    micros
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(1_000_000))
+    |> Decimal.round(2)
+    |> Decimal.to_string(:normal)
+    |> fixed_decimal_places(2)
+    |> then(&"$#{&1}")
+  end
 
   defp pool_rows(scope) do
     pools =
@@ -107,6 +124,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         token_usage_weekly: usage.token_usage_weekly,
         token_histogram_24h: usage.token_histogram_24h,
         request_histogram_24h: usage.request_histogram_24h,
+        estimated_cost_micros_24h: usage.estimated_cost_micros_24h,
         routing_strategy: Map.get(routing_settings, pool.id).routing_strategy
       }
     end)
@@ -169,6 +187,13 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
 
       {:error, _reason} ->
         %{request_count_5h: 0, tokens_per_second: nil}
+    end
+  end
+
+  defp fixed_decimal_places(value, places) do
+    case String.split(value, ".", parts: 2) do
+      [whole] -> whole <> "." <> String.duplicate("0", places)
+      [whole, fraction] -> whole <> "." <> String.pad_trailing(fraction, places, "0")
     end
   end
 end

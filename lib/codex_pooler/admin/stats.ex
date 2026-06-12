@@ -64,12 +64,11 @@ defmodule CodexPooler.Admin.Stats do
         DateTime.add(ended_at, -@pool_histogram_window_seconds, :second)
       )
 
-    token_histograms =
-      pool_token_histograms(
-        pool_ids,
-        AccountingReporting.settlements_for_pool_ids(pool_ids, histogram_started_at, ended_at),
-        ended_at
-      )
+    histogram_settlements =
+      AccountingReporting.settlements_for_pool_ids(pool_ids, histogram_started_at, ended_at)
+
+    token_histograms = pool_token_histograms(pool_ids, histogram_settlements, ended_at)
+    cost_micros_24h = pool_estimated_cost_micros(pool_ids, histogram_settlements)
 
     request_histograms =
       pool_request_histograms(
@@ -96,7 +95,8 @@ defmodule CodexPooler.Admin.Stats do
          token_usage_5h: Map.get(token_usage_5h, pool_id, empty_token_usage()),
          token_usage_weekly: Map.get(token_usage_weekly, pool_id, empty_token_usage()),
          token_histogram_24h: Map.fetch!(token_histograms, pool_id),
-         request_histogram_24h: Map.fetch!(request_histograms, pool_id)
+         request_histogram_24h: Map.fetch!(request_histograms, pool_id),
+         estimated_cost_micros_24h: Map.fetch!(cost_micros_24h, pool_id)
        }}
     end)
   end
@@ -306,6 +306,15 @@ defmodule CodexPooler.Admin.Stats do
         end)
 
       {pool_id, rows}
+    end)
+  end
+
+  defp pool_estimated_cost_micros(pool_ids, settlements) do
+    entries_by_pool_id = Enum.group_by(settlements, & &1.pool_id)
+
+    Map.new(pool_ids, fn pool_id ->
+      entries = Map.get(entries_by_pool_id, pool_id, [])
+      {pool_id, sum_decimal_integer(entries, :estimated_cost_micros)}
     end)
   end
 

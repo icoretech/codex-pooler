@@ -340,7 +340,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         class="pool-card-metrics border-t border-base-300 bg-base-200/20 px-4 py-2.5"
         data-role="pool-card-metrics"
       >
-        <dl class="grid min-w-0 grid-cols-4 divide-x divide-base-300/70 text-xs leading-5">
+        <dl class="grid min-w-0 grid-cols-2 gap-y-2 text-xs leading-5 sm:grid-cols-4 sm:divide-x sm:divide-base-300/70 sm:gap-y-0">
           <.pool_metric_link
             data_role="pool-upstream-count-cell"
             href={~p"/admin/upstreams?pool_id=#{@pool_row.pool.id}"}
@@ -360,20 +360,33 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           <.pool_metric_link
             data_role="pool-request-count-cell"
             href={~p"/admin/request-logs?pool_id=#{@pool_row.pool.id}"}
-            label="Requests 5h"
-            value={PoolsReadModel.format_metric_integer(@pool_row.request_count_5h)}
-            value_id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}
+            label="Req/TPS 5h"
+            value={
+              PoolsReadModel.format_request_throughput(
+                @pool_row.request_count_5h,
+                @pool_row.tokens_per_second
+              )
+            }
+            value_id={"pool-row-#{@pool_row.pool.id}-request-throughput-5h"}
             wrapper_class="min-w-0 px-3"
-          />
-          <div class="min-w-0 pl-3" data-role="pool-tps-cell">
+          >
+            <span id={"pool-row-#{@pool_row.pool.id}-request-count-5h"}>
+              {PoolsReadModel.format_metric_integer(@pool_row.request_count_5h)}
+            </span>
+            <span aria-hidden="true"> / </span>
+            <span id={"pool-row-#{@pool_row.pool.id}-tokens-per-sec"}>
+              {PoolsReadModel.format_metric_rate(@pool_row.tokens_per_second)}
+            </span>
+          </.pool_metric_link>
+          <div class="min-w-0 pl-3" data-role="pool-cost-24h-cell">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              TPS 5h
+              Cost 24h
             </dt>
             <dd
-              id={"pool-row-#{@pool_row.pool.id}-tokens-per-sec"}
+              id={"pool-row-#{@pool_row.pool.id}-estimated-cost-24h"}
               class="truncate text-base-content/60"
             >
-              {PoolsReadModel.format_metric_float(@pool_row.tokens_per_second)}
+              {PoolsReadModel.format_estimated_cost_micros(@pool_row.estimated_cost_micros_24h)}
             </dd>
           </div>
         </dl>
@@ -388,6 +401,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :value, :any, required: true
   attr :value_id, :string, required: true
   attr :wrapper_class, :string, required: true
+  slot :inner_block
 
   defp pool_metric_link(assigns) do
     ~H"""
@@ -401,7 +415,11 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         </.link>
       </dt>
       <dd id={@value_id} class="truncate text-base-content/60">
-        {@value}
+        <%= if @inner_block != [] do %>
+          {render_slot(@inner_block)}
+        <% else %>
+          {@value}
+        <% end %>
       </dd>
     </div>
     """
