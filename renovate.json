@@ -11,9 +11,14 @@
     "github-actions",
     "helm-values",
     "helmv3",
+    "mise",
     "mix",
     "npm"
   ],
+  "constraints": {
+    "elixir": "1.20.0",
+    "erlang": "28.5"
+  },
   "labels": [
     "dependencies"
   ],
@@ -53,15 +58,20 @@
       "rangeStrategy": "pin"
     },
     {
-      "description": "Keep Erlang/Elixir runtime image updates together",
-      "matchDatasources": [
-        "docker"
+      "description": "Keep Erlang/Elixir runtime and toolchain updates together",
+      "matchManagers": [
+        "custom.regex",
+        "dockerfile",
+        "mise"
       ],
       "matchPackageNames": [
-        "elixir"
+        "elixir",
+        "elixir-lang/elixir",
+        "erlang",
+        "erlang/otp"
       ],
-      "groupName": "Elixir runtime image",
-      "groupSlug": "elixir-runtime-image"
+      "groupName": "Elixir/Erlang toolchain",
+      "groupSlug": "elixir-erlang-toolchain"
     },
     {
       "description": "Keep Node runtime image updates together",
@@ -126,17 +136,32 @@
     },
     {
       "customType": "regex",
-      "description": "Update mise Elixir runtime version from Docker Elixir slim tags",
+      "description": "Update Renovate Elixir artifact constraint",
       "managerFilePatterns": [
-        "/(^|/)mise\\.toml$/"
+        "/(^|/)renovate\\.json$/"
       ],
       "matchStrings": [
-        "(?<prefix>elixir\\s*=\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+-otp-\\d+)(?<suffix>\")"
+        "(?<prefix>\"constraints\"\\s*:\\s*\\{[\\s\\S]*?\"elixir\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
       ],
-      "depNameTemplate": "elixir",
-      "datasourceTemplate": "docker",
-      "currentValueTemplate": "{{{currentValue}}}-slim",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{replace '-slim' '' newValue}}}{{{suffix}}}"
+      "depNameTemplate": "elixir-lang/elixir",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$",
+      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Renovate Erlang artifact constraint",
+      "managerFilePatterns": [
+        "/(^|/)renovate\\.json$/"
+      ],
+      "matchStrings": [
+        "(?<prefix>\"constraints\"\\s*:\\s*\\{[\\s\\S]*?\"erlang\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+(?:\\.\\d+)?)(?<suffix>\")"
+      ],
+      "depNameTemplate": "erlang/otp",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^OTP-(?<version>\\d+\\.\\d+(?:\\.\\d+)?)$",
+      "versioningTemplate": "semver-coerced",
+      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
     },
     {
       "customType": "regex",
