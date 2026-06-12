@@ -1,0 +1,82 @@
+---
+title: OpenAI-Compatible Codex Gateway
+description: Public answer page for using Codex Pooler as a narrow OpenAI-compatible /v1 gateway over Codex account Pools.
+sidebar:
+  hidden: true
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"OpenAI-Compatible Codex Gateway","description":"Codex Pooler provides narrow OpenAI-compatible /v1 support for selected SDK routes by translating supported requests into Codex-compatible work and routing them through Pool policy.","url":"https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/","about":["OpenAI-compatible /v1","Codex gateway","OpenAI SDK clients","Pool API keys"]}
+---
+
+Codex Pooler can act as a narrow OpenAI-compatible Codex gateway for selected SDK clients. Clients call `/v1` with a Pool API key, and Codex Pooler translates supported requests into Codex-compatible work before applying the same Pool routing, limits, account selection, and accounting path.
+
+It does not provide full OpenAI API parity.
+
+## Supported Shape At A Glance
+
+<table>
+  <thead>
+    <tr>
+      <th>Client need</th>
+      <th>Use this route</th>
+      <th>Boundary</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>List models visible to the Pool</td>
+      <td><code>GET /v1/models</code></td>
+      <td>OpenAI-shaped model list from Pool and catalog state</td>
+    </tr>
+    <tr>
+      <td>Send Responses work</td>
+      <td><code>POST /v1/responses</code></td>
+      <td>Translated to Codex-compatible work and routed through Pool policy</td>
+    </tr>
+    <tr>
+      <td>Use chat-completions-style clients</td>
+      <td><code>POST /v1/chat/completions</code></td>
+      <td>Coerced to Codex Responses work and normalized back to chat shape</td>
+    </tr>
+    <tr>
+      <td>Use narrow Responses websocket compatibility</td>
+      <td><code>GET /v1/responses</code></td>
+      <td>Not OpenAI Realtime SDK support</td>
+    </tr>
+    <tr>
+      <td>Read operator metadata</td>
+      <td><code>/mcp</code></td>
+      <td>Separate endpoint with operator MCP tokens, not Pool API keys</td>
+    </tr>
+  </tbody>
+</table>
+
+## Base URL
+
+Use `https://codex-pooler.example.com/v1` for deployed examples, or `http://localhost:4000/v1` for local setup. The credential is a Pool API key.
+
+```text
+Base URL: https://codex-pooler.example.com/v1
+Authorization: Bearer <pool-api-key>
+```
+
+## Unsupported Boundaries
+
+Codex Pooler does not support `/v1/realtime` or OpenAI Realtime SDK websocket or session routes. `GET /v1/responses` is narrow Responses websocket compatibility only.
+
+Unsupported `/v1` routes may return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed. Examples include embeddings, batches, moderations, fine-tuning jobs, image variations, response retrieve, response cancel, response delete, and `/v1/responses/compact`.
+
+## Canonical Setup Pages
+
+- [OpenAI-Compatible SDKs](/clients/openai-compatible/) explains SDK base URLs, route support, and MCP separation
+- [Runtime Routes](/reference/runtime-routes/) lists supported, translated, partial, and unsupported public routes
+- [Routing Strategies](/reference/routing-strategies/) explains how `/v1` traffic still uses Pool eligibility and routing
+
+## Related Discovery Pages
+
+- [Self-hosted Codex gateway](/discovery/self-hosted-codex-gateway/)
+- [Codex account pooling](/discovery/codex-account-pooling/)
+- [Codex Pooler vs direct credentials](/discovery/codex-pooler-vs-direct-credentials/)

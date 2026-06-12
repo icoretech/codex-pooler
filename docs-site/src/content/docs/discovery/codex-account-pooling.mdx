@@ -1,0 +1,78 @@
+---
+title: Codex Account Pooling
+description: Public answer page explaining Codex account pooling in Codex Pooler, including Pools, upstream assignments, routing eligibility, continuity, and metadata-only logs.
+sidebar:
+  hidden: true
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"Codex Account Pooling","description":"Codex account pooling in Codex Pooler means assigning authorized upstream Codex accounts to Pools so clients use stable Pool API keys while the gateway selects eligible accounts for supported work.","url":"https://docs.codex-pooler.com/discovery/codex-account-pooling/","about":["Codex account pooling","Pool API keys","upstream accounts","routing eligibility"]}
+---
+
+Codex account pooling means grouping authorized upstream Codex accounts behind a Pool. Clients use a stable Pool API key, and Codex Pooler chooses an eligible upstream account based on Pool assignment, lifecycle state, model support, quota evidence, route health, policy, and continuity.
+
+## Account Pooling Checklist
+
+Use this checklist when you want to know whether a Pool can route supported Codex work.
+
+<table>
+  <thead>
+    <tr>
+      <th>Check</th>
+      <th>Why it matters</th>
+      <th>Where to read more</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Pool is active</td>
+      <td>A disabled or archived Pool should not admit new runtime work</td>
+      <td><a href="/operators/pools/">Pools</a></td>
+    </tr>
+    <tr>
+      <td>Pool API key is active</td>
+      <td>The client credential must represent the Pool receiving the request</td>
+      <td><a href="/operators/api-keys/">API keys</a></td>
+    </tr>
+    <tr>
+      <td>Upstream is assigned and active</td>
+      <td>Only assigned, usable upstream accounts can become route candidates</td>
+      <td><a href="/operators/upstreams/">Upstreams</a></td>
+    </tr>
+    <tr>
+      <td>Model and route are compatible</td>
+      <td>The requested model and route shape must be supported for the assignment</td>
+      <td><a href="/reference/runtime-routes/">Runtime Routes</a></td>
+    </tr>
+    <tr>
+      <td>Quota and health evidence are usable</td>
+      <td>Exhausted quota, stale evidence, or route health can remove an account before strategy ordering</td>
+      <td><a href="/reference/routing-strategies/">Routing Strategies</a></td>
+    </tr>
+    <tr>
+      <td>Continuity can be honored</td>
+      <td>Existing sessions, websocket sessions, previous response links, and file affinity may pin work to one upstream</td>
+      <td><a href="/reference/routing-strategies/">Routing Strategies</a></td>
+    </tr>
+  </tbody>
+</table>
+
+## What A Pool Does
+
+A Pool is the routing and policy boundary that clients authenticate against. It groups upstream account assignments, Pool API keys, routing behavior, compatibility settings, and metadata scope for request and audit evidence.
+
+The routing strategy orders only accounts that already passed eligibility checks. It cannot choose a paused account, an unassigned account, an account without the requested model, or an account blocked by continuity or quota evidence.
+
+## What Stays Metadata-Only
+
+Codex Pooler docs describe request logs, audit logs, and MCP output as metadata-only. Public-safe fields include route family, endpoint path, status class, Pool label, upstream label, model name, retry count, duration, token count, and timestamp examples.
+
+Raw prompts, completions, request bodies, response bodies, file bytes, audio bytes, image bytes, websocket frames, bearer tokens, Pool API keys, MCP tokens, upstream secrets, and Codex `auth.json` material must not appear in public docs or examples.
+
+## Related Discovery Pages
+
+- [Self-hosted Codex gateway](/discovery/self-hosted-codex-gateway/)
+- [OpenAI-compatible Codex gateway](/discovery/openai-compatible-codex-gateway/)
+- [Codex Pooler vs direct credentials](/discovery/codex-pooler-vs-direct-credentials/)

@@ -1,0 +1,74 @@
+---
+title: Self-Hosted Codex Gateway
+description: Public answer page for teams evaluating Codex Pooler as a self-hosted gateway for Codex backend clients, Pool API keys, and metadata-only operations.
+sidebar:
+  hidden: true
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"Self-Hosted Codex Gateway","description":"Codex Pooler is a self-hosted Codex gateway for trusted operators who want Pool API keys, shared upstream Codex capacity, Codex backend compatibility, and metadata-only operational evidence.","url":"https://docs.codex-pooler.com/discovery/self-hosted-codex-gateway/","about":["Codex Pooler","self-hosted Codex gateway","Pool API keys","Codex backend compatibility"]}
+---
+
+Codex Pooler is a self-hosted Codex gateway for operators who need shared Codex account capacity behind stable Pool API keys. It runs under your own Docker Compose or Kubernetes deployment, routes supported Codex backend traffic through Pool policy, and keeps request evidence metadata-only.
+
+## When To Use Codex Pooler As A Self-Hosted Gateway
+
+Use Codex Pooler when you already operate trusted Codex accounts and want one controlled gateway between clients and account capacity. It is not a hosted provider and it is not a general OpenAI API clone.
+
+<table>
+  <thead>
+    <tr>
+      <th>Need</th>
+      <th>Codex Pooler fit</th>
+      <th>Canonical docs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Run the gateway yourself</td>
+      <td>Docker Compose for local or small installs, Helm for Kubernetes deployments</td>
+      <td><a href="/getting-started/quick-start/">Quick Start</a> and <a href="/deployment/helm/">Helm deployment</a></td>
+    </tr>
+    <tr>
+      <td>Give clients one stable credential</td>
+      <td>Pool API keys represent a Pool, not one upstream account</td>
+      <td><a href="/operators/pools/">Pools</a> and <a href="/operators/api-keys/">API keys</a></td>
+    </tr>
+    <tr>
+      <td>Support Codex backend clients</td>
+      <td>Use the Codex backend compatibility route rooted at <code>/backend-api/codex</code></td>
+      <td><a href="/clients/codex-cli/">Codex CLI</a> and <a href="/reference/runtime-routes/">Runtime Routes</a></td>
+    </tr>
+    <tr>
+      <td>Keep operations evidence safe</td>
+      <td>Request logs, audit logs, and MCP tools expose metadata, not raw prompts, bodies, or credentials</td>
+      <td><a href="/operators/request-logs/">Request logs</a> and <a href="/operators/admin-ui/">Admin UI</a></td>
+    </tr>
+  </tbody>
+</table>
+
+## Public Route Shape
+
+For local setup, use `http://localhost:4000`. For deployed examples, use `https://codex-pooler.example.com`.
+
+```text
+Codex backend clients: http://localhost:4000/backend-api/codex
+Selected SDK clients:  http://localhost:4000/v1
+Operator MCP hosts:    http://localhost:4000/mcp
+```
+
+Runtime work on `/backend-api` and `/v1` uses Pool API keys. Operator MCP uses operator-owned MCP bearer tokens and stays separate from runtime credentials.
+
+## Related Discovery Pages
+
+- [Codex account pooling](/discovery/codex-account-pooling/)
+- [OpenAI-compatible Codex gateway](/discovery/openai-compatible-codex-gateway/)
+- [Codex Pooler vs direct credentials](/discovery/codex-pooler-vs-direct-credentials/)
+
+## Backed By Existing Docs
+
+- [Quick Start](/getting-started/quick-start/) shows the local Docker Compose first-run flow
+- [Runtime Routes](/reference/runtime-routes/) lists the public route families and support boundaries
+- [Routing Strategies](/reference/routing-strategies/) explains Pool API key admission, eligibility, and upstream account selection
