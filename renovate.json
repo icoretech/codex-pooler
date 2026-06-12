@@ -141,7 +141,7 @@
         "/(^|/)renovate\\.json$/"
       ],
       "matchStrings": [
-        "(?<prefix>\"constraints\"\\s*:\\s*\\{[\\s\\S]*?\"elixir\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
+        "(?<prefix>\"elixir\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\")"
       ],
       "depNameTemplate": "elixir-lang/elixir",
       "datasourceTemplate": "github-releases",
@@ -155,7 +155,7 @@
         "/(^|/)renovate\\.json$/"
       ],
       "matchStrings": [
-        "(?<prefix>\"constraints\"\\s*:\\s*\\{[\\s\\S]*?\"erlang\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+(?:\\.\\d+)?)(?<suffix>\")"
+        "(?<prefix>\"erlang\"\\s*:\\s*\")(?<currentValue>\\d+\\.\\d+(?:\\.\\d+)?)(?<suffix>\")"
       ],
       "depNameTemplate": "erlang/otp",
       "datasourceTemplate": "github-tags",
