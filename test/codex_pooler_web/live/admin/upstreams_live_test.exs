@@ -443,6 +443,47 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     end
   end
 
+  test "shows OAuth relink only with account recovery actions", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "relink-recovery-visibility",
+        name: "Relink Recovery Visibility"
+      })
+
+    %{identity: active_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Healthy Relink Codex",
+        chatgpt_account_id: "acct_relink_visibility_active",
+        identity_status: "active"
+      })
+
+    %{identity: recovery_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Recovery Relink Codex",
+        chatgpt_account_id: "acct_relink_visibility_recovery",
+        identity_status: "reauth_required",
+        identity_metadata: blocked_auth_metadata("failed")
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    for action_id <- [
+          "replace-auth-json-upstream-account-#{active_identity.id}",
+          "oauth-relink-upstream-account-#{active_identity.id}",
+          "reinvite-upstream-account-#{active_identity.id}"
+        ] do
+      refute has_element?(view, "##{action_id}")
+    end
+
+    for action_id <- [
+          "replace-auth-json-upstream-account-#{recovery_identity.id}",
+          "oauth-relink-upstream-account-#{recovery_identity.id}",
+          "reinvite-upstream-account-#{recovery_identity.id}"
+        ] do
+      assert has_element?(view, "##{action_id}")
+    end
+  end
+
   test "browser OAuth callback errors stay safe and keep the raw callback out of HTML", %{
     conn: conn,
     scope: scope
@@ -3120,11 +3161,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       )
 
     refute deleted_html =~ "replace-auth-json-upstream-account-#{deleted_id}"
-    assert deleted_html =~ ~s(id="oauth-relink-upstream-account-#{deleted_id}")
-
-    assert deleted_html =~
-             ~r/<button[^>]+id="oauth-relink-upstream-account-#{deleted_id}"[^>]+ disabled(?:[\s=>])/
-
+    refute deleted_html =~ "oauth-relink-upstream-account-#{deleted_id}"
     refute deleted_html =~ "reinvite-upstream-account-#{deleted_id}"
 
     usable_id = Ecto.UUID.generate()
@@ -3145,11 +3182,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       )
 
     refute usable_html =~ "replace-auth-json-upstream-account-#{usable_id}"
-    assert usable_html =~ ~s(id="oauth-relink-upstream-account-#{usable_id}")
-
-    refute usable_html =~
-             ~r/<button[^>]+id="oauth-relink-upstream-account-#{usable_id}"[^>]+ disabled(?:[\s=>])/
-
+    refute usable_html =~ "oauth-relink-upstream-account-#{usable_id}"
     refute usable_html =~ "reinvite-upstream-account-#{usable_id}"
 
     %{identity: invalid_email_identity} =

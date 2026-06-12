@@ -218,7 +218,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             phx-value-pool-id={@recovery_default_pool_id}
           />
         </li>
-        <li>
+        <li :if={@recovery_eligible?}>
           <AdminComponents.dropdown_action_item
             id={"oauth-relink-upstream-account-#{@account.identity.id}"}
             icon="hero-link"
