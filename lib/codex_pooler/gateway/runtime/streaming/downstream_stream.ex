@@ -67,9 +67,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     buffer == "" and not passthrough?
   end
 
-  def keepalive_allowed?(%{public_openai_chat: %{buffer: buffer, passthrough?: passthrough?}})
-      when is_binary(buffer) and is_boolean(passthrough?) do
-    buffer == "" and not passthrough?
+  def keepalive_allowed?(%{
+        public_openai_chat: %{buffer: buffer, discarding_oversized?: discarding_oversized?}
+      })
+      when is_binary(buffer) and is_boolean(discarding_oversized?) do
+    buffer == "" and not discarding_oversized?
   end
 
   def keepalive_allowed?(_state), do: true

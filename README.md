@@ -528,6 +528,72 @@ operator MCP token.
 </details>
 
 <details>
+<summary><img src=".github/assets/kilo-favicon.png" alt="Kilo logo" width="16" height="16"> Kilo <code>~/.config/kilo/kilo.jsonc</code></summary>
+
+Kilo Code uses the OpenAI-compatible provider path for Codex Pooler's `/v1`
+surface. Install the current CLI from npm:
+
+```bash
+npm install -g @kilocode/cli
+```
+
+Then configure the provider in `~/.config/kilo/kilo.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "openai-compatible/gpt-5.5",
+  "enabled_providers": ["openai-compatible"],
+  "provider": {
+    "openai-compatible": {
+      "options": {
+        "apiKey": "{env:CODEX_POOLER_API_KEY}",
+        "baseURL": "http://localhost:4000/v1"
+      },
+      "models": {
+        "gpt-5.5": {
+          "name": "GPT-5.5 via Codex Pooler",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "limit": {
+            "context": 400000,
+            "output": 128000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Define only model ids your assigned Pool can serve. For deployed instances,
+change `baseURL` to `https://codex-pooler.example.com/v1`.
+
+Check the headless path from a repository:
+
+```bash
+export CODEX_POOLER_API_KEY=<pool-api-key>
+kilo run \
+  --model openai-compatible/gpt-5.5 \
+  --pure \
+  --format json \
+  --dir "$PWD" \
+  'Reply with exactly: kilo ok'
+```
+
+Use `--auto` only for trusted, isolated automation where Kilo may run approved
+tools without prompting. Codex Pooler model use does not require MCP. If you
+need operator metadata, use a separate MCP-capable host with an operator MCP
+token.
+
+</details>
+
+<details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
 Aider uses the OpenAI-compatible route with the `openai/` model prefix. Keep the

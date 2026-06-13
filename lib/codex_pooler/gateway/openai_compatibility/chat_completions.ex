@@ -33,29 +33,37 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
           required(:model) => String.t() | nil,
           required(:role_sent?) => boolean(),
           required(:include_usage?) => boolean(),
-          required(:passthrough?) => boolean()
+          required(:discarding_oversized?) => boolean()
         }
+
+  @max_incomplete_chat_sse_block_bytes 1_048_576
 
   @spec stream_state(map()) :: stream_state()
   def stream_state(chat_payload), do: initial_state(chat_payload)
 
   @spec normalize_stream_data(binary(), stream_state()) :: {binary(), stream_state()}
-  def normalize_stream_data(data, %{passthrough?: true} = state) when is_binary(data) do
-    normalize_passthrough_data(data, state)
+  def normalize_stream_data(data, %{discarding_oversized?: true} = state) when is_binary(data) do
+    discard_oversized_data(data, state)
   end
 
   def normalize_stream_data(data, state) when is_binary(data) and is_map(state) do
     buffered_data = state.buffer <> data
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: true)
+    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
 
-    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_data) do
+    if oversized_incomplete_sse_block?(buffer) do
       BufferTelemetry.record_oversized_incomplete(
         "public_openai_chat_sse",
         byte_size(buffered_data),
-        StreamProtocol.max_incomplete_sse_block_bytes()
+        @max_incomplete_chat_sse_block_bytes
       )
 
-      {buffered_data, %{state | buffer: "", passthrough?: true}}
+      {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: ""})
+      {oversized_iodata, state} = oversized_incomplete_prefix_chunk(buffer, state)
+
+      {
+        [iodata, oversized_iodata] |> IO.iodata_to_binary(),
+        %{state | buffer: "", discarding_oversized?: true}
+      }
     else
       normalize_stream_blocks(blocks, buffer, state)
     end
@@ -63,32 +71,34 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   def normalize_stream_data(data, state), do: {data, state}
 
-  defp normalize_passthrough_data(data, state) do
+  defp discard_oversized_data(data, state) do
     case sse_block_separator(data) do
       {index, separator_size} ->
-        passthrough_size = index + separator_size
-        passthrough = binary_part(data, 0, passthrough_size)
-        rest = binary_part(data, passthrough_size, byte_size(data) - passthrough_size)
+        discard_size = index + separator_size
+        rest = binary_part(data, discard_size, byte_size(data) - discard_size)
 
-        state = %{state | passthrough?: false, buffer: ""}
+        state = %{state | discarding_oversized?: false, buffer: ""}
         {normalized_rest, state} = normalize_stream_data(rest, state)
 
-        {[passthrough, normalized_rest] |> IO.iodata_to_binary(), state}
+        {normalized_rest, state}
 
       nil ->
-        {data, state}
+        {"", state}
     end
   end
 
   defp normalize_stream_blocks(blocks, buffer, state) do
-    {iodata, state} =
-      Enum.map_reduce(blocks, %{state | buffer: buffer}, fn block, stream_state ->
-        normalize_stream_block(block, stream_state)
-      end)
+    {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: buffer})
 
     state = if terminal_blocks?(blocks), do: %{state | buffer: ""}, else: state
 
     {IO.iodata_to_binary(iodata), state}
+  end
+
+  defp normalize_complete_blocks(blocks, state) do
+    Enum.map_reduce(blocks, state, fn block, stream_state ->
+      normalize_stream_block(block, stream_state)
+    end)
   end
 
   defp normalize_stream_block("data: [DONE]", state), do: {[], state}
@@ -141,10 +151,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   defp normalize_stream_event(_type, _decoded, state), do: {[], state}
 
-  defp oversized_incomplete_sse_prefix?([], "", data),
-    do: StreamProtocol.oversized_incomplete_sse_block?(data)
+  defp oversized_incomplete_sse_block?(buffer),
+    do: byte_size(buffer) > @max_incomplete_chat_sse_block_bytes
 
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _data), do: false
+  defp oversized_incomplete_prefix_chunk(buffer, state) do
+    if response_created_prefix?(buffer) do
+      maybe_role_chunk(state)
+    else
+      {[], state}
+    end
+  end
+
+  defp response_created_prefix?(buffer) do
+    String.starts_with?(buffer, "event: response.created\n") or
+      String.starts_with?(buffer, "event: response.created\r\n") or
+      String.contains?(buffer, "\"type\":\"response.created\"") or
+      String.contains?(buffer, "\"type\": \"response.created\"")
+  end
 
   defp maybe_role_chunk(%{role_sent?: true} = state), do: {[], state}
 
@@ -263,7 +286,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       model: Map.get(chat_payload, "model"),
       role_sent?: false,
       include_usage?: get_in(chat_payload, ["stream_options", "include_usage"]) == true,
-      passthrough?: false
+      discarding_oversized?: false
     }
   end
 

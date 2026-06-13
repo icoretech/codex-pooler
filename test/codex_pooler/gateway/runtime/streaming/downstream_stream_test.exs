@@ -91,7 +91,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert DownstreamStream.keepalive_allowed?(state)
     end
 
-    test "blocks keepalive comments during oversized public OpenAI chat passthrough" do
+    test "normalizes oversized public OpenAI chat blocks without raw passthrough" do
       opts =
         RequestOptions.build(
           %{
@@ -119,19 +119,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       first = binary_part(oversized, 0, split_at)
       second = binary_part(oversized, split_at, byte_size(oversized) - split_at)
 
-      assert {^first, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(first, "/v1/chat/completions", opts, state)
 
       refute DownstreamStream.keepalive_allowed?(state)
 
-      assert {^second, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(second, "/v1/chat/completions", opts, state)
 
       refute DownstreamStream.keepalive_allowed?(state)
 
-      assert {"\n\n", state} =
+      assert {chunk, state} =
                DownstreamStream.normalize_data("\n\n", "/v1/chat/completions", opts, state)
 
+      assert chunk =~ "\"object\":\"chat.completion.chunk\""
+      assert chunk =~ "synthetic chat delta"
+      refute chunk =~ "response.output_text.delta"
       assert DownstreamStream.keepalive_allowed?(state)
     end
 
