@@ -1,13 +1,13 @@
 ---
 title: Hermes Agent
-description: Configure Hermes Agent with Codex Pooler's narrow OpenAI-compatible /v1 surface and operator MCP endpoint.
+description: Configure Hermes Agent with Codex Pooler's narrow OpenAI-compatible /v1 surface, image generation, and operator MCP endpoint.
 ---
 
 ![Codex Pooler Hermes Agent integration](/codex-pooler-hermes.png)
 
 Hermes Agent should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface unless a Codex backend route is documented for the specific Hermes path you are testing.
 
-The recommended setup is the Hermes `openai-api` provider. It keeps Hermes on its OpenAI API path, sends model requests to `/v1`, and keeps the Pool API key separate from the optional operator MCP token.
+The recommended setup is the Hermes `openai-api` provider. It keeps Hermes on its OpenAI API path, sends model requests to `/v1`, configures image generation on the OpenAI image provider, and keeps the Pool API key separate from the optional operator MCP token.
 
 For a deployed instance, use these URLs:
 
@@ -32,7 +32,7 @@ OPENAI_BASE_URL=https://codex-pooler.example.com/v1
 CODEX_POOLER_MCP_KEY=<operator-mcp-token>
 ```
 
-Then point `~/.hermes/config.yaml` at the same `/v1` base URL and force the Responses transport mode.
+Then point `~/.hermes/config.yaml` at the same `/v1` base URL, force the Responses transport mode, and include the `image_gen` block for Hermes image generation and edits.
 
 ```yaml
 model:
@@ -45,6 +45,10 @@ model:
 
 agent:
   image_input_mode: native
+
+image_gen:
+  provider: openai
+  model: gpt-image-2-medium
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:

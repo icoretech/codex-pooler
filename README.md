@@ -362,8 +362,10 @@ OpenAI.
 Hermes works best through its `openai-api` provider with the Responses transport
 forced explicitly. This is the recommended Codex Pooler setup. Keep the Pool API
 key in `~/.hermes/.env` and point the provider config at Codex Pooler's `/v1`
-surface. The `mcp_servers` block is an optional operator-only add-on for
-read-only metadata tools; Codex Pooler works without it.
+surface. Include Hermes' `image_gen` block when you want image generation or
+edits through the same OpenAI-compatible path. The `mcp_servers` block is an
+optional operator-only add-on for read-only metadata tools; Codex Pooler works
+without it.
 
 ```bash
 OPENAI_API_KEY=<pool-api-key>
@@ -383,6 +385,10 @@ model:
 
 agent:
   image_input_mode: native
+
+image_gen:
+  provider: openai
+  model: gpt-image-2-medium
 
 # Optional operator-only MCP metadata add-on. Omit for model/runtime use.
 mcp_servers:
