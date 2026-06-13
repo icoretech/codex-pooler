@@ -97,11 +97,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "explicit authenticated proxy routes"
       assert feature.contract =~ "proxy_control"
       assert feature.contract =~ "metadata-only"
+      assert feature.contract =~ "raw AVAS SDP proxy query strings exactly"
+      assert feature.contract =~ "do not expand /v1/realtime"
       refute feature.contract =~ "placeholder"
       refute feature.contract =~ "not implemented"
       assert fixture.route_class == "proxy_control"
       assert fixture.analytics_forwarding_disabled == %{status: 204, upstream_call: false}
       assert "location" in fixture.response_header_allowlist
+
+      assert fixture.raw_realtime_query == %{
+               route: "/backend-api/codex/realtime/calls",
+               upstream_path: "/codex/realtime/calls",
+               avas_query_example: "intent=example-intent&architecture=avas",
+               exact_query_forwarding: true,
+               route_expansion: false,
+               unsupported_public_routes: ["/v1/realtime"]
+             }
+
       assert fixture.privacy == "metadata_only"
     end
 
@@ -209,9 +221,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
       assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
       assert responses_chat.contract =~ "backend regular HTTP Responses and compact routes"
+      assert responses_chat.contract =~ "request-scoped x-codex-turn-state"
+      assert responses_chat.contract =~ "relay upstream x-codex-turn-state response headers"
       assert responses_chat.contract =~ "x-codex-window-id"
       assert responses_chat.contract =~ "x-codex-installation-id"
-      assert responses_chat.contract =~ "public /v1 and websocket header lanes do not"
+      assert responses_chat.contract =~ "public /v1 and websocket request-header lanes do not"
       assert responses_chat.contract =~ "context-overflow recovery stays client/upstream-owned"
       assert responses_chat.contract =~ "no server-side hidden replay"
       assert responses_chat.contract =~ "stored prompt/frame reconstruction"
@@ -263,12 +277,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "/backend-api/codex/v1/responses/compact"
                ],
                forwarded_headers: [
+                 "x-codex-turn-state",
                  "x-codex-turn-metadata",
                  "x-codex-window-id",
                  "x-codex-parent-thread-id",
                  "x-codex-installation-id",
                  "x-openai-subagent"
                ],
+               relayed_response_headers: ["x-codex-turn-state"],
                not_forwarded_on: [
                  "/v1/responses",
                  "backend_websocket_response.create",
@@ -276,6 +292,28 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                ],
                privacy: "raw_values_not_persisted"
              }
+    end
+
+    test "documents backend websocket request-scoped turn-state carrier" do
+      feature = CompatibilityMatrix.by_slug!(:websocket_continuity)
+      fixture = CompatibilityMatrix.fixture!(:websocket_turn)
+
+      assert feature.status == :supported
+      assert feature.current == :persisted_session_turns
+      assert feature.contract =~ "response.create.client_metadata"
+      assert feature.contract =~ "per-frame request-scoped turn state"
+      assert feature.contract =~ "upgrade/header value only as fallback"
+
+      assert fixture.headers == %{"x-codex-turn-state" => "fixture-upgrade-turn-state"}
+
+      assert fixture.response_create_client_metadata == %{
+               "x-codex-turn-state" => "fixture-frame-turn-state"
+             }
+
+      assert fixture.turn_state_precedence ==
+               "response.create.client_metadata_over_upgrade_header"
+
+      assert fixture.privacy == "raw_value_not_persisted"
     end
 
     test "documents v1 supported surface as authenticated OpenAI compatibility" do

@@ -1134,12 +1134,15 @@ regressions showed `/v1/responses` HTTP streaming and Responses websocket paths
 stay inside the observed client budgets with the existing stream timeout
 settings, so no new route-specific timeout defaults are required.
 
-Backend regular HTTP Responses and compact routes forward only the approved
-lineage metadata headers upstream: `x-codex-turn-metadata`,
-`x-codex-window-id`, `x-codex-parent-thread-id`,
-`x-codex-installation-id`, and `x-openai-subagent`. Public `/v1/responses` and
-websocket request headers do not use that backend-only forwarding lane, and raw
-metadata values are not persisted.
+Backend regular HTTP Responses and compact routes forward request-scoped
+`x-codex-turn-state` plus the approved lineage metadata headers upstream:
+`x-codex-turn-metadata`, `x-codex-window-id`,
+`x-codex-parent-thread-id`, `x-codex-installation-id`, and
+`x-openai-subagent`. They also relay upstream `x-codex-turn-state` response
+headers downstream. Public `/v1/responses` and websocket request headers do not
+use that backend-only forwarding lane; backend websocket request-scoped turn
+state travels in `response.create.client_metadata["x-codex-turn-state"]`, and
+raw metadata values are not persisted.
 
 ## Operator MCP Service
 

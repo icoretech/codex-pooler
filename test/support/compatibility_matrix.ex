@@ -75,7 +75,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_chat,
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output, while malformed trigger placement is rejected before dispatch; backend regular HTTP Responses and compact routes forward only approved lineage metadata headers, including x-codex-window-id and x-codex-installation-id, while public /v1 and websocket header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay or stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output, while malformed trigger placement is rejected before dispatch; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay or stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :backend_v1_alias_surface,
@@ -103,7 +103,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity and is excluded from prompt-cache routing locality"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality"
     },
     %{
       slug: :reasoning_minimal,
@@ -221,7 +221,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :control_plane_surface,
       contract:
-        "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve raw SDP realtime bytes, allowlist response headers, and keep logs metadata-only"
+        "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve opaque realtime SDP bodies, forward raw AVAS SDP proxy query strings exactly on /backend-api/codex/realtime/calls only, do not expand /v1/realtime or hosted realtime routes, allowlist response headers, and keep logs metadata-only"
     },
     %{
       slug: :backend_alpha_search,
@@ -384,12 +384,14 @@ defmodule CodexPooler.CompatibilityMatrix do
           "/backend-api/codex/v1/responses/compact"
         ],
         forwarded_headers: [
+          "x-codex-turn-state",
           "x-codex-turn-metadata",
           "x-codex-window-id",
           "x-codex-parent-thread-id",
           "x-codex-installation-id",
           "x-openai-subagent"
         ],
+        relayed_response_headers: ["x-codex-turn-state"],
         not_forwarded_on: [
           "/v1/responses",
           "backend_websocket_response.create",
@@ -431,7 +433,10 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     websocket_turn: %{
-      headers: %{"x-codex-turn-state" => "fixture-turn-state"},
+      headers: %{"x-codex-turn-state" => "fixture-upgrade-turn-state"},
+      response_create_client_metadata: %{"x-codex-turn-state" => "fixture-frame-turn-state"},
+      turn_state_precedence: "response.create.client_metadata_over_upgrade_header",
+      privacy: "raw_value_not_persisted",
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic websocket turn"}
     },
     reasoning_minimal: %{
@@ -500,6 +505,14 @@ defmodule CodexPooler.CompatibilityMatrix do
         "request-id",
         "x-request-id"
       ],
+      raw_realtime_query: %{
+        route: "/backend-api/codex/realtime/calls",
+        upstream_path: "/codex/realtime/calls",
+        avas_query_example: "intent=example-intent&architecture=avas",
+        exact_query_forwarding: true,
+        route_expansion: false,
+        unsupported_public_routes: ["/v1/realtime"]
+      },
       privacy: "metadata_only",
       routes: @control_plane_fixture_routes
     },
