@@ -97,6 +97,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"x-codex-turn-metadata", "metadata-redacted"},
                {"x-codex-window-id", "window-redacted"},
                {"x-codex-parent-thread-id", "thread-redacted"},
+               {"x-codex-turn-state", "turn-state-redacted"},
                {"x-openai-subagent", "subagent-redacted"}
              ]
     end
@@ -159,7 +160,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         {"idempotency-key", "downstream-idempotency"},
         {"accept", "application/json"},
         {"content-type", "application/json"},
-        {"x-codex-turn-state", "turn-state-redacted"},
         {"x-codex-extra", "extra-redacted"},
         {"x-openai-extra", "extra-redacted"}
       ]
@@ -170,6 +170,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       {"x-codex-turn-metadata", "metadata-redacted"},
       {"x-codex-window-id", "window-redacted"},
       {"x-codex-parent-thread-id", "thread-redacted"},
+      {"x-codex-turn-state", "turn-state-redacted"},
       {"x-openai-subagent", "subagent-redacted"}
     ]
   end

@@ -19,6 +19,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
 
   @sse_keepalive_frame ": keepalive\n\n"
+  @backend_turn_state_relay_endpoints [
+    "/backend-api/codex/responses",
+    "/backend-api/codex/responses/compact"
+  ]
 
   @type callbacks :: %{
           required(:finalization_callbacks) => StreamLifecycle.finalization_callbacks(),
@@ -46,7 +50,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp relay_streaming_result(response, %DispatchContext{} = context, callbacks) do
     result = %{
       status: response.status,
-      headers: stream_headers(response)
+      headers: stream_headers(response, context.request_options)
     }
 
     case context.request_options.transport.websocket_writer do
@@ -365,9 +369,30 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp maybe_mark_visible_output(state, _request, _visible?), do: state
 
-  defp stream_headers(response) do
+  defp stream_headers(response, request_options) do
     content_type = header(response, "content-type") || "text/event-stream"
+
     [{"cache-control", "no-cache"}, {"content-type", content_type}]
+    |> maybe_put_backend_turn_state_response_header(response, request_options)
+  end
+
+  defp maybe_put_backend_turn_state_response_header(
+         headers,
+         response,
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint},
+           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+         }
+       )
+       when endpoint in @backend_turn_state_relay_endpoints do
+    case header(response, "x-codex-turn-state") do
+      value when is_binary(value) -> [{"x-codex-turn-state", value} | headers]
+      _value -> headers
+    end
+  end
+
+  defp maybe_put_backend_turn_state_response_header(headers, _response, _request_options) do
+    headers
   end
 
   defp header(%Req.Response{headers: headers}, key) do

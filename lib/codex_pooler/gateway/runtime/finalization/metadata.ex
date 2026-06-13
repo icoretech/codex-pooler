@@ -5,6 +5,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
+  @backend_turn_state_relay_endpoints [
+    "/backend-api/codex/responses",
+    "/backend-api/codex/responses/compact"
+  ]
+
   @spec response_metadata(Req.Response.t(), String.t() | nil, RequestOptions.t() | map()) ::
           map()
   def response_metadata(response, error_kind, opts) do
@@ -83,12 +88,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   def response_body(%Req.Response{}), do: ""
 
   @spec response_headers(Req.Response.t(), boolean()) :: [{String.t(), String.t()}]
-  def response_headers(response, streaming?) do
+  @spec response_headers(Req.Response.t(), boolean(), RequestOptions.t() | nil) ::
+          [{String.t(), String.t()}]
+  def response_headers(response, streaming?, request_options \\ nil) do
     content_type =
       header(response, "content-type") ||
         if(streaming?, do: "text/event-stream", else: "application/json")
 
     headers = [{"content-type", content_type}]
+
+    headers = maybe_put_backend_turn_state_response_header(headers, response, request_options)
+
     if streaming?, do: [{"cache-control", "no-cache"} | headers], else: headers
   end
 
@@ -147,6 +157,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp maybe_put_websocket_frame_headers(metadata, _headers), do: metadata
+
+  @spec maybe_put_backend_turn_state_response_header(
+          [{String.t(), String.t()}],
+          Req.Response.t(),
+          RequestOptions.t() | nil
+        ) :: [{String.t(), String.t()}]
+  defp maybe_put_backend_turn_state_response_header(
+         headers,
+         response,
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint},
+           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+         }
+       )
+       when endpoint in @backend_turn_state_relay_endpoints do
+    case header(response, "x-codex-turn-state") do
+      value when is_binary(value) -> [{"x-codex-turn-state", value} | headers]
+      _value -> headers
+    end
+  end
+
+  defp maybe_put_backend_turn_state_response_header(headers, _response, _request_options),
+    do: headers
 
   defp header(%Req.Response{headers: headers}, key) do
     headers

@@ -989,6 +989,142 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_client_metadata_not_persisted!(setup, metadata)
   end
 
+  @tag :client_metadata
+  test "POST /backend-api/codex/responses forwards and relays x-codex-turn-state for backend continuity",
+       %{conn: conn} do
+    request_turn_state = "backend-http-turn-state-#{System.unique_integer([:positive])}"
+    response_turn_state = "upstream-http-turn-state-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "id" => "resp_backend_turn_state",
+            "object" => "response",
+            "status" => "completed",
+            "output" => [],
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+          },
+          [{"x-codex-turn-state", response_turn_state}]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic turn-state forwarding request"
+      })
+
+    assert %{"id" => "resp_backend_turn_state"} = json_response(conn, 200)
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
+  @tag :client_metadata
+  test "POST /backend-api/codex/responses relays x-codex-turn-state on upstream status failures",
+       %{conn: conn} do
+    request_turn_state = "backend-http-failure-turn-state-#{System.unique_integer([:positive])}"
+
+    response_turn_state =
+      "upstream-http-failure-turn-state-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "error" => %{
+              "code" => "rate_limit_exceeded",
+              "message" => "synthetic upstream demand failure"
+            }
+          },
+          [{"x-codex-turn-state", response_turn_state}],
+          429
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic turn-state failure relay request"
+      })
+
+    assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_status"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 429
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
+  @tag :client_metadata
+  test "POST /v1/responses does not forward or relay backend x-codex-turn-state",
+       %{conn: conn} do
+    request_turn_state = "public-v1-request-turn-state-#{System.unique_integer([:positive])}"
+    response_turn_state = "public-v1-response-turn-state-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "id" => "resp_public_turn_state_boundary",
+            "object" => "response",
+            "status" => "completed",
+            "output" => [],
+            "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+          },
+          [{"x-codex-turn-state", response_turn_state}]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic public turn-state boundary request"
+      })
+
+    assert %{"id" => "resp_public_turn_state_boundary"} = json_response(conn, 200)
+    assert get_resp_header(conn, "x-codex-turn-state") == []
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    refute Map.has_key?(Map.new(captured.headers), "x-codex-turn-state")
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
   test "POST /backend-api/codex/responses sends trusted Responses Lite marker from selected model metadata",
        %{conn: conn} do
     upstream =
@@ -3042,7 +3178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :feature_control_plane_realtime_sdp
-  test "POST /backend-api/codex/realtime/calls forwards raw SDP bytes and stores metadata only",
+  test "POST /backend-api/codex/realtime/calls forwards raw AVAS query SDP bytes and stores metadata only",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -3061,7 +3197,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream)
     sdp = "v=0\r\no=- 123 456 IN IP4 127.0.0.1\r\ns=codex-pooler-test\r\n"
-    query_string = "session=one&repeat=1&repeat=2"
+    query_string = "intent=quicksilver&architecture=avas"
 
     conn =
       conn
@@ -7266,6 +7402,93 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert turn.status == "succeeded"
   end
 
+  @tag :client_metadata
+  test "POST /backend-api/codex/responses/compact forwards and relays x-codex-turn-state",
+       %{conn: conn} do
+    request_turn_state = "compact-request-turn-state-#{System.unique_integer([:positive])}"
+    response_turn_state = "compact-response-turn-state-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "object" => "response.compaction",
+            "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+          },
+          [{"x-codex-turn-state", response_turn_state}]
+        )
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    conn =
+      conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic compact turn-state forwarding request"
+      })
+
+    assert %{"object" => "response.compaction"} = json_response(conn, 200)
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
+  @tag :client_metadata
+  test "POST /backend-api/codex/responses forwards and relays x-codex-turn-state for streaming responses",
+       %{conn: conn} do
+    request_turn_state = "backend-stream-turn-state-#{System.unique_integer([:positive])}"
+    response_turn_state = "upstream-stream-turn-state-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_backend_stream_turn_state",
+                 "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+               }
+             }}
+          ],
+          headers: [{"x-codex-turn-state", response_turn_state}]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic streaming turn-state relay request",
+        "stream" => true
+      })
+
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert conn.resp_body =~ "event: response.completed\n"
+    assert conn.resp_body =~ "resp_backend_stream_turn_state"
+    assert conn.resp_body =~ "data: [DONE]\n\n"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
   test "POST /backend-api/codex/responses/compact keeps opencode continuity headers local without forwarding",
        %{
          conn: conn
@@ -7431,9 +7654,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "POST /backend-api/codex/responses/compact finalizes upstream demand failures", %{
     conn: conn
   } do
+    request_turn_state = "compact-failure-turn-state-#{System.unique_integer([:positive])}"
+
+    response_turn_state =
+      "compact-failure-response-turn-state-#{System.unique_integer([:positive])}"
+
     upstream =
       start_upstream(
-        FakeUpstream.json_response(
+        FakeUpstream.json_response_with_headers(
           %{
             "error" => %{
               "code" => "rate_limit_exceeded",
@@ -7441,6 +7669,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                 "We're currently experiencing high demand, which may cause temporary errors."
             }
           },
+          [{"x-codex-turn-state", response_turn_state}],
           429
         )
       )
@@ -7449,7 +7678,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", "compact-failure-turn-state")
+      |> put_req_header("x-codex-turn-state", request_turn_state)
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -7457,6 +7686,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
@@ -7471,6 +7706,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert turn.transport_kind == "http_json"
     assert turn.status == "failed"
+
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
   test "POST /backend-api/codex/responses/compact proxies without explicit compact metadata", %{
@@ -9120,6 +9358,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       inspect({requests, attempts, sessions, turns, audit_events, logs.items})
 
     refute_client_metadata_text!(persistence_text, metadata)
+  end
+
+  defp assert_turn_state_not_persisted!(setup, turn_state) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    sessions = Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id))
+    turns = Repo.all(from(t in CodexTurn))
+    audit_events = Repo.all(from(e in AuditEvent))
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    persistence_text =
+      inspect({requests, attempts, sessions, turns, audit_events, logs.items})
+
+    refute persistence_text =~ turn_state
   end
 
   defp refute_lineage_text!(text, metadata) do

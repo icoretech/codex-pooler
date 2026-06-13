@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     "x-codex-window-id",
     "x-codex-parent-thread-id",
     "x-codex-installation-id",
+    "x-codex-turn-state",
     "x-openai-subagent"
   ]
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"

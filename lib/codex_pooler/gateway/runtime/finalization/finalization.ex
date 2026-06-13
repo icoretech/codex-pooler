@@ -339,7 +339,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok,
          %{
            status: status,
-           headers: Metadata.response_headers(response, RouteClass.streaming?(payload)),
+           headers:
+             Metadata.response_headers(response, RouteClass.streaming?(payload), request_options),
            raw_body: body
          }}
 
@@ -405,7 +406,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok,
          %{
            status: response.status,
-           headers: Metadata.response_headers(response, false),
+           headers: Metadata.response_headers(response, false, request_options),
            raw_body: body
          }}
 
