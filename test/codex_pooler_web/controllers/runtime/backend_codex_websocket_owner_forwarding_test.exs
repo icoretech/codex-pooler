@@ -174,7 +174,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
 
-      session = Repo.get_by!(CodexSession, session_key: "stable-ws-owner-forwarding")
+      session =
+        Repo.get_by!(CodexSession,
+          session_key: turn_state_session_key("stable-ws-owner-forwarding")
+        )
+
+      refute_raw_turn_state_session_key!(setup.pool.id, "stable-ws-owner-forwarding")
       assert session.owner_instance_id == Atom.to_string(node())
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
     after
@@ -515,6 +520,114 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert owner_metadata["enabled"] == true
         assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
         assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+
+        retargeted_state
+      after
+        CodexResponsesSocket.terminate(:closed, origin_state)
+      end
+
+    CodexResponsesSocket.terminate(:closed, retargeted_state)
+  end
+
+  test "owner-forwarded response create retargets from frame turn-state before spawning" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_turn_state_retarget_anchor",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_turn_state_retarget_success",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    target_turn_state = "stable-ws-owner-frame-turn-state-retarget"
+    origin_turn_state = "stable-ws-owner-frame-turn-state-origin"
+
+    {:ok, target_state} =
+      owner_socket(
+        auth,
+        "ws-owner-turn-state-retarget-anchor",
+        target_turn_state
+      )
+
+    target_state =
+      try do
+        anchor_payload =
+          websocket_payload(setup, "owner turn-state retarget anchor", %{
+            "request_id" => "ws-owner-turn-state-retarget-anchor"
+          })
+
+        assert {:ok, target_state} =
+                 CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, target_state)
+
+        assert {:push, {:text, anchor_frame}, target_state} =
+                 receive_owner_socket_push(target_state)
+
+        assert %{"id" => "resp_owner_turn_state_retarget_anchor"} = Jason.decode!(anchor_frame)
+        assert {:ok, target_state} = receive_socket_done(target_state)
+        target_state
+      after
+        CodexResponsesSocket.terminate(:closed, target_state)
+      end
+
+    target_session = target_state.codex_session
+    {:ok, origin_state} = owner_socket(auth, "ws-owner-turn-state-origin", origin_turn_state)
+    origin_session = origin_state.codex_session
+
+    retargeted_state =
+      try do
+        continuation_payload =
+          websocket_payload(setup, "owner turn-state retarget continuation", %{
+            "client_metadata" => %{"x-codex-turn-state" => target_turn_state},
+            "request_id" => "ws-owner-turn-state-retarget-continuation"
+          })
+
+        assert {:ok, retargeted_state} =
+                 CodexResponsesSocket.handle_in(
+                   {continuation_payload, [opcode: :text]},
+                   origin_state
+                 )
+
+        assert retargeted_state.codex_session.id == target_session.id
+        refute retargeted_state.codex_session.id == origin_session.id
+        assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
+        assert retargeted_state.websocket_owner_downstream.epoch > 0
+
+        assert {:push, {:text, retarget_frame}, retargeted_state} =
+                 receive_owner_socket_push(retargeted_state)
+
+        assert %{"id" => "resp_owner_turn_state_retarget_success"} = Jason.decode!(retarget_frame)
+        assert {:ok, _retargeted_state} = receive_socket_done(retargeted_state)
+
+        assert [anchor_request, retargeted_request] = await_upstream_requests(upstream, 2)
+
+        assert anchor_request.websocket_connection_id ==
+                 retargeted_request.websocket_connection_id
+
+        assert retargeted_request.json["client_metadata"]["x-codex-turn-state"] ==
+                 target_turn_state
+
+        assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
+        assert anchor_log.status == "succeeded"
+        assert retargeted_log.status == "succeeded"
+        assert retargeted_log.correlation_id == "ws-owner-turn-state-retarget-continuation"
+        assert retargeted_log.request_metadata["codex_session_id"] == target_session.id
+
+        owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
+        assert owner_metadata["enabled"] == true
+        assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
+        assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+
+        refute_raw_turn_state_session_key!(setup.pool.id, origin_turn_state)
+        refute_raw_turn_state_session_key!(setup.pool.id, target_turn_state)
+        assert_no_leak_in_persistence!(setup.pool.id)
 
         retargeted_state
       after
@@ -3191,9 +3304,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
            }) == {:error, :owner_unavailable}
 
     refute Repo.get_by(CodexSession,
-             session_key: "stable-ws-auth",
+             session_key: turn_state_session_key("stable-ws-auth"),
              api_key_id: alternate_key.api_key.id
            )
+
+    refute_raw_turn_state_session_key!(setup.pool.id, "stable-ws-auth")
 
     assert Repo.get!(CodexSession, session.id).api_key_id == setup.api_key.id
   end
@@ -3347,7 +3462,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_no_leak_in_persistence!(setup.pool.id)
 
     {:ok, owner_pid} =
-      WebsocketOwnerSession.lookup(Repo.get_by!(CodexSession, session_key: "leak-success").id)
+      WebsocketOwnerSession.lookup(
+        Repo.get_by!(CodexSession, session_key: turn_state_session_key("leak-success")).id
+      )
 
     assert_no_leak!("owner state after success", :sys.get_state(owner_pid))
   end
@@ -3456,7 +3573,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
 
-    session = Repo.get_by!(CodexSession, session_key: "close-during-request")
+    session =
+      Repo.get_by!(CodexSession, session_key: turn_state_session_key("close-during-request"))
+
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
     request = Repo.get!(Request, turn.request_id)
     attempt = Repo.one!(from(a in Attempt, where: a.request_id == ^request.id))
@@ -3525,7 +3644,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     interrupted_turn =
       Repo.one!(from t in CodexTurn, where: t.request_id == ^interrupted_request.id)
 
-    session = Repo.get_by!(CodexSession, session_key: turn_state)
+    session = Repo.get_by!(CodexSession, session_key: turn_state_session_key(turn_state))
+    refute_raw_turn_state_session_key!(setup.pool.id, turn_state)
 
     assert_owner_interruption_state!(%{
       request: interrupted_request,
@@ -4151,6 +4271,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp assert_no_leak_in_persistence!(pool_id) do
     assert_no_leak!("persistence rows", persistence_excerpt(pool_id))
+  end
+
+  defp refute_raw_turn_state_session_key!(pool_id, turn_state) do
+    refute Repo.exists?(
+             from session in CodexSession,
+               where:
+                 session.pool_id == ^pool_id and
+                   fragment("lower(?)", session.session_key) == ^String.downcase(turn_state)
+           )
+  end
+
+  defp turn_state_session_key(turn_state) do
+    "x-codex-turn-state:" <>
+      (:crypto.hash(:sha256, String.trim(turn_state)) |> Base.encode16(case: :lower))
   end
 
   defp persistence_excerpt(pool_id) do

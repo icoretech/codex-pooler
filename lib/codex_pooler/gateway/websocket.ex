@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Websocket do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.{ContinuityPayload, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Service
@@ -263,7 +263,7 @@ defmodule CodexPooler.Gateway.Websocket do
       when is_map(runtime) and is_map(payload) do
     case ContinuityPayload.previous_response_id(payload) do
       nil ->
-        {:ok, runtime}
+        retarget_websocket_owner_runtime_from_turn_state(auth, runtime, payload, opts)
 
       previous_response_id ->
         retarget_websocket_owner_runtime_from_previous_response_id(
@@ -296,12 +296,7 @@ defmodule CodexPooler.Gateway.Websocket do
     with :ok <- require_websocket_owner_forwarding_enabled(),
          {:ok, %CodexSession{} = target_session} <-
            start_owner_session_from_previous_response_id(auth, retarget_opts) do
-      if target_session.id == current_session.id do
-        {:ok, runtime}
-      else
-        prepare_owner_websocket_session_with_recovery(target_session, retarget_opts, true)
-        |> owner_runtime_retarget_result()
-      end
+      retarget_owner_runtime_to_session(current_session, runtime, target_session, retarget_opts)
     end
   end
 
@@ -312,6 +307,90 @@ defmodule CodexPooler.Gateway.Websocket do
          _opts
        ),
        do: {:error, :owner_unavailable}
+
+  @spec retarget_websocket_owner_runtime_from_turn_state(
+          auth(),
+          websocket_runtime(),
+          payload(),
+          opts()
+        ) ::
+          owner_runtime_retarget_result()
+  defp retarget_websocket_owner_runtime_from_turn_state(
+         auth,
+         %{codex_session: %CodexSession{} = current_session} = runtime,
+         payload,
+         opts
+       )
+       when is_map(payload) do
+    with %RequestOptions{openai_compatibility: %{public_openai_responses_stream: false}} = opts <-
+           owner_websocket_opts(opts),
+         turn_state when is_binary(turn_state) <-
+           PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+      retarget_opts = RequestOptions.put_continuity(opts, accepted_turn_state: turn_state)
+
+      attach_websocket_owner_runtime_from_turn_state(
+        auth,
+        current_session,
+        runtime,
+        retarget_opts
+      )
+    else
+      %RequestOptions{} -> {:ok, runtime}
+      nil -> {:ok, runtime}
+    end
+  end
+
+  defp retarget_websocket_owner_runtime_from_turn_state(_auth, runtime, _payload, _opts)
+       when is_map(runtime),
+       do: {:ok, runtime}
+
+  @spec attach_websocket_owner_runtime_from_turn_state(
+          auth(),
+          CodexSession.t(),
+          websocket_runtime(),
+          RequestOptions.t()
+        ) :: owner_runtime_retarget_result()
+  defp attach_websocket_owner_runtime_from_turn_state(
+         auth,
+         %CodexSession{} = current_session,
+         runtime,
+         %RequestOptions{} = retarget_opts
+       ) do
+    with :ok <- require_websocket_owner_forwarding_enabled(),
+         {:ok, %CodexSession{} = target_session} <-
+           start_owner_session_from_turn_state(auth, retarget_opts) do
+      retarget_owner_runtime_to_session(current_session, runtime, target_session, retarget_opts)
+    else
+      {:error, :session_not_found} -> {:ok, runtime}
+      {:error, reason} -> owner_retarget_error(reason)
+    end
+  end
+
+  @spec retarget_owner_runtime_to_session(
+          CodexSession.t(),
+          websocket_runtime(),
+          CodexSession.t(),
+          RequestOptions.t()
+        ) :: owner_runtime_retarget_result()
+  defp retarget_owner_runtime_to_session(
+         %CodexSession{id: session_id},
+         runtime,
+         %CodexSession{id: session_id},
+         %RequestOptions{}
+       ) do
+    {:ok, runtime}
+  end
+
+  defp retarget_owner_runtime_to_session(
+         %CodexSession{},
+         _runtime,
+         %CodexSession{} = target_session,
+         %RequestOptions{} = retarget_opts
+       ) do
+    target_session
+    |> prepare_owner_websocket_session_with_recovery(retarget_opts, true)
+    |> owner_runtime_retarget_result()
+  end
 
   @spec owner_retarget_websocket_opts(opts(), websocket_runtime(), String.t()) ::
           RequestOptions.t()
@@ -326,6 +405,17 @@ defmodule CodexPooler.Gateway.Websocket do
   defp start_owner_session_from_previous_response_id(auth, %RequestOptions{} = opts) do
     case SessionContinuity.start_codex_session_from_previous_response_id(auth, opts) do
       {:ok, %CodexSession{} = session} -> {:ok, session}
+      {:error, reason} -> owner_retarget_error(reason)
+    end
+  end
+
+  @spec start_owner_session_from_turn_state(auth(), RequestOptions.t()) ::
+          {:ok, CodexSession.t()}
+          | {:error, :session_not_found | WebsocketOwnerContract.owner_error()}
+  defp start_owner_session_from_turn_state(auth, %RequestOptions{} = opts) do
+    case SessionContinuity.start_codex_session_from_turn_state(auth, opts) do
+      {:ok, %CodexSession{} = session} -> {:ok, session}
+      {:error, :session_not_found} -> {:error, :session_not_found}
       {:error, reason} -> owner_retarget_error(reason)
     end
   end

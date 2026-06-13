@@ -85,6 +85,93 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
     end
 
+    test "uses backend frame turn-state to attach a different-session owner runtime", %{
+      auth: auth
+    } do
+      {:ok, current_runtime} = owner_runtime(auth, "owner-runtime-turn-state-current")
+      target_turn_state = owner_turn_state("owner-runtime-turn-state-target")
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(auth, %{accepted_turn_state: target_turn_state})
+
+      target_session = Repo.get!(CodexSession, target_session.id)
+
+      assert {:ok, retargeted_runtime} =
+               Gateway.retarget_websocket_owner_runtime(auth, current_runtime, %{
+                 "type" => "response.create",
+                 "client_metadata" => %{"x-codex-turn-state" => target_turn_state}
+               })
+
+      assert retargeted_runtime.codex_session.id == target_session.id
+      assert retargeted_runtime.codex_session.id != current_runtime.codex_session.id
+      assert retargeted_runtime.websocket_owner_lease_token == target_session.owner_lease_token
+      assert is_map(retargeted_runtime.websocket_owner_downstream)
+      assert retargeted_runtime.websocket_owner_downstream.pid == self()
+      assert is_boolean(retargeted_runtime.websocket_owner_active_turn_reconnect?)
+      assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(target_session.id)
+      assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
+    end
+
+    test "keeps the current owner runtime when backend frame turn-state is unknown", %{
+      auth: auth
+    } do
+      {:ok, runtime} = owner_runtime(auth, "owner-runtime-unknown-turn-state")
+      owner_pid = owner_pid!(runtime.codex_session.id)
+      owner_state_before = :sys.get_state(owner_pid)
+
+      assert {:ok, ^runtime} =
+               Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
+                 "type" => "response.create",
+                 "client_metadata" => %{
+                   "x-codex-turn-state" => owner_turn_state("unknown")
+                 }
+               })
+
+      assert :sys.get_state(owner_pid) == owner_state_before
+      assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
+    end
+
+    test "previous response aliases take precedence over backend frame turn-state", %{
+      api_key: api_key,
+      auth: auth
+    } do
+      {:ok, current_runtime} = owner_runtime(auth, "owner-runtime-precedence-current")
+      target_turn_state = owner_turn_state("owner-runtime-precedence-target")
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(auth, %{accepted_turn_state: target_turn_state})
+
+      target_session = Repo.get!(CodexSession, target_session.id)
+      owner_pid = owner_pid!(current_runtime.codex_session.id)
+      owner_state_before = :sys.get_state(owner_pid)
+
+      assert {:error, :owner_unavailable} =
+               Gateway.retarget_websocket_owner_runtime(auth, current_runtime, %{
+                 "type" => "response.create",
+                 "previous_response_id" => previous_response_id("guessed-precedence"),
+                 "client_metadata" => %{"x-codex-turn-state" => target_turn_state}
+               })
+
+      assert :sys.get_state(owner_pid) == owner_state_before
+      assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
+      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(target_session.id)
+
+      previous_response_id = previous_response_id("valid-precedence")
+
+      register_previous_response_alias!(
+        current_runtime.codex_session,
+        api_key,
+        previous_response_id
+      )
+
+      assert {:ok, ^current_runtime} =
+               Gateway.retarget_websocket_owner_runtime(auth, current_runtime, %{
+                 "type" => "response.create",
+                 "previous_response_id" => previous_response_id,
+                 "client_metadata" => %{"x-codex-turn-state" => target_turn_state}
+               })
+    end
+
     test "refuses guessed aliases with a sanitized owner error and preserves current runtime", %{
       auth: auth
     } do
@@ -109,7 +196,11 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   end
 
   defp owner_opts(session_key) do
-    %{accepted_turn_state: "#{session_key}-#{System.unique_integer([:positive])}"}
+    %{accepted_turn_state: owner_turn_state(session_key)}
+  end
+
+  defp owner_turn_state(session_key) do
+    "#{session_key}-#{System.unique_integer([:positive])}"
   end
 
   defp previous_response_id(label) do
