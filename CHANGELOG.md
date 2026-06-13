@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.12...codex-pooler-v0.0.13) (2026-06-13)
+
+
+### Bug Fixes
+
+* **admin:** map more request log user agents ([5d6195f](https://github.com/icoretech/codex-pooler/commit/5d6195f4bfec2066541729e40382e7e6398b5513))
+* **gateway:** hash turn-state session keys ([29f94d7](https://github.com/icoretech/codex-pooler/commit/29f94d7a8a7a841a580fdda4c1a75fd4a5a9c666))
+* **gateway:** support Kilo chat completion streams ([16f21be](https://github.com/icoretech/codex-pooler/commit/16f21be263291511b4eb88d12a222b37eda541dd))
+* **openai:** accept OMP completed tool replay ([e6d3980](https://github.com/icoretech/codex-pooler/commit/e6d3980bc6382310279ecb9ca72bf61c58e74d18))
+* **payloads:** extract backend turn-state metadata ([99e471d](https://github.com/icoretech/codex-pooler/commit/99e471dcb24237b172ab466c5c81d0e1679d2c38))
+* **runtime:** relay backend turn-state headers ([a787f75](https://github.com/icoretech/codex-pooler/commit/a787f75a74134461d64226d32665cd56f76dd9a1))
+* **websocket:** persist frame turn-state continuity ([323e4e5](https://github.com/icoretech/codex-pooler/commit/323e4e5f6cb5a05b2af7f06f51bc70eddf627b29))
+* **websocket:** retarget owners by frame turn-state ([18eb85d](https://github.com/icoretech/codex-pooler/commit/18eb85d232cf7843164628efe2b968762c95b4e6))
+
 ## [0.0.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.11...codex-pooler-v0.0.12) (2026-06-13)
 
 
