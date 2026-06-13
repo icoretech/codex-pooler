@@ -1454,6 +1454,91 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert attempt.status == "succeeded"
   end
 
+  @tag :tool_result_previous_response
+  test "POST /v1/responses normalizes OMP completed function call replay status", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_http_omp_completed_tool_replay",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "store" => false,
+        "stream" => true,
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic OMP request"}]
+          },
+          %{
+            "type" => "reasoning",
+            "content" => [],
+            "summary" => [%{"type" => "summary_text", "text" => "synthetic OMP summary"}],
+            "encrypted_content" => "synthetic-omp-encrypted-reasoning"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_v1_http_omp_replay",
+            "name" => "lookup_fixture",
+            "arguments" => "{}",
+            "status" => "completed"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_v1_http_omp_replay",
+            "output" => "synthetic OMP tool output"
+          }
+        ]
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "event: response.completed\n"
+    assert conn.resp_body =~ "resp_v1_http_omp_completed_tool_replay"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert Enum.map(captured.json["input"], & &1["type"]) == [
+             "message",
+             "reasoning",
+             "function_call",
+             "function_call_output"
+           ]
+
+    assert %{"type" => "reasoning", "encrypted_content" => "synthetic-omp-encrypted-reasoning"} =
+             Enum.at(captured.json["input"], 1)
+
+    refute Map.has_key?(Enum.at(captured.json["input"], 1), "content")
+    refute Map.has_key?(Enum.at(captured.json["input"], 2), "status")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    metadata = inspect(request.request_metadata)
+    refute metadata =~ "synthetic OMP request"
+    refute metadata =~ "synthetic OMP summary"
+    refute metadata =~ "synthetic OMP tool output"
+    refute metadata =~ "call_v1_http_omp_replay"
+  end
+
   test "POST /v1/responses non-streaming preserves web search action queries", %{conn: conn} do
     web_search_item = web_search_call_item("ws_call_non_stream")
 

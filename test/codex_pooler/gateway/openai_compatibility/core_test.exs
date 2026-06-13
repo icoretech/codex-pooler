@@ -1468,7 +1468,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "call_id" => "call_fixture",
           "name" => "lookup_fixture",
           "arguments" => "{}",
-          "status" => "completed"
+          "status" => "in_progress"
         },
         %{
           "type" => "function_call",
