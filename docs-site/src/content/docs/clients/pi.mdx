@@ -33,6 +33,9 @@ For a deployed instance, add:
           "id": "gpt-5.5",
           "name": "GPT-5.5 via Codex Pooler",
           "reasoning": true,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh"
+          },
           "input": ["text", "image"],
           "contextWindow": 400000,
           "maxTokens": 128000
@@ -46,6 +49,21 @@ For a deployed instance, add:
 For local setup, change `baseUrl` to `http://localhost:4000/v1`.
 
 `authHeader: true` makes Pi send the Pool API key as `Authorization: Bearer ...`. Define only model ids your assigned Pool can serve.
+
+`thinkingLevelMap.xhigh` is required for Pi to expose `xhigh` for this custom model. Without it, Pi clamps `--thinking xhigh` and `defaultThinkingLevel: "xhigh"` down to `high`.
+
+## Default model
+
+If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "defaultProvider": "codex-pooler",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": ["codex-pooler/gpt-5.5"]
+}
+```
 
 ## Smoke check
 

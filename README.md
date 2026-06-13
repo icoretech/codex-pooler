@@ -474,7 +474,7 @@ change the MCP `url` to `https://codex-pooler.example.com/mcp`.
 </details>
 
 <details>
-<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code></summary>
+<summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
 
 Pi works best through a custom provider that uses Codex Pooler's narrow
 OpenAI-compatible `/v1` Responses surface. Install Pi from npm so you get the
@@ -500,6 +500,9 @@ Then add a provider to `~/.pi/agent/models.json`:
           "id": "gpt-5.5",
           "name": "GPT-5.5 via Codex Pooler",
           "reasoning": true,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh"
+          },
           "input": ["text", "image"],
           "contextWindow": 400000,
           "maxTokens": 128000
@@ -514,6 +517,23 @@ Then add a provider to `~/.pi/agent/models.json`:
 `Authorization: Bearer ...`. Define only model ids your assigned Pool can serve.
 For deployed instances, change `baseUrl` to
 `https://codex-pooler.example.com/v1`.
+
+The explicit `thinkingLevelMap` entry is required for Pi to expose `xhigh` in
+the model picker and footer. Without it, Pi treats `xhigh` as unsupported for a
+custom model and clamps `--thinking xhigh` or `defaultThinkingLevel: "xhigh"` to
+`high`.
+
+Optionally set Codex Pooler as the default Pi model in
+`~/.pi/agent/settings.json`:
+
+```json
+{
+  "defaultProvider": "codex-pooler",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "xhigh",
+  "enabledModels": ["codex-pooler/gpt-5.5"]
+}
+```
 
 Check the non-interactive path from a repository:
 
