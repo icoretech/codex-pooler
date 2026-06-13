@@ -226,7 +226,7 @@ defmodule CodexPooler.Admin.Stats do
         quota_health: quota_summary
       },
       tables: %{
-        top_api_keys: top_api_keys(settlements),
+        top_api_keys: top_api_keys(settlements, pools),
         upstreams: upstream_table(settlements, quota_accounts),
         recent_failures: recent_failures(requests),
         daily_rollups: daily_rollup_table(daily_rollups),
@@ -452,11 +452,12 @@ defmodule CodexPooler.Admin.Stats do
     }
   end
 
-  defp top_api_keys([]), do: []
+  defp top_api_keys([], _pools), do: []
 
-  defp top_api_keys(settlements) do
+  defp top_api_keys(settlements, pools) do
     key_ids = settlements |> Enum.map(& &1.api_key_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
     keys_by_id = AccessReporting.api_keys_by_id(key_ids)
+    pool_names_by_id = Map.new(pools, &{&1.id, &1.name})
 
     settlements
     |> Enum.group_by(& &1.api_key_id)
@@ -466,6 +467,7 @@ defmodule CodexPooler.Admin.Stats do
       %{
         api_key_id: api_key_id,
         display_name: api_key && api_key.display_name,
+        pool_name: usage_pool_name(entries, pool_names_by_id),
         requests: sum_integer(entries, :request_count),
         total_tokens: sum_integer(entries, :total_tokens),
         estimated_cost_micros: sum_decimal_integer(entries, :estimated_cost_micros)
@@ -495,6 +497,21 @@ defmodule CodexPooler.Admin.Stats do
         estimated_cost_micros: sum_decimal_integer(entries, :estimated_cost_micros)
       }
     end)
+    |> Enum.sort_by(fn row ->
+      {-row.total_tokens, -row.requests, row.assignment_label || row.upstream_label || ""}
+    end)
+  end
+
+  defp usage_pool_name(entries, pool_names_by_id) do
+    entries
+    |> Enum.map(& &1.pool_id)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> case do
+      [pool_id] -> Map.get(pool_names_by_id, pool_id)
+      [] -> nil
+      _pool_ids -> "Multiple Pools"
+    end
   end
 
   defp recent_failures(requests) do
@@ -570,7 +587,18 @@ defmodule CodexPooler.Admin.Stats do
     Enum.map(buckets, fn label ->
       entries = Map.get(grouped, label, [])
 
-      %{bucket: label, total_tokens: sum_integer(entries, :total_tokens)}
+      input_tokens = sum_integer(entries, :input_tokens)
+      cached_input_tokens = sum_integer(entries, :cached_input_tokens)
+
+      %{
+        bucket: label,
+        input_tokens: input_tokens,
+        cached_input_tokens: cached_input_tokens,
+        uncached_input_tokens: max(input_tokens - cached_input_tokens, 0),
+        output_tokens: sum_integer(entries, :output_tokens),
+        reasoning_tokens: sum_integer(entries, :reasoning_tokens),
+        total_tokens: sum_integer(entries, :total_tokens)
+      }
     end)
   end
 

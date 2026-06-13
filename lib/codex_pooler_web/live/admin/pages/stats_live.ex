@@ -160,9 +160,10 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           <StatsCharts.traffic_charts
             requests={@dashboard.charts.requests}
             tokens={@dashboard.charts.tokens}
+            costs={@dashboard.charts.estimated_cost}
           />
 
-          <section class="grid min-w-0 gap-4 xl:grid-cols-2">
+          <section class="grid min-w-0 gap-4 2xl:grid-cols-2">
             <StatsPresentation.top_api_keys_table rows={@dashboard.tables.top_api_keys} />
             <StatsPresentation.upstreams_table rows={@dashboard.tables.upstreams} />
           </section>

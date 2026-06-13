@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.Format
 
   @default_quota_state_presentation %{tone: :neutral, label: nil}
   @quota_state_presentations %{
@@ -47,7 +48,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
         id="stats-kpi-tokens"
         icon="hero-cpu-chip"
         label="Tokens"
-        value={format_integer(@dashboard.kpis.tokens.total_tokens)}
+        value={Format.token_count(@dashboard.kpis.tokens.total_tokens)}
         description={token_summary(@dashboard.kpis.tokens)}
         tone={:primary}
         compact_mobile
@@ -104,14 +105,13 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     <AdminComponents.admin_surface
       id="stats-api-key-surface"
       title="Top API keys"
-      description="Highest usage in this range."
-      count={"#{length(@rows)} rows"}
     >
       <div class="overflow-x-auto">
         <table id="stats-api-key-table" class="table table-zebra table-sm">
           <thead>
             <tr>
               <th>API key</th>
+              <th>Pool</th>
               <th class="text-right">Requests</th>
               <th class="text-right">Tokens</th>
               <th class="text-right">Cost</th>
@@ -119,7 +119,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
           </thead>
           <tbody>
             <tr :if={@rows == []} id="stats-api-key-empty-row">
-              <td colspan="4" class="text-center text-sm text-base-content/60">
+              <td colspan="5" class="text-center text-sm text-base-content/60">
                 No settled API-key usage for this period.
               </td>
             </tr>
@@ -127,11 +127,14 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <td class="min-w-44 font-semibold">
                 {row.display_name || "API key not recorded"}
               </td>
+              <td class="min-w-36 text-base-content/80">
+                {row.pool_name || "Pool not available"}
+              </td>
               <td class="text-right font-mono tabular-nums">
                 {format_integer(row.requests)}
               </td>
               <td class="text-right font-mono tabular-nums">
-                {format_integer(row.total_tokens)}
+                {Format.token_count(row.total_tokens)}
               </td>
               <td class="text-right font-mono tabular-nums">
                 {format_micros(row.estimated_cost_micros)}
@@ -151,15 +154,13 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     <AdminComponents.admin_surface
       id="stats-upstream-surface"
       title="Upstream usage"
-      description="Account state and usage in this range."
-      count={"#{length(@rows)} rows"}
     >
       <div class="overflow-x-auto">
         <table id="stats-upstream-table" class="table table-zebra table-sm">
           <thead>
             <tr>
               <th>Upstream</th>
-              <th>Status</th>
+              <th class="text-center">Status</th>
               <th class="text-right">Requests</th>
               <th class="text-right">Tokens</th>
             </tr>
@@ -178,7 +179,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
                   </span>
                 </div>
               </td>
-              <td>
+              <td class="text-center">
                 <span class={AdminBadges.status_chip_class(row.status)}>
                   {row.status || "unknown"}
                 </span>
@@ -187,7 +188,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
                 {format_integer(row.requests)}
               </td>
               <td class="text-right font-mono tabular-nums">
-                {format_integer(row.total_tokens)}
+                {Format.token_count(row.total_tokens)}
               </td>
             </tr>
           </tbody>
@@ -202,7 +203,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
 
   defp token_summary(tokens),
     do:
-      "#{format_integer(tokens.input_tokens)} input · #{format_integer(tokens.cached_input_tokens)} cached · #{format_integer(tokens.output_tokens)} output"
+      "#{Format.token_count(tokens.input_tokens)} input · #{Format.token_count(tokens.cached_input_tokens)} cached · #{Format.token_count(tokens.output_tokens)} output"
 
   defp turn_summary(turns),
     do: "#{format_integer(turns.value)} turns · #{format_integer(turns.in_progress)} in progress"
@@ -236,7 +237,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
   defp quota_state_presentation(state),
     do: Map.get(@quota_state_presentations, state, @default_quota_state_presentation)
 
-  defp format_cost(%{usd: %Decimal{} = usd}), do: "$#{Decimal.to_string(usd, :normal)}"
+  defp format_cost(%{usd: %Decimal{} = usd}), do: Format.money(usd)
   defp format_cost(%{status: "unpriced"}), do: "unpriced"
   defp format_cost(%{status: "unavailable"}), do: "unavailable"
   defp format_cost(%{status: status}), do: status || "unavailable"
@@ -247,12 +248,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
   defp cost_status_label(status), do: humanize(status)
 
   defp format_micros(nil), do: "unavailable"
-  defp format_micros(0), do: "unpriced"
-
-  defp format_micros(micros) when is_integer(micros) do
-    usd = micros |> Decimal.new() |> Decimal.div(Decimal.new(1_000_000)) |> Decimal.round(6)
-    "$#{Decimal.to_string(usd, :normal)}"
-  end
+  defp format_micros(micros) when is_integer(micros), do: Format.money_from_micros(micros)
 
   defp format_percent(nil), do: "not available"
   defp format_percent(value), do: "#{format_float(value)}%"

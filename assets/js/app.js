@@ -39,6 +39,55 @@ const formatChartNumber = value => {
     maximumFractionDigits: Number.isInteger(number) ? 0 : 1,
   }).format(number)
 }
+const compactNumberScales = [
+  {value: 1_000_000_000, suffix: "B"},
+  {value: 1_000_000, suffix: "M"},
+  {value: 1_000, suffix: "k"},
+]
+const formatCompactNumber = value => {
+  const number = Number(value || 0)
+
+  if (!Number.isFinite(number)) return "0"
+
+  const sign = number < 0 ? "-" : ""
+  const absolute = Math.abs(number)
+  const scale = compactNumberScales.find(item => absolute >= item.value)
+
+  if (!scale) return `${sign}${formatChartNumber(absolute)}`
+
+  const scaled = (absolute / scale.value)
+    .toFixed(1)
+    .replace(/\.0$/, "")
+
+  return `${sign}${scaled}${scale.suffix}`
+}
+const formatMoneyNumber = value => {
+  const number = Number(value || 0)
+
+  if (!Number.isFinite(number)) return "$0.00"
+
+  const sign = number < 0 ? "-" : ""
+  const formatted = new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Math.abs(number))
+
+  return `${sign}$${formatted}`
+}
+const formatChartValue = (value, kind) => {
+  switch (kind) {
+    case "money":
+    case "usd":
+      return formatMoneyNumber(value)
+    case "token":
+    case "tokens":
+      return formatCompactNumber(value)
+    case "integer":
+      return formatChartNumber(Math.round(Number(value || 0)))
+    default:
+      return formatChartNumber(value)
+  }
+}
 const ClipboardCopy = {
   mounted() {
     this.el.addEventListener("click", async () => {
@@ -225,24 +274,32 @@ const QuotaPressureChart = {
     this.chart.render()
   },
 }
-function buildChartYaxis({compact, axisColor, units, yaxisConfig}) {
-  const axisLabels = {
+function chartAxisLabels({compact, axisColor, valueKind}) {
+  return {
     show: !compact,
     style: {colors: axisColor, fontSize: "11px", fontFamily: "inherit"},
-    formatter: value => formatChartNumber(value),
+    formatter: value => formatChartValue(value, valueKind),
   }
+}
+
+function buildChartYaxis({compact, axisColor, units, valueKinds, yaxisConfig}) {
+  const axisLabels = chartAxisLabels({compact, axisColor, valueKind: valueKinds[0] || units[0]})
 
   if (Array.isArray(yaxisConfig)) {
-    return yaxisConfig.map((axis, index) => ({
-      seriesName: axis.seriesName,
-      opposite: axis.opposite === true,
-      show: !compact,
-      labels: axisLabels,
-      title: {
-        text: compact ? undefined : axis.title || units[index],
-        style: {color: axisColor, fontSize: "11px", fontFamily: "inherit", fontWeight: 600},
-      },
-    }))
+    return yaxisConfig.map((axis, index) => {
+      const valueKind = axis.valueKind || valueKinds[index] || units[index]
+
+      return {
+        seriesName: axis.seriesName,
+        opposite: axis.opposite === true,
+        show: !compact,
+        labels: chartAxisLabels({compact, axisColor, valueKind}),
+        title: {
+          text: compact ? undefined : axis.title || units[index],
+          style: {color: axisColor, fontSize: "11px", fontFamily: "inherit", fontWeight: 600},
+        },
+      }
+    })
   }
 
   return {
@@ -266,16 +323,26 @@ const ApexTimeSeriesChart = {
       .map(item => ({...item, type: item.type || "column"}))
     const unit = this.el.dataset.chartUnit || "value"
     const units = parseChartJSON(this.el.dataset.chartUnits, series.map(() => unit))
+    const valueKinds = parseChartJSON(this.el.dataset.chartValueKinds, units)
     const yaxisConfig = parseChartJSON(this.el.dataset.chartYaxis, null)
     const compact = this.el.dataset.chartCompact === "true"
+    const stacked = this.el.dataset.chartStacked === "true"
+    const showLegend = this.el.dataset.chartLegend
+      ? this.el.dataset.chartLegend !== "false"
+      : !compact
     const showLabels = this.el.dataset.chartLabels === "true"
     const height = Number.parseInt(this.el.dataset.chartHeight || "260", 10)
+    const configuredBarRadius = Number.parseInt(
+      this.el.dataset.chartBarRadius || `${compact ? 2 : 4}`,
+      10
+    )
+    const barRadius = Number.isFinite(configuredBarRadius) ? Math.max(configuredBarRadius, 0) : 0
     const colors = parseChartJSON(this.el.dataset.chartColors, [this.el.dataset.chartColor || "var(--color-primary)"])
       .map(color => resolveCssColor(this.el, color))
     const axisColor = resolveCssColor(this.el, "color-mix(in oklab, var(--color-base-content) 62%, transparent)")
     const gridColor = resolveCssColor(this.el, "color-mix(in oklab, var(--color-base-content) 12%, transparent)")
     const seriesTypes = series.map(item => item.type || "column")
-    const yaxis = buildChartYaxis({compact, axisColor, units, yaxisConfig})
+    const yaxis = buildChartYaxis({compact, axisColor, units, valueKinds, yaxisConfig})
     const options = {
       chart: {
         type: "line",
@@ -283,6 +350,8 @@ const ApexTimeSeriesChart = {
         toolbar: {show: false},
         sparkline: {enabled: compact},
         animations: {enabled: false},
+        stacked,
+        stackOnlyBar: stacked,
       },
       colors,
       dataLabels: {enabled: false},
@@ -300,11 +369,13 @@ const ApexTimeSeriesChart = {
       },
       plotOptions: {
         bar: {
-          borderRadius: compact ? 2 : 4,
+          borderRadius: barRadius,
           borderRadiusApplication: "end",
+          borderRadiusWhenStacked: "last",
           columnWidth: compact ? "72%" : "58%",
         },
       },
+      legend: {show: showLegend},
       markers: {
         size: 0,
         hover: {size: compact ? 3 : 4},
@@ -324,7 +395,14 @@ const ApexTimeSeriesChart = {
         intersect: false,
         x: {show: true},
         y: {
-          formatter: (value, {seriesIndex}) => `${formatChartNumber(value)} ${units[seriesIndex] || unit}`,
+          formatter: (value, {seriesIndex}) => {
+            const valueKind = valueKinds[seriesIndex] || units[seriesIndex] || unit
+            const formattedValue = formatChartValue(value, valueKind)
+
+            if (["money", "usd"].includes(valueKind)) return formattedValue
+
+            return `${formattedValue} ${units[seriesIndex] || unit}`
+          },
           title: {formatter: seriesName => `${seriesName}: `},
         },
       },

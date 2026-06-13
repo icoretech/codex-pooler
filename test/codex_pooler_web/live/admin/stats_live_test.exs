@@ -128,6 +128,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert has_element?(view, "#stats-pool-filter-control [aria-label='Scope']")
       assert has_element?(view, "#stats-time-filter-control [aria-label='Range']")
+      assert has_element?(view, "#stats-filter-form[phx-hook='AdminFilterDropdowns']")
       refute has_element?(view, "#stats-filter-submit")
       refute has_element?(view, "#stats-filter-reset")
       refute has_element?(view, "#stats-selected-scope")
@@ -167,29 +168,56 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-tokens", "10 cached")
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "50.0")
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "Throughput")
-      assert has_element?(view, "#stats-kpi-cost", "$1.500000")
+      assert has_element?(view, "#stats-kpi-cost", "$1.50")
       assert has_element?(view, "#stats-kpi-avg-latency", "1000 ms")
       assert has_element?(view, "#stats-kpi-avg-latency", "Mean response time")
       assert has_element?(view, "#stats-kpi-active-sessions", "1")
       assert has_element?(view, "#stats-kpi-active-sessions", "1 turns")
       assert has_element?(view, "#stats-kpi-quota-health", "Available")
+      assert has_element?(view, "#stats-traffic-chart-scroll[data-role='chart-scroll-region']")
+      assert has_element?(view, "#stats-traffic-chart-scroll.overflow-x-auto")
+      assert has_element?(view, "#stats-traffic-chart-plot.admin-chart-mobile-wide")
       assert has_element?(view, "#stats-traffic-chart-plot[phx-hook='ApexTimeSeriesChart']")
       assert has_element?(view, "#stats-traffic-chart-plot[phx-update='ignore']")
       assert has_element?(view, "#stats-traffic-chart-plot[data-chart-unit='tokens']")
       assert has_element?(view, "#stats-traffic-chart-plot[data-chart-units]")
       assert has_element?(view, "#stats-traffic-chart-plot[data-chart-yaxis]")
+      assert has_element?(view, "#stats-traffic-chart-plot[data-chart-legend='false']")
       assert has_element?(view, "#stats-traffic-chart", "Traffic over time")
       assert has_element?(view, "#stats-traffic-chart", "100 tokens / 2 requests")
+      refute has_element?(view, "#stats-traffic-chart-summary")
+      refute has_element?(view, "#stats-traffic-chart-total.font-mono")
       refute has_element?(view, "#stats-traffic-chart-plot svg")
+      assert has_element?(view, "#stats-token-cost-chart", "Tokens vs cost")
+      assert has_element?(view, "#stats-token-cost-chart", "100 tokens / $1.50")
+      assert has_element?(view, "#stats-token-cost-chart-scroll[data-role='chart-scroll-region']")
+      assert has_element?(view, "#stats-token-cost-chart-scroll.overflow-x-auto")
+      assert has_element?(view, "#stats-token-cost-chart-plot.admin-chart-mobile-wide")
+      assert has_element?(view, "#stats-token-cost-chart-plot[phx-hook='ApexTimeSeriesChart']")
+      assert has_element?(view, "#stats-token-cost-chart-plot[phx-update='ignore']")
+      assert has_element?(view, "#stats-token-cost-chart-plot[data-chart-stacked='true']")
+      assert has_element?(view, "#stats-token-cost-chart-plot[data-chart-legend='false']")
+      assert has_element?(view, "#stats-token-cost-chart-plot[data-chart-bar-radius='0']")
+      assert has_element?(view, "#stats-token-cost-chart-plot[data-chart-value-kinds]")
+      assert has_element?(view, "#stats-token-cost-chart-plot[data-chart-yaxis]")
       refute has_element?(view, "#stats-token-chart")
+      refute has_element?(view, "#stats-api-key-surface > header p")
+      refute has_element?(view, "#stats-api-key-surface > header > span")
       assert has_element?(view, "#stats-api-key-table", "Stats UI key")
-      assert has_element?(view, "#stats-api-key-table", "$1.500000")
+      assert has_element?(view, "#stats-api-key-table thead th", "Pool")
+      assert has_element?(view, "#stats-api-key-row-0 td:nth-child(2)", "Stats Live")
+      refute has_element?(view, "#stats-api-key-row-0 td:nth-child(2)", "stats-live")
+      assert has_element?(view, "#stats-api-key-table", "$1.50")
+      refute has_element?(view, "#stats-upstream-surface > header p")
+      refute has_element?(view, "#stats-upstream-surface > header > span")
       assert has_element?(view, "#stats-upstream-table", "Stats assignment")
       assert has_element?(view, "#stats-upstream-table thead th", "Upstream")
       assert has_element?(view, "#stats-upstream-table thead th", "Status")
+      assert has_element?(view, "#stats-upstream-table thead th.text-center", "Status")
       refute has_element?(view, "#stats-upstream-table thead th", "Quota")
       assert has_element?(view, "#stats-upstream-table thead th", "Requests")
       assert has_element?(view, "#stats-upstream-table thead th", "Tokens")
+      assert has_element?(view, "#stats-upstream-row-0 td:nth-child(2).text-center")
       assert has_element?(view, "#stats-upstream-row-0 td:nth-child(3)", "1")
       assert has_element?(view, "#stats-upstream-row-0 td:nth-child(4)", "100")
       refute has_element?(view, "#stats-upstream-row-0 td:nth-child(5)")
@@ -204,6 +232,13 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert traffic_chart_html =~ "ApexTimeSeriesChart"
       assert traffic_chart_html =~ "Tokens"
       assert traffic_chart_html =~ "Requests"
+
+      token_cost_chart_html = view |> element("#stats-token-cost-chart-plot") |> render()
+
+      assert token_cost_chart_html =~ "Cached input"
+      assert token_cost_chart_html =~ "Cost"
+      assert token_cost_chart_html =~ "data-chart-stacked=\"true\""
+      assert token_cost_chart_html =~ "&quot;usd&quot;"
 
       html = render(view)
       refute html =~ sensitive_marker
@@ -425,6 +460,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-requests", "0")
       assert has_element?(view, "#stats-kpi-tokens", "0")
       assert has_element?(view, "#stats-traffic-chart", "0 tokens / 0 requests")
+      assert has_element?(view, "#stats-token-cost-chart", "0 tokens / $0.00")
       refute has_element?(view, "#stats-api-key-table", "Unassigned hidden key")
 
       state = :sys.get_state(view.pid)
@@ -698,6 +734,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-cost", "unavailable")
       assert has_element?(view, "#stats-traffic-chart", "0 requests")
       assert has_element?(view, "#stats-traffic-chart", "0 tokens")
+      assert has_element?(view, "#stats-token-cost-chart", "$0.00")
     end
 
     test "free plan weekly-only quota is not rendered as consumed or exhausted", %{
@@ -805,6 +842,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       #stats-kpi-active-sessions
       #stats-kpi-quota-health
       #stats-traffic-chart
+      #stats-token-cost-chart
     )
   end
 

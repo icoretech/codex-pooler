@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
+  alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.PoolForm
 
   @type data_load_warning :: map()
@@ -92,16 +93,10 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   end
 
   @spec format_estimated_cost_micros(non_neg_integer() | nil) :: String.t()
-  def format_estimated_cost_micros(nil), do: "$0.00"
+  def format_estimated_cost_micros(nil), do: Format.money_from_micros(0)
 
   def format_estimated_cost_micros(micros) when is_integer(micros) do
-    micros
-    |> Decimal.new()
-    |> Decimal.div(Decimal.new(1_000_000))
-    |> Decimal.round(2)
-    |> Decimal.to_string(:normal)
-    |> fixed_decimal_places(2)
-    |> then(&"$#{&1}")
+    Format.money_from_micros(micros)
   end
 
   defp pool_rows(scope, traffic_window) do
@@ -198,11 +193,4 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     do: Float.round(total_tokens / (latency_ms / 1000), 2)
 
   defp pool_tokens_per_second(_total_tokens, _latency_ms), do: nil
-
-  defp fixed_decimal_places(value, places) do
-    case String.split(value, ".", parts: 2) do
-      [whole] -> whole <> "." <> String.duplicate("0", places)
-      [whole, fraction] -> whole <> "." <> String.pad_trailing(fraction, places, "0")
-    end
-  end
 end

@@ -452,6 +452,10 @@ body {
   min-width: 0;
 }
 
+.admin-chart-mobile-wide {
+  min-width: 36rem;
+}
+
 .admin-apex-bar-chart .apexcharts-canvas,
 .admin-apex-bar-chart svg {
   max-width: 100%;
@@ -518,6 +522,12 @@ body {
 
   .routing-option-help {
     padding-left: 1.85rem;
+  }
+}
+
+@media (width >= 48rem) {
+  .admin-chart-mobile-wide {
+    min-width: 0;
   }
 }
 

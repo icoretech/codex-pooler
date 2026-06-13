@@ -117,7 +117,14 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.kpis.turns.value == 1
     assert dashboard.kpis.quota_health.state == :available
 
-    assert [%{display_name: "Stats key", requests: 1, total_tokens: 100}] =
+    assert [
+             %{
+               display_name: "Stats key",
+               pool_name: "Stats Primary",
+               requests: 1,
+               total_tokens: 100
+             }
+           ] =
              dashboard.tables.top_api_keys
 
     assert [%{quota_state: :available, requests: 1, total_tokens: 100}] =
@@ -127,7 +134,23 @@ defmodule CodexPooler.Admin.StatsTest do
              dashboard.tables.recent_failures
 
     assert Enum.count(dashboard.charts.requests) == 24
-    assert Enum.any?(dashboard.charts.tokens, &(&1.total_tokens == 100))
+
+    assert Enum.any?(
+             dashboard.charts.tokens,
+             &match?(
+               %{
+                 cached_input_tokens: 10,
+                 input_tokens: 60,
+                 output_tokens: 30,
+                 reasoning_tokens: 10,
+                 total_tokens: 100,
+                 uncached_input_tokens: 50
+               },
+               &1
+             )
+           )
+
+    assert Enum.any?(dashboard.charts.estimated_cost, &(&1.estimated_cost_micros == 1_500_000))
     assert [%{request_count: 1, total_tokens: 100}] = dashboard.tables.daily_rollups
 
     assert %{requests: 2, attempts: 2, settlements: 1, daily_rollups: 1, codex_turns: 1} =
@@ -136,6 +159,32 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.any?(dashboard.tables.recent_activity, &(&1.type == :audit_event))
     assert Enum.any?(dashboard.tables.recent_activity, &(&1.type == :job))
     refute inspect(dashboard.tables.recent_activity) =~ "Bearer hidden"
+  end
+
+  test "build_dashboard/2 sorts upstream usage by tokens descending" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-upstream-sort", name: "Stats Upstream Sort"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+
+    %{identity: low_identity, assignment: low_assignment} =
+      upstream_assignment_fixture(pool, %{assignment_label: "Low upstream"})
+
+    %{identity: high_identity, assignment: high_assignment} =
+      upstream_assignment_fixture(pool, %{assignment_label: "High upstream"})
+
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+
+    insert_timed_usage!(pool, api_key, low_assignment, low_identity, occurred_at, 10)
+    insert_timed_usage!(pool, api_key, high_assignment, high_identity, occurred_at, 90)
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "1h", as_of: as_of})
+
+    assert [
+             %{assignment_label: "High upstream", total_tokens: 90},
+             %{assignment_label: "Low upstream", total_tokens: 10}
+           ] = dashboard.tables.upstreams
   end
 
   test "empty selected period returns typed empty states and unavailable KPI values" do
