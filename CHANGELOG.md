@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.0.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.11...codex-pooler-v0.0.12) (2026-06-13)
+
+
+### Features
+
+* **admin:** add pool traffic window selector ([215a2d3](https://github.com/icoretech/codex-pooler/commit/215a2d37ae65c9133cfad53481fdecea894fc648))
+* **admin:** add shared usage formatters ([4626780](https://github.com/icoretech/codex-pooler/commit/462678095d600b3463356204e0743776137f85e4))
+* **admin:** add stats token cost chart ([faa092f](https://github.com/icoretech/codex-pooler/commit/faa092f981d5836fe8b1b04b04f491c2f30b81d8))
+
+
+### Bug Fixes
+
+* **admin:** align job card headers ([c8339cc](https://github.com/icoretech/codex-pooler/commit/c8339cc5e86befc52e117a6d63ccce5efb485872))
+* **admin:** contain filter dropdowns and dialogs ([5f002fd](https://github.com/icoretech/codex-pooler/commit/5f002fd90561410f856e449d080c4b17a5d10070))
+* **admin:** hide pool card chart legends ([6dba819](https://github.com/icoretech/codex-pooler/commit/6dba8196e88c818250ca05e49a1d9707522c7961))
+* **admin:** hide relink on usable upstream accounts ([a679c40](https://github.com/icoretech/codex-pooler/commit/a679c40a037d11cb5d36be06da137ff26db267f3))
+* **admin:** refine pool traffic cards ([f396515](https://github.com/icoretech/codex-pooler/commit/f396515372313d64fa7202e555b78625cbf0f119))
+* **admin:** remove unreachable pool formatter clause ([8e4dce5](https://github.com/icoretech/codex-pooler/commit/8e4dce596d2bd264d347662926d05c5f12be87c1))
+* **admin:** show pool throughput and cost metrics ([266e520](https://github.com/icoretech/codex-pooler/commit/266e520e8a11225e94b96735950c0099f3e8ca95))
+* **deps:** update dependency apexcharts to ^5.15.0 ([#22](https://github.com/icoretech/codex-pooler/issues/22)) ([91baed8](https://github.com/icoretech/codex-pooler/commit/91baed8130f811d509d14a99d72ddef4f92b9337))
+* **dev:** isolate local postgres credentials ([28d997c](https://github.com/icoretech/codex-pooler/commit/28d997c6012038185b00add6fe860c31fc7b2860))
+* **files:** validate upstream upload urls ([f625acf](https://github.com/icoretech/codex-pooler/commit/f625acf0092833326b7f78d7f4372a26708a2c34))
+* **openai:** harden public compatibility responses ([644f20d](https://github.com/icoretech/codex-pooler/commit/644f20ddda56fea375f00890bf44458e5fc96c0b))
+* **renovate:** avoid overlapping toolchain regexes ([4286010](https://github.com/icoretech/codex-pooler/commit/4286010f46916245ae6ecd038ea05537cff20d3e))
+* **renovate:** keep elixir toolchain pins compatible ([262c203](https://github.com/icoretech/codex-pooler/commit/262c2038d59ba4c4a2828277907b261d48105619))
+* **renovate:** pin mix artifact toolchain ([13c4290](https://github.com/icoretech/codex-pooler/commit/13c4290ec489394aab33372f5d6d50865220adab))
+* **renovate:** restore otp-specific elixir pin ([abbb571](https://github.com/icoretech/codex-pooler/commit/abbb5714df348d5fc792444dc1b230b5c5e60541))
+* **renovate:** use erlang prebuild constraint ([ea45bb9](https://github.com/icoretech/codex-pooler/commit/ea45bb98cd1e48df9ffd3c443c161ab250b3d42d))
+* **renovate:** use installable mix artifact elixir ([4b4a478](https://github.com/icoretech/codex-pooler/commit/4b4a478edd711d33ddac15b9bd9bd87879216c2b))
+* **runtime:** forward codex installation metadata ([3a332f5](https://github.com/icoretech/codex-pooler/commit/3a332f53dd4f3df5886ea7d3361133952b2e9a6c))
+
 ## [0.0.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.10...codex-pooler-v0.0.11) (2026-06-11)
 
 
