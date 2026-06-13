@@ -430,6 +430,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-row-#{pool.id}-traffic-histogram-plot[data-chart-units='[\"tokens\",\"requests\"]']"
            )
 
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram-plot[data-chart-legend='false']"
+           )
+
     assert has_element?(view, "#pool-row-#{pool.id}-activity")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
     refute has_element?(view, "#pool-row-#{pool.id}", "5h quota")

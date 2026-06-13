@@ -540,6 +540,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           data-chart-height="84"
           data-chart-colors={@traffic_histogram_card.colors}
           data-chart-compact="true"
+          data-chart-legend="false"
         >
         </div>
         <div
