@@ -781,6 +781,121 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute request_text =~ "ws-client-metadata-forwarded"
   end
 
+  @tag :client_metadata
+  test "websocket request-scoped x-codex-turn-state from client_metadata participates in continuity without upgrade state" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_request_scoped_turn_state",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{})
+    request_turn_state = "ws-request-scoped-turn-state-#{System.unique_integer([:positive])}"
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true,
+                 "client_metadata" => %{"x-codex-turn-state" => request_turn_state}
+               }),
+               %{request_id: "ws-request-scoped-turn-state", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_request_scoped_turn_state"} = Jason.decode!(frame)
+
+    assert [turn_alias] =
+             Repo.all(
+               from(alias_record in BridgeSessionAlias,
+                 where:
+                   alias_record.codex_session_id == ^session.id and
+                     alias_record.alias_kind == "turn_state" and
+                     alias_record.status == "active"
+               )
+             )
+
+    assert turn_alias.alias_hash == :crypto.hash(:sha256, request_turn_state)
+    assert_websocket_turn_state_not_persisted!(setup, request_turn_state)
+  end
+
+  @tag :client_metadata
+  test "websocket ignores malformed request-scoped x-codex-turn-state client metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_malformed_turn_state",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{})
+
+    metadata_cases = [
+      {"blank", %{"x-codex-turn-state" => "   "}},
+      {"nonbinary", %{"x-codex-turn-state" => ["opaque-turn-state-sentinel"]}},
+      {"malformed", ["x-codex-turn-state", "opaque-client-metadata-sentinel"]}
+    ]
+
+    for {label, client_metadata} <- metadata_cases do
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                   "stream" => true,
+                   "generate" => true,
+                   "client_metadata" => client_metadata
+                 }),
+                 %{request_id: "ws-malformed-turn-state-#{label}", codex_session: session},
+                 fn frame -> send(self(), {:websocket_frame, label, frame}) end
+               )
+
+      assert_received {:websocket_frame, ^label, frame}
+      assert %{"id" => "resp_ws_malformed_turn_state"} = Jason.decode!(frame)
+    end
+
+    refute Repo.exists?(
+             from(alias_record in BridgeSessionAlias,
+               where:
+                 alias_record.codex_session_id == ^session.id and
+                   alias_record.alias_kind == "turn_state" and
+                   alias_record.status == "active"
+             )
+           )
+
+    persistence_text =
+      inspect({
+        Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id)),
+        Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id)),
+        Repo.all(from(turn in CodexTurn)),
+        Repo.all(
+          from(alias_record in BridgeSessionAlias,
+            where: alias_record.codex_session_id == ^session.id
+          )
+        ),
+        Accounting.list_request_logs(setup.pool).items
+      })
+
+    refute persistence_text =~ "opaque-turn-state-sentinel"
+    refute persistence_text =~ "opaque-client-metadata-sentinel"
+  end
+
   test "websocket dispatch sends trusted Responses Lite marker as per-request client metadata" do
     upstream =
       start_upstream(
@@ -7280,6 +7395,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute persistence_text =~ metadata.window_id
     refute persistence_text =~ metadata.sentinel
     refute persistence_text =~ "existing-client-metadata"
+  end
+
+  defp assert_websocket_turn_state_not_persisted!(setup, turn_state) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    sessions = Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id))
+    turns = Repo.all(from(t in CodexTurn))
+    audit_events = Repo.all(from(e in AuditEvent))
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    persistence_text =
+      inspect({requests, attempts, sessions, turns, audit_events, logs.items})
+
+    refute persistence_text =~ turn_state
   end
 
   defp refute_rate_limit_event_windows(identity) do

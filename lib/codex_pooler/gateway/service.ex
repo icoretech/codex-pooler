@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Service do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -283,6 +284,7 @@ defmodule CodexPooler.Gateway.Service do
               route_class: RouteClass.proxy_websocket(),
               websocket_writer: push_frame
             )
+            |> maybe_put_backend_websocket_turn_state(coerced.endpoint, coerced.payload)
             |> RequestOptions.put_continuity(
               codex_turn_id: SessionContinuity.websocket_turn_id(coerced.payload)
             )
@@ -296,6 +298,37 @@ defmodule CodexPooler.Gateway.Service do
         end
     end
   end
+
+  @spec maybe_put_backend_websocket_turn_state(opts(), String.t(), payload()) :: opts()
+  defp maybe_put_backend_websocket_turn_state(
+         %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}} =
+           request_options,
+         _endpoint,
+         _payload
+       ) do
+    request_options
+  end
+
+  defp maybe_put_backend_websocket_turn_state(
+         %RequestOptions{} = request_options,
+         "/backend-api/codex/responses",
+         payload
+       ) do
+    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+      nil ->
+        request_options
+
+      turn_state ->
+        RequestOptions.put_continuity(request_options, accepted_turn_state: turn_state)
+    end
+  end
+
+  defp maybe_put_backend_websocket_turn_state(
+         %RequestOptions{} = request_options,
+         _endpoint,
+         _payload
+       ),
+       do: request_options
 
   defp coerce_websocket_response_payload(
          %{"type" => "response.create"} = payload,
