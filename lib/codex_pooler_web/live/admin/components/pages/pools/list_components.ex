@@ -714,9 +714,6 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   defp format_request_count(1), do: "1 request"
   defp format_request_count(value) when is_integer(value), do: "#{format_integer(value)} requests"
 
-  defp format_request_count(value) when is_float(value),
-    do: value |> round() |> format_request_count()
-
   defp format_integer(number) when is_integer(number) do
     number
     |> Integer.to_string()
