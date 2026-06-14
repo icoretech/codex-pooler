@@ -61,13 +61,13 @@ For local setup, change `baseURL` to `http://localhost:4000/v1`.
 
 Kilo is a chat-completions client. It sends model requests to `POST /v1/chat/completions`, and Codex Pooler translates supported chat-completions requests into Codex Responses work internally. Do not point Kilo at `/backend-api/codex`, `/v1/responses`, or `/v1/chat/completions` as the configured base URL.
 
-## Smoke check
+## Connection Check
 
 Run a tool-using prompt from an isolated directory:
 
 ```bash
-mkdir -p /tmp/codex-pooler-kilo-smoke
-cd /tmp/codex-pooler-kilo-smoke
+mkdir -p /tmp/codex-pooler-kilo-check
+cd /tmp/codex-pooler-kilo-check
 
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \

@@ -75,7 +75,7 @@ That test should create normal `/v1` traffic using the Pool API key. The MCP ent
 
 ## Alternate `openai-codex` credential-pool path
 
-Hermes can also use its `openai-codex` provider against Codex Pooler, but this path is less direct. Hermes treats `openai-codex` as an OAuth provider by default, so add a Pool API key credential ahead of any device-code credential and keep the credential `base_url` on `/v1`.
+Hermes can also use its `openai-codex` provider against Codex Pooler, but this alternate path is less direct. The preferred setup is the `openai-api` provider above with `api_mode: codex_responses`. Hermes treats `openai-codex` as an OAuth provider by default, so add a Pool API key credential ahead of any device-code credential and keep the credential `base_url` on `/v1`.
 
 Keep endpoint and MCP token values in the environment:
 

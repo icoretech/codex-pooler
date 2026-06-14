@@ -5,7 +5,7 @@ description: Configure OpenCode with Codex Pooler's narrow OpenAI-compatible /v1
 
 ![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
 
-OpenCode should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
+OpenCode should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
 
 OpenCode websocket support is the narrow Responses websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
 
@@ -92,6 +92,8 @@ Add Codex Pooler as a remote MCP server only when the OpenCode host should inspe
 Use a dedicated operator MCP token for hosts that persist remote MCP headers. Don't use a Pool API key for `/mcp`.
 
 ## Compatibility notes
+
+If you automate OpenCode from scripts, use OpenCode's own documented headless command shape for your installed version and verify both the final response and the expected file changes. The examples on this page focus on configuration, not a full automation workflow.
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. Supported OpenCode traffic should stay on `/v1/responses` or `/v1/chat/completions`, depending on the OpenAI provider path OpenCode uses.
 

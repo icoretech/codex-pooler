@@ -110,10 +110,12 @@ for example `https://codex-pooler.example.com`.
 
 ![Codex Pooler OpenCode integration](.github/assets/codex-pooler-opencode.png)
 
-OpenCode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. The
-provider uses the Pool API key, and the optional remote MCP entry uses an
-operator-owned MCP token. MCP is not required for OpenCode to use Codex Pooler;
-it only gives an operator MCP host read-only metadata tools. Its websocket
+OpenCode talks to Codex Pooler through the OpenAI-compatible `/v1` surface. Keep
+the provider id as `openai` for this setup so OpenCode continues to use its
+OpenAI provider-family behavior. The provider uses the Pool API key, and the
+optional remote MCP entry uses an operator-owned MCP token. MCP is not required
+for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only
+metadata tools. Its websocket
 support is the narrow Responses websocket route at `GET /v1/responses`, not
 OpenAI Realtime SDK compatibility.
 
@@ -414,12 +416,12 @@ hermes -z 'Reply with exactly: hermes openai api ok' --ignore-rules
 ```
 
 Hermes can also be made to use its `openai-codex` provider against Codex
-Pooler. This is less direct because Hermes treats `openai-codex` as an OAuth
-provider by default; add a Pool API key credential ahead of any existing
+Pooler, but this alternate path is less direct because Hermes treats `openai-codex` as an
+OAuth provider by default; add a Pool API key credential ahead of any existing
 device-code credential and keep the entry's `base_url` on `/v1`. Use this only
 when you specifically need Hermes' `openai-codex` credential-pool behavior; the
-`openai-api` configuration above is the preferred setup. This variant stores
-the key in `auth.json` because Hermes credential pools live there.
+`openai-api` configuration above is the preferred setup. This variant stores the
+key in `auth.json` because Hermes credential pools live there.
 
 ```bash
 HERMES_CODEX_BASE_URL=http://localhost:4000/v1
@@ -688,8 +690,8 @@ do not set `"permission": "ask"`, which is not a valid config shape.
 Check the headless tool path from an isolated directory:
 
 ```bash
-mkdir -p /tmp/codex-pooler-kilo-smoke
-cd /tmp/codex-pooler-kilo-smoke
+mkdir -p /tmp/codex-pooler-kilo-check
+cd /tmp/codex-pooler-kilo-check
 
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \
@@ -720,12 +722,23 @@ model: openai/gpt-5.5
 openai-api-base: http://localhost:4000/v1
 ```
 
-Smoke-test from a repository:
+Check Aider from a repository with a real file edit:
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-aider --model openai/gpt-5.5 --message 'Reply with exactly: aider ok'
+aider --model openai/gpt-5.5 \
+  --openai-api-base http://localhost:4000/v1 \
+  --message 'Create a file named aider-ok.txt containing exactly: aider ok. After the file exists, reply with exactly: aider ok' \
+  --yes-always \
+  --no-auto-commits \
+  --no-git \
+  --no-browser \
+  --no-gui \
+  --no-analytics
 ```
+
+The check is only useful if the file exists with the expected content; a text
+reply alone does not prove Aider can edit through the configured model path.
 
 For deployed instances, change `openai-api-base` to
 `https://codex-pooler.example.com/v1`.
@@ -1305,7 +1318,7 @@ web app to one replica because backend
 websocket continuity owns a live upstream websocket in an app pod. Owner-alive
 cross-node forwarding is wired, but scaling web replicas still requires
 clustering, owner-forwarding, and the explicit unsafe topology acknowledgement
-until Kubernetes smoke evidence relaxes that guard.
+until Kubernetes deployment validation relaxes that guard.
 
 The Helm migration hook runs database migrations and imports the vendored OpenAI
 pricing feed so request-log cost reporting has pricing snapshots after install

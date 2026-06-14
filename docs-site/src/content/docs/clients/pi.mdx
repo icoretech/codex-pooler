@@ -65,7 +65,7 @@ If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults
 }
 ```
 
-## Smoke check
+## Connection Check
 
 Run a one-shot prompt from the repository you want Pi to inspect:
 
@@ -79,7 +79,7 @@ pi --provider codex-pooler \
   -p 'Reply with exactly: pi ok'
 ```
 
-`--no-session` keeps the check ephemeral. `--no-context-files` keeps the smoke independent from local project instructions. For normal interactive use, omit those flags if you want Pi to load `AGENTS.md`, skills, sessions, and project settings.
+`--no-session` keeps the check ephemeral. `--no-context-files` keeps it independent from local project instructions. For normal interactive use, omit those flags if you want Pi to load `AGENTS.md`, skills, sessions, and project settings.
 
 ## MCP boundary
 
