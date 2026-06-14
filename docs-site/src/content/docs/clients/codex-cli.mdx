@@ -1,21 +1,31 @@
 ---
 title: Codex CLI and Codex Desktop
-description: Configure Codex CLI and Codex Desktop with Codex Pooler backend compatibility, shared ~/.codex/config.toml provider settings, HTTP/SSE fallback, optional operator MCP access, and local session migration.
+description: Configure Codex CLI and Codex Desktop with Codex Pooler backend compatibility, shared CODEX_HOME/config.toml provider settings, HTTP/SSE fallback, optional operator MCP access, and local session migration.
 head:
   - tag: script
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Does Codex Pooler work with Codex CLI and Codex Desktop?","acceptedAnswer":{"@type":"Answer","text":"Yes. Codex CLI and Codex Desktop share Codex configuration layers. Put the Codex Pooler provider in ~/.codex/config.toml, set model_provider to codex-pooler-ws, and point base_url at https://codex-pooler.example.com/backend-api/codex."}},{"@type":"Question","name":"Should Codex CLI or Codex Desktop use /v1 with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients, not Codex CLI or Codex Desktop backend traffic."}},{"@type":"Question","name":"Where should Codex Pooler provider settings live for Codex?","acceptedAnswer":{"@type":"Answer","text":"Use the user-level ~/.codex/config.toml file for provider and auth settings. Project-local .codex/config.toml files are trust-gated and cannot override machine-local provider keys such as model_provider and model_providers."}}]}
+      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Does Codex Pooler work with Codex CLI and Codex Desktop?","acceptedAnswer":{"@type":"Answer","text":"Yes. Codex CLI and Codex Desktop share Codex configuration layers. Put the Codex Pooler provider in CODEX_HOME/config.toml, set model_provider to codex-pooler-ws, and point base_url at https://codex-pooler.example.com/backend-api/codex."}},{"@type":"Question","name":"Should Codex CLI or Codex Desktop use /v1 with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients, not Codex CLI or Codex Desktop backend traffic."}},{"@type":"Question","name":"Where should Codex Pooler provider settings live for Codex?","acceptedAnswer":{"@type":"Answer","text":"Use the user-level CODEX_HOME/config.toml file for provider and auth settings. Project-local .codex/config.toml files are trust-gated and cannot override machine-local provider keys such as model_provider and model_providers."}}]}
 ---
 
 ![Codex Pooler integration for Codex CLI and Codex Desktop](/codex-pooler-codex.png)
 
-Codex Pooler supports both Codex CLI and Codex Desktop through the Codex backend compatibility route. Both Codex surfaces share the same configuration layers and user-level `~/.codex/config.toml`, so one provider block can serve the terminal and desktop/IDE experience.
+Codex Pooler supports both Codex CLI and Codex Desktop through the Codex backend compatibility route. Both Codex surfaces share the same configuration layers and user-level `CODEX_HOME/config.toml`, so one provider block can serve the terminal and desktop/IDE experience.
 
 Use `/backend-api/codex`, not the OpenAI-compatible `/v1` SDK surface. Put provider and auth settings in the user-level config file; Codex's project-local `.codex/config.toml` layers are trust-gated and do not override machine-local provider keys such as `model_provider` or `model_providers`.
 
-In Codex Desktop or the IDE extension, open the same file from the settings gear with **Codex Settings > Open config.toml**. CLI users can edit `~/.codex/config.toml` directly.
+## Config file path
+
+Codex resolves `CODEX_HOME` first. If `CODEX_HOME` is unset, current Codex sources default it to `$HOME/.codex` on every OS, so the user config file is `CODEX_HOME/config.toml`.
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `$HOME/.codex/config.toml` |
+| Linux | `$HOME/.codex/config.toml` |
+| Windows | `$HOME\.codex\config.toml`, normally `%USERPROFILE%\.codex\config.toml` |
+
+Codex Desktop and the IDE extension open the same file from **Codex Settings > Open config.toml**.
 
 For a deployed instance, the Codex backend base URL is:
 
@@ -29,14 +39,13 @@ For local setup and local connection checks, use:
 http://localhost:4000/backend-api/codex
 ```
 
-Keep your Pool API key in an environment variable. Don't paste raw keys into `~/.codex/config.toml`.
+Keep your Pool API key in an environment variable. Don't paste raw keys into `CODEX_HOME/config.toml`.
 
 ## Websocket provider for Codex CLI and Desktop
 
-Use the websocket-capable provider for normal Codex backend behavior in Codex CLI and Codex Desktop. Keep `name = "OpenAI"` because Codex uses that provider family for its backend Responses protocol.
+Use the websocket-capable provider for normal Codex backend behavior in Codex CLI and Codex Desktop. Keep the provider id as `codex-pooler-ws`, but keep `name = "OpenAI"` exactly. In current Codex sources, `name` is not just a display label: exact `OpenAI` matching enables OpenAI-family behavior such as remote compaction, web search/image availability, and Codex backend request compression.
 
 ```toml
-model = "gpt-5.5"
 model_provider = "codex-pooler-ws"
 
 [model_providers.codex-pooler-ws]
@@ -55,6 +64,8 @@ With a local Codex Pooler instance, change `base_url` to `http://localhost:4000/
 Keep an HTTP/SSE provider when you need to force non-websocket behavior for a client check or when a Codex runtime cannot open backend websocket streams.
 
 ```toml
+model_provider = "codex-pooler-http"
+
 [model_providers.codex-pooler-http]
 name = "OpenAI"
 base_url = "https://codex-pooler.example.com/backend-api/codex"
@@ -90,7 +101,9 @@ Codex filters resumable conversations by `model_provider` in local Codex state. 
 
 Close Codex first; these commands edit local Codex state in place. If you made the HTTP provider your default, replace only the destination value `codex-pooler-ws` with `codex-pooler-http` before copying.
 
-macOS default shell is zsh. Run these two zsh one-liners:
+### macOS (zsh)
+
+Run these two zsh one-liners:
 
 ```zsh
 if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
@@ -100,7 +113,9 @@ if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -na
 for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
-Linux default examples assume bash. Run these two bash one-liners:
+### Linux (bash)
+
+Run these two bash one-liners:
 
 ```bash
 if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
@@ -110,7 +125,9 @@ if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -na
 for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
-On Windows, run the same migration from PowerShell. This expects `sqlite3` to be available on `PATH`.
+### Windows (PowerShell)
+
+Run the same migration from PowerShell. This expects `sqlite3` to be available on `PATH`.
 
 ```powershell
 $ErrorActionPreference = "Stop"

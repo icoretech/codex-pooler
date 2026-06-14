@@ -180,23 +180,39 @@ operator MCP entry, change its `url` to `https://codex-pooler.example.com/mcp`.
 </details>
 
 <details>
-<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>~/.codex/config.toml</code></summary>
+<summary><img src=".github/assets/codex-cli-favicon.png" alt="Codex logo" width="16" height="16"> Codex CLI and Codex Desktop <code>CODEX_HOME/config.toml</code></summary>
 
 ![Codex Pooler integration for Codex CLI and Codex Desktop](.github/assets/codex-pooler-codex.png)
 
 Codex CLI and Codex Desktop should use the backend compatibility route, not the
 `/v1` SDK route. They share the same Codex configuration layers and user-level
-`~/.codex/config.toml`, so one Codex Pooler provider block can serve the terminal
-and desktop/IDE experience. Keep the provider `name` as `OpenAI`; Codex uses that
-value for provider-family behavior even when the request is routed through Codex
-Pooler.
+`CODEX_HOME/config.toml`, so one Codex Pooler provider block can serve the
+terminal and desktop/IDE experience. Keep the provider id as `codex-pooler-ws`,
+but keep the provider `name` exactly `OpenAI`. In current Codex sources, `name`
+is not just
+a display label: exact `OpenAI` matching enables OpenAI-family behavior such as
+remote compaction, web search/image availability, and Codex backend request
+compression.
 
-Put provider and auth settings in the user-level config file. Codex's
-project-local `.codex/config.toml` layers are trust-gated and do not override
-machine-local provider keys such as `model_provider` or `model_providers`.
+Put provider and auth settings in the user-level config file. Codex resolves
+`CODEX_HOME` first. If `CODEX_HOME` is unset, current Codex sources default it
+to `$HOME/.codex` on every OS, so the user config file is
+`CODEX_HOME/config.toml`.
+
+| OS | Default config file |
+| --- | --- |
+| macOS | `$HOME/.codex/config.toml` |
+| Linux | `$HOME/.codex/config.toml` |
+| Windows | `$HOME\.codex\config.toml`, normally `%USERPROFILE%\.codex\config.toml` |
+
+Codex's project-local `.codex/config.toml` layers are trust-gated and do not
+override machine-local provider keys such as `model_provider` or
+`model_providers`.
+
+Use the websocket provider for normal Codex CLI and Codex Desktop backend
+behavior:
 
 ```toml
-model = "gpt-5.5"
 model_provider = "codex-pooler-ws"
 
 [model_providers.codex-pooler-ws]
@@ -206,6 +222,13 @@ env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
+```
+
+Keep an HTTP/SSE provider when you need to force non-websocket behavior for a
+client check or when a Codex runtime cannot open backend websocket streams:
+
+```toml
+model_provider = "codex-pooler-http"
 
 [model_providers.codex-pooler-http]
 name = "OpenAI"
@@ -214,18 +237,21 @@ env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = false
 requires_openai_auth = true
+```
 
-# Optional operator-only MCP metadata add-on. Omit for normal Codex runtime use.
+For deployed instances, change `base_url` to
+`https://codex-pooler.example.com/backend-api/codex`.
+
+Optional operator-only MCP metadata add-on. Omit for normal Codex runtime use:
+
+```toml
 [mcp_servers.codex_pooler]
 url = "http://localhost:4000/mcp"
 bearer_token_env_var = "CODEX_POOLER_MCP_KEY"
 ```
 
-Use the websocket provider for normal Codex CLI and Codex Desktop backend
-behavior, and keep the HTTP provider when you need to force SSE-only coverage.
-For deployed instances, change both `base_url` values to
-`https://codex-pooler.example.com/backend-api/codex`; if you keep the optional
-operator MCP add-on, change its `url` to `https://codex-pooler.example.com/mcp`.
+For deployed instances, change the optional MCP `url` to
+`https://codex-pooler.example.com/mcp`.
 
 Codex filters resumable conversations by `model_provider`. If you already have
 Codex CLI or Codex Desktop sessions created with the built-in `openai` provider
@@ -235,7 +261,9 @@ commands edit local Codex state in place. If you made the HTTP provider your
 default, replace only the destination value `codex-pooler-ws` with
 `codex-pooler-http` before copying.
 
-macOS default shell is zsh. Run these two zsh one-liners:
+#### macOS (zsh)
+
+Run these two zsh one-liners:
 
 ```zsh
 if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
@@ -245,7 +273,9 @@ if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -na
 for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
-Linux default examples assume bash. Run these two bash one-liners:
+#### Linux (bash)
+
+Run these two bash one-liners:
 
 ```bash
 if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
@@ -255,8 +285,10 @@ if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -na
 for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
 ```
 
-On Windows, run the same migration from PowerShell. This expects `sqlite3` to be
-available on `PATH`.
+#### Windows (PowerShell)
+
+Run the same migration from PowerShell. This expects `sqlite3` to be available
+on `PATH`.
 
 ```powershell
 $ErrorActionPreference = "Stop"

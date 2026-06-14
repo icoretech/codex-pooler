@@ -77,7 +77,7 @@ Privacy boundaries:
 - Do not include raw prompts, completions, request bodies, response bodies, multipart bodies, websocket frames, file bytes, audio bytes, image bytes, data URLs, transcripts, bearer tokens, cookies, Pool API keys, MCP tokens, auth.json, access tokens, refresh tokens, raw upload URLs, raw idempotency keys, private hostnames, real account ids, raw emails, or private IP addresses.
 
 Agent guidance:
-- Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex CLI or Codex Desktop with ~/.codex/config.toml, model_provider=codex-pooler-ws, and the /backend-api/codex route.
+- Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex CLI or Codex Desktop with CODEX_HOME/config.toml, model_provider=codex-pooler-ws, and the /backend-api/codex route.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
 - Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with LLM_BASE_URL, LLM_MODEL=openai/gpt-5.5, and --override-with-envs.
 - Use https://docs.codex-pooler.com/clients/aider/ when configuring Aider with ~/.aider.conf.yml, model=openai/gpt-5.5, openai-api-base=https://codex-pooler.example.com/v1, and a Pool API key in OPENAI_API_KEY.
