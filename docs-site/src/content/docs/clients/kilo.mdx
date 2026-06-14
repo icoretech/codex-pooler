@@ -1,31 +1,31 @@
 ---
 title: Kilo
-description: Configure Kilo Code CLI with Codex Pooler's narrow OpenAI-compatible /v1 surface and a Pool API key.
+description: Configure Kilo Code CLI with Codex Pooler's narrow OpenAI-compatible /v1 chat-completions surface and a Pool API key.
 ---
 
-Kilo Code should use Codex Pooler through its OpenAI-compatible provider. Configure `~/.config/kilo/kilo.jsonc`, keep the Pool API key in the environment, and select models with the `openai-compatible/<model>` name that Kilo expects.
+Kilo Code should use a named OpenAI-compatible provider that points at Codex Pooler's `/v1` base URL. Kilo appends `/chat/completions` itself, so do not set `baseURL` to a full `/v1/chat/completions` endpoint.
 
 ## Install
 
 Use the current npm package:
 
 ```bash
-npm install -g @kilocode/cli
+npm install -g @kilocode/cli@latest
 ```
 
 For one-off use without a global install, run `npx -y @kilocode/cli@latest`.
 
 ## Provider shape
 
-For a deployed instance, add:
+For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
 
 ```jsonc
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "openai-compatible/gpt-5.5",
-  "enabled_providers": ["openai-compatible"],
+  "model": "codex-pooler/gpt-5.5",
+  "enabled_providers": ["codex-pooler"],
   "provider": {
-    "openai-compatible": {
+    "codex-pooler": {
       "options": {
         "apiKey": "{env:CODEX_POOLER_API_KEY}",
         "baseURL": "https://codex-pooler.example.com/v1"
@@ -36,12 +36,14 @@ For a deployed instance, add:
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
+          "attachment": true,
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
           "limit": {
             "context": 400000,
+            "input": 256000,
             "output": 128000
           }
         }
@@ -53,23 +55,31 @@ For a deployed instance, add:
 
 For local setup, change `baseURL` to `http://localhost:4000/v1`.
 
-`{env:CODEX_POOLER_API_KEY}` keeps the Pool API key outside the config file. Define only model ids your assigned Pool can serve.
+`{env:CODEX_POOLER_API_KEY}` keeps the Pool API key outside the config file. Define only model ids your assigned Pool can serve. If you add Kilo permissions, use the object form such as `"permission": {"bash": "allow"}`; do not set `"permission": "ask"`, which is not a valid Kilo config shape.
+
+## Route shape
+
+Kilo is a chat-completions client. It sends model requests to `POST /v1/chat/completions`, and Codex Pooler translates supported chat-completions requests into Codex Responses work internally. Do not point Kilo at `/backend-api/codex`, `/v1/responses`, or `/v1/chat/completions` as the configured base URL.
 
 ## Smoke check
 
-Run a one-shot prompt from the repository you want Kilo to inspect:
+Run a tool-using prompt from an isolated directory:
 
 ```bash
+mkdir -p /tmp/codex-pooler-kilo-smoke
+cd /tmp/codex-pooler-kilo-smoke
+
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \
-  --model openai-compatible/gpt-5.5 \
+  --model codex-pooler/gpt-5.5 \
   --pure \
+  --auto \
   --format json \
   --dir "$PWD" \
-  'Reply with exactly: kilo ok'
+  'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
 ```
 
-`--pure` keeps external plugins out of the check. Use `--auto` only in trusted isolated automation, because it lets Kilo approve tool permissions automatically.
+`--pure` keeps external plugins out of the check. `--auto` is only for trusted isolated automation, because it lets Kilo approve tool permissions automatically.
 
 ## MCP boundary
 

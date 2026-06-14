@@ -636,11 +636,12 @@ operator token separate from the Pool API key used for `/v1`.
 <details>
 <summary><img src=".github/assets/kilo-favicon.png" alt="Kilo logo" width="16" height="16"> Kilo <code>~/.config/kilo/kilo.jsonc</code></summary>
 
-Kilo Code uses the OpenAI-compatible provider path for Codex Pooler's `/v1`
-surface. Install the current CLI from npm:
+Kilo Code should use a named OpenAI-compatible provider whose base URL ends at
+Codex Pooler's `/v1` surface. Kilo appends `/chat/completions` itself, so do
+not put `/v1/chat/completions` in `baseURL`. Install the current CLI from npm:
 
 ```bash
-npm install -g @kilocode/cli
+npm install -g @kilocode/cli@latest
 ```
 
 Then configure the provider in `~/.config/kilo/kilo.jsonc`:
@@ -648,10 +649,10 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
 ```jsonc
 {
   "$schema": "https://app.kilo.ai/config.json",
-  "model": "openai-compatible/gpt-5.5",
-  "enabled_providers": ["openai-compatible"],
+  "model": "codex-pooler/gpt-5.5",
+  "enabled_providers": ["codex-pooler"],
   "provider": {
-    "openai-compatible": {
+    "codex-pooler": {
       "options": {
         "apiKey": "{env:CODEX_POOLER_API_KEY}",
         "baseURL": "http://localhost:4000/v1"
@@ -662,12 +663,14 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
+          "attachment": true,
           "modalities": {
             "input": ["text", "image"],
             "output": ["text"]
           },
           "limit": {
             "context": 400000,
+            "input": 256000,
             "output": 128000
           }
         }
@@ -678,24 +681,30 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
 ```
 
 Define only model ids your assigned Pool can serve. For deployed instances,
-change `baseURL` to `https://codex-pooler.example.com/v1`.
+change `baseURL` to `https://codex-pooler.example.com/v1`. If you add Kilo
+permissions, use Kilo's object form such as `"permission": {"bash": "allow"}`;
+do not set `"permission": "ask"`, which is not a valid config shape.
 
-Check the headless path from a repository:
+Check the headless tool path from an isolated directory:
 
 ```bash
+mkdir -p /tmp/codex-pooler-kilo-smoke
+cd /tmp/codex-pooler-kilo-smoke
+
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \
-  --model openai-compatible/gpt-5.5 \
+  --model codex-pooler/gpt-5.5 \
   --pure \
+  --auto \
   --format json \
   --dir "$PWD" \
-  'Reply with exactly: kilo ok'
+  'Use your tools to create kilo-ok.txt containing exactly: kilo ok. After the file exists, reply with exactly: kilo ok'
 ```
 
-Use `--auto` only for trusted, isolated automation where Kilo may run approved
-tools without prompting. Codex Pooler model use does not require MCP. If you
-need operator metadata, use a separate MCP-capable host with an operator MCP
-token.
+`--pure` keeps external plugins out of the check. `--auto` is only for trusted,
+isolated automation where Kilo may run approved tools without prompting. Codex
+Pooler model use does not require MCP. If you need operator metadata, use a
+separate MCP-capable host with an operator MCP token.
 
 </details>
 
