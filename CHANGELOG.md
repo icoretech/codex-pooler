@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.14...codex-pooler-v0.0.15) (2026-06-14)
+
+
+### Bug Fixes
+
+* **gateway:** recover retained response tiers ([0a6d950](https://github.com/icoretech/codex-pooler/commit/0a6d950dd85860de28fe13a443836111d22e15cf))
+* **gateway:** settle terminal response usage ([cfb636d](https://github.com/icoretech/codex-pooler/commit/cfb636d1798291acf34d0c540d317d2196a91526))
+
 ## [0.0.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.13...codex-pooler-v0.0.14) (2026-06-14)
 
 
