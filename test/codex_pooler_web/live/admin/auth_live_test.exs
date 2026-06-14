@@ -106,12 +106,6 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
         assert has_element?(view, "#admin-websocket-state-popover [data-ws-state]", "Syncing")
         assert has_element?(view, "#admin-websocket-state-popover [data-ws-transport]", "Pending")
 
-        assert has_element?(
-                 view,
-                 "#admin-websocket-state-popover",
-                 "Changes appear automatically while this page is open. No manual refresh needed."
-               )
-
         for forbidden_copy <- [
               "web" <> "socket degraded",
               "Browser connection" <> " degraded",
@@ -146,19 +140,77 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
         refute has_element?(view, "#admin-sidebar-theme-toggle")
         refute has_element?(view, "#admin-sidebar-session-label")
 
+        app_version = to_string(Application.spec(:codex_pooler, :vsn))
+
+        release_notes_url =
+          "https://github.com/icoretech/codex-pooler/releases/tag/codex-pooler-v#{app_version}"
+
+        assert has_element?(view, "#admin-github-dropdown.dropdown.dropdown-end")
+
         assert has_element?(
                  view,
-                 "a[href='https://github.com/icoretech/codex-pooler'][target='_blank']",
-                 to_string(Application.spec(:codex_pooler, :vsn))
+                 "#admin-github-button[role='button'][aria-label='Codex Pooler project links']"
+               )
+
+        assert has_element?(view, "#admin-github-button svg.size-5.fill-current")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-popover[aria-label='Codex Pooler project links']"
+               )
+
+        assert has_element?(view, "#admin-github-popover", "Codex Pooler")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-release-notes[href='#{release_notes_url}'][target='_blank']",
+                 "Release notes"
+               )
+
+        assert has_element?(view, "#admin-github-release-notes .hero-tag")
+        assert has_element?(view, "#admin-github-release-notes", "codex-pooler-v#{app_version}")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-repository[href='https://github.com/icoretech/codex-pooler'][target='_blank']",
+                 "Official repository"
+               )
+
+        assert has_element?(view, "#admin-github-repository .hero-code-bracket-square")
+        assert has_element?(view, "#admin-github-repository", "icoretech/codex-pooler")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-docs[href='https://docs.codex-pooler.com/'][target='_blank']",
+                 "Documentation"
+               )
+
+        assert has_element?(view, "#admin-github-docs .hero-book-open")
+        assert has_element?(view, "#admin-github-docs", "docs.codex-pooler.com")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-x-profile[href='https://x.com/icoretech_inc'][target='_blank']",
+                 "iCoreTech on X"
+               )
+
+        assert has_element?(view, "#admin-github-x-profile .hero-at-symbol")
+        assert has_element?(view, "#admin-github-x-profile", "@icoretech_inc")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-star-invite[href='https://github.com/icoretech/codex-pooler']"
+               )
+
+        assert has_element?(view, "#admin-github-star-invite .hero-star")
+
+        assert has_element?(
+                 view,
+                 "#admin-github-star-invite",
+                 "Star the repository to follow updates."
                )
 
         assert has_element?(view, "header a[href='/admin/pools']", "CODEX POOLER")
-
-        refute has_element?(
-                 view,
-                 "a[href='https://github.com/icoretech/codex-pooler']",
-                 "v#{Application.spec(:codex_pooler, :vsn)}"
-               )
 
         for nav_selector <- @admin_nav_selectors do
           assert has_element?(view, nav_selector)

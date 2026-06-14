@@ -111,6 +111,10 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       |> assign(:admin_footer_nav_items, @admin_footer_nav_items)
       |> assign(:admin_identity, admin_identity(assigns.current_scope))
       |> assign(:app_version, app_version())
+      |> assign(:release_notes_url, release_notes_url(app_version()))
+      |> assign(:repository_url, repository_url())
+      |> assign(:docs_url, docs_url())
+      |> assign(:x_profile_url, x_profile_url())
 
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope} auth_surface chrome={:admin}>
@@ -125,14 +129,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             </.link>
 
             <div class="flex min-w-0 items-center gap-3">
-              <a
-                href="https://github.com/icoretech/codex-pooler"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="flex h-12 items-center text-xs font-semibold leading-none text-base-content/60 transition-colors hover:text-base-content"
-              >
-                <span>{@app_version}</span>
-              </a>
+              <.github_resources_dropdown
+                app_version={@app_version}
+                release_notes_url={@release_notes_url}
+                repository_url={@repository_url}
+                docs_url={@docs_url}
+                x_profile_url={@x_profile_url}
+              />
               <.alert_notification_dropdown center={@alert_notification_center} />
               <div
                 id="topbar-connection-indicator"
@@ -166,9 +169,6 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                     <div>
                       <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
                         live updates
-                      </p>
-                      <p class="mt-1 text-xs leading-5 text-base-content/60">
-                        Changes appear automatically while this page is open. No manual refresh needed.
                       </p>
                     </div>
                     <dl class="grid gap-2 text-xs">
@@ -299,6 +299,131 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     ]
   end
 
+  attr :app_version, :string, required: true
+  attr :release_notes_url, :string, required: true
+  attr :repository_url, :string, required: true
+  attr :docs_url, :string, required: true
+  attr :x_profile_url, :string, required: true
+
+  defp github_resources_dropdown(assigns) do
+    ~H"""
+    <details
+      id="admin-github-dropdown"
+      class="dropdown dropdown-end"
+      phx-click-away={JS.remove_attribute("open", to: "#admin-github-dropdown")}
+    >
+      <summary
+        id="admin-github-button"
+        class="btn btn-ghost btn-sm btn-square relative list-none text-base-content/60 [&::-webkit-details-marker]:hidden"
+        role="button"
+        aria-label="Codex Pooler project links"
+        data-role="admin-github-trigger"
+      >
+        <.github_icon class="size-5 fill-current" />
+        <span class="sr-only">Project links</span>
+      </summary>
+
+      <section
+        id="admin-github-popover"
+        class="dropdown-content z-50 mt-3 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 p-4 text-left shadow-2xl"
+        aria-label="Codex Pooler project links"
+      >
+        <div class="grid gap-3">
+          <div>
+            <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
+              Codex Pooler
+            </p>
+          </div>
+
+          <nav class="grid gap-2" aria-label="Codex Pooler project resources">
+            <.github_resource_card
+              id="admin-github-release-notes"
+              href={@release_notes_url}
+              icon="hero-tag"
+              title="Release notes"
+              subtitle={"codex-pooler-v#{@app_version}"}
+            />
+            <.github_resource_card
+              id="admin-github-repository"
+              href={@repository_url}
+              icon="hero-code-bracket-square"
+              title="Official repository"
+              subtitle="icoretech/codex-pooler"
+            />
+            <.github_resource_card
+              id="admin-github-docs"
+              href={@docs_url}
+              icon="hero-book-open"
+              title="Documentation"
+              subtitle="docs.codex-pooler.com"
+            />
+            <.github_resource_card
+              id="admin-github-x-profile"
+              href={@x_profile_url}
+              icon="hero-at-symbol"
+              title="iCoreTech on X"
+              subtitle="@icoretech_inc"
+            />
+          </nav>
+
+          <a
+            id="admin-github-star-invite"
+            href={@repository_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="flex items-start gap-2 rounded-box bg-base-200/70 px-3 py-2 text-xs leading-5 text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content"
+          >
+            <.icon name="hero-star" class="mt-0.5 size-4 shrink-0 text-primary" />
+            <span>Star the repository to follow updates.</span>
+          </a>
+        </div>
+      </section>
+    </details>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :href, :string, required: true
+  attr :icon, :string, required: true
+  attr :title, :string, required: true
+  attr :subtitle, :string, required: true
+
+  defp github_resource_card(assigns) do
+    ~H"""
+    <a
+      id={@id}
+      href={@href}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="group flex items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-2.5 text-left transition-colors hover:border-base-content/20 hover:bg-base-200"
+    >
+      <span class="grid size-8 shrink-0 place-items-center rounded-box bg-base-200 text-base-content/55 group-hover:text-base-content">
+        <.icon name={@icon} class="size-4" />
+      </span>
+      <span class="min-w-0 flex-1">
+        <span class="block truncate text-xs font-semibold text-base-content">{@title}</span>
+        <span class="mt-0.5 block truncate font-mono text-[0.66rem] leading-none text-base-content/45">
+          {@subtitle}
+        </span>
+      </span>
+      <.icon
+        name="hero-arrow-top-right-on-square"
+        class="size-3.5 shrink-0 text-base-content/35 group-hover:text-base-content/65"
+      />
+    </a>
+    """
+  end
+
+  attr :class, :any, default: "size-5 fill-current"
+
+  defp github_icon(assigns) do
+    ~H"""
+    <svg viewBox="0 0 24 24" aria-hidden="true" class={@class}>
+      <path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.54 2.87 8.39 6.84 9.75.5.09.68-.22.68-.49 0-.24-.01-1.04-.01-1.89-2.78.62-3.37-1.22-3.37-1.22-.46-1.19-1.12-1.5-1.12-1.5-.91-.64.07-.63.07-.63 1.01.07 1.54 1.06 1.54 1.06.89 1.57 2.34 1.12 2.91.86.09-.67.35-1.12.64-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.35 9.35 0 0 1 12 7c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.13 10.13 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z" />
+    </svg>
+    """
+  end
+
   attr :center, :map, required: true
 
   defp alert_notification_dropdown(assigns) do
@@ -329,16 +454,13 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
       <section
         id="admin-notifications-popover"
-        class="dropdown-content z-50 mt-3 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 text-left shadow-2xl"
+        class="dropdown-content z-50 mt-3 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 p-4 text-left shadow-2xl"
         aria-label="Admin notifications"
       >
-        <header class="flex items-start justify-between gap-3 border-b border-base-300 p-4">
+        <header class="flex items-start justify-between gap-3">
           <div class="grid gap-1">
-            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+            <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
               notifications
-            </p>
-            <p class="text-xs leading-5 text-base-content/60">
-              Alert incidents visible to this operator.
             </p>
           </div>
           <button
@@ -357,13 +479,16 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
         <ul
           id="admin-notifications-list"
-          class="max-h-96 overflow-y-auto overscroll-contain p-2"
+          class="mt-3 max-h-96 overflow-y-auto overscroll-contain"
           data-role="admin-notifications-list"
         >
           <li
             :if={!notification_has_rows?(@center)}
-            class="grid place-items-center rounded-box border border-dashed border-base-300 px-4 py-8 text-center text-sm font-medium text-base-content/55"
+            class="grid place-items-center gap-2 rounded-box border border-dashed border-base-300 px-4 py-8 text-center text-sm font-medium text-base-content/55"
           >
+            <span data-role="admin-notifications-empty-icon">
+              <.icon name="hero-check-circle" class="size-8 text-base-content/35" />
+            </span>
             No active notifications
           </li>
           <li :for={row <- notification_rows(@center)} class="py-1">
@@ -591,4 +716,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     |> Application.spec(:vsn)
     |> to_string()
   end
+
+  defp release_notes_url(version) when is_binary(version) do
+    "https://github.com/icoretech/codex-pooler/releases/tag/codex-pooler-v#{version}"
+  end
+
+  defp repository_url, do: "https://github.com/icoretech/codex-pooler"
+
+  defp docs_url, do: "https://docs.codex-pooler.com/"
+
+  defp x_profile_url, do: "https://x.com/icoretech_inc"
 end

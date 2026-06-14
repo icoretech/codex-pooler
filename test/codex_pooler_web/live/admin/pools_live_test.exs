@@ -730,12 +730,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Codex Pooler telemetry is separate."
-           )
-
-    assert has_element?(
-             view,
-             "#pool-create-routing-controls",
              "Allow /v1 compatibility"
            )
 
@@ -1123,12 +1117,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-edit-routing-controls",
              "Forward sanitized OpenAI control-plane analytics."
-           )
-
-    assert has_element?(
-             view,
-             "#pool-edit-routing-controls",
-             "Codex Pooler telemetry is separate."
            )
 
     assert has_element?(

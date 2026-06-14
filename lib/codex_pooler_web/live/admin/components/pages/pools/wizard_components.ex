@@ -234,7 +234,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         label="Forward analytics"
                       />
                       <p class="routing-option-help">
-                        Forward sanitized OpenAI control-plane analytics. Codex Pooler telemetry is separate.
+                        Forward sanitized OpenAI control-plane analytics.
                       </p>
                     </div>
                     <div class="routing-matrix-option">
