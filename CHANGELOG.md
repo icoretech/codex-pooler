@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.0.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.13...codex-pooler-v0.0.14) (2026-06-14)
+
+
+### Features
+
+* **admin:** add project resource menu ([8d6864d](https://github.com/icoretech/codex-pooler/commit/8d6864dfe0ee54e17631b7bae595b58038ae6743))
+
+
+### Bug Fixes
+
+* **admin:** keep worker card actions aligned ([0afc383](https://github.com/icoretech/codex-pooler/commit/0afc383e264eb3d5afcf272c4742df8d71a7eae6))
+
 ## [0.0.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.12...codex-pooler-v0.0.13) (2026-06-13)
 
 
