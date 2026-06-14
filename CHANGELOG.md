@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.13...codex-pooler-v0.0.14) (2026-06-14)
+
+
+### Features
+
+* **admin:** add project resource menu ([8d6864d](https://github.com/icoretech/codex-pooler/commit/8d6864dfe0ee54e17631b7bae595b58038ae6743))
+
+
+### Bug Fixes
+
+* **admin:** keep worker card actions aligned ([0afc383](https://github.com/icoretech/codex-pooler/commit/0afc383e264eb3d5afcf272c4742df8d71a7eae6))
+* **admin:** report settled usage costs ([3378d49](https://github.com/icoretech/codex-pooler/commit/3378d4980d06b2320113fb5b8c0190ce0a78de05))
+* **dev:** isolate local postgres env ([ac65437](https://github.com/icoretech/codex-pooler/commit/ac65437af2f24a40635e2790533c944893c16602))
+
 ## [0.0.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.12...codex-pooler-v0.0.13) (2026-06-13)
 
 
