@@ -713,21 +713,29 @@ separate MCP-capable host with an operator MCP token.
 <details>
 <summary><img src=".github/assets/aider-favicon.png" alt="Aider logo" width="16" height="16"> Aider <code>~/.aider.conf.yml</code></summary>
 
-Aider uses the OpenAI-compatible route with the `openai/` model prefix. Keep the
-Pool API key in the environment and point Aider's OpenAI API base at Codex
-Pooler's `/v1` surface.
+Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the
+stable route settings in `.aider.conf.yml`; Aider loads this file from your home
+directory, then the git repo root, then the current directory, with later files
+taking priority.
 
 ```yaml
+# ~/.aider.conf.yml or <repo>/.aider.conf.yml
 model: openai/gpt-5.5
 openai-api-base: http://localhost:4000/v1
 ```
 
-Check Aider from a repository with a real file edit:
+Keep the Pool API key out of the YAML file. Export it in the shell, or put it in
+a gitignored `.env` file that Aider can load:
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-aider --model openai/gpt-5.5 \
-  --openai-api-base http://localhost:4000/v1 \
+```
+
+Check Aider from a repository with a real file edit. The command should only need
+the one-off prompt when the config file is present:
+
+```bash
+aider \
   --message 'Create a file named aider-ok.txt containing exactly: aider ok. After the file exists, reply with exactly: aider ok' \
   --yes-always \
   --no-auto-commits \

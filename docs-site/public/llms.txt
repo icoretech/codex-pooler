@@ -80,6 +80,7 @@ Agent guidance:
 - Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex backend clients.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
 - Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with LLM_BASE_URL, LLM_MODEL=openai/gpt-5.5, and --override-with-envs.
+- Use https://docs.codex-pooler.com/clients/aider/ when configuring Aider with ~/.aider.conf.yml, model=openai/gpt-5.5, openai-api-base=https://codex-pooler.example.com/v1, and a Pool API key in OPENAI_API_KEY.
 - Use https://docs.codex-pooler.com/clients/kilo/ when configuring Kilo Code with ~/.config/kilo/kilo.jsonc, model=codex-pooler/gpt-5.5, provider options apiKey={env:CODEX_POOLER_API_KEY}, baseURL=https://codex-pooler.example.com/v1, and Kilo's chat-completions route shape.
 - Use https://docs.codex-pooler.com/clients/omp/ when configuring Oh My Pi (OMP) with ~/.omp/agent/models.yml, modelRoles in ~/.omp/agent/config.yml, api=openai-responses, authHeader=true, and a Pool API key in CODEX_POOLER_API_KEY.
 - Use https://docs.codex-pooler.com/clients/pi/ when configuring Pi with ~/.pi/agent/models.json, api=openai-responses, authHeader=true, and a Pool API key in CODEX_POOLER_API_KEY.
