@@ -516,6 +516,11 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
              "#{catalog_card} [data-role='worker-card-header-actions'] > [data-role='job-worker-card-actions']"
            )
 
+    assert has_element?(
+             view,
+             "#{token_card} [data-role='worker-card-header-actions'] > [data-role='worker-card-action-spacer']"
+           )
+
     refute has_element?(view, "#{token_card} [data-role='job-worker-card-actions']")
     refute has_element?(view, "#{token_card}", "Enqueue Now")
 

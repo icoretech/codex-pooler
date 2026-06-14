@@ -50,7 +50,6 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
       </div>
 
       <div
-        :if={worker_state_badge_visible?(@card.state) or @card.manual_enqueue}
         data-role="worker-card-header-actions"
         class="flex shrink-0 items-center gap-2 self-center"
       >
@@ -68,6 +67,12 @@ defmodule CodexPoolerWeb.Admin.JobWorkerCards do
           <span>{@card.state_label}</span>
         </span>
         <.worker_card_actions :if={@card.manual_enqueue} card={@card} />
+        <span
+          :if={!@card.manual_enqueue}
+          data-role="worker-card-action-spacer"
+          aria-hidden="true"
+          class="btn btn-ghost btn-sm btn-square pointer-events-none invisible"
+        />
       </div>
     </header>
     """
