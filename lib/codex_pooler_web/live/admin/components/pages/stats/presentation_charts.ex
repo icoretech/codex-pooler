@@ -278,7 +278,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
 
     cost_by_label =
       Map.new(cost_rows, fn row ->
-        {format_bucket(row.bucket), max(row.estimated_cost_micros || 0, 0)}
+        {format_bucket(row.bucket), max(row.settled_cost_micros || 0, 0)}
       end)
 
     labels =

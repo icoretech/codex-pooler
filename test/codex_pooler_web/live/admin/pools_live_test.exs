@@ -182,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 1,
              request_count: 0,
              tokens_per_second: nil,
-             estimated_cost_micros: 0,
+             settled_cost_micros: 0,
              traffic_window: "24h",
              traffic_window_label: "24h",
              routing_strategy: "deterministic_rotation"
@@ -194,7 +194,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              upstream_count: 0,
              request_count: 0,
              tokens_per_second: nil,
-             estimated_cost_micros: 0,
+             settled_cost_micros: 0,
              traffic_window: "24h",
              traffic_window_label: "24h",
              routing_strategy: "bridge_ring"
@@ -205,7 +205,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "0 / 0")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "0")
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$0.00")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$0.00")
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Deterministic rotation")
 
     assert has_element?(
@@ -320,7 +320,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{other_pool.id}-request-throughput", "0 / 0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-request-count", "0")
     assert has_element?(view, "#pool-row-#{other_pool.id}-tokens-per-sec", "0")
-    assert has_element?(view, "#pool-row-#{other_pool.id}-estimated-cost", "$0.00")
+    assert has_element?(view, "#pool-row-#{other_pool.id}-settled-cost", "$0.00")
     assert has_element?(view, "#pool-row-#{other_pool.id}-routing-strategy", "Bridge ring")
     assert has_element?(view, "#pool-row-#{other_pool.id}-status", "disabled")
     assert has_element?(view, "#pool-row-#{other_pool.id}-activity")
@@ -399,7 +399,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       input_tokens: 60,
       cached_input_tokens: 20,
       output_tokens: 40,
-      estimated_cost_micros: 1_234_567
+      estimated_cost_micros: 1_234_567,
+      settled_cost_micros: 654_321
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
@@ -418,7 +419,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50")
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$1.23")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$0.65")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "Traffic 24h")
 
     refute has_element?(
@@ -512,7 +513,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "Req/TPS 24h"
            )
 
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$1.00")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$1.00")
     assert has_element?(view, "#pool-row-#{pool.id} [data-role='pool-cost-cell']", "Cost 24h")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "Traffic 24h")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
@@ -540,7 +541,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "Req/TPS 7d"
            )
 
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$1.50")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$1.50")
     assert has_element?(view, "#pool-row-#{pool.id} [data-role='pool-cost-cell']", "Cost 7d")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "Traffic 7d")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "125 tokens")
@@ -619,7 +620,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec")
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost")
 
     assert has_element?(
              view,
@@ -1417,7 +1418,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "0 / 0")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "0")
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$0.00")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$0.00")
 
     %{api_key: api_key} = api_key_fixture(pool, %{scope: scope})
     _ = :sys.get_state(view.pid)
@@ -1448,7 +1449,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       total_tokens: 100,
       input_tokens: 60,
       output_tokens: 40,
-      estimated_cost_micros: 2_500_000
+      estimated_cost_micros: 2_500_000,
+      settled_cost_micros: 1_250_000
     })
 
     assert {:ok, _event} = Events.broadcast_usage(pool.id, "usage_updated", %{})
@@ -1457,7 +1459,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50")
-    assert has_element?(view, "#pool-row-#{pool.id}-estimated-cost", "$2.50")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$1.25")
     assert has_element?(view, "#pool-metric-requests", "1")
     assert has_element?(view, "#pool-metric-tokens-per-sec", "50")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
@@ -1770,7 +1772,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       total_tokens: tokens,
       input_tokens: tokens,
       output_tokens: 0,
-      estimated_cost_micros: cost_micros
+      estimated_cost_micros: cost_micros,
+      settled_cost_micros: cost_micros
     })
     |> set_ledger_time!(timestamp)
 

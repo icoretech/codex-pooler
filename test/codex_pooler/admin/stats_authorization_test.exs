@@ -118,7 +118,7 @@ defmodule CodexPooler.Admin.StatsAuthorizationTest do
     assert dashboard.quota.accounts == []
     assert dashboard.charts.requests == []
     assert dashboard.charts.tokens == []
-    assert dashboard.charts.estimated_cost == []
+    assert dashboard.charts.settled_cost == []
     assert dashboard.sources.requests == 0
     assert dashboard.sources.settlements == 0
     assert [%{code: :no_reporting_pools}] = dashboard.empty_states

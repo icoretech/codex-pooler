@@ -69,8 +69,8 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
         id="stats-kpi-cost"
         icon="hero-currency-dollar"
         label="Cost"
-        value={format_cost(@dashboard.kpis.estimated_cost)}
-        description={cost_status_label(@dashboard.kpis.estimated_cost.status)}
+        value={format_cost(@dashboard.kpis.settled_cost)}
+        description={cost_status_label(@dashboard.kpis.settled_cost.status)}
         compact_mobile
       />
       <AdminComponents.metric_card
@@ -133,7 +133,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               </p>
             </div>
             <span class="shrink-0 font-mono text-sm font-semibold tabular-nums">
-              {format_micros(row.estimated_cost_micros)}
+              {format_micros(row.settled_cost_micros)}
             </span>
           </div>
           <dl class="grid grid-cols-2 gap-2 text-xs">
@@ -183,7 +183,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
                 {Format.token_count(row.total_tokens)}
               </td>
               <td class="text-right font-mono tabular-nums">
-                {format_micros(row.estimated_cost_micros)}
+                {format_micros(row.settled_cost_micros)}
               </td>
             </tr>
           </tbody>
@@ -325,8 +325,8 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
   defp format_cost(%{status: "unavailable"}), do: "unavailable"
   defp format_cost(%{status: status}), do: status || "unavailable"
 
-  defp cost_status_label("estimated"), do: "Settled usage estimate"
-  defp cost_status_label("unpriced"), do: "No price match"
+  defp cost_status_label("settled"), do: "Settled usage cost"
+  defp cost_status_label("unpriced"), do: "No settled cost"
   defp cost_status_label("unavailable"), do: "No usage"
   defp cost_status_label(status), do: humanize(status)
 

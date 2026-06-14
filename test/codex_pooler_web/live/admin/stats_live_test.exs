@@ -168,7 +168,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-tokens", "10 cached")
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "50.0")
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "Throughput")
-      assert has_element?(view, "#stats-kpi-cost", "$1.50")
+      assert has_element?(view, "#stats-kpi-cost", "$0.75")
       assert has_element?(view, "#stats-kpi-avg-latency", "1000 ms")
       assert has_element?(view, "#stats-kpi-avg-latency", "Mean response time")
       assert has_element?(view, "#stats-kpi-active-sessions", "1")
@@ -189,7 +189,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       refute has_element?(view, "#stats-traffic-chart-total.font-mono")
       refute has_element?(view, "#stats-traffic-chart-plot svg")
       assert has_element?(view, "#stats-token-cost-chart", "Tokens vs cost")
-      assert has_element?(view, "#stats-token-cost-chart", "100 tokens / $1.50")
+      assert has_element?(view, "#stats-token-cost-chart", "100 tokens / $0.75")
       assert has_element?(view, "#stats-token-cost-chart-scroll[data-role='chart-scroll-region']")
       assert has_element?(view, "#stats-token-cost-chart-scroll.overflow-x-auto")
       assert has_element?(view, "#stats-token-cost-chart-plot.admin-chart-mobile-wide")
@@ -207,7 +207,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-api-key-table thead th", "Pool")
       assert has_element?(view, "#stats-api-key-row-0 td:nth-child(2)", "Stats Live")
       refute has_element?(view, "#stats-api-key-row-0 td:nth-child(2)", "stats-live")
-      assert has_element?(view, "#stats-api-key-table", "$1.50")
+      assert has_element?(view, "#stats-api-key-table", "$0.75")
       refute has_element?(view, "#stats-upstream-surface > header p")
       refute has_element?(view, "#stats-upstream-surface > header > span")
       assert has_element?(view, "#stats-upstream-table", "Stats assignment")
@@ -1021,7 +1021,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       output_tokens: 30,
       total_tokens: 100,
       estimated_cost_micros: 1_500_000,
-      settled_cost_micros: 1_500_000,
+      settled_cost_micros: 750_000,
       details: %{"body" => sensitive_marker}
     })
     |> Ecto.Changeset.change(%{cached_input_tokens: 10, reasoning_tokens: 10})
@@ -1089,7 +1089,9 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       total_tokens: Map.fetch!(attrs, :total_tokens),
       input_tokens: Map.fetch!(attrs, :total_tokens),
       output_tokens: 0,
-      estimated_cost_micros: Map.get(attrs, :estimated_cost_micros, 0)
+      estimated_cost_micros: Map.get(attrs, :estimated_cost_micros, 0),
+      settled_cost_micros:
+        Map.get(attrs, :settled_cost_micros, Map.get(attrs, :estimated_cost_micros, 0))
     })
 
     %{api_key: api_key, raw_key: raw_key, identity: identity, assignment: assignment}
@@ -1234,7 +1236,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       reasoning_tokens: 10,
       total_tokens: 100,
       estimated_cost_micros: Decimal.new(1_500_000),
-      settled_cost_micros: Decimal.new(1_500_000),
+      settled_cost_micros: Decimal.new(750_000),
       created_at: now,
       updated_at: now
     }

@@ -455,10 +455,10 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               Cost {@pool_row.traffic_window_label}
             </dt>
             <dd
-              id={"pool-row-#{@pool_row.pool.id}-estimated-cost"}
+              id={"pool-row-#{@pool_row.pool.id}-settled-cost"}
               class="truncate text-base-content/60"
             >
-              {PoolsReadModel.format_estimated_cost_micros(@pool_row.estimated_cost_micros)}
+              {PoolsReadModel.format_settled_cost_micros(@pool_row.settled_cost_micros)}
             </dd>
           </div>
         </dl>

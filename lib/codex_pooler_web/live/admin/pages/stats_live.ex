@@ -167,7 +167,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           <StatsCharts.traffic_charts
             requests={@dashboard.charts.requests}
             tokens={@dashboard.charts.tokens}
-            costs={@dashboard.charts.estimated_cost}
+            costs={@dashboard.charts.settled_cost}
             model_usage={@dashboard.charts.model_usage}
           />
 

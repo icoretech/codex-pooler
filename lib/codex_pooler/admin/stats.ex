@@ -46,7 +46,7 @@ defmodule CodexPooler.Admin.Stats do
           required(:token_usage_weekly) => map(),
           required(:token_histogram) => [map()],
           required(:request_histogram) => [map()],
-          required(:estimated_cost_micros) => non_neg_integer()
+          required(:settled_cost_micros) => non_neg_integer()
         }
 
   @spec build_dashboard(Scope.t(), map() | keyword()) ::
@@ -100,7 +100,7 @@ defmodule CodexPooler.Admin.Stats do
       AccountingReporting.settlements_for_pool_ids(pool_ids, histogram_started_at, ended_at)
 
     token_histograms = pool_token_histograms(pool_ids, histogram_settlements, ended_at, window)
-    cost_micros = pool_estimated_cost_micros(pool_ids, histogram_settlements)
+    cost_micros = pool_settled_cost_micros(pool_ids, histogram_settlements)
 
     request_histograms =
       pool_request_histograms(
@@ -135,7 +135,7 @@ defmodule CodexPooler.Admin.Stats do
          token_usage_weekly: Map.get(token_usage_weekly, pool_id, empty_token_usage()),
          token_histogram: Map.fetch!(token_histograms, pool_id),
          request_histogram: Map.fetch!(request_histograms, pool_id),
-         estimated_cost_micros: Map.fetch!(cost_micros, pool_id)
+         settled_cost_micros: Map.fetch!(cost_micros, pool_id)
        }}
     end)
   end
@@ -229,7 +229,7 @@ defmodule CodexPooler.Admin.Stats do
         success_rate: success_rate_kpi(requests),
         tokens: token_kpi(settlements),
         tokens_per_second: tokens_per_second_kpi(settlements, attempts),
-        estimated_cost: estimated_cost_kpi(settlements),
+        settled_cost: settled_cost_kpi(settlements),
         average_latency_ms: average_latency_kpi(attempts),
         active_sessions: %{value: active_session_count},
         turns: turn_kpi(turns),
@@ -245,7 +245,7 @@ defmodule CodexPooler.Admin.Stats do
       charts: %{
         requests: request_series(requests, normalized),
         tokens: token_series(settlements, normalized),
-        estimated_cost: cost_series(settlements, normalized),
+        settled_cost: cost_series(settlements, normalized),
         model_usage: model_usage
       },
       quota: %{
@@ -280,7 +280,7 @@ defmodule CodexPooler.Admin.Stats do
         success_rate: success_rate_kpi([]),
         tokens: token_kpi([]),
         tokens_per_second: tokens_per_second_kpi([], []),
-        estimated_cost: estimated_cost_kpi([]),
+        settled_cost: settled_cost_kpi([]),
         average_latency_ms: average_latency_kpi([]),
         active_sessions: %{value: 0},
         turns: turn_kpi([]),
@@ -296,7 +296,7 @@ defmodule CodexPooler.Admin.Stats do
       charts: %{
         requests: [],
         tokens: [],
-        estimated_cost: [],
+        settled_cost: [],
         model_usage: []
       },
       quota: %{
@@ -386,12 +386,12 @@ defmodule CodexPooler.Admin.Stats do
     end)
   end
 
-  defp pool_estimated_cost_micros(pool_ids, settlements) do
+  defp pool_settled_cost_micros(pool_ids, settlements) do
     entries_by_pool_id = Enum.group_by(settlements, & &1.pool_id)
 
     Map.new(pool_ids, fn pool_id ->
       entries = Map.get(entries_by_pool_id, pool_id, [])
-      {pool_id, sum_decimal_integer(entries, :estimated_cost_micros)}
+      {pool_id, sum_decimal_integer(entries, :settled_cost_micros)}
     end)
   end
 
@@ -433,13 +433,13 @@ defmodule CodexPooler.Admin.Stats do
     %{value: value, unit: "tokens/second"}
   end
 
-  defp estimated_cost_kpi([]), do: %{status: "unavailable", micros: 0, usd: nil}
+  defp settled_cost_kpi([]), do: %{status: "unavailable", micros: 0, usd: nil}
 
-  defp estimated_cost_kpi(settlements) do
-    micros = sum_decimal_integer(settlements, :estimated_cost_micros)
+  defp settled_cost_kpi(settlements) do
+    micros = sum_decimal_integer(settlements, :settled_cost_micros)
 
     %{
-      status: if(micros > 0, do: "estimated", else: "unpriced"),
+      status: if(micros > 0, do: "settled", else: "unpriced"),
       micros: micros,
       usd: micros_to_usd_decimal(micros)
     }
@@ -484,7 +484,7 @@ defmodule CodexPooler.Admin.Stats do
         pool_name: usage_pool_name(entries, pool_names_by_id),
         requests: sum_integer(entries, :request_count),
         total_tokens: sum_integer(entries, :total_tokens),
-        estimated_cost_micros: sum_decimal_integer(entries, :estimated_cost_micros)
+        settled_cost_micros: sum_decimal_integer(entries, :settled_cost_micros)
       }
     end)
     |> Enum.sort_by(&{&1.total_tokens, &1.requests}, :desc)
@@ -508,7 +508,7 @@ defmodule CodexPooler.Admin.Stats do
         quota_state: account.state,
         requests: sum_integer(entries, :request_count),
         total_tokens: sum_integer(entries, :total_tokens),
-        estimated_cost_micros: sum_decimal_integer(entries, :estimated_cost_micros)
+        settled_cost_micros: sum_decimal_integer(entries, :settled_cost_micros)
       }
     end)
     |> Enum.sort_by(fn row ->
@@ -559,7 +559,7 @@ defmodule CodexPooler.Admin.Stats do
         success_count: rollup.success_count || 0,
         failure_count: rollup.failure_count || 0,
         total_tokens: rollup.total_tokens || 0,
-        estimated_cost_micros: decimal_to_integer(rollup.estimated_cost_micros)
+        settled_cost_micros: decimal_to_integer(rollup.settled_cost_micros)
       }
     end)
   end
@@ -636,7 +636,7 @@ defmodule CodexPooler.Admin.Stats do
 
       %{
         bucket: label,
-        estimated_cost_micros: sum_decimal_integer(entries, :estimated_cost_micros)
+        settled_cost_micros: sum_decimal_integer(entries, :settled_cost_micros)
       }
     end)
   end

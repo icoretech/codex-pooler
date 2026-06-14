@@ -38,7 +38,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:token_usage_weekly) => token_usage(),
           required(:token_histogram) => [map()],
           required(:request_histogram) => [map()],
-          required(:estimated_cost_micros) => non_neg_integer(),
+          required(:settled_cost_micros) => non_neg_integer(),
           required(:traffic_window) => String.t(),
           required(:traffic_window_label) => String.t(),
           required(:routing_strategy) => String.t()
@@ -92,10 +92,10 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     "#{format_metric_integer(request_count)} / #{format_metric_rate(tokens_per_second)}"
   end
 
-  @spec format_estimated_cost_micros(non_neg_integer() | nil) :: String.t()
-  def format_estimated_cost_micros(nil), do: Format.money_from_micros(0)
+  @spec format_settled_cost_micros(non_neg_integer() | nil) :: String.t()
+  def format_settled_cost_micros(nil), do: Format.money_from_micros(0)
 
-  def format_estimated_cost_micros(micros) when is_integer(micros) do
+  def format_settled_cost_micros(micros) when is_integer(micros) do
     Format.money_from_micros(micros)
   end
 
@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         token_usage_weekly: usage.token_usage_weekly,
         token_histogram: usage.token_histogram,
         request_histogram: usage.request_histogram,
-        estimated_cost_micros: usage.estimated_cost_micros,
+        settled_cost_micros: usage.settled_cost_micros,
         traffic_window: traffic_window,
         traffic_window_label: traffic_window_label,
         routing_strategy: Map.get(routing_settings, pool.id).routing_strategy

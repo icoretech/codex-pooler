@@ -45,7 +45,7 @@ defmodule CodexPooler.Admin.StatsTest do
       output_tokens: 30,
       total_tokens: 100,
       estimated_cost_micros: 1_500_000,
-      settled_cost_micros: 1_500_000
+      settled_cost_micros: 750_000
     })
     |> Ecto.Changeset.change(%{cached_input_tokens: 10, reasoning_tokens: 10})
     |> Repo.update!()
@@ -109,9 +109,9 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.kpis.tokens.output_tokens == 30
     assert dashboard.kpis.tokens.reasoning_tokens == 10
     assert dashboard.kpis.tokens_per_second.value == 50.0
-    assert dashboard.kpis.estimated_cost.status == "estimated"
-    assert dashboard.kpis.estimated_cost.micros == 1_500_000
-    assert Decimal.equal?(dashboard.kpis.estimated_cost.usd, Decimal.new("1.500000"))
+    assert dashboard.kpis.settled_cost.status == "settled"
+    assert dashboard.kpis.settled_cost.micros == 750_000
+    assert Decimal.equal?(dashboard.kpis.settled_cost.usd, Decimal.new("0.750000"))
     assert dashboard.kpis.average_latency_ms.value == 1000
     assert dashboard.kpis.active_sessions.value == 1
     assert dashboard.kpis.turns.value == 1
@@ -150,7 +150,7 @@ defmodule CodexPooler.Admin.StatsTest do
              )
            )
 
-    assert Enum.any?(dashboard.charts.estimated_cost, &(&1.estimated_cost_micros == 1_500_000))
+    assert Enum.any?(dashboard.charts.settled_cost, &(&1.settled_cost_micros == 750_000))
     assert [%{request_count: 1, total_tokens: 100}] = dashboard.tables.daily_rollups
 
     assert %{requests: 2, attempts: 2, settlements: 1, daily_rollups: 1, codex_turns: 1} =
@@ -574,7 +574,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.kpis.success_rate == %{value: nil, unit: "percent"}
     assert dashboard.kpis.tokens.total_tokens == 0
     assert dashboard.kpis.tokens_per_second == %{value: nil, unit: "tokens/second"}
-    assert dashboard.kpis.estimated_cost == %{status: "unavailable", micros: 0, usd: nil}
+    assert dashboard.kpis.settled_cost == %{status: "unavailable", micros: 0, usd: nil}
     assert dashboard.kpis.average_latency_ms == %{value: nil, unit: "ms"}
     assert dashboard.kpis.turns == %{value: 0, succeeded: 0, failed: 0, in_progress: 0}
     assert dashboard.kpis.quota_health.state == :unknown
@@ -609,7 +609,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.filters.pool_options == []
     assert dashboard.charts.requests == []
     assert dashboard.charts.tokens == []
-    assert dashboard.charts.estimated_cost == []
+    assert dashboard.charts.settled_cost == []
     assert Map.fetch!(dashboard.charts, :model_usage) == []
   end
 
@@ -660,7 +660,8 @@ defmodule CodexPooler.Admin.StatsTest do
       total_tokens: 42,
       input_tokens: 30,
       output_tokens: 12,
-      estimated_cost_micros: 420_000
+      estimated_cost_micros: 420_000,
+      settled_cost_micros: 210_000
     })
     |> set_ledger_time!(occurred_at)
 
@@ -669,7 +670,7 @@ defmodule CodexPooler.Admin.StatsTest do
 
     assert dashboard.kpis.requests.value == 1
     assert dashboard.kpis.tokens.total_tokens == 42
-    assert dashboard.kpis.estimated_cost.micros == 420_000
+    assert dashboard.kpis.settled_cost.micros == 210_000
     assert dashboard.tables.daily_rollups == []
     assert dashboard.sources.daily_rollups == 0
     assert dashboard.sources.usage_source == :raw_ledger_fallback
@@ -705,7 +706,8 @@ defmodule CodexPooler.Admin.StatsTest do
       input_tokens: 60,
       cached_input_tokens: 20,
       output_tokens: 40,
-      estimated_cost_micros: 1_500_000
+      estimated_cost_micros: 1_500_000,
+      settled_cost_micros: 700_000
     })
     |> set_ledger_time!(occurred_at)
 
@@ -734,7 +736,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[pool.id].token_usage.total_tokens == 100
     assert metrics[pool.id].token_usage.cached_input_tokens == 20
     assert metrics[pool.id].token_usage_weekly.total_tokens == 125
-    assert metrics[pool.id].estimated_cost_micros == 1_500_000
+    assert metrics[pool.id].settled_cost_micros == 700_000
     assert length(metrics[pool.id].token_histogram) == 24
     assert Enum.any?(metrics[pool.id].token_histogram, &(&1.total_tokens == 100))
     assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 100
@@ -746,7 +748,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[other_pool.id].tokens_per_second == 500.0
     assert metrics[other_pool.id].token_usage.total_tokens == 50
     assert metrics[other_pool.id].token_usage_weekly.total_tokens == 50
-    assert metrics[other_pool.id].estimated_cost_micros == 50
+    assert metrics[other_pool.id].settled_cost_micros == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].token_histogram, & &1.total_tokens)) == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].request_histogram, & &1.requests)) == 1
 
@@ -755,7 +757,7 @@ defmodule CodexPooler.Admin.StatsTest do
 
     assert seven_day_metrics[pool.id].request_count == 2
     assert seven_day_metrics[pool.id].token_usage.total_tokens == 125
-    assert seven_day_metrics[pool.id].estimated_cost_micros == 1_500_025
+    assert seven_day_metrics[pool.id].settled_cost_micros == 700_025
     assert length(seven_day_metrics[pool.id].token_histogram) == 7
 
     assert Enum.sum(Enum.map(seven_day_metrics[pool.id].token_histogram, & &1.total_tokens)) ==
@@ -966,7 +968,7 @@ defmodule CodexPooler.Admin.StatsTest do
       reasoning_tokens: 10,
       total_tokens: 100,
       estimated_cost_micros: Decimal.new(1_500_000),
-      settled_cost_micros: Decimal.new(1_500_000),
+      settled_cost_micros: Decimal.new(750_000),
       created_at: now,
       updated_at: now
     }
@@ -1025,7 +1027,8 @@ defmodule CodexPooler.Admin.StatsTest do
       total_tokens: tokens,
       input_tokens: tokens,
       output_tokens: 0,
-      estimated_cost_micros: tokens
+      estimated_cost_micros: tokens,
+      settled_cost_micros: tokens
     })
     |> set_ledger_time!(timestamp)
 

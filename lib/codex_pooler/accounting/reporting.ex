@@ -54,6 +54,7 @@ defmodule CodexPooler.Accounting.Reporting do
           reasoning_tokens: entry.reasoning_tokens,
           total_tokens: entry.total_tokens,
           estimated_cost_micros: entry.estimated_cost_micros,
+          settled_cost_micros: entry.settled_cost_micros,
           occurred_at: entry.occurred_at
         }
     )
@@ -144,7 +145,8 @@ defmodule CodexPooler.Accounting.Reporting do
           success_count: rollup.success_count,
           failure_count: rollup.failure_count,
           total_tokens: rollup.total_tokens,
-          estimated_cost_micros: rollup.estimated_cost_micros
+          estimated_cost_micros: rollup.estimated_cost_micros,
+          settled_cost_micros: rollup.settled_cost_micros
         }
     )
   end
