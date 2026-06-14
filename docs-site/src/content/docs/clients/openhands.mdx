@@ -1,13 +1,26 @@
 ---
 title: OpenHands
-description: Configure OpenHands CLI with Codex Pooler's narrow OpenAI-compatible /v1 surface, a Pool API key, and env override mode.
+description: Configure OpenHands CLI with Codex Pooler's narrow OpenAI-compatible /v1 surface, OpenHands CLI config directory, a Pool API key, and env override mode.
 ---
 
-OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the Pool API key in the environment, point OpenHands at the `/v1` base URL, and pass `--override-with-envs` so the environment values win for the run.
+OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the Pool API key in the environment, point OpenHands at the `/v1` base URL, and pass `--override-with-envs` so the environment values win for the run without persisting Pool settings.
 
-## Install and run locally
+## Config/state directory
 
-Use the published OpenHands CLI through `uvx`:
+OpenHands CLI stores local state under `~/.openhands/`, created on first run. Current OpenHands CLI docs list these files:
+
+| Path | Purpose |
+| --- | --- |
+| `~/.openhands/agent_settings.json` | LLM configuration and agent settings |
+| `~/.openhands/cli_config.json` | CLI preferences |
+| `~/.openhands/mcp.json` | MCP server configuration |
+| `~/.openhands/conversations/` | Conversation history |
+
+On Windows, OpenHands CLI runs through WSL in the upstream install docs, so those paths live in the WSL user's home directory. This Codex Pooler example uses environment overrides instead of saved config because it is explicit, easy to test, and does not mutate the user's OpenHands state.
+
+## Run with environment overrides
+
+The `uvx` command below is a Codex Pooler smoke-friendly way to run the published OpenHands CLI. It is not a replacement for the upstream installation guide.
 
 ```bash
 export LLM_API_KEY=<pool-api-key>

@@ -79,11 +79,13 @@ Privacy boundaries:
 Agent guidance:
 - Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex CLI or Codex Desktop with CODEX_HOME/config.toml, model_provider=codex-pooler-ws, and the /backend-api/codex route.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
-- Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with LLM_BASE_URL, LLM_MODEL=openai/gpt-5.5, and --override-with-envs.
+- Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with environment overrides LLM_BASE_URL, LLM_MODEL=openai/gpt-5.5, --override-with-envs, and local state under ~/.openhands/.
 - Use https://docs.codex-pooler.com/clients/aider/ when configuring Aider with ~/.aider.conf.yml, model=openai/gpt-5.5, openai-api-base=https://codex-pooler.example.com/v1, and a Pool API key in OPENAI_API_KEY.
+- Use https://docs.codex-pooler.com/clients/continue/ when configuring Continue with ~/.continue/config.yaml on macOS/Linux or %USERPROFILE%\.continue\config.yaml on Windows, provider=openai, apiBase=https://codex-pooler.example.com/v1, and a Pool API key as a Continue secret.
+- Use https://docs.codex-pooler.com/clients/goose/ when configuring Goose with ~/.config/goose/config.yaml on macOS/Linux or %APPDATA%\Block\goose\config\config.yaml on Windows, GOOSE_PROVIDER=openai, OPENAI_HOST=https://codex-pooler.example.com, OPENAI_BASE_PATH=v1/chat/completions, and a Pool API key in OPENAI_API_KEY or Goose secret storage.
 - Use https://docs.codex-pooler.com/clients/kilo/ when configuring Kilo Code with ~/.config/kilo/kilo.jsonc, model=codex-pooler/gpt-5.5, provider options apiKey={env:CODEX_POOLER_API_KEY}, baseURL=https://codex-pooler.example.com/v1, and Kilo's chat-completions route shape.
 - Use https://docs.codex-pooler.com/clients/omp/ when configuring Oh My Pi (OMP) with ~/.omp/agent/models.yml, modelRoles in ~/.omp/agent/config.yml, api=openai-responses, authHeader=true, and a Pool API key in CODEX_POOLER_API_KEY.
-- Use https://docs.codex-pooler.com/clients/pi/ when configuring Pi with ~/.pi/agent/models.json, api=openai-responses, authHeader=true, and a Pool API key in CODEX_POOLER_API_KEY.
+- Use https://docs.codex-pooler.com/clients/pi/ when configuring Pi with ~/.pi/agent/models.json, ~/.pi/agent/settings.json, api=openai-responses, authHeader=true, and a Pool API key in CODEX_POOLER_API_KEY.
 - Use https://docs.codex-pooler.com/discovery/self-hosted-codex-gateway/ for short answers about Codex Pooler as a self-hosted Codex gateway.
 - Use https://docs.codex-pooler.com/discovery/codex-account-pooling/ for short answers about Pools, upstream accounts, eligibility, and routing.
 - Use https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/ for short answers about narrow /v1 SDK compatibility over Codex Pools.

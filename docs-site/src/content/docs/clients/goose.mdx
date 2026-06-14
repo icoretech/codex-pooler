@@ -1,9 +1,23 @@
 ---
 title: Goose
-description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 chat completions path and optional operator MCP metadata access.
+description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 chat completions path, config.yaml file locations, and optional operator MCP metadata access.
 ---
 
 Configure Goose's OpenAI provider with `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
+
+## Config file path
+
+Put persistent Goose provider and extension settings in `config.yaml`:
+
+| OS | Config file |
+| --- | --- |
+| macOS | `~/.config/goose/config.yaml` |
+| Linux | `~/.config/goose/config.yaml` |
+| Windows | `%APPDATA%\Block\goose\config\config.yaml` |
+
+Goose also keeps related files in the same config area: `permission.yaml` for tool permission levels, `secrets.yaml` when file-based secret storage is used, `permissions/tool_permissions.json` for runtime permission decisions, and `prompts/` for prompt templates. Direct edits usually require restarting existing Goose sessions; `goose info -v` shows the active settings.
+
+You can also manage settings from Goose Desktop **Settings** or by running `goose configure` in Goose CLI. Environment variables have higher precedence than the config file, so `OPENAI_API_KEY` can stay outside YAML.
 
 ```yaml
 GOOSE_PROVIDER: openai

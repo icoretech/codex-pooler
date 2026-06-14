@@ -1,9 +1,23 @@
 ---
 title: Pi
-description: Configure Pi coding agent with Codex Pooler's narrow OpenAI-compatible /v1 Responses surface and a Pool API key.
+description: Configure Pi coding agent with Codex Pooler's narrow OpenAI-compatible /v1 Responses surface, Pi models/settings file locations, and a Pool API key.
 ---
 
 Pi should use Codex Pooler through a custom provider in `~/.pi/agent/models.json`. Point that provider at the narrow OpenAI-compatible `/v1` surface, keep the Pool API key in the environment, and choose `openai-responses` so Pi sends agent turns through the Responses route.
+
+## Config file path
+
+Pi docs use home-relative paths for global config and project-local `.pi` paths for overrides:
+
+| Path | Scope |
+| --- | --- |
+| `~/.pi/agent/models.json` | Global custom providers and models |
+| `~/.pi/agent/settings.json` | Global defaults, UI behavior, resource paths, and project trust fallback |
+| `~/.pi/agent/trust.json` | Saved project trust decisions |
+| `~/.pi/agent/sessions/` | Saved sessions |
+| `.pi/settings.json` | Project settings that override and merge with global settings |
+
+On Windows, use the same home-relative paths under the user profile, for example `%USERPROFILE%\.pi\agent\models.json` and `%USERPROFILE%\.pi\agent\settings.json`.
 
 ## Install
 

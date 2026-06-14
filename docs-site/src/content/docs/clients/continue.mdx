@@ -1,9 +1,25 @@
 ---
 title: Continue
-description: Configure Continue with Codex Pooler's narrow OpenAI-compatible /v1 surface, model capabilities, and optional operator MCP metadata access.
+description: Configure Continue with Codex Pooler's narrow OpenAI-compatible /v1 surface, local config.yaml file locations, model capabilities, and optional operator MCP metadata access.
 ---
 
 Continue can use Codex Pooler as an OpenAI-compatible provider by setting `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue secret. For `gpt-5*` models, Continue uses the Responses API by default.
+
+## Config file path
+
+For local Continue configs, put the Codex Pooler assistant in `config.yaml`:
+
+| OS | Local config file |
+| --- | --- |
+| macOS | `~/.continue/config.yaml` |
+| Linux | `~/.continue/config.yaml` |
+| Windows | `%USERPROFILE%\.continue\config.yaml` |
+
+In the IDE extension, open the Continue chat sidebar, use the config selector above the chat input, then click the gear icon beside **Local Config**. Continue creates this file on first use and reloads it after saves.
+
+Continue CLI resolves config from `--config` first, then the saved last-used config, then the default assistant or `~/.continue/config.yaml` when not logged in.
+
+Hub configs live in Continue Mission Control instead of this local file. For Codex Pooler examples, local `config.yaml` is the clearest setup because it keeps the Pool route, capabilities, and optional MCP entry inspectable.
 
 ```yaml
 name: Codex Pooler

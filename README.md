@@ -520,8 +520,13 @@ change the MCP `url` to `https://codex-pooler.example.com/mcp`.
 <summary><img src=".github/assets/pi-favicon.png" alt="Pi logo" width="16" height="16"> Pi <code>~/.pi/agent/models.json</code> and <code>settings.json</code></summary>
 
 Pi works best through a custom provider that uses Codex Pooler's narrow
-OpenAI-compatible `/v1` Responses surface. Install Pi from npm so you get the
-latest published CLI:
+OpenAI-compatible `/v1` Responses surface. Put custom providers and models in
+`~/.pi/agent/models.json`; put global defaults in `~/.pi/agent/settings.json`;
+use `.pi/settings.json` for project overrides; and keep saved trust decisions in
+`~/.pi/agent/trust.json`. On Windows, use the same home-relative paths under the
+user profile, for example `%USERPROFILE%\.pi\agent\models.json`.
+
+Install Pi from npm so you get the latest published CLI:
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
@@ -801,6 +806,14 @@ Continue can use Codex Pooler as an OpenAI-compatible provider by setting
 `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue
 secret. For `gpt-5*` models, Continue uses the Responses API by default.
 
+For local Continue configs, put the assistant in `~/.continue/config.yaml` on
+macOS/Linux or `%USERPROFILE%\.continue\config.yaml` on Windows. In the IDE
+extension, open the Continue chat sidebar, use the config selector above the chat
+input, then click the gear icon beside **Local Config**. Continue CLI resolves
+`--config` first, then its saved last-used config, then the default assistant or
+`~/.continue/config.yaml` when not logged in.
+
+
 ```yaml
 name: Codex Pooler
 version: 1.0.0
@@ -912,6 +925,16 @@ Configure Goose's OpenAI provider for Codex Pooler's OpenAI-compatible
 chat-completions path. Keep the Pool API key in `OPENAI_API_KEY` or Goose's
 secret storage.
 
+Put persistent Goose provider and extension settings in
+`~/.config/goose/config.yaml` on macOS/Linux or
+`%APPDATA%\Block\goose\config\config.yaml` on Windows. Goose also keeps
+related files in that config area: `permission.yaml` for tool permission levels,
+`secrets.yaml` when file-based secret storage is used,
+`permissions/tool_permissions.json` for runtime permission decisions, and
+`prompts/` for prompt templates. Environment variables have higher precedence
+than the config file, so `OPENAI_API_KEY` can stay outside YAML.
+
+
 ```yaml
 GOOSE_PROVIDER: openai
 GOOSE_MODEL: gpt-5.5
@@ -1016,11 +1039,20 @@ completion style requests.
 </details>
 
 <details>
-<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands</summary>
+<summary><img src=".github/assets/openhands-favicon.png" alt="OpenHands logo" width="16" height="16"> OpenHands <code>~/.openhands/</code></summary>
 
 OpenHands CLI can use Codex Pooler through the narrow OpenAI-compatible `/v1`
 surface. Keep the Pool API key in the environment, set the OpenHands base URL to
-`/v1`, and use the OpenAI model prefix that OpenHands expects.
+`/v1`, and use the OpenAI model prefix that OpenHands expects. The command below
+uses `--override-with-envs`, so it does not persist Pool settings to OpenHands'
+local state.
+
+OpenHands CLI stores local state under `~/.openhands/`, created on first run.
+Current OpenHands CLI docs list `agent_settings.json` for LLM configuration and
+agent settings, `cli_config.json` for CLI preferences, `mcp.json` for MCP server
+configuration, and `conversations/` for conversation history. On Windows,
+OpenHands CLI runs through WSL in the upstream install docs, so those paths live
+in the WSL user's home directory.
 
 ```bash
 export LLM_API_KEY=<pool-api-key>
