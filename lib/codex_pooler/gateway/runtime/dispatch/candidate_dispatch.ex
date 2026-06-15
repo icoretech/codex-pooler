@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
 
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
+  alias CodexPooler.Gateway.RequestCompression
   alias CodexPooler.Gateway.Runtime.Dispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
@@ -50,6 +51,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
              context.endpoint,
              context.request_options
            ) do
+      context = %{context | request_options: request_options}
+
+      {upstream_payload, request_options} =
+        RequestCompression.maybe_compress(upstream_payload, context, request_options)
+
       context = %{context | request_options: request_options}
 
       dispatch_fun.(%PreparedContext{

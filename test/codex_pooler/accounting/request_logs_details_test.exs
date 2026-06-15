@@ -99,6 +99,67 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert log.errors == []
   end
 
+  test "request log rows expose sanitized compression summary without raw candidate strings" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    sentinel = "SENTINEL_TOOL_OUTPUT_SHOULD_NOT_RENDER"
+    compressed_sentinel = "SENTINEL_COMPRESSED_OUTPUT_SHOULD_NOT_STORE"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-row-compression",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_json",
+        status: "succeeded",
+        correlation_id: "row-compression"
+      })
+
+    assert {:ok, _attempt} =
+             Accounting.create_attempt(request, assignment, %{
+               status: "succeeded",
+               response_metadata: %{
+                 "payload_compression" => %{
+                   "enabled" => true,
+                   "attempted" => true,
+                   "status" => "compressed",
+                   "reason" => "rewritten",
+                   "route_class" => "proxy_http",
+                   "transport" => "http_json",
+                   "candidate_count" => 3,
+                   "compressed_count" => 2,
+                   "skipped_count" => 1,
+                   "original_bytes" => 12_000,
+                   "compressed_bytes" => 3_000,
+                   "original_tokens" => 900,
+                   "compressed_tokens" => 300,
+                   "strategies" => ["log_output", "diff"],
+                   "raw_candidate" => sentinel,
+                   "original_output" => sentinel,
+                   "compressed_output" => compressed_sentinel
+                 }
+               }
+             })
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+    assert log.id == request.id
+    assert log.metadata["payload_compression"]["candidate_count"] == 3
+    assert log.metadata["payload_compression"]["compressed_count"] == 2
+    assert log.metadata["payload_compression"]["skipped_count"] == 1
+    assert log.metadata["payload_compression"]["saved_bytes"] == 9000
+    assert log.metadata["payload_compression"]["saved_tokens"] == 600
+
+    assert log.payload_compression.status == "compressed"
+    assert log.payload_compression.reason == "rewritten"
+    assert log.payload_compression.unit == "tokens"
+    assert log.payload_compression.saved_count == 600
+    assert log.payload_compression.savings_percent == 66.67
+    assert log.payload_compression.compression_ratio == 0.3333
+
+    log_text = inspect(log)
+    refute log_text =~ sentinel
+    refute log_text =~ compressed_sentinel
+  end
+
   test "request log rows aggregate all sanitized denial attempt degraded and retryable errors" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

@@ -6,6 +6,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
     only: [
       cached_cost_title: 1,
+      compression_savings_line: 1,
+      compression_savings_reason: 1,
+      compression_savings_status: 1,
+      compression_savings_title: 1,
+      compression_savings_unit: 1,
       format_cached_input_cost_summary: 1,
       format_cached_token_breakdown: 1,
       format_errors: 2,
@@ -80,6 +85,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
           —
         </span>
       <% end %>
+      <span
+        :if={compression_line = compression_savings_line(@request_log)}
+        id={"#{@prefix}-#{@request_log.id}-compression-savings"}
+        data-role="compression-savings"
+        data-compression-unit={compression_savings_unit(@request_log)}
+        data-compression-status={compression_savings_status(@request_log)}
+        data-compression-reason={compression_savings_reason(@request_log)}
+        class="block whitespace-nowrap text-base-content/60"
+        title={compression_savings_title(@request_log)}
+      >
+        {compression_line}
+      </span>
       <span
         :for={error <- format_errors(@request_log, @datetime_preferences)}
         :if={@show_errors}

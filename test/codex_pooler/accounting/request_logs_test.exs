@@ -1445,6 +1445,200 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute inspect(log) =~ "raw websocket prompt"
   end
 
+  test "request logs project HTTP and websocket compression metadata without raw candidate content" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    sentinel = "SENTINEL_TOOL_OUTPUT_SHOULD_NOT_RENDER"
+    compressed_sentinel = "SENTINEL_COMPRESSED_OUTPUT_SHOULD_NOT_STORE"
+
+    assert {:ok, %{request: http_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses",
+               requested_model: "gpt-compression-http-log",
+               transport: "http_json",
+               status: "succeeded",
+               correlation_id: "compression-http-log",
+               request_metadata: %{
+                 "body" => %{"input" => sentinel}
+               }
+             })
+
+    assert {:ok, http_attempt} =
+             Accounting.create_attempt(http_request, assignment, %{
+               status: "succeeded",
+               response_metadata:
+                 compression_metadata(%{
+                   route_class: "proxy_http",
+                   transport: "http_json",
+                   candidate_count: 2,
+                   compressed_count: 1,
+                   skipped_count: 1,
+                   original_bytes: 4096,
+                   compressed_bytes: 1024,
+                   original_tokens: 1000,
+                   compressed_tokens: 400,
+                   raw_candidate: sentinel,
+                   original_output: sentinel,
+                   compressed_output: compressed_sentinel
+                 })
+             })
+
+    assert {:ok, %{request: websocket_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses",
+               requested_model: "gpt-compression-websocket-log",
+               transport: "websocket",
+               status: "succeeded",
+               correlation_id: "compression-websocket-log",
+               request_metadata: %{
+                 "websocket_frame" => sentinel
+               }
+             })
+
+    assert {:ok, websocket_attempt} =
+             Accounting.create_attempt(websocket_request, assignment, %{
+               status: "succeeded",
+               response_metadata:
+                 compression_metadata(%{
+                   route_class: "proxy_websocket",
+                   transport: "websocket",
+                   candidate_count: 1,
+                   compressed_count: 1,
+                   skipped_count: 0,
+                   original_bytes: 8192,
+                   compressed_bytes: 4096,
+                   raw_candidate: sentinel,
+                   original_output: sentinel,
+                   compressed_output: compressed_sentinel
+                 })
+             })
+
+    persisted_text =
+      inspect({
+        Repo.get!(Request, http_request.id).request_metadata,
+        Repo.get!(Request, websocket_request.id).request_metadata,
+        Repo.get!(Attempt, http_attempt.id).response_metadata,
+        Repo.get!(Attempt, websocket_attempt.id).response_metadata
+      })
+
+    refute persisted_text =~ sentinel
+    refute persisted_text =~ compressed_sentinel
+
+    assert %{items: logs, total: 2} =
+             Accounting.list_request_logs(pool, filters: [model: "compression-"])
+
+    logs_by_id = Map.new(logs, &{&1.id, &1})
+    http_log = Map.fetch!(logs_by_id, http_request.id)
+    websocket_log = Map.fetch!(logs_by_id, websocket_request.id)
+
+    assert http_log.metadata["payload_compression"]["status"] == "compressed"
+    assert http_log.metadata["payload_compression"]["reason"] == "rewritten"
+    assert http_log.metadata["payload_compression"]["candidate_count"] == 2
+    assert http_log.metadata["payload_compression"]["compressed_count"] == 1
+    assert http_log.metadata["payload_compression"]["skipped_count"] == 1
+    assert http_log.metadata["payload_compression"]["saved_bytes"] == 3072
+    assert http_log.metadata["payload_compression"]["saved_tokens"] == 600
+    assert http_log.payload_compression.saved_count == 600
+    assert http_log.payload_compression.unit == "tokens"
+    assert http_log.payload_compression.savings_percent == 60.0
+    assert http_log.payload_compression.compression_ratio == 0.4
+
+    assert websocket_log.metadata["payload_compression"]["status"] == "compressed"
+    assert websocket_log.metadata["payload_compression"]["reason"] == "rewritten"
+    assert websocket_log.metadata["payload_compression"]["saved_bytes"] == 4096
+    assert websocket_log.metadata["payload_compression"]["token_savings_percent"] == nil
+    assert websocket_log.payload_compression.saved_count == 4096
+    assert websocket_log.payload_compression.unit == "bytes"
+    assert websocket_log.payload_compression.savings_percent == 50.0
+    assert websocket_log.payload_compression.compression_ratio == 0.5
+
+    log_text = inspect(logs)
+    refute log_text =~ sentinel
+    refute log_text =~ compressed_sentinel
+  end
+
+  test "request logs keep skipped and failure compression reasons as safe codes" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    sentinel = "SENTINEL_TOOL_OUTPUT_SHOULD_NOT_RENDER"
+
+    assert {:ok, %{request: skipped_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses/compact",
+               requested_model: "gpt-compression-skipped-log",
+               transport: "http_compact_json",
+               status: "succeeded",
+               correlation_id: "compression-skipped-log"
+             })
+
+    assert {:ok, skipped_attempt} =
+             Accounting.create_attempt(skipped_request, assignment, %{
+               status: "succeeded",
+               response_metadata: %{
+                 "payload_compression" => %{
+                   "enabled" => true,
+                   "attempted" => true,
+                   "status" => "skipped",
+                   "reason" => "tokenizer_input_limit",
+                   "route_class" => "proxy_compact",
+                   "transport" => "http_compact_json",
+                   "candidate_count" => 2,
+                   "compressed_count" => 0,
+                   "skipped_count" => 2,
+                   "tokenizer_input_skipped_count" => 2,
+                   "raw_reason" => sentinel
+                 }
+               }
+             })
+
+    assert Repo.get!(Attempt, skipped_attempt.id).response_metadata["payload_compression"][
+             "tokenizer_input_skipped_count"
+           ] == 2
+
+    assert {:ok, %{request: failure_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses",
+               requested_model: "gpt-compression-failure-log",
+               transport: "http_json",
+               status: "failed",
+               correlation_id: "compression-failure-log",
+               last_error_code: "upstream_status"
+             })
+
+    assert {:ok, _attempt} =
+             Accounting.create_attempt(failure_request, assignment, %{
+               status: "failed",
+               response_metadata: %{
+                 "payload_compression" => %{
+                   "enabled" => true,
+                   "attempted" => true,
+                   "status" => "error_passthrough",
+                   "reason" => "compression_error",
+                   "route_class" => "proxy_http",
+                   "transport" => "http_json",
+                   "candidate_count" => 0,
+                   "compressed_count" => 0,
+                   "skipped_count" => 0,
+                   "error_message" => sentinel
+                 }
+               }
+             })
+
+    assert %{items: logs, total: 2} =
+             Accounting.list_request_logs(pool, filters: [model: "compression-"])
+
+    logs_by_id = Map.new(logs, &{&1.id, &1})
+    skipped_log = Map.fetch!(logs_by_id, skipped_request.id)
+    failure_log = Map.fetch!(logs_by_id, failure_request.id)
+
+    assert skipped_log.metadata["payload_compression"]["reason"] == "tokenizer_input_limit"
+    assert skipped_log.metadata["payload_compression"]["tokenizer_input_skipped_count"] == 2
+    assert skipped_log.payload_compression.reason == "tokenizer_input_limit"
+    assert skipped_log.payload_compression.tokenizer_input_skipped_count == 2
+    assert failure_log.metadata["payload_compression"]["reason"] == "compression_error"
+    refute inspect(logs) =~ sentinel
+  end
+
   test "request log status stays authoritative when the latest attempt reports owner_drained" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -2192,6 +2386,30 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
     refute inspect(log) =~ raw_idempotency_key
+  end
+
+  defp compression_metadata(attrs) do
+    %{
+      "payload_compression" => %{
+        "enabled" => true,
+        "attempted" => true,
+        "status" => "compressed",
+        "reason" => "rewritten",
+        "route_class" => Map.fetch!(attrs, :route_class),
+        "transport" => Map.fetch!(attrs, :transport),
+        "candidate_count" => Map.fetch!(attrs, :candidate_count),
+        "compressed_count" => Map.fetch!(attrs, :compressed_count),
+        "skipped_count" => Map.fetch!(attrs, :skipped_count),
+        "original_bytes" => Map.fetch!(attrs, :original_bytes),
+        "compressed_bytes" => Map.fetch!(attrs, :compressed_bytes),
+        "original_tokens" => Map.get(attrs, :original_tokens),
+        "compressed_tokens" => Map.get(attrs, :compressed_tokens),
+        "strategies" => ["log_output"],
+        "raw_candidate" => Map.fetch!(attrs, :raw_candidate),
+        "original_output" => Map.fetch!(attrs, :original_output),
+        "compressed_output" => Map.fetch!(attrs, :compressed_output)
+      }
+    }
   end
 
   defp refresh_request_log_facts(requests) do

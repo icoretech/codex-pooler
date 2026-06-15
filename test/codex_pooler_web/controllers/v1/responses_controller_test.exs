@@ -775,6 +775,86 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert attempt.status == "succeeded"
   end
 
+  test "POST /v1/responses compresses eligible translated tool output before dispatch",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_compressed_tool_output",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
+    enable_request_compression!(setup.pool)
+    omitted_sentinel = "v1 translated omitted sentinel"
+    original_output = compression_log_fixture(omitted_sentinel)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "role" => "tool",
+            "tool_call_id" => "call_v1_compressed_tool_output",
+            "content" => original_output
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_compressed_tool_output"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    translated_item = List.first(captured.json["input"])
+    assert translated_item["type"] == "function_call_output"
+    assert translated_item["call_id"] == "call_v1_compressed_tool_output"
+
+    compressed_output = translated_item["output"]
+    assert compressed_output != original_output
+    assert compressed_output =~ "[compressed log output: omitted"
+    refute compressed_output =~ omitted_sentinel
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.endpoint == "/backend-api/codex/responses"
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             "/v1/responses"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    assert %{
+             "enabled" => true,
+             "attempted" => true,
+             "status" => "compressed",
+             "route_class" => "proxy_stream",
+             "transport" => "http_sse",
+             "candidate_count" => 1,
+             "compressed_count" => 1,
+             "skipped_count" => 0
+           } = metadata = attempt.response_metadata["payload_compression"]
+
+    assert "log_output" in metadata["strategies"]
+    assert metadata["original_bytes"] > metadata["compressed_bytes"]
+    assert metadata["original_tokens"] > metadata["compressed_tokens"]
+    refute inspect(metadata) =~ omitted_sentinel
+    refute inspect(metadata) =~ "call_v1_compressed_tool_output"
+  end
+
   test "POST /v1/responses streaming settles retained terminal usage and pricing", %{
     conn: conn
   } do
@@ -1460,7 +1540,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
-  test "POST /v1/responses forwards real opencode ordinary replay shape", %{conn: conn} do
+  test "POST /v1/responses drops stateless reasoning from real opencode ordinary replay shape", %{
+    conn: conn
+  } do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -1546,17 +1628,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
              "message",
-             "reasoning",
              "message",
              "function_call",
              "function_call_output"
            ]
 
-    assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
-             Enum.at(captured.json["input"], 1)
-
-    refute Map.has_key?(Enum.at(captured.json["input"], 1), "id")
-    assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 2)
+    refute inspect(captured.json["input"]) =~ "synthetic-encrypted-reasoning"
+    assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 1)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -1574,7 +1652,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
-  test "POST /v1/responses normalizes OMP completed function call replay status", %{conn: conn} do
+  test "POST /v1/responses drops stateless OMP reasoning and normalizes function call status", %{
+    conn: conn
+  } do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -1636,16 +1716,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
              "message",
-             "reasoning",
              "function_call",
              "function_call_output"
            ]
 
-    assert %{"type" => "reasoning", "encrypted_content" => "synthetic-omp-encrypted-reasoning"} =
-             Enum.at(captured.json["input"], 1)
-
-    refute Map.has_key?(Enum.at(captured.json["input"], 1), "content")
-    refute Map.has_key?(Enum.at(captured.json["input"], 2), "status")
+    refute inspect(captured.json["input"]) =~ "synthetic-omp-encrypted-reasoning"
+    refute Map.has_key?(Enum.at(captured.json["input"], 1), "status")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -4064,6 +4140,39 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp enable_request_compression!(pool) do
+    pool
+    |> CodexPooler.Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{
+      request_compression_enabled: true,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp compression_log_fixture(omitted_sentinel) do
+    middle =
+      1..96
+      |> Enum.map(fn
+        48 -> "ordinary build line 48 #{omitted_sentinel}"
+        index -> "ordinary build line #{index}"
+      end)
+
+    [
+      "command started",
+      "context before first",
+      "error: first failure",
+      "context after first"
+    ]
+    |> Kernel.++(middle)
+    |> Kernel.++([
+      "context before final",
+      "fatal: final failure",
+      "context after final"
+    ])
+    |> Enum.join("\n")
   end
 
   defp long_turn_progress_events(response_id) do

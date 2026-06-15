@@ -144,7 +144,7 @@ defmodule CodexPooler.PoolsTest do
 
   describe "pool management" do
     @tag feature_pool_control_plane_analytics: true
-    test "routing settings load defaults, prompt cache affinity flag, analytics forwarding flag, compatibility flag, and persisted strategies by pool id" do
+    test "routing settings load defaults, feature flags, and persisted strategies by pool id" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
 
@@ -162,7 +162,8 @@ defmodule CodexPooler.PoolsTest do
                sticky_http_sessions: false,
                prompt_cache_affinity_enabled: true,
                control_plane_analytics_forwarding_enabled: true,
-               v1_compatibility_enabled: true
+               v1_compatibility_enabled: true,
+               request_compression_enabled: false
              } = Pools.routing_settings_with_defaults(pool)
 
       assert pool_id == pool.id
@@ -172,7 +173,8 @@ defmodule CodexPooler.PoolsTest do
                routing_strategy: "bridge_ring",
                prompt_cache_affinity_enabled: true,
                control_plane_analytics_forwarding_enabled: true,
-               v1_compatibility_enabled: true
+               v1_compatibility_enabled: true,
+               request_compression_enabled: false
              } =
                Pools.ensure_routing_settings(pool)
 
@@ -189,28 +191,47 @@ defmodule CodexPooler.PoolsTest do
                  "sticky_http_sessions" => true,
                  "prompt_cache_affinity_enabled" => false,
                  "control_plane_analytics_forwarding_enabled" => false,
-                 "v1_compatibility_enabled" => false
+                 "v1_compatibility_enabled" => false,
+                 "request_compression_enabled" => "true"
                })
 
       refute Pools.get_routing_settings(routed_pool).prompt_cache_affinity_enabled
       refute Pools.get_routing_settings(routed_pool).control_plane_analytics_forwarding_enabled
+      assert Pools.get_routing_settings(routed_pool).request_compression_enabled
       refute Pools.routing_settings_with_defaults(routed_pool).prompt_cache_affinity_enabled
 
       refute Pools.routing_settings_with_defaults(routed_pool).control_plane_analytics_forwarding_enabled
 
+      assert Pools.routing_settings_with_defaults(routed_pool).request_compression_enabled
       refute Pools.v1_compatibility_enabled?(routed_pool)
 
       assert {:ok, %RoutingSettings{} = reenabled_settings} =
                Pools.update_routing_settings(scope, routed_pool, %{
                  "prompt_cache_affinity_enabled" => true,
                  "control_plane_analytics_forwarding_enabled" => true,
-                 "v1_compatibility_enabled" => true
+                 "v1_compatibility_enabled" => true,
+                 "request_compression_enabled" => false
                })
 
       assert reenabled_settings.prompt_cache_affinity_enabled
       assert reenabled_settings.control_plane_analytics_forwarding_enabled
       assert reenabled_settings.v1_compatibility_enabled
+      refute reenabled_settings.request_compression_enabled
       assert Pools.v1_compatibility_enabled?(routed_pool)
+
+      assert {:ok, %RoutingSettings{} = string_disabled_settings} =
+               Pools.update_routing_settings(scope, routed_pool, %{
+                 "request_compression_enabled" => "false"
+               })
+
+      refute string_disabled_settings.request_compression_enabled
+
+      assert {:ok, %RoutingSettings{} = invalid_disabled_settings} =
+               Pools.update_routing_settings(scope, routed_pool, %{
+                 "request_compression_enabled" => "invalid"
+               })
+
+      refute invalid_disabled_settings.request_compression_enabled
 
       audits =
         Repo.all(
@@ -221,13 +242,36 @@ defmodule CodexPooler.PoolsTest do
 
       assert Enum.map(audits, & &1.details["routing_strategy"]) == [
                "deterministic_rotation",
+               "deterministic_rotation",
+               "deterministic_rotation",
                "deterministic_rotation"
              ]
 
-      assert Enum.map(audits, & &1.details["sticky_http_sessions"]) == [true, true]
-      assert Enum.map(audits, & &1.details["prompt_cache_affinity_enabled"]) == [false, true]
+      assert Enum.map(audits, & &1.details["sticky_http_sessions"]) == [true, true, true, true]
+
+      assert Enum.map(audits, & &1.details["prompt_cache_affinity_enabled"]) == [
+               false,
+               true,
+               true,
+               true
+             ]
+
+      assert Enum.map(audits, & &1.details["request_compression_enabled"]) == [
+               true,
+               false,
+               false,
+               false
+             ]
+
       assert Enum.all?(audits, &is_boolean(&1.details["prompt_cache_affinity_enabled"]))
-      assert Enum.map(audits, & &1.pool_id) == [routed_pool.id, routed_pool.id]
+      assert Enum.all?(audits, &is_boolean(&1.details["request_compression_enabled"]))
+
+      assert Enum.map(audits, & &1.pool_id) == [
+               routed_pool.id,
+               routed_pool.id,
+               routed_pool.id,
+               routed_pool.id
+             ]
 
       pool_id = pool.id
       routed_pool_id = routed_pool.id
@@ -241,21 +285,44 @@ defmodule CodexPooler.PoolsTest do
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
-                 v1_compatibility_enabled: true
+                 v1_compatibility_enabled: true,
+                 request_compression_enabled: false
                },
                ^routed_pool_id => %RoutingSettings{
                  routing_strategy: "deterministic_rotation",
                  prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
-                 v1_compatibility_enabled: true
+                 v1_compatibility_enabled: true,
+                 request_compression_enabled: false
                },
                ^missing_pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
                  control_plane_analytics_forwarding_enabled: true,
-                 v1_compatibility_enabled: true
+                 v1_compatibility_enabled: true,
+                 request_compression_enabled: false
                }
              } = settings_by_pool_id
+    end
+
+    test "routing settings persist boolean request compression enablement" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "compression-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               Pools.create_pool(scope, %{
+                 slug: "request-compression-boolean",
+                 name: "Request Compression Boolean"
+               })
+
+      assert {:ok, %RoutingSettings{} = settings} =
+               Pools.update_routing_settings(scope, pool, %{
+                 "request_compression_enabled" => true
+               })
+
+      assert settings.request_compression_enabled == true
+      assert Repo.get!(RoutingSettings, pool.id).request_compression_enabled == true
+      assert Pools.get_routing_settings(pool).request_compression_enabled == true
     end
 
     test "pool workflow defaults prompt cache affinity on and persists explicit disables" do

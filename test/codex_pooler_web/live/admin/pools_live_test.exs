@@ -685,12 +685,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-routing-controls #pool_sticky_http_sessions")
     assert has_element?(view, "#pool-create-routing-controls #pool_prompt_cache_affinity_enabled")
     assert has_element?(view, "#pool-create-routing-controls #pool_v1_compatibility_enabled")
+    assert has_element?(view, "#pool-create-routing-controls #pool_request_compression_enabled")
     assert has_element?(view, "#pool_routing_strategy")
     assert has_element?(view, "#pool_bridge_ring_size")
     assert has_element?(view, "#pool_sticky_websocket_sessions")
     assert has_element?(view, "#pool_sticky_http_sessions")
     assert has_element?(view, "#pool_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_v1_compatibility_enabled")
+    refute has_element?(view, "#pool_request_compression_enabled[checked]")
 
     assert has_element?(
              view,
@@ -732,6 +734,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-create-routing-controls",
              "Allow /v1 compatibility"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Compress upstream-bound Responses tool outputs before dispatch."
            )
 
     assert has_element?(view, "#pool_routing_strategy option", "Bridge ring")
@@ -839,6 +847,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == true
     assert settings.control_plane_analytics_forwarding_enabled == true
     assert settings.v1_compatibility_enabled == true
+    assert settings.request_compression_enabled == false
     assert has_element?(view, "#pool-row-#{created_pool.id}", "Generated Slug Pool")
     refute has_element?(view, "#pool-row-#{created_pool.id}", "generated-slug-pool")
     refute has_element?(view, "#pool-create-dialog")
@@ -882,6 +891,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
+        "request_compression_enabled" => "true",
         "upstream_identity_ids" => [first_identity.id, second_identity.id]
       }
     })
@@ -895,6 +905,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
+    assert settings.request_compression_enabled == true
 
     assert Enum.map(assignments, & &1.upstream_identity_id) |> Enum.sort() ==
              [first_identity.id, second_identity.id] |> Enum.sort()
@@ -947,6 +958,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
+        "request_compression_enabled" => "true",
         "upstream_identity_ids" => [identity.id]
       }
     })
@@ -962,6 +974,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool_prompt_cache_affinity_enabled[checked]")
     refute has_element?(view, "#pool_control_plane_analytics_forwarding_enabled[checked]")
     refute has_element?(view, "#pool_v1_compatibility_enabled[checked]")
+    assert has_element?(view, "#pool_request_compression_enabled[checked]")
 
     assert Repo.aggregate(Pool, :count, :id) == initial_pool_count
   end
@@ -1070,6 +1083,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
            )
 
     assert has_element?(view, "#pool-edit-routing-controls #pool_edit_v1_compatibility_enabled")
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls #pool_edit_request_compression_enabled"
+           )
+
     assert has_element?(view, "#pool_edit_routing_strategy")
     assert has_element?(view, "#pool_edit_bridge_ring_size")
     assert has_element?(view, "#pool_edit_sticky_websocket_sessions")
@@ -1077,6 +1096,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_edit_control_plane_analytics_forwarding_enabled")
     assert has_element?(view, "#pool_edit_v1_compatibility_enabled")
+    refute has_element?(view, "#pool_edit_request_compression_enabled[checked]")
 
     assert has_element?(
              view,
@@ -1124,6 +1144,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-edit-routing-controls",
              "Allow /v1 compatibility"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Compress upstream-bound Responses tool outputs before dispatch."
            )
 
     view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()
@@ -1216,6 +1242,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
+        "request_compression_enabled" => "true",
         "upstream_identity_ids" => [kept_assignment.upstream_identity_id],
         "api_key_ids" => [linked_api_key.id, moved_api_key.id]
       }
@@ -1229,6 +1256,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
+    assert settings.request_compression_enabled == true
     assert Repo.get!(PoolUpstreamAssignment, removed_assignment.id).status == "deleted"
     assert Repo.get!(PoolUpstreamAssignment, kept_assignment.id).status == "active"
     assert Repo.get!(APIKey, linked_api_key.id).pool_id == pool.id
@@ -1482,7 +1510,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "sticky_websocket_sessions" => false,
         "sticky_http_sessions" => true,
         "prompt_cache_affinity_enabled" => false,
-        "control_plane_analytics_forwarding_enabled" => true
+        "control_plane_analytics_forwarding_enabled" => true,
+        "request_compression_enabled" => true
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
@@ -1490,6 +1519,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
     refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
+    assert has_element?(view, "#pool_edit_request_compression_enabled[checked]")
 
     view
     |> element("#pool-edit-form")
@@ -1502,6 +1532,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
+        "request_compression_enabled" => "false",
         "upstream_identity_ids" => []
       }
     })
@@ -1515,6 +1546,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.control_plane_analytics_forwarding_enabled == false
     assert settings.v1_compatibility_enabled == false
+    assert settings.request_compression_enabled == false
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
     refute has_element?(view, "#pool-edit-dialog")
   end
@@ -1599,6 +1631,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "control_plane_analytics_forwarding_enabled" => "false",
         "v1_compatibility_enabled" => "false",
+        "request_compression_enabled" => "true",
         "upstream_identity_ids" => [second_assignment.upstream_identity_id]
       }
     })
@@ -1618,6 +1651,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     refute has_element?(view, "#pool_edit_control_plane_analytics_forwarding_enabled[checked]")
     refute has_element?(view, "#pool_edit_v1_compatibility_enabled[checked]")
+    assert has_element?(view, "#pool_edit_request_compression_enabled[checked]")
 
     refute has_element?(
              view,

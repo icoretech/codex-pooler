@@ -1115,6 +1115,131 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-#{cached_request.id}-cached-tokens", "total: 150")
   end
 
+  test "renders compression savings from safe metadata with token-first and byte fallback",
+       %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "compression-savings-logs",
+        name: "Compression Savings Logs"
+      })
+
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "Compression key"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    sentinel = "SENTINEL_TOOL_OUTPUT_SHOULD_NOT_RENDER"
+    compressed_sentinel = "SENTINEL_COMPRESSED_OUTPUT_SHOULD_NOT_STORE"
+
+    assert {:ok, %{request: token_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses",
+               requested_model: "gpt-compression-token-ui",
+               transport: "http_json",
+               status: "succeeded",
+               correlation_id: "compression-token-ui",
+               request_metadata: %{"body" => %{"input" => sentinel}}
+             })
+
+    assert {:ok, _token_attempt} =
+             Accounting.create_attempt(token_request, assignment, %{
+               status: "succeeded",
+               response_metadata:
+                 ui_compression_metadata(%{
+                   route_class: "proxy_http",
+                   transport: "http_json",
+                   original_bytes: 4096,
+                   compressed_bytes: 1024,
+                   original_tokens: 1000,
+                   compressed_tokens: 400,
+                   tokenizer_input_skipped_count: 1,
+                   raw_candidate: sentinel,
+                   original_output: sentinel,
+                   compressed_output: compressed_sentinel
+                 })
+             })
+
+    ledger_entry_fixture(token_request, %{
+      input_tokens: 80,
+      cached_input_tokens: 0,
+      output_tokens: 20,
+      total_tokens: 100,
+      settled_cost_micros: 1_000,
+      details: %{"pricing_status" => "priced", "settled_cost_micros" => "1000"}
+    })
+
+    assert {:ok, %{request: byte_request}} =
+             Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+               endpoint: "/backend-api/codex/responses",
+               requested_model: "gpt-compression-byte-ui",
+               transport: "websocket",
+               status: "succeeded",
+               correlation_id: "compression-byte-ui",
+               request_metadata: %{"websocket_frame" => sentinel}
+             })
+
+    assert {:ok, _byte_attempt} =
+             Accounting.create_attempt(byte_request, assignment, %{
+               status: "succeeded",
+               response_metadata:
+                 ui_compression_metadata(%{
+                   route_class: "proxy_websocket",
+                   transport: "websocket",
+                   original_bytes: 8192,
+                   compressed_bytes: 4096,
+                   raw_candidate: sentinel,
+                   original_output: sentinel,
+                   compressed_output: compressed_sentinel
+                 })
+             })
+
+    ledger_entry_fixture(byte_request, %{
+      input_tokens: 40,
+      cached_input_tokens: 0,
+      output_tokens: 10,
+      total_tokens: 50,
+      settled_cost_micros: 500,
+      details: %{"pricing_status" => "priced", "settled_cost_micros" => "500"}
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    assert has_element?(
+             view,
+             "#request-log-#{token_request.id}-compression-savings[data-compression-unit='tokens'][data-compression-status='compressed'][data-compression-reason='rewritten']",
+             "compression saved 600 tokens (60%) · ratio 0.4x"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{token_request.id}-compression-savings[title*='tokenizer input skipped: 1']"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{token_request.id}-compression-savings[data-compression-unit='tokens']",
+             "compression saved 600 tokens (60%) · ratio 0.4x"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{token_request.id}-compression-savings[title*='tokenizer input skipped: 1']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{byte_request.id}-compression-savings[data-compression-unit='bytes'][data-compression-status='compressed'][data-compression-reason='rewritten']",
+             "compression saved 4,096 bytes (50%) · byte ratio 0.5x"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{byte_request.id}-compression-savings[data-compression-unit='bytes']",
+             "compression saved 4,096 bytes (50%) · byte ratio 0.5x"
+           )
+
+    html = render(view)
+    refute html =~ sentinel
+    refute html =~ compressed_sentinel
+  end
+
   test "transport and route helpers render in separate columns",
        %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "transport-route", name: "Transport Route"})
@@ -2351,6 +2476,41 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     %{request: request, attempt: attempt, identity: identity, assignment: assignment}
   end
+
+  defp ui_compression_metadata(attrs) do
+    metadata =
+      %{
+        "enabled" => true,
+        "attempted" => true,
+        "status" => "compressed",
+        "reason" => "rewritten",
+        "route_class" => Map.fetch!(attrs, :route_class),
+        "transport" => Map.fetch!(attrs, :transport),
+        "candidate_count" => 1,
+        "compressed_count" => 1,
+        "skipped_count" => 0,
+        "original_bytes" => Map.fetch!(attrs, :original_bytes),
+        "compressed_bytes" => Map.fetch!(attrs, :compressed_bytes),
+        "strategies" => ["log_output"],
+        "raw_candidate" => Map.fetch!(attrs, :raw_candidate),
+        "original_output" => Map.fetch!(attrs, :original_output),
+        "compressed_output" => Map.fetch!(attrs, :compressed_output)
+      }
+
+    metadata =
+      metadata
+      |> maybe_put("original_tokens", Map.get(attrs, :original_tokens))
+      |> maybe_put("compressed_tokens", Map.get(attrs, :compressed_tokens))
+      |> maybe_put(
+        "tokenizer_input_skipped_count",
+        Map.get(attrs, :tokenizer_input_skipped_count)
+      )
+
+    %{"payload_compression" => metadata}
+  end
+
+  defp maybe_put(metadata, _key, nil), do: metadata
+  defp maybe_put(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp assigned_admin_conn(scope, pool, email) do
     %{user: admin, temporary_password: temporary_password} =

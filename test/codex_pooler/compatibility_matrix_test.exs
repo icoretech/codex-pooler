@@ -1,0 +1,96 @@
+defmodule CodexPooler.CompatibilityMatrixTest do
+  use ExUnit.Case, async: true
+
+  alias CodexPooler.CompatibilityMatrix
+
+  describe "request compression compatibility contract" do
+    test "documents Pool-gated request-side fail-open metadata-only behavior" do
+      feature = CompatibilityMatrix.by_slug!(:request_compression)
+      fixture = CompatibilityMatrix.fixture!(:request_compression)
+
+      assert feature.status == :supported
+      assert feature.current == :pool_gated_request_side_payload_rewrite
+      assert :route in feature.categories
+      assert :auth in feature.categories
+      assert :error in feature.categories
+      assert :streaming in feature.categories
+      assert :ownership in feature.categories
+      assert :degraded in feature.categories
+
+      assert feature.contract =~ "Pool-gated"
+      assert feature.contract =~ "request_compression_enabled"
+      assert feature.contract =~ "request-side only"
+      assert feature.contract =~ "fail-open"
+      assert feature.contract =~ "metadata-only"
+      assert feature.contract =~ "payload_compression"
+
+      assert Map.fetch!(fixture, :pool_gate) == %{
+               setting: "request_compression_enabled",
+               default_enabled: false,
+               disabled_behavior: "original_request_passthrough"
+             }
+
+      assert Map.fetch!(fixture, :direction) == "request_side_only"
+      assert Map.fetch!(fixture, :failure_mode) == "fail_open_original_request"
+
+      assert Map.fetch!(fixture, :privacy) == %{
+               raw_outputs_stored: false,
+               raw_response_bodies_stored: false,
+               ccr_retrieval: false,
+               request_log_metadata: "payload_compression",
+               metadata_only: true
+             }
+    end
+
+    test "keeps eligible routes and public compact unsupported behavior explicit" do
+      feature = CompatibilityMatrix.by_slug!(:request_compression)
+      fixture = CompatibilityMatrix.fixture!(:request_compression)
+
+      assert feature.routes == [
+               %{method: :post, path: "/backend-api/codex/responses"},
+               %{method: :post, path: "/backend-api/codex/v1/responses"},
+               %{method: :post, path: "/backend-api/codex/v1/chat/completions"},
+               %{method: :post, path: "/v1/responses"},
+               %{method: :post, path: "/v1/chat/completions"},
+               %{method: :post, path: "/backend-api/codex/responses/compact"},
+               %{method: :post, path: "/backend-api/codex/v1/responses/compact"},
+               %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+               %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"},
+               %{method: :get, path: "/v1/responses", transport: "websocket"}
+             ]
+
+      assert Map.fetch!(fixture, :eligible_route_families) == [
+               "backend_responses",
+               "backend_v1_responses_alias",
+               "backend_v1_chat_alias",
+               "public_v1_responses",
+               "public_v1_chat_translation",
+               "backend_compact",
+               "backend_v1_compact_alias",
+               "backend_websocket_response_create",
+               "backend_v1_websocket_response_create_alias",
+               "public_v1_websocket_response_create"
+             ]
+
+      assert Map.fetch!(fixture, :ineligible_surfaces) == [
+               "multipart",
+               "files",
+               "audio",
+               "images",
+               "admin",
+               "mcp",
+               "usage",
+               "control_plane"
+             ]
+
+      assert Map.fetch!(fixture, :public_unsupported_compact) == %{
+               method: :post,
+               path: "/v1/responses/compact",
+               status: 404,
+               error_code: "unsupported_endpoint",
+               compression_eligible: false,
+               upstream_dispatch: false
+             }
+    end
+  end
+end

@@ -247,6 +247,16 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         OpenAI-style `/v1` compatibility routes.
                       </p>
                     </div>
+                    <div class="routing-matrix-option">
+                      <.input
+                        field={@form[:request_compression_enabled]}
+                        type="checkbox"
+                        label="Request compression"
+                      />
+                      <p class="routing-option-help">
+                        Compress upstream-bound Responses tool outputs before dispatch.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>

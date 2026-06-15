@@ -213,6 +213,28 @@ defmodule CodexPooler.CompatibilityMatrix do
         "transient SSE failures may retry only before the client sees output, message, tool, or delta events"
     },
     %{
+      slug: :request_compression,
+      status: :supported,
+      current: :pool_gated_request_side_payload_rewrite,
+      categories: [:route, :auth, :error, :streaming, :ownership, :degraded],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/v1/responses"},
+        %{method: :post, path: "/backend-api/codex/v1/chat/completions"},
+        %{method: :post, path: "/v1/responses"},
+        %{method: :post, path: "/v1/chat/completions"},
+        %{method: :post, path: "/backend-api/codex/responses/compact"},
+        %{method: :post, path: "/backend-api/codex/v1/responses/compact"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :request_compression,
+      contract:
+        "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches, while public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
+    },
+    %{
       slug: :control_plane_surface,
       status: :supported,
       current: :explicit_authenticated_proxy_routes,
@@ -258,7 +280,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, emit early public streaming terminal errors without synthetic success prefixes, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, keep POST /v1/responses/compact routed only to deterministic unsupported_endpoint with no upstream compact dispatch, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, emit early public streaming terminal errors without synthetic success prefixes, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -490,6 +512,58 @@ defmodule CodexPooler.CompatibilityMatrix do
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic stream", "stream" => true},
       retry_window: "before_visible_output"
     },
+    request_compression: %{
+      pool_gate: %{
+        setting: "request_compression_enabled",
+        default_enabled: false,
+        disabled_behavior: "original_request_passthrough"
+      },
+      direction: "request_side_only",
+      failure_mode: "fail_open_original_request",
+      route_classes: %{
+        http: ["proxy_http", "proxy_stream"],
+        compact: "proxy_compact",
+        websocket: "proxy_websocket",
+        public_unsupported_compact: "proxy_http"
+      },
+      eligible_route_families: [
+        "backend_responses",
+        "backend_v1_responses_alias",
+        "backend_v1_chat_alias",
+        "public_v1_responses",
+        "public_v1_chat_translation",
+        "backend_compact",
+        "backend_v1_compact_alias",
+        "backend_websocket_response_create",
+        "backend_v1_websocket_response_create_alias",
+        "public_v1_websocket_response_create"
+      ],
+      ineligible_surfaces: [
+        "multipart",
+        "files",
+        "audio",
+        "images",
+        "admin",
+        "mcp",
+        "usage",
+        "control_plane"
+      ],
+      public_unsupported_compact: %{
+        method: :post,
+        path: "/v1/responses/compact",
+        status: 404,
+        error_code: "unsupported_endpoint",
+        compression_eligible: false,
+        upstream_dispatch: false
+      },
+      privacy: %{
+        raw_outputs_stored: false,
+        raw_response_bodies_stored: false,
+        ccr_retrieval: false,
+        request_log_metadata: "payload_compression",
+        metadata_only: true
+      }
+    },
     control_plane_surface: %{
       auth: "required_bearer_api_key",
       route_class: "proxy_control",
@@ -536,6 +610,13 @@ defmodule CodexPooler.CompatibilityMatrix do
         "audio",
         "images"
       ],
+      unsupported_compact: %{
+        method: :post,
+        path: "/v1/responses/compact",
+        status: 404,
+        error_code: "unsupported_endpoint",
+        upstream_dispatch: false
+      },
       routes: [
         "/v1/models",
         "/v1/responses",

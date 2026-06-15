@@ -1157,7 +1157,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert Enum.at(coerced["input"], 2)["namespace"] == "browser.search"
     end
 
-    test "opencode ordinary replay accepts idless encrypted reasoning and assistant phase" do
+    test "opencode ordinary replay drops idless encrypted reasoning and preserves assistant phase" do
       payload = %{
         "model" => "gpt-fixture-text",
         "include" => ["reasoning.encrypted_content"],
@@ -1213,22 +1213,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert Enum.map(coerced["input"], & &1["type"]) == [
                "message",
-               "reasoning",
                "message",
                "function_call",
                "function_call_output"
              ]
 
-      assert %{"type" => "reasoning", "encrypted_content" => "synthetic-encrypted-reasoning"} =
+      assert %{"role" => "assistant", "phase" => "commentary"} =
                Enum.at(coerced["input"], 1)
 
-      refute Map.has_key?(Enum.at(coerced["input"], 1), "id")
-
-      assert %{"role" => "assistant", "phase" => "commentary"} =
-               Enum.at(coerced["input"], 2)
+      refute inspect(coerced["input"]) =~ "synthetic-encrypted-reasoning"
     end
 
-    test "Hermes ordinary replay accepts completed assistant message metadata" do
+    test "Hermes ordinary replay drops reasoning and preserves completed assistant metadata" do
       payload = %{
         "model" => "gpt-fixture-text",
         "store" => false,
@@ -1253,7 +1249,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
 
       assert [
-               %{"type" => "reasoning"},
                %{
                  "type" => "message",
                  "role" => "assistant",
@@ -1264,6 +1259,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                },
                %{"type" => "message", "role" => "user"}
              ] = coerced["input"]
+
+      refute inspect(coerced["input"]) =~ "synthetic-encrypted-reasoning"
     end
 
     test "OpenClaw ordinary replay normalizes assistant thinking content" do
@@ -1302,7 +1299,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       refute inspect(coerced["input"]) =~ "thinkingSignature"
     end
 
-    test "OpenClaw ordinary replay accepts converted reasoning and message items" do
+    test "OpenClaw ordinary replay drops converted reasoning and keeps message items" do
       payload = %{
         "model" => "gpt-fixture-text",
         "store" => false,
@@ -1346,11 +1343,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert [
                %{"type" => "message", "role" => "user"},
                %{
-                 "type" => "reasoning",
-                 "encrypted_content" => "synthetic-encrypted-reasoning",
-                 "id" => "rs_synthetic_openclaw"
-               },
-               %{
                  "type" => "message",
                  "role" => "assistant",
                  "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
@@ -1363,6 +1355,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       refute inspect(coerced["input"]) =~ "annotations"
       refute inspect(coerced["input"]) =~ "content\" => []"
+      refute inspect(coerced["input"]) =~ "synthetic-encrypted-reasoning"
+      refute inspect(coerced["input"]) =~ "rs_synthetic_openclaw"
     end
 
     test "opencode native replay repairs paired blank tool call ids only" do

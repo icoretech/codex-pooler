@@ -75,6 +75,10 @@ surface, while instance admins work only with their assigned Pools.
 - **Prompt-cache locality:** use a transient `prompt_cache_key` to prefer the
   same eligible upstream account for repeat stateless requests, improving
   provider-side cache locality without storing prompts or responses locally
+- **Per-Pool request compression:** optionally compress upstream-bound
+  Responses tool outputs before dispatch on supported request routes. The
+  option is disabled by default, request-side only, and records safe aggregate
+  savings without storing raw outputs.
 - **Operator dashboard:** manage Pool-scoped accounts, API keys, invites,
   usage, request logs, audit logs, MCP access, and the owner-only jobs,
   operators, and system settings surfaces
@@ -1326,6 +1330,26 @@ headers downstream. Public `/v1/responses` and websocket request headers do not
 use that backend-only forwarding lane; backend websocket request-scoped turn
 state travels in `response.create.client_metadata["x-codex-turn-state"]`, and
 raw metadata values are not persisted.
+
+Request compression is a per-Pool admin option stored as
+`request_compression_enabled`. It is disabled by default. When enabled, Codex
+Pooler can rewrite request-side Responses tool-output payloads before upstream
+dispatch for these routes only: `POST /backend-api/codex/responses`,
+`POST /backend-api/codex/v1/responses`,
+`POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`,
+`POST /v1/chat/completions`, `POST /backend-api/codex/responses/compact`,
+`POST /backend-api/codex/v1/responses/compact`, and backend or narrow public
+Responses websocket `response.create` work. Multipart, file, audio, image,
+admin, MCP, usage, and control-plane requests are not eligible; public
+`/v1/responses/compact` remains unsupported because it has no upstream compact
+dispatch.
+
+Request compression is request-side only. Codex Pooler does not store raw tool
+outputs, does not store raw response bodies, and does not implement
+CCR/retrieval. Request logs may show `payload_compression` metadata with safe
+aggregate savings only, preferring saved token count and percent when local
+token counts are available and falling back to byte savings when token counts
+are unavailable.
 
 ## Operator MCP Service
 

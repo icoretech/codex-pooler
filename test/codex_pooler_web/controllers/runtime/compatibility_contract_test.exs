@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     strict_schema_validation
     unsupported_input_image_reference
     first_event_stream_retry
+    request_compression
     control_plane_surface
     backend_alpha_search
     v1_supported_surface
@@ -334,6 +335,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "OpenAI-compatible /v1 routes"
       assert feature.contract =~ "narrow GET /v1/responses Responses websocket compatibility only"
       assert feature.contract =~ "exclude broad /v1/realtime routes"
+      assert feature.contract =~ "POST /v1/responses/compact"
+      assert feature.contract =~ "unsupported_endpoint"
+      assert feature.contract =~ "no upstream compact dispatch"
       assert feature.contract =~ "documented local precedence"
 
       assert feature.contract =~
@@ -355,6 +359,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.default_enabled == true
       assert fixture.websocket_route == %{method: :get, path: "/v1/responses"}
       assert fixture.websocket_contract == "narrow_responses_websocket_only"
+
+      assert fixture.unsupported_compact == %{
+               method: :post,
+               path: "/v1/responses/compact",
+               status: 404,
+               error_code: "unsupported_endpoint",
+               upstream_dispatch: false
+             }
 
       assert fixture.continuity_precedence == [
                "x-codex-window-id",

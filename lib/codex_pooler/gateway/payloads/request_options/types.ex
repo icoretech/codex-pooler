@@ -162,12 +162,13 @@ end
 
 defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
   @moduledoc false
-  defstruct [:now, :interrupt_reason, :gateway_debug_payload]
+  defstruct [:now, :interrupt_reason, :gateway_debug_payload, :payload_compression]
 
   @type t :: %__MODULE__{
           now: DateTime.t() | nil,
           interrupt_reason: String.t() | nil,
-          gateway_debug_payload: map() | nil
+          gateway_debug_payload: map() | nil,
+          payload_compression: map() | nil
         }
 end
 

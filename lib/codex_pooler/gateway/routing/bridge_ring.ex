@@ -190,7 +190,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   defp strategy_order("quota_first", candidates, %Model{} = model, seed, route_state) do
     Enum.sort_by(candidates, fn {assignment, identity} ->
       {
-        -quota_headroom_score(identity, model, route_state),
+        -quota_capacity_score(identity, model, route_state),
         -rendezvous_score(seed, assignment.id)
       }
     end)
@@ -587,7 +587,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     tail ++ head
   end
 
-  defp quota_headroom_score(identity, %Model{} = model) do
+  defp quota_capacity_score(identity, %Model{} = model) do
     identity
     |> QuotaWindows.quota_window_selection_data(quota_scope_opts(model))
     |> Map.get(:routing_windows, [])
@@ -597,7 +597,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Enum.min(fn -> 0 end)
   end
 
-  defp quota_headroom_score(identity, %Model{} = model, %RouteState{} = route_state) do
+  defp quota_capacity_score(identity, %Model{} = model, %RouteState{} = route_state) do
     route_state
     |> RouteState.quota_windows_for_identity(identity)
     |> QuotaWindows.quota_window_selection_data_from_windows(quota_scope_opts(model))
@@ -608,8 +608,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Enum.min(fn -> 0 end)
   end
 
-  defp quota_headroom_score(identity, %Model{} = model, _route_state),
-    do: quota_headroom_score(identity, model)
+  defp quota_capacity_score(identity, %Model{} = model, _route_state),
+    do: quota_capacity_score(identity, model)
 
   defp routing_settings(_auth, %RouteState{routing_settings: %RoutingSettings{} = settings}),
     do: settings

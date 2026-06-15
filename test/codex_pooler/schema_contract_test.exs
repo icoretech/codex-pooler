@@ -335,6 +335,7 @@ defmodule CodexPooler.SchemaContractTest do
   test "preserves JSONB, decimal-compatible money/rate fields, and integer token counters" do
     assert column_type("pool_routing_settings", "metadata") == "jsonb"
     assert column_type("pool_routing_settings", "prompt_cache_affinity_enabled") == "boolean"
+    assert column_type("pool_routing_settings", "request_compression_enabled") == "boolean"
     assert column_type("models", "metadata") == "jsonb"
     assert column_type("ledger_entries", "details") == "jsonb"
     assert column_type("account_quota_windows", "metadata") == "jsonb"
@@ -890,10 +891,11 @@ defmodule CodexPooler.SchemaContractTest do
     end
   end
 
-  test "pool routing settings expose prompt cache affinity as non-null default-on storage" do
+  test "pool routing settings expose feature flags as non-null boolean storage" do
     columns = table_columns("pool_routing_settings")
 
     assert columns["prompt_cache_affinity_enabled"] == {"boolean", "NO"}
+    assert columns["request_compression_enabled"] == {"boolean", "NO"}
 
     assert [["true"]] =
              Repo.query!("""
@@ -902,6 +904,15 @@ defmodule CodexPooler.SchemaContractTest do
              WHERE table_schema = 'public'
                AND table_name = 'pool_routing_settings'
                AND column_name = 'prompt_cache_affinity_enabled'
+             """).rows
+
+    assert [["false"]] =
+             Repo.query!("""
+             SELECT column_default
+             FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'pool_routing_settings'
+               AND column_name = 'request_compression_enabled'
              """).rows
   end
 
@@ -970,6 +981,9 @@ defmodule CodexPooler.SchemaContractTest do
     assert UpstreamIdentity.__schema__(:type, :account_email) == :string
 
     assert RoutingSettings.__schema__(:type, :prompt_cache_affinity_enabled) ==
+             :boolean
+
+    assert RoutingSettings.__schema__(:type, :request_compression_enabled) ==
              :boolean
 
     assert Model.__schema__(:type, :metadata) == :map

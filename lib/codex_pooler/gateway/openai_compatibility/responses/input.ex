@@ -12,7 +12,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   def normalize_input(%{"input" => input} = payload) when is_list(input) do
     with {:ok, input} <- normalize_input_items(input) do
-      {:ok, payload |> Map.put("input", input) |> lift_instruction_messages()}
+      {:ok,
+       payload
+       |> Map.put("input", input)
+       |> drop_stateless_reasoning_replay()
+       |> lift_instruction_messages()}
     end
   end
 
@@ -20,7 +24,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   def normalize_list_input(%{"input" => input} = payload) when is_list(input) do
     with {:ok, input} <- normalize_input_items(input) do
-      {:ok, Map.put(payload, "input", input)}
+      {:ok, payload |> Map.put("input", input) |> drop_stateless_reasoning_replay()}
     end
   end
 
@@ -570,6 +574,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     do: String.trim(value) != ""
 
   defp previous_response_id?(_payload), do: false
+
+  defp drop_stateless_reasoning_replay(%{"input" => input} = payload) when is_list(input) do
+    if previous_response_id?(payload) do
+      payload
+    else
+      Map.put(payload, "input", Enum.reject(input, &reasoning_replay_item?/1))
+    end
+  end
+
+  defp drop_stateless_reasoning_replay(payload), do: payload
+
+  defp reasoning_replay_item?(%{"type" => "reasoning"}), do: true
+  defp reasoning_replay_item?(_item), do: false
 
   defp validate_assistant_replay_item(%{"role" => "assistant", "content" => content} = item) do
     with :ok <-

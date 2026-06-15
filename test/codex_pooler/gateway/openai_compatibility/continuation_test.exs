@@ -471,7 +471,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       refute metadata =~ "raw_request"
     end
 
-    test "v1 Responses accepts Hermes completed assistant replay metadata before dispatch", %{
+    test "v1 Responses drops stateless Hermes reasoning replay metadata before dispatch", %{
       conn: conn
     } do
       upstream =
@@ -516,7 +516,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       refute Map.has_key?(captured.json, "previous_response_id")
 
       assert [
-               %{"type" => "reasoning"},
                %{
                  "type" => "message",
                  "role" => "assistant",
@@ -527,6 +526,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
                },
                %{"type" => "message", "role" => "user"}
              ] = captured.json["input"]
+
+      refute inspect(captured.json["input"]) =~ "synthetic-hermes-encrypted-reasoning"
 
       metadata = persisted_gateway_metadata(setup.pool.id)
       refute metadata =~ "synthetic assistant replay"
@@ -595,7 +596,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       refute metadata =~ "raw_request"
     end
 
-    test "v1 Responses accepts converted OpenClaw reasoning replay before dispatch", %{
+    test "v1 Responses drops stateless converted OpenClaw reasoning replay before dispatch", %{
       conn: conn
     } do
       upstream =
@@ -658,11 +659,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       assert [
                %{"type" => "message", "role" => "user"},
                %{
-                 "type" => "reasoning",
-                 "encrypted_content" => "synthetic-openclaw-encrypted-reasoning",
-                 "id" => "rs_v1_openclaw_converted_reasoning"
-               },
-               %{
                  "type" => "message",
                  "role" => "assistant",
                  "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
@@ -674,6 +670,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
              ] = captured.json["input"]
 
       refute inspect(captured.json["input"]) =~ "annotations"
+      refute inspect(captured.json["input"]) =~ "synthetic-openclaw-encrypted-reasoning"
+      refute inspect(captured.json["input"]) =~ "rs_v1_openclaw_converted_reasoning"
 
       metadata = persisted_gateway_metadata(setup.pool.id)
       refute metadata =~ "synthetic assistant replay"

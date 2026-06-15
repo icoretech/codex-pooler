@@ -76,6 +76,35 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   ]
 
   @prompt_cache_key_max_bytes 256
+  @payload_compression_statuses ~w(disabled ineligible compressed no_change skipped error_passthrough)
+  @payload_compression_reasons ~w(
+                                    pool_disabled
+                                    route_ineligible
+                                    transport_ineligible
+                                    payload_kind_ineligible
+                                    invalid_json
+                                    no_candidates
+                                    no_rewrites
+                                    below_min_bytes
+                                    scanner_error
+                                    strategy_unavailable
+                                    tokenizer_unavailable
+                                    token_count_failed
+                                    tokenizer_input_limit
+                                    no_token_shrink
+                                    over_body_limit
+                                    over_candidate_limit
+                                    compression_error
+                                    native_load_failed
+                                    rewritten
+                                  )
+  @payload_compression_strategy_names ~w(
+                                        log_output
+                                        search_results
+                                        diff
+                                        json_array_lossless
+                                      )
+  @safe_payload_compression_value ~r/\A[a-zA-Z0-9_.:-]+\z/
 
   @known_opt_keys [
     :accepted_turn_state,
@@ -112,6 +141,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :openai_translated_endpoint,
     :openai_chat_payload,
     :owner_instance_id,
+    :payload_compression,
     :pool_timeout,
     :pool_timeout_ms,
     :pool_upstream_assignment_id,
@@ -302,6 +332,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec put_runtime_context(t(), keyword()) :: t()
   def put_runtime_context(%__MODULE__{} = options, updates) when is_list(updates) do
+    updates = updates |> Map.new() |> normalize_runtime_updates()
     %{options | runtime: struct!(options.runtime, updates)}
   end
 
@@ -345,6 +376,23 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       %{"openai_compatibility" => metadata}
     end
   end
+
+  @spec payload_compression_attempt_metadata(t() | map() | term()) :: map()
+  def payload_compression_attempt_metadata(%__MODULE__{
+        runtime: %{payload_compression: metadata}
+      }),
+      do: payload_compression_metadata_envelope(metadata)
+
+  def payload_compression_attempt_metadata(%{runtime: %{payload_compression: metadata}}),
+    do: payload_compression_metadata_envelope(metadata)
+
+  def payload_compression_attempt_metadata(%{payload_compression: metadata}),
+    do: payload_compression_metadata_envelope(metadata)
+
+  def payload_compression_attempt_metadata(_opts), do: %{}
+
+  @spec payload_compression_request_metadata(t() | map() | term()) :: map()
+  def payload_compression_request_metadata(opts), do: payload_compression_attempt_metadata(opts)
 
   @spec route_class(t()) :: String.t() | nil
   def route_class(%__MODULE__{transport: %{route_class: route_class}})
@@ -499,7 +547,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     %RuntimeContext{
       now: Map.get(opts, :now),
       interrupt_reason: Map.get(opts, :interrupt_reason) || Map.get(opts, :reason),
-      gateway_debug_payload: Map.get(opts, :gateway_debug_payload)
+      gateway_debug_payload: Map.get(opts, :gateway_debug_payload),
+      payload_compression:
+        normalize_payload_compression_metadata(Map.get(opts, :payload_compression))
     }
   end
 
@@ -745,6 +795,192 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp openai_surface(_compatibility), do: nil
 
+  defp payload_compression_metadata_envelope(metadata) do
+    case normalize_payload_compression_metadata(metadata) do
+      metadata when is_map(metadata) -> %{"payload_compression" => metadata}
+      nil -> %{}
+    end
+  end
+
+  defp normalize_payload_compression_metadata(metadata) when is_map(metadata) do
+    if metadata_bool(metadata, :attempted) == true do
+      %{}
+      |> put_optional_bool("enabled", metadata_bool(metadata, :enabled))
+      |> Map.put("attempted", true)
+      |> put_optional_value(
+        "status",
+        payload_compression_status(metadata_value(metadata, :status))
+      )
+      |> put_optional_value(
+        "reason",
+        payload_compression_reason(metadata_value(metadata, :reason))
+      )
+      |> put_optional_value(
+        "route_class",
+        safe_payload_compression_value(metadata_value(metadata, :route_class))
+      )
+      |> put_optional_value(
+        "transport",
+        safe_payload_compression_value(metadata_value(metadata, :transport))
+      )
+      |> put_optional_value(
+        "tokenizer",
+        safe_payload_compression_value(metadata_value(metadata, :tokenizer))
+      )
+      |> put_optional_integer("candidate_count", metadata_value(metadata, :candidate_count))
+      |> put_optional_integer("compressed_count", metadata_value(metadata, :compressed_count))
+      |> put_optional_integer("skipped_count", metadata_value(metadata, :skipped_count))
+      |> put_optional_integer(
+        "tokenizer_input_skipped_count",
+        metadata_value(metadata, :tokenizer_input_skipped_count)
+      )
+      |> put_byte_savings(metadata)
+      |> put_token_savings(metadata)
+      |> put_optional_strategies(metadata_value(metadata, :strategies))
+      |> put_optional_integer("elapsed_ms", metadata_value(metadata, :elapsed_ms))
+    end
+  end
+
+  defp normalize_payload_compression_metadata(_metadata), do: nil
+
+  defp put_byte_savings(metadata, source) do
+    original = non_negative_integer(metadata_value(source, :original_bytes))
+    compressed = non_negative_integer(metadata_value(source, :compressed_bytes))
+    saved = saved_count(source, :saved_bytes, original, compressed)
+
+    metadata
+    |> put_optional_value("original_bytes", original)
+    |> put_optional_value("compressed_bytes", compressed)
+    |> put_optional_value("saved_bytes", saved)
+    |> put_savings_ratio("byte_savings", original, saved)
+    |> put_compression_ratio(original, compressed)
+  end
+
+  defp put_token_savings(metadata, source) do
+    original = non_negative_integer(metadata_value(source, :original_tokens))
+    compressed = non_negative_integer(metadata_value(source, :compressed_tokens))
+    saved = saved_count(source, :saved_tokens, original, compressed)
+
+    metadata
+    |> put_optional_value("original_tokens", original)
+    |> put_optional_value("compressed_tokens", compressed)
+    |> put_optional_value("saved_tokens", saved)
+    |> put_savings_ratio("token_savings", original, saved)
+  end
+
+  defp put_savings_ratio(metadata, _prefix, nil, _saved), do: metadata
+  defp put_savings_ratio(metadata, _prefix, 0, _saved), do: metadata
+  defp put_savings_ratio(metadata, _prefix, _original, nil), do: metadata
+
+  defp put_savings_ratio(metadata, prefix, original, saved) do
+    ratio = Float.round(saved / original, 4)
+
+    metadata
+    |> Map.put("#{prefix}_ratio", ratio)
+    |> Map.put("#{prefix}_percent", Float.round(ratio * 100, 2))
+  end
+
+  defp put_compression_ratio(metadata, nil, _compressed), do: metadata
+  defp put_compression_ratio(metadata, 0, _compressed), do: metadata
+  defp put_compression_ratio(metadata, _original, nil), do: metadata
+
+  defp put_compression_ratio(metadata, original, compressed) do
+    Map.put(metadata, "compression_ratio", Float.round(compressed / original, 4))
+  end
+
+  defp saved_count(_source, _key, original, compressed)
+       when is_integer(original) and is_integer(compressed) do
+    max(original - compressed, 0)
+  end
+
+  defp saved_count(source, key, _original, _compressed) do
+    non_negative_integer(metadata_value(source, key))
+  end
+
+  defp put_optional_bool(metadata, key, value) when is_boolean(value),
+    do: Map.put(metadata, key, value)
+
+  defp put_optional_bool(metadata, _key, _value), do: metadata
+
+  defp put_optional_integer(metadata, key, value),
+    do: put_optional_value(metadata, key, non_negative_integer(value))
+
+  defp put_optional_strategies(metadata, strategies) when is_list(strategies) do
+    strategies =
+      strategies
+      |> Enum.map(&payload_compression_strategy/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(12)
+
+    case strategies do
+      [] -> metadata
+      strategies -> Map.put(metadata, "strategies", strategies)
+    end
+  end
+
+  defp put_optional_strategies(metadata, _strategies), do: metadata
+
+  defp put_optional_value(metadata, _key, nil), do: metadata
+  defp put_optional_value(metadata, key, value), do: Map.put(metadata, key, value)
+
+  defp payload_compression_status(value) do
+    value
+    |> safe_payload_compression_value()
+    |> allow_payload_compression_value(@payload_compression_statuses)
+  end
+
+  defp payload_compression_reason(nil), do: nil
+
+  defp payload_compression_reason(value) do
+    value
+    |> safe_payload_compression_value()
+    |> allow_payload_compression_value(@payload_compression_reasons)
+  end
+
+  defp payload_compression_strategy(value) do
+    value
+    |> safe_payload_compression_value()
+    |> allow_payload_compression_value(@payload_compression_strategy_names)
+  end
+
+  defp allow_payload_compression_value(nil, _allowed), do: nil
+
+  defp allow_payload_compression_value(value, allowed) do
+    if value in allowed, do: value
+  end
+
+  defp safe_payload_compression_value(nil), do: nil
+
+  defp safe_payload_compression_value(value) when is_atom(value),
+    do: value |> Atom.to_string() |> safe_payload_compression_value()
+
+  defp safe_payload_compression_value(value) when is_binary(value) do
+    value = value |> String.trim() |> String.slice(0, 120)
+
+    if value != "" and String.match?(value, @safe_payload_compression_value) do
+      value
+    end
+  end
+
+  defp safe_payload_compression_value(_value), do: nil
+
+  defp metadata_bool(metadata, key) do
+    case metadata_value(metadata, key) do
+      value when is_boolean(value) -> value
+      _value -> nil
+    end
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_atom(key) do
+    case Map.fetch(metadata, key) do
+      {:ok, value} -> value
+      :error -> Map.get(metadata, Atom.to_string(key))
+    end
+  end
+
+  defp non_negative_integer(value) when is_integer(value) and value >= 0, do: value
+  defp non_negative_integer(_value), do: nil
+
   defp normalize_continuity_updates(updates) do
     updates
     |> normalize_update(:bridge_owner_lease_ttl_seconds, &optional_positive_integer/1)
@@ -785,6 +1021,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     |> normalize_update(:forwarded_headers, &forwarded_headers/1)
     |> normalize_update(:finalize_retry_timeout_ms, &optional_non_negative_integer/1)
     |> normalize_update(:finalize_retry_interval_ms, &optional_non_negative_integer/1)
+  end
+
+  defp normalize_runtime_updates(updates) do
+    normalize_update(updates, :payload_compression, &normalize_payload_compression_metadata/1)
   end
 
   defp normalize_update(updates, key, normalizer) do

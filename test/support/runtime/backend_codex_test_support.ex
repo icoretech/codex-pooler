@@ -421,11 +421,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       %{"source_assignment_ids" => [upstream.assignment.id]}
       |> Map.merge(Keyword.get(opts, :model_metadata, %{}))
 
+    exposed_model_id = Keyword.get(opts, :exposed_model_id, "gpt-test-model")
+    upstream_model_id = Keyword.get(opts, :upstream_model_id, "provider-gpt-test-model")
+
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-test-model",
-        upstream_model_id: "provider-gpt-test-model",
-        pricing_ref: "provider-gpt-test-model",
+        exposed_model_id: exposed_model_id,
+        upstream_model_id: upstream_model_id,
+        pricing_ref: Keyword.get(opts, :pricing_ref, upstream_model_id),
         metadata: model_metadata,
         supports_responses: true,
         supports_streaming: true

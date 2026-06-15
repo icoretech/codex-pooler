@@ -160,6 +160,60 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     end
   end
 
+  def compression_savings_line(%{payload_compression: compression})
+      when is_map(compression) do
+    with unit when unit in ["tokens", "bytes"] <- Map.get(compression, :unit),
+         saved when is_integer(saved) <- Map.get(compression, :saved_count),
+         percent when is_number(percent) <- Map.get(compression, :savings_percent),
+         ratio when is_number(ratio) <- Map.get(compression, :compression_ratio) do
+      "compression saved #{format_compression_count(saved, unit)} (#{format_percent(percent)}) · #{format_compression_ratio(ratio, unit)}"
+    else
+      _value -> nil
+    end
+  end
+
+  def compression_savings_line(_log), do: nil
+
+  def compression_savings_title(%{payload_compression: compression})
+      when is_map(compression) do
+    [
+      compression_title_part("status", Map.get(compression, :status)),
+      compression_title_part("reason", Map.get(compression, :reason)),
+      compression_count_title_part("candidates", Map.get(compression, :candidate_count)),
+      compression_count_title_part("compressed", Map.get(compression, :compressed_count)),
+      compression_count_title_part("skipped", Map.get(compression, :skipped_count)),
+      compression_count_title_part(
+        "tokenizer input skipped",
+        Map.get(compression, :tokenizer_input_skipped_count)
+      )
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, "; ")
+    end
+  end
+
+  def compression_savings_title(_log), do: nil
+
+  def compression_savings_unit(%{payload_compression: %{unit: unit}})
+      when unit in ["tokens", "bytes"],
+      do: unit
+
+  def compression_savings_unit(_log), do: nil
+
+  def compression_savings_status(%{payload_compression: %{status: status}})
+      when is_binary(status) and status != "",
+      do: status
+
+  def compression_savings_status(_log), do: nil
+
+  def compression_savings_reason(%{payload_compression: %{reason: reason}})
+      when is_binary(reason) and reason != "",
+      do: reason
+
+  def compression_savings_reason(_log), do: nil
+
   def format_total_cost(cost) do
     case format_cost(cost) do
       "-" -> "Total cost unavailable"
@@ -415,6 +469,29 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     do: "(#{Format.money(usd)} cached)"
 
   defp compact_cached_input_cost(_usd), do: nil
+
+  defp format_compression_count(saved, "tokens"), do: "#{Format.token_count(saved)} tokens"
+  defp format_compression_count(saved, "bytes"), do: "#{Format.integer(saved)} bytes"
+
+  defp format_compression_ratio(ratio, "bytes"), do: "byte ratio #{format_decimal(ratio)}x"
+  defp format_compression_ratio(ratio, _unit), do: "ratio #{format_decimal(ratio)}x"
+
+  defp format_percent(percent), do: "#{format_decimal(percent)}%"
+
+  defp format_decimal(value) when is_integer(value), do: Integer.to_string(value)
+
+  defp format_decimal(value) when is_float(value) do
+    value
+    |> :erlang.float_to_binary(decimals: 4)
+    |> String.trim_trailing("0")
+    |> String.trim_trailing(".")
+  end
+
+  defp compression_title_part(_label, nil), do: nil
+  defp compression_title_part(label, value), do: "#{label}: #{value}"
+
+  defp compression_count_title_part(_label, nil), do: nil
+  defp compression_count_title_part(label, value), do: "#{label}: #{Format.integer(value)}"
 
   defp blank?(nil), do: true
   defp blank?(value), do: String.trim(to_string(value)) == ""

@@ -52,12 +52,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
+  @supported_compression_model "gpt-4o"
 
   @websocket_lifecycle_metadata_keys ~w(
     codex_session_id
@@ -906,7 +908,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
          ]}
       )
 
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, supported_compression_model_opts())
+    enable_request_compression!(setup.pool)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, first_state} =
@@ -941,6 +944,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     try do
+      omitted_sentinel = "owner websocket compressed omitted marker"
+      original_output = compression_log_fixture(omitted_sentinel)
+
       tool_payload =
         Jason.encode!(%{
           "type" => "response.create",
@@ -949,7 +955,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
             %{
               "type" => "function_call_output",
               "call_id" => "call_owner_tool",
-              "output" => "owner tool output"
+              "output" => original_output
             }
           ],
           "stream" => true,
@@ -970,17 +976,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
 
-      assert second_request.json["input"] == [
-               %{
-                 "type" => "function_call_output",
-                 "call_id" => "call_owner_tool",
-                 "output" => "owner tool output"
-               }
-             ]
+      assert [%{"type" => "function_call_output", "call_id" => "call_owner_tool"}] =
+               second_request.json["input"]
+
+      assert_owner_tool_output_compressed!(second_request, omitted_sentinel)
 
       assert [first_log, second_log] = request_logs(setup.pool.id)
       assert first_log.status == "succeeded"
       assert second_log.status == "succeeded"
+
+      second_attempt =
+        Repo.one!(
+          from(a in Attempt,
+            where: a.request_id == ^second_log.id,
+            order_by: [asc: a.attempt_number]
+          )
+        )
+
+      assert_compressed_payload_metadata!(second_attempt, "proxy_websocket", "websocket")
 
       owner_metadata = second_log.request_metadata["websocket_owner_forwarding"]
       assert owner_metadata["enabled"] == true
@@ -989,6 +1002,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
       assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
       refute inspect(second_log.request_metadata) =~ "lease-token"
+
+      refute_payload_compression_leak!(
+        second_attempt.response_metadata["payload_compression"],
+        [omitted_sentinel, "call_owner_tool"]
+      )
     after
       CodexResponsesSocket.terminate(:closed, second_state)
     end
@@ -3997,6 +4015,92 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     }
     |> Map.merge(Map.new(extra_opts))
     |> RequestOptions.for_websocket()
+  end
+
+  defp enable_request_compression!(pool) do
+    pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{
+      request_compression_enabled: true,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp assert_owner_tool_output_compressed!(request, omitted_sentinel) do
+    output = request.json["input"] |> List.first() |> Map.fetch!("output")
+
+    unless is_binary(output) and String.contains?(output, "[compressed log output: omitted") do
+      flunk("expected owner upstream websocket tool output to be compressed")
+    end
+
+    if String.contains?(output, omitted_sentinel) do
+      flunk("compressed owner upstream websocket output retained omitted sentinel")
+    end
+
+    if output |> String.split("[compressed log output: omitted") |> length() != 2 do
+      flunk("expected owner upstream websocket tool output to be compressed exactly once")
+    end
+  end
+
+  defp assert_compressed_payload_metadata!(attempt, route_class, transport) do
+    assert %{
+             "enabled" => true,
+             "attempted" => true,
+             "status" => "compressed",
+             "route_class" => ^route_class,
+             "transport" => ^transport,
+             "candidate_count" => 1,
+             "compressed_count" => 1,
+             "skipped_count" => 0
+           } = metadata = attempt.response_metadata["payload_compression"]
+
+    assert "log_output" in metadata["strategies"]
+    assert metadata["original_bytes"] > metadata["compressed_bytes"]
+    assert metadata["saved_bytes"] > 0
+    assert metadata["original_tokens"] > metadata["compressed_tokens"]
+    assert metadata["saved_tokens"] > 0
+  end
+
+  defp supported_compression_model_opts do
+    [
+      exposed_model_id: @supported_compression_model,
+      upstream_model_id: @supported_compression_model,
+      pricing_ref: @supported_compression_model
+    ]
+  end
+
+  defp refute_payload_compression_leak!(metadata, forbidden_values) when is_map(metadata) do
+    metadata_text = inspect(metadata)
+
+    for value <- forbidden_values do
+      if String.contains?(metadata_text, value) do
+        flunk("payload compression metadata leaked forbidden owner websocket request content")
+      end
+    end
+  end
+
+  defp compression_log_fixture(omitted_sentinel) do
+    middle =
+      1..96
+      |> Enum.map(fn
+        48 -> "ordinary build line 48 #{omitted_sentinel}"
+        index -> "ordinary build line #{index}"
+      end)
+
+    [
+      "command started",
+      "context before first",
+      "error: first failure",
+      "context after first"
+    ]
+    |> Kernel.++(middle)
+    |> Kernel.++([
+      "context before final",
+      "fatal: final failure",
+      "context after final"
+    ])
+    |> Enum.join("\n")
   end
 
   defp receive_owner_socket_push(state) do

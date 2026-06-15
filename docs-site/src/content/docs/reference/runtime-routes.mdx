@@ -594,6 +594,53 @@ MCP output is metadata-only and scoped by the operator's owner or assigned-Pool 
 
 Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, and control-plane routes.
 
+## Request compression boundaries
+
+Request compression is a per-Pool routing option named `request_compression_enabled`. It is disabled by default. When enabled, Codex Pooler may compress upstream-bound Responses tool-output content before dispatch. This is request-side only: raw outputs and upstream response bodies are not stored, and CCR/retrieval is not implemented.
+
+Eligible route families are exact:
+
+<table>
+  <thead>
+    <tr>
+      <th>Family</th>
+      <th>Eligible routes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Backend Responses</td>
+      <td><code>POST /backend-api/codex/responses</code></td>
+    </tr>
+    <tr>
+      <td>Backend <code>/v1/responses</code></td>
+      <td><code>POST /backend-api/codex/v1/responses</code></td>
+    </tr>
+    <tr>
+      <td>Translated chat completions</td>
+      <td><code>POST /backend-api/codex/v1/chat/completions</code> and <code>POST /v1/chat/completions</code></td>
+    </tr>
+    <tr>
+      <td>Public <code>/v1/responses</code></td>
+      <td><code>POST /v1/responses</code></td>
+    </tr>
+    <tr>
+      <td>Compact backend routes</td>
+      <td><code>POST /backend-api/codex/responses/compact</code> and <code>POST /backend-api/codex/v1/responses/compact</code></td>
+    </tr>
+    <tr>
+      <td>Responses websocket</td>
+      <td>backend and narrow public websocket <code>response.create</code> payloads that dispatch to backend Responses</td>
+    </tr>
+  </tbody>
+</table>
+
+Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and control-plane routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch.
+
+Compression is fail-open. Scanner, tokenizer, compression, and limit errors preserve the original upstream request body and record safe `payload_compression` metadata. JSON request bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process with tokenizer data shipped by the application; it does not call OpenAI or load a local model.
+
+Request logs show safe aggregate savings only. They prefer saved tokens and token savings percent when token counts are available, and fall back to saved bytes and byte savings percent when token counts are unavailable.
+
 Continuity headers are also local routing inputs. Codex Pooler chooses them in this order:
 
 1. `x-codex-window-id`

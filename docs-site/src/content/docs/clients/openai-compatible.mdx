@@ -127,6 +127,14 @@ The `/v1` surface is compatibility over Codex routing, not a separate OpenAI eng
 
 `POST /v1/responses` lifts system and developer input-message text into top-level `instructions` before dispatching to Codex-compatible work. Streaming `/v1/responses` and `/v1/chat/completions` return early upstream terminal errors as the first public SSE event or data chunk, without synthetic assistant/success prefixes. Non-streaming failures remain OpenAI-shaped JSON errors.
 
+## Request compression behavior
+
+Per-Pool request compression can apply to `POST /v1/responses`, `POST /v1/chat/completions`, and narrow Responses websocket `response.create` traffic. It is transparent to SDK clients and does not require a client flag. Operators enable it with the Pool setting `request_compression_enabled`.
+
+The feature is request-side only. Codex Pooler may compress upstream-bound Responses tool-output payloads before dispatch, but it does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Public `/v1/responses/compact` remains unsupported.
+
+If compression is enabled but savings do not appear, check the request log's `payload_compression` status and reason. The UI prefers saved token count and token savings percent when local token counts are available, then falls back to saved bytes and byte savings percent.
+
 ## Routed but unsupported boundaries
 
 These `/v1` routes are unsupported and may return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed:

@@ -1,14 +1,24 @@
 defmodule CodexPooler.Gateway.WebsocketTest do
   use CodexPooler.DataCase, async: false
 
+  import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPooler.PoolerFixtures
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Gateway.Service
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
+
+  @websocket_frame_timeout 1_000
+  @supported_compression_model "gpt-4o"
 
   describe "retarget_websocket_owner_runtime/4" do
     setup do
@@ -191,6 +201,165 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     end
   end
 
+  describe "websocket response.create request compression" do
+    test "disabled pool sends the original backend websocket tool output with safe metadata" do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_compression_disabled",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream, supported_compression_model_opts())
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      {:ok, session} = Gateway.start_codex_session(auth, accepted_turn_state: "ws-disabled")
+      omitted_sentinel = "backend websocket disabled omitted marker"
+      original_output = compression_log_fixture(omitted_sentinel)
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 backend_tool_output_payload(setup, original_output, "call_ws_disabled"),
+                 websocket_request_options(session, "ws-compression-disabled"),
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      assert %{"id" => "resp_ws_compression_disabled"} = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+
+      assert captured_output_fingerprint(captured) == payload_fingerprint(original_output)
+
+      assert [request] = request_rows(setup.pool.id)
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert [attempt] = attempt_rows(request)
+
+      assert %{
+               "enabled" => false,
+               "attempted" => true,
+               "status" => "disabled",
+               "reason" => "pool_disabled",
+               "route_class" => "proxy_websocket",
+               "transport" => "websocket",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0
+             } = attempt.response_metadata["payload_compression"]
+
+      refute_payload_compression_leak!(
+        attempt.response_metadata["payload_compression"],
+        [omitted_sentinel, "call_ws_disabled"]
+      )
+    end
+
+    test "enabled pool compresses backend websocket tool output before upstream send" do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_backend_compressed",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream, supported_compression_model_opts())
+      enable_request_compression!(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      {:ok, session} = Gateway.start_codex_session(auth, accepted_turn_state: "ws-backend")
+      omitted_sentinel = "backend websocket compressed omitted marker"
+      original_output = compression_log_fixture(omitted_sentinel)
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 backend_tool_output_payload(setup, original_output, "call_ws_backend"),
+                 websocket_request_options(session, "ws-backend-compressed"),
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      assert %{"id" => "resp_ws_backend_compressed"} = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert_websocket_output_compressed!(captured, omitted_sentinel)
+
+      assert [request] = request_rows(setup.pool.id)
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert [attempt] = attempt_rows(request)
+      assert_compressed_metadata!(attempt, "proxy_websocket", "websocket", "log_output")
+
+      refute_payload_compression_leak!(
+        attempt.response_metadata["payload_compression"],
+        [omitted_sentinel, "call_ws_backend"]
+      )
+    end
+
+    test "enabled pool compresses public websocket response.create tool output before upstream send" do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_public_compressed",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream, supported_compression_model_opts())
+      enable_request_compression!(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      {:ok, session} = Gateway.start_codex_session(auth, accepted_turn_state: "ws-public")
+      omitted_sentinel = "public websocket compressed omitted marker"
+      original_output = compression_log_fixture(omitted_sentinel)
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 public_tool_output_payload(setup, original_output, "call_ws_public"),
+                 public_websocket_request_options(session, "ws-public-compressed"),
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      assert %{"id" => "resp_ws_public_compressed"} = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+
+      assert captured.json["input"] |> List.first() |> Map.fetch!("type") ==
+               "function_call_output"
+
+      assert_websocket_output_compressed!(captured, omitted_sentinel)
+
+      assert [request] = request_rows(setup.pool.id)
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+               "/v1/responses"
+
+      assert [attempt] = attempt_rows(request)
+      assert_compressed_metadata!(attempt, "proxy_websocket", "websocket", "log_output")
+
+      refute_payload_compression_leak!(
+        attempt.response_metadata["payload_compression"],
+        [omitted_sentinel, "call_ws_public"]
+      )
+    end
+  end
+
   defp owner_runtime(auth, session_key) do
     Gateway.prepare_websocket_session(auth, owner_opts(session_key))
   end
@@ -249,5 +418,172 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     end)
 
     :ok
+  end
+
+  defp execute_websocket_response(
+         auth,
+         raw_payload,
+         %RequestOptions{} = request_options,
+         push_frame
+       )
+       when is_binary(raw_payload) and is_function(push_frame, 1) do
+    Service.execute_websocket_response(auth, raw_payload, request_options, push_frame)
+  end
+
+  defp websocket_request_options(%CodexSession{} = session, request_id) do
+    %{
+      request_id: request_id,
+      client_ip: "127.0.0.1",
+      codex_session: session
+    }
+    |> RequestOptions.for_websocket()
+  end
+
+  defp public_websocket_request_options(%CodexSession{} = session, request_id) do
+    session
+    |> websocket_request_options(request_id)
+    |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+    |> RequestOptions.put_continuity(accepted_turn_state: nil)
+    |> RequestOptions.mark_openai_compatibility_origin(
+      "/v1/responses",
+      "/backend-api/codex/responses"
+    )
+  end
+
+  defp backend_tool_output_payload(setup, output, call_id) do
+    %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => call_id,
+          "output" => output
+        }
+      ],
+      "stream" => true,
+      "generate" => true
+    }
+    |> Jason.encode!()
+  end
+
+  defp public_tool_output_payload(setup, output, tool_call_id) do
+    %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => [
+        %{
+          "role" => "tool",
+          "tool_call_id" => tool_call_id,
+          "content" => output
+        }
+      ],
+      "stream" => true,
+      "generate" => true
+    }
+    |> Jason.encode!()
+  end
+
+  defp assert_websocket_output_compressed!(captured, omitted_sentinel) do
+    output = captured.json["input"] |> List.first() |> Map.fetch!("output")
+
+    unless is_binary(output) and String.contains?(output, "[compressed log output: omitted") do
+      flunk("expected websocket upstream tool output to be compressed")
+    end
+
+    if String.contains?(output, omitted_sentinel) do
+      flunk("compressed websocket upstream output retained omitted sentinel")
+    end
+  end
+
+  defp assert_compressed_metadata!(attempt, route_class, transport, strategy) do
+    assert %{
+             "enabled" => true,
+             "attempted" => true,
+             "status" => "compressed",
+             "route_class" => ^route_class,
+             "transport" => ^transport,
+             "candidate_count" => 1,
+             "compressed_count" => 1,
+             "skipped_count" => 0
+           } = metadata = attempt.response_metadata["payload_compression"]
+
+    assert strategy in metadata["strategies"]
+    assert metadata["original_bytes"] > metadata["compressed_bytes"]
+    assert metadata["saved_bytes"] > 0
+    assert metadata["original_tokens"] > metadata["compressed_tokens"]
+    assert metadata["saved_tokens"] > 0
+  end
+
+  defp supported_compression_model_opts do
+    [
+      exposed_model_id: @supported_compression_model,
+      upstream_model_id: @supported_compression_model,
+      pricing_ref: @supported_compression_model
+    ]
+  end
+
+  defp refute_payload_compression_leak!(metadata, forbidden_values) when is_map(metadata) do
+    metadata_text = inspect(metadata)
+
+    for value <- forbidden_values do
+      if String.contains?(metadata_text, value) do
+        flunk("payload compression metadata leaked forbidden websocket request content")
+      end
+    end
+  end
+
+  defp captured_output_fingerprint(captured) do
+    captured.json["input"]
+    |> List.first()
+    |> Map.fetch!("output")
+    |> payload_fingerprint()
+  end
+
+  defp payload_fingerprint(payload) when is_binary(payload) do
+    :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
+  end
+
+  defp request_rows(pool_id) do
+    Repo.all(from(r in Request, where: r.pool_id == ^pool_id, order_by: [asc: r.admitted_at]))
+  end
+
+  defp attempt_rows(%Request{} = request) do
+    Repo.all(
+      from(a in Attempt, where: a.request_id == ^request.id, order_by: [asc: a.attempt_number])
+    )
+  end
+
+  defp enable_request_compression!(pool) do
+    pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{
+      request_compression_enabled: true,
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
+  defp compression_log_fixture(omitted_sentinel) do
+    middle =
+      1..96
+      |> Enum.map(fn
+        48 -> "ordinary build line 48 #{omitted_sentinel}"
+        index -> "ordinary build line #{index}"
+      end)
+
+    [
+      "command started",
+      "context before first",
+      "error: first failure",
+      "context after first"
+    ]
+    |> Kernel.++(middle)
+    |> Kernel.++([
+      "context before final",
+      "fatal: final failure",
+      "context after final"
+    ])
+    |> Enum.join("\n")
   end
 end

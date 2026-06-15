@@ -166,7 +166,16 @@ config :tailwind,
 
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id, :admin_surface, :loader, :error_code]
+  metadata: [
+    :request_id,
+    :admin_surface,
+    :loader,
+    :error_code,
+    :request_compression_reason,
+    :request_compression_exception,
+    :request_compression_route_class,
+    :request_compression_transport
+  ]
 
 config :phoenix, :logger, false
 

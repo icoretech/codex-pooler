@@ -29,7 +29,8 @@ A Pool controls:
 4. routing strategy, which decides how eligible upstreams are ordered
 5. continuity settings, which decide when related requests should prefer the same upstream
 6. compatibility settings, such as OpenAI-style `/v1` routes and sanitized OpenAI control-plane analytics forwarding
-7. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
+7. request compression, which can reduce upstream-bound Responses tool-output payloads for eligible route families
+8. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
 
 ## Page Metrics
 
@@ -226,6 +227,14 @@ Routing settings are split into selection policy, continuity, and compatibility.
 
 `Allow /v1 compatibility` enables OpenAI-style `/v1` compatibility routes for clients that use that surface.
 
+`Request compression` enables per-Pool request compression. It is off by default and applies only to upstream-bound Responses tool-output payloads on eligible request routes. It is request-side only: Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval.
+
+Eligible families are backend Responses, backend `/v1/responses`, backend and public translated chat completions, public `/v1/responses`, backend compact routes, and websocket `response.create` dispatches. Multipart, file, audio, image, admin, MCP, usage, and control-plane requests are not eligible. Public `/v1/responses/compact` remains unsupported because it has no upstream compact dispatch.
+
+Request compression is fail-open. If scanning, token counting, rewriting, or limits fail, the original request body is sent upstream and request logs record a safe `payload_compression` status and reason. JSON bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process using tokenizer data shipped with the application; it does not call OpenAI or load a local model.
+
+Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable.
+
 ## Upstreams Step
 
 The Upstreams step selects which active upstream accounts are available to the Pool. A checked upstream becomes a Pool assignment. Runtime routing still applies eligibility checks before using it.
@@ -261,6 +270,7 @@ When a Pool is not behaving as expected, check it in this order:
 5. confirm the requested model and route shape are supported by the assigned upstreams
 6. inspect recent Requests 5h, TPS 5h, and Traffic 24h for changes in load
 7. open Request logs filtered from the card footer for request-level metadata
-8. check Audit logs when a Pool, upstream assignment, or API key changed recently
+8. for request-compression questions, inspect `payload_compression` status, reason, route class, candidate counts, and savings display in the Request log row
+9. check Audit logs when a Pool, upstream assignment, API key, or routing setting changed recently
 
 If all upstreams fail eligibility, routing cannot use them even if the Pool card looks active. The card shows Pool-level configuration, while final routing also depends on upstream status, model support, quota evidence, route health, and continuity constraints.

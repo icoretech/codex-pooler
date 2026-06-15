@@ -102,6 +102,56 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
     end
   end
 
+  describe "pool routing settings workflow" do
+    test "creation persists request compression routing setting when enabled" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Compression Workflow Create",
+                 "routing_strategy" => "bridge_ring",
+                 "request_compression_enabled" => "true"
+               })
+
+      settings = Pools.get_routing_settings(pool)
+
+      assert settings.request_compression_enabled == true
+      assert settings.prompt_cache_affinity_enabled == true
+      assert settings.v1_compatibility_enabled == true
+    end
+
+    test "update persists request compression routing setting with compatibility toggles" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "compression-workflow-edit", name: "Compression Workflow Edit"})
+
+      assert {:ok, _settings} =
+               Pools.update_routing_settings(scope, pool, %{
+                 "request_compression_enabled" => true
+               })
+
+      assert {:ok, updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Compression Workflow Updated",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "prompt_cache_affinity_enabled" => "false",
+                 "v1_compatibility_enabled" => "false",
+                 "request_compression_enabled" => "false",
+                 "upstream_identity_ids" => [],
+                 "api_key_ids" => []
+               })
+
+      settings = Pools.get_routing_settings(updated_pool)
+
+      assert updated_pool.id == pool.id
+      assert settings.request_compression_enabled == false
+      assert settings.prompt_cache_affinity_enabled == false
+      assert settings.v1_compatibility_enabled == false
+    end
+  end
+
   defp publish_from_task(fun) when is_function(fun, 0) do
     fun
     |> Task.async()

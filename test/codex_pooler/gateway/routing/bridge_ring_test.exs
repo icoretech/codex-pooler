@@ -441,22 +441,22 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   end
 
   describe "plan_route/5 quota-first edge cases" do
-    test "quota_first orders by quota headroom before rendezvous tie-breaking" do
+    test "quota_first orders by remaining quota before rendezvous tie-breaking" do
       setup = routing_setup(3)
-      [low_headroom, high_headroom, middle_headroom] = setup.assignments
+      [low_remaining, high_remaining, middle_remaining] = setup.assignments
       [_low_identity, high_identity, _middle_identity] = setup.identities
-      seed = seed_preferring_assignment([low_headroom.id, high_headroom.id], low_headroom.id)
+      seed = seed_preferring_assignment([low_remaining.id, high_remaining.id], low_remaining.id)
 
-      prime_account_quota!(setup, low_headroom, Decimal.new("90"))
-      prime_account_quota!(setup, high_headroom, Decimal.new("10"))
-      prime_account_quota!(setup, middle_headroom, Decimal.new("50"))
+      prime_account_quota!(setup, low_remaining, Decimal.new("90"))
+      prime_account_quota!(setup, high_remaining, Decimal.new("10"))
+      prime_account_quota!(setup, middle_remaining, Decimal.new("50"))
       quota_first_plan = plan_for(setup, "quota_first", seed)
 
-      assert quota_first_plan.selected_assignment_id == high_headroom.id
-      assert hd(quota_first_plan.candidates) == {high_headroom, high_identity}
+      assert quota_first_plan.selected_assignment_id == high_remaining.id
+      assert hd(quota_first_plan.candidates) == {high_remaining, high_identity}
     end
 
-    test "quota_first breaks equal headroom ties by rendezvous order" do
+    test "quota_first breaks equal remaining-quota ties by rendezvous order" do
       setup = routing_setup(2)
       [first, second] = setup.assignments
       seed = seed_preferring_assignment([first.id, second.id], second.id)
@@ -471,7 +471,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert quota_first_plan.selected_assignment_id == hd(expected_ids)
     end
 
-    test "quota_first ignores credits when quota headroom ties" do
+    test "quota_first ignores credits when remaining quota ties" do
       setup = routing_setup(2)
       [lower_credit, higher_credit] = setup.assignments
       seed = seed_preferring_assignment([lower_credit.id, higher_credit.id], lower_credit.id)
@@ -487,54 +487,54 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert quota_first_plan.selected_assignment_id == hd(expected_ids)
     end
 
-    test "quota_first gives missing usable quota a zero headroom score" do
+    test "quota_first gives missing usable quota a zero capacity score" do
       setup = routing_setup(3)
-      [unknown_quota, high_headroom, low_headroom] = setup.assignments
-      seed = seed_preferring_assignment([unknown_quota.id, high_headroom.id], unknown_quota.id)
+      [unknown_quota, high_remaining, low_remaining] = setup.assignments
+      seed = seed_preferring_assignment([unknown_quota.id, high_remaining.id], unknown_quota.id)
 
-      prime_account_quota!(setup, high_headroom, Decimal.new("20"))
-      prime_account_quota!(setup, low_headroom, Decimal.new("95"))
+      prime_account_quota!(setup, high_remaining, Decimal.new("20"))
+      prime_account_quota!(setup, low_remaining, Decimal.new("95"))
 
       quota_first_plan = plan_for(setup, "quota_first", seed)
 
       assert candidate_ids(quota_first_plan.candidates) == [
-               high_headroom.id,
-               low_headroom.id,
+               high_remaining.id,
+               low_remaining.id,
                unknown_quota.id
              ]
 
-      assert quota_first_plan.selected_assignment_id == high_headroom.id
+      assert quota_first_plan.selected_assignment_id == high_remaining.id
     end
 
     test "quota_first scores model-scoped quota with only in-scope usable windows" do
       setup = routing_setup(2)
-      [requested_model_headroom, fallback_headroom] = setup.assignments
+      [requested_model_remaining, fallback_remaining] = setup.assignments
 
       seed =
         seed_preferring_assignment(
-          [requested_model_headroom.id, fallback_headroom.id],
-          fallback_headroom.id
+          [requested_model_remaining.id, fallback_remaining.id],
+          fallback_remaining.id
         )
 
-      prime_account_quota!(setup, requested_model_headroom, Decimal.new("5"))
-      prime_model_quota!(setup, requested_model_headroom, Decimal.new("30"))
+      prime_account_quota!(setup, requested_model_remaining, Decimal.new("5"))
+      prime_model_quota!(setup, requested_model_remaining, Decimal.new("30"))
 
-      prime_model_quota!(setup, requested_model_headroom, Decimal.new("99"),
+      prime_model_quota!(setup, requested_model_remaining, Decimal.new("99"),
         model: "other-model",
         upstream_model: "other-upstream-model"
       )
 
-      prime_account_quota!(setup, fallback_headroom, Decimal.new("5"))
-      prime_model_quota!(setup, fallback_headroom, Decimal.new("40"))
+      prime_account_quota!(setup, fallback_remaining, Decimal.new("5"))
+      prime_model_quota!(setup, fallback_remaining, Decimal.new("40"))
 
       quota_first_plan = plan_for(setup, "quota_first", seed)
 
       assert candidate_ids(quota_first_plan.candidates) == [
-               requested_model_headroom.id,
-               fallback_headroom.id
+               requested_model_remaining.id,
+               fallback_remaining.id
              ]
 
-      assert quota_first_plan.selected_assignment_id == requested_model_headroom.id
+      assert quota_first_plan.selected_assignment_id == requested_model_remaining.id
     end
 
     test "quota_first and routing settings consume the request-local route-state snapshot" do

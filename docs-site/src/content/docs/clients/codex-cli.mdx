@@ -77,6 +77,12 @@ requires_openai_auth = true
 
 Both providers use the same Pool API key and the same Codex backend compatibility route in Codex CLI and Codex Desktop. Codex Pooler routes each request through Pool policy, account eligibility, limits, session continuity, and request accounting.
 
+## Request compression behavior
+
+Codex CLI and Codex Desktop do not need a client-side switch for Codex Pooler's per-Pool request compression. When an operator enables `request_compression_enabled`, eligible backend Responses, backend compact, backend `/v1/responses` aliases, translated backend chat, and websocket `response.create` requests may have upstream-bound Responses tool-output payloads compressed before dispatch.
+
+The feature is request-side only. Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Request logs may show safe aggregate `payload_compression` savings, preferring saved token count and token savings percent when token counts are available and falling back to byte savings when they are not.
+
 ## Optional operator MCP endpoint
 
 Codex Pooler also exposes an operator MCP endpoint at `/mcp`. This is an optional operator-only metadata add-on. Omit it for normal Codex runtime use. MCP uses an operator-owned MCP token, not a Pool API key.

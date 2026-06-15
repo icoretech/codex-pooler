@@ -3309,7 +3309,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert spark.reset_at == nil
     end
 
-    test "preserves explicit zero credit balances when usage percent still has headroom" do
+    test "preserves explicit zero credit balances when usage percent still leaves capacity" do
       synced_at = ~U[2026-04-27 10:00:00Z]
 
       for balance <- ["0", "0.0", 0, 0.0] do

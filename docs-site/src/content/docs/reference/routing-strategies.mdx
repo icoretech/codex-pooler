@@ -116,7 +116,7 @@ Temporary demotion also affects order. When an upstream attempt fails with a ret
 
 Session continuity is stronger than ordinary stateless routing.
 
-Stateless requests can be routed to any eligible upstream account in the Pool. Strategy, quota headroom, prompt-cache locality, and recent failures shape the order.
+Stateless requests can be routed to any eligible upstream account in the Pool. Strategy, remaining quota, prompt-cache locality, and recent failures shape the order.
 
 Session-bound requests are different. If a request belongs to an existing Codex session, websocket session, previous response chain, or file affinity, Codex Pooler keeps it with the upstream assignment that owns that state. This protects resumable conversations, websocket reconnects, tool-result continuations, and uploaded file references.
 

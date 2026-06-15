@@ -129,6 +129,14 @@ defmodule CodexPooler.Pools.Routing do
               settings.v1_compatibility_enabled
             )
           ),
+        request_compression_enabled:
+          parse_boolean(
+            routing_attr(
+              attrs,
+              "request_compression_enabled",
+              settings.request_compression_enabled
+            )
+          ),
         metadata: settings.metadata || %{},
         created_at: settings.created_at,
         updated_at: now
@@ -143,7 +151,8 @@ defmodule CodexPooler.Pools.Routing do
             sticky_http_sessions: settings.sticky_http_sessions,
             prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
             control_plane_analytics_forwarding_enabled:
-              settings.control_plane_analytics_forwarding_enabled
+              settings.control_plane_analytics_forwarding_enabled,
+            request_compression_enabled: settings.request_compression_enabled
           })
 
           maybe_broadcast_routing_change(opts, pool, settings)
@@ -181,6 +190,7 @@ defmodule CodexPooler.Pools.Routing do
       prompt_cache_affinity_enabled: true,
       control_plane_analytics_forwarding_enabled: true,
       v1_compatibility_enabled: true,
+      request_compression_enabled: false,
       metadata: %{},
       created_at: now,
       updated_at: now

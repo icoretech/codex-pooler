@@ -24,10 +24,88 @@ defmodule CodexPooler.Accounting.Metadata do
                         ])
   @safe_sensitive_exact_keys MapSet.new([
                                "api_key_id",
+                               "payload_compression",
                                "reservation_snapshot_inputs",
                                "token_refresh_reason_code_preview"
                              ])
   @safe_control_plane_keys MapSet.new(["analytics_forwarding"])
+  @payload_compression_statuses ~w(disabled ineligible compressed no_change skipped error_passthrough)
+  @payload_compression_reasons ~w(
+                                  pool_disabled
+                                  route_ineligible
+                                  transport_ineligible
+                                  payload_kind_ineligible
+                                  invalid_json
+                                  no_candidates
+                                  no_rewrites
+                                  below_min_bytes
+                                  scanner_error
+                                  strategy_unavailable
+                                  tokenizer_unavailable
+                                  token_count_failed
+                                  tokenizer_input_limit
+                                  no_token_shrink
+                                  over_body_limit
+                                  over_candidate_limit
+                                  compression_error
+                                  native_load_failed
+                                  rewritten
+                                )
+  @payload_compression_strategy_names ~w(
+                                         diff
+                                         json_array_lossless
+                                         log_output
+                                         search_results
+                                       )
+  @payload_compression_bool_keys MapSet.new(~w(attempted enabled))
+  @payload_compression_integer_keys MapSet.new(~w(
+                                      candidate_count
+                                      compressed_bytes
+                                      compressed_count
+                                      compressed_tokens
+                                      elapsed_ms
+                                      original_bytes
+                                      original_tokens
+                                      saved_bytes
+                                      saved_tokens
+                                      skipped_count
+                                      tokenizer_input_skipped_count
+                                    ))
+  @payload_compression_number_keys MapSet.new(~w(
+                                     byte_savings_percent
+                                     byte_savings_ratio
+                                     compression_ratio
+                                     token_savings_percent
+                                     token_savings_ratio
+                                   ))
+  @payload_compression_identifier_keys MapSet.new(~w(route_class tokenizer transport))
+  @safe_payload_compression_value ~r/\A[a-zA-Z0-9_.:-]+\z/
+  @safe_payload_compression_keys MapSet.new(~w(
+                                    attempted
+                                    byte_savings_percent
+                                    byte_savings_ratio
+                                    candidate_count
+                                    compressed_bytes
+                                    compressed_count
+                                    compressed_tokens
+                                    compression_ratio
+                                    elapsed_ms
+                                    enabled
+                                    original_bytes
+                                    original_tokens
+                                    reason
+                                    route_class
+                                    saved_bytes
+                                    saved_tokens
+                                    skipped_count
+                                    status
+                                    strategies
+                                    token_savings_percent
+                                    token_savings_ratio
+                                    tokenizer_input_skipped_count
+                                    tokenizer
+                                    transport
+                                  ))
 
   @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type request_result_row :: %{required(:request) => Request.t(), optional(atom()) => term()}
@@ -293,6 +371,9 @@ defmodule CodexPooler.Accounting.Metadata do
     normalized = normalize_key(key)
 
     cond do
+      normalized == "payload_compression" ->
+        sanitize_payload_compression_map(value)
+
       sensitive_key?(normalized) ->
         @redacted
 
@@ -317,8 +398,7 @@ defmodule CodexPooler.Accounting.Metadata do
   defp sanitize_value(value, key) when is_binary(value) do
     cond do
       sensitive_key?(key) -> @redacted
-      String.match?(value, ~r/sk-cxp-[a-f0-9]{12}-[A-Za-z0-9_-]+/) -> @redacted
-      String.match?(value, ~r/(?i)bearer\s+[A-Za-z0-9._~+\/-]+=*/) -> @redacted
+      sensitive_binary?(value) -> @redacted
       true -> value
     end
   end
@@ -338,6 +418,104 @@ defmodule CodexPooler.Accounting.Metadata do
 
       {child_key, sanitized_value}
     end)
+  end
+
+  defp sanitize_payload_compression_map(value) when is_map(value) do
+    Map.new(value, fn {child_key, child_value} ->
+      normalized = normalize_key(child_key)
+
+      sanitized_value =
+        if MapSet.member?(@safe_payload_compression_keys, normalized) do
+          sanitize_payload_compression_value(normalized, child_value)
+        else
+          @redacted
+        end
+
+      {child_key, sanitized_value}
+    end)
+  end
+
+  defp sanitize_payload_compression_value("status", value),
+    do: allowed_payload_compression_value(value, @payload_compression_statuses)
+
+  defp sanitize_payload_compression_value("reason", value),
+    do: allowed_payload_compression_value(value, @payload_compression_reasons)
+
+  defp sanitize_payload_compression_value("strategies", value)
+       when is_list(value) do
+    value
+    |> Enum.map(&allowed_payload_compression_value(&1, @payload_compression_strategy_names))
+    |> Enum.reject(&(is_nil(&1) or &1 == @redacted))
+    |> Enum.take(12)
+  end
+
+  defp sanitize_payload_compression_value("strategies", nil), do: nil
+  defp sanitize_payload_compression_value("strategies", _value), do: @redacted
+
+  defp sanitize_payload_compression_value(key, value) do
+    cond do
+      MapSet.member?(@payload_compression_bool_keys, key) ->
+        payload_compression_bool(value)
+
+      MapSet.member?(@payload_compression_integer_keys, key) ->
+        payload_compression_integer(value)
+
+      MapSet.member?(@payload_compression_number_keys, key) ->
+        payload_compression_number(value)
+
+      MapSet.member?(@payload_compression_identifier_keys, key) ->
+        safe_payload_compression_value(value)
+
+      true ->
+        @redacted
+    end
+  end
+
+  defp payload_compression_bool(value) when is_boolean(value), do: value
+  defp payload_compression_bool(nil), do: nil
+  defp payload_compression_bool(_value), do: @redacted
+
+  defp payload_compression_integer(value) when is_integer(value) and value >= 0, do: value
+  defp payload_compression_integer(nil), do: nil
+  defp payload_compression_integer(_value), do: @redacted
+
+  defp payload_compression_number(value) when is_integer(value) and value >= 0, do: value
+  defp payload_compression_number(value) when is_float(value) and value >= 0, do: value
+  defp payload_compression_number(nil), do: nil
+  defp payload_compression_number(_value), do: @redacted
+
+  defp allowed_payload_compression_value(value, allowed_values) do
+    case safe_payload_compression_value(value) do
+      nil ->
+        nil
+
+      value when is_binary(value) ->
+        if value in allowed_values, do: value, else: @redacted
+    end
+  end
+
+  defp safe_payload_compression_value(nil), do: nil
+
+  defp safe_payload_compression_value(value) when is_atom(value),
+    do: value |> Atom.to_string() |> safe_payload_compression_value()
+
+  defp safe_payload_compression_value(value) when is_binary(value) do
+    value = value |> String.trim() |> String.slice(0, 120)
+
+    cond do
+      value == "" -> nil
+      sensitive_binary?(value) -> @redacted
+      String.match?(value, @safe_payload_compression_value) -> value
+      true -> @redacted
+    end
+  end
+
+  defp safe_payload_compression_value(_value), do: @redacted
+
+  defp sensitive_binary?(value) do
+    String.match?(value, ~r/sk-cxp-[a-f0-9]{12}-[A-Za-z0-9_-]+/) or
+      String.match?(value, ~r/(?i)bearer\s+[A-Za-z0-9._~+\/-]+=*/) or
+      String.match?(value, ~r/\Ask-(?!cxp-[a-f0-9]{12}\z)[A-Za-z0-9_-]{24,}\z/)
   end
 
   defp sensitive_key?(nil), do: false
