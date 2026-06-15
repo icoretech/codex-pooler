@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.15...codex-pooler-v0.1.0) (2026-06-15)
+
+
+### Features
+
+* **gateway:** add request compression ([689a73f](https://github.com/icoretech/codex-pooler/commit/689a73ff2bec9b7a7a7ef49d7edc8333f35c6bf8))
+* **gateway:** expand request compression coverage ([765d8a7](https://github.com/icoretech/codex-pooler/commit/765d8a7e0832b6ef0b4c9be267526d446919beb4))
+
 ## [0.0.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.14...codex-pooler-v0.0.15) (2026-06-14)
 
 
