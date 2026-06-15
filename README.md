@@ -1477,3 +1477,13 @@ repository when Kubernetes deployment behavior or values change.
 `mix test` and `mix precommit` serialize database-backed test runs with a
 PostgreSQL advisory lock keyed by the configured test database, so concurrent
 local runs wait instead of deadlocking the shared sandbox database.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=icoretech%2Fcodex-pooler&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=icoretech/codex-pooler&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=icoretech/codex-pooler&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=icoretech/codex-pooler&type=date&legend=top-left" />
+ </picture>
+</a>
