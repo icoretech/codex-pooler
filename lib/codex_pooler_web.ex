@@ -65,7 +65,7 @@ defmodule CodexPoolerWeb do
     quote do
       use Phoenix.LiveView
 
-      on_mount CodexPoolerWeb.Live.AdminNotificationCenterHooks
+      on_mount CodexPoolerWeb.Admin.NotificationCenterHooks
 
       unquote(html_helpers())
     end

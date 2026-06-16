@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Live.AdminNotificationCenterHooks do
+defmodule CodexPoolerWeb.Admin.NotificationCenterHooks do
   @moduledoc false
 
   import Phoenix.Component, only: [assign: 3]
