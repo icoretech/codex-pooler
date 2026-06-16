@@ -2179,6 +2179,74 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert Enum.at(result.payload["input"], 3)["call_id"] == "call_fixture_replay"
   end
 
+  test "Responses preserves item metadata on native and translated replay items" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "previous_response_id" => "resp_fixture_metadata",
+      "store" => false,
+      "input" => [
+        %{
+          "type" => "reasoning",
+          "id" => "rs_fixture_metadata",
+          "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+          "encrypted_content" => nil,
+          "metadata" => %{"turn_id" => "turn_reasoning"}
+        },
+        %{
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
+          "metadata" => %{"turn_id" => "turn_message"}
+        },
+        %{
+          "type" => "function_call",
+          "id" => "fc_fixture_metadata",
+          "call_id" => "call_fixture_native_metadata",
+          "name" => "lookup_fixture",
+          "arguments" => "{}",
+          "metadata" => %{"turn_id" => "turn_call"}
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco_fixture_metadata",
+          "call_id" => "call_fixture_native_metadata",
+          "output" => "synthetic tool output",
+          "metadata" => %{"turn_id" => "turn_output"}
+        },
+        %{
+          "role" => "assistant",
+          "metadata" => %{"turn_id" => "turn_rebuilt_call"},
+          "tool_calls" => [
+            %{
+              "id" => "call_fixture_rebuilt_metadata",
+              "type" => "function",
+              "function" => %{
+                "name" => "terminal",
+                "arguments" => "{\"cmd\":\"date\"}"
+              }
+            }
+          ]
+        },
+        %{
+          "role" => "tool",
+          "tool_call_id" => "call_fixture_rebuilt_metadata",
+          "content" => "synthetic translated tool output",
+          "metadata" => %{"turn_id" => "turn_rebuilt_output"}
+        }
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload, collect_openai_response_stream: true)
+
+    assert Enum.map(result.payload["input"], &get_in(&1, ["metadata", "turn_id"])) == [
+             "turn_reasoning",
+             "turn_message",
+             "turn_call",
+             "turn_output",
+             "turn_rebuilt_call",
+             "turn_rebuilt_output"
+           ]
+  end
+
   @tag :responses_coercion
   test "strict function parameters reject missing additionalProperties at the top level" do
     assert {:error, reason} =

@@ -28,6 +28,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsUserAgentsTest do
       assert %{kind: "vercel_ai_sdk", label: "Vercel AI SDK"} =
                UserAgents.classify("ai/6.0.191 ai-sdk/provider-utils/4.0.27 runtime/node.js/26")
 
+      assert %{kind: "vercel_ai_sdk", label: "Vercel AI SDK"} =
+               UserAgents.classify(
+                 "ai/7.0.0-beta.12 @ai-sdk/openai/4.0.0-beta.12 runtime/node.js/24"
+               )
+
       assert %{kind: "python", label: "Python"} = UserAgents.classify("python-requests/2.33.0")
       assert %{kind: "python", label: "Python"} = UserAgents.classify("Python-urllib/3.14")
       assert %{kind: "node", label: "Node.js"} = UserAgents.classify("node")

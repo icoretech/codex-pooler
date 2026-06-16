@@ -214,53 +214,79 @@ defmodule CodexPooler.Accounting.PricingResolution do
          timestamp,
          batch_usage?
        ) do
-    snapshot = pricing_snapshot(identifiers, service_tier, price_bucket, timestamp)
-
-    case snapshot do
+    case pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) ||
+           fallback_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
       %PricingSnapshot{} = snapshot ->
         priced_snapshot(snapshot, requested_tier, actual_tier, service_tier, batch_usage?)
 
       nil ->
-        case fallback_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
-          %PricingSnapshot{} = fallback ->
-            priced_snapshot(fallback, requested_tier, actual_tier, service_tier, batch_usage?)
-
-          nil ->
-            case suffix_inference_pricing_snapshot(
-                   identifiers,
-                   service_tier,
-                   price_bucket,
-                   timestamp
-                 ) ||
-                   fallback_suffix_inference_pricing_snapshot(
-                     identifiers,
-                     service_tier,
-                     price_bucket,
-                     timestamp
-                   ) do
-              {%PricingSnapshot{} = inferred, alias_metadata} ->
-                priced_snapshot(
-                  inferred,
-                  requested_tier,
-                  actual_tier,
-                  service_tier,
-                  batch_usage?,
-                  alias_metadata
-                )
-
-              nil ->
-                missing_pricing_snapshot(
-                  model,
-                  identifiers,
-                  requested_tier,
-                  actual_tier,
-                  service_tier,
-                  timestamp,
-                  batch_usage?
-                )
-            end
-        end
+        lookup_inferred_service_tier(
+          model,
+          identifiers,
+          requested_tier,
+          actual_tier,
+          service_tier,
+          price_bucket,
+          timestamp,
+          batch_usage?
+        )
     end
+  end
+
+  @spec lookup_inferred_service_tier(
+          Model.t(),
+          [String.t()],
+          String.t() | nil,
+          String.t() | nil,
+          String.t(),
+          String.t(),
+          DateTime.t(),
+          boolean()
+        ) :: map()
+  defp lookup_inferred_service_tier(
+         model,
+         identifiers,
+         requested_tier,
+         actual_tier,
+         service_tier,
+         price_bucket,
+         timestamp,
+         batch_usage?
+       ) do
+    case inferred_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
+      {%PricingSnapshot{} = inferred, alias_metadata} ->
+        priced_snapshot(
+          inferred,
+          requested_tier,
+          actual_tier,
+          service_tier,
+          batch_usage?,
+          alias_metadata
+        )
+
+      nil ->
+        missing_pricing_snapshot(
+          model,
+          identifiers,
+          requested_tier,
+          actual_tier,
+          service_tier,
+          timestamp,
+          batch_usage?
+        )
+    end
+  end
+
+  @spec inferred_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
+          {PricingSnapshot.t(), map()} | nil
+  defp inferred_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
+    suffix_inference_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) ||
+      fallback_suffix_inference_pricing_snapshot(
+        identifiers,
+        service_tier,
+        price_bucket,
+        timestamp
+      )
   end
 
   defp pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
@@ -291,7 +317,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
           String.t(),
           String.t(),
           DateTime.t()
-        ) :: {%PricingSnapshot{}, map()} | nil
+        ) :: {PricingSnapshot.t(), map()} | nil
   defp fallback_suffix_inference_pricing_snapshot(
          identifiers,
          service_tier,
@@ -315,7 +341,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
        do: nil
 
   @spec suffix_inference_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
-          {%PricingSnapshot{}, map()} | nil
+          {PricingSnapshot.t(), map()} | nil
   defp suffix_inference_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
     candidates = suffix_inference_candidates(identifiers)
     candidate_identifiers = candidates |> Enum.map(& &1.to) |> Enum.uniq()
@@ -393,39 +419,84 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
     1..(segment_count - 1)
     |> Enum.reduce_while({[], 0}, fn distance, {candidates, arbitrary_trim_count} ->
-      trimmed_segment = Enum.at(segments, -distance)
-
-      arbitrary_trim_count =
-        if date_or_version_suffix?(trimmed_segment),
-          do: arbitrary_trim_count,
-          else: arbitrary_trim_count + 1
-
-      if arbitrary_trim_count > 1 do
-        {:halt, {candidates, arbitrary_trim_count}}
-      else
-        candidate_identifier =
-          segments
-          |> Enum.take(segment_count - distance)
-          |> Enum.join("-")
-
-        candidate =
-          if blank?(candidate_identifier) or candidate_identifier == original_identifier do
-            nil
-          else
-            %{
-              from: original_identifier,
-              to: candidate_identifier,
-              distance: distance
-            }
-          end
-
-        candidates = if candidate, do: [candidate | candidates], else: candidates
-
-        {:cont, {candidates, arbitrary_trim_count}}
-      end
+      suffix_inference_candidate_step(
+        segments,
+        original_identifier,
+        segment_count,
+        distance,
+        candidates,
+        arbitrary_trim_count
+      )
     end)
     |> elem(0)
     |> Enum.reverse()
+  end
+
+  @spec suffix_inference_candidate_step(
+          [String.t()],
+          String.t(),
+          pos_integer(),
+          pos_integer(),
+          [suffix_candidate()],
+          non_neg_integer()
+        ) :: {:cont | :halt, {[suffix_candidate()], non_neg_integer()}}
+  defp suffix_inference_candidate_step(
+         segments,
+         original_identifier,
+         segment_count,
+         distance,
+         candidates,
+         arbitrary_trim_count
+       ) do
+    arbitrary_trim_count =
+      if date_or_version_suffix?(Enum.at(segments, -distance)),
+        do: arbitrary_trim_count,
+        else: arbitrary_trim_count + 1
+
+    if arbitrary_trim_count > 1 do
+      {:halt, {candidates, arbitrary_trim_count}}
+    else
+      candidate_identifier =
+        segments
+        |> Enum.take(segment_count - distance)
+        |> Enum.join("-")
+
+      candidates =
+        maybe_prepend_suffix_candidate(
+          candidates,
+          candidate_identifier,
+          original_identifier,
+          distance
+        )
+
+      {:cont, {candidates, arbitrary_trim_count}}
+    end
+  end
+
+  @spec maybe_prepend_suffix_candidate(
+          [suffix_candidate()],
+          String.t(),
+          String.t(),
+          pos_integer()
+        ) :: [suffix_candidate()]
+  defp maybe_prepend_suffix_candidate(
+         candidates,
+         candidate_identifier,
+         original_identifier,
+         distance
+       ) do
+    if blank?(candidate_identifier) or candidate_identifier == original_identifier do
+      candidates
+    else
+      [
+        %{
+          from: original_identifier,
+          to: candidate_identifier,
+          distance: distance
+        }
+        | candidates
+      ]
+    end
   end
 
   @spec date_or_version_suffix?(term()) :: boolean()
@@ -443,7 +514,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
     end
   end
 
-  @spec nearest_suffix_inference_match([map()]) :: {%PricingSnapshot{}, map()} | nil
+  @spec nearest_suffix_inference_match([map()]) :: {PricingSnapshot.t(), map()} | nil
   defp nearest_suffix_inference_match([]), do: nil
 
   defp nearest_suffix_inference_match(matches) do

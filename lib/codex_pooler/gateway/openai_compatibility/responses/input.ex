@@ -114,15 +114,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   defp normalize_input_item(%{"type" => "additional_tools"} = item), do: {:ok, item}
 
-  defp normalize_input_item(%{"role" => "assistant", "tool_calls" => tool_calls})
+  defp normalize_input_item(%{"role" => "assistant", "tool_calls" => tool_calls} = item)
        when is_list(tool_calls) do
-    normalize_assistant_tool_calls(tool_calls)
+    normalize_assistant_tool_calls(tool_calls, Map.get(item, "metadata"))
   end
 
   defp normalize_input_item(%{"role" => "tool"} = item) do
     with {:ok, call_id} <- tool_call_id(item),
          {:ok, output} <- tool_output(item) do
-      {:ok, %{"type" => "function_call_output", "call_id" => call_id, "output" => output}}
+      {:ok,
+       %{"type" => "function_call_output", "call_id" => call_id, "output" => output}
+       |> put_optional_metadata(Map.get(item, "metadata"))}
     end
   end
 
@@ -185,10 +187,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     end
   end
 
-  defp normalize_assistant_tool_calls(tool_calls) do
+  defp normalize_assistant_tool_calls(tool_calls, parent_metadata) do
     tool_calls
     |> Enum.reduce_while({:ok, []}, fn tool_call, {:ok, acc} ->
-      case normalize_assistant_tool_call(tool_call) do
+      case normalize_assistant_tool_call(tool_call, parent_metadata) do
         {:ok, item} -> {:cont, {:ok, [item | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -200,7 +202,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   end
 
   defp normalize_assistant_tool_call(
-         %{"function" => %{"name" => name, "arguments" => arguments}} = item
+         %{"function" => %{"name" => name, "arguments" => arguments}} = item,
+         parent_metadata
        )
        when is_binary(name) and is_binary(arguments) do
     case clean_string(Map.get(item, "call_id")) || clean_string(Map.get(item, "id")) do
@@ -215,11 +218,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
            "name" => name,
            "arguments" => arguments
          }
-         |> put_optional_id(Map.get(item, "response_item_id"))}
+         |> put_optional_id(Map.get(item, "response_item_id"))
+         |> put_optional_metadata(Map.get(item, "metadata") || parent_metadata)}
     end
   end
 
-  defp normalize_assistant_tool_call(_item),
+  defp normalize_assistant_tool_call(_item, _parent_metadata),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp normalize_assistant_replay_content(content) do
@@ -262,6 +266,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
       id -> Map.put(item, "id", id)
     end
   end
+
+  defp put_optional_metadata(item, metadata) when is_map(metadata),
+    do: Map.put(item, "metadata", metadata)
+
+  defp put_optional_metadata(item, _metadata), do: item
 
   defp input_text_message(text) do
     %{
@@ -590,8 +599,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   defp validate_assistant_replay_item(%{"role" => "assistant", "content" => content} = item) do
     with :ok <-
-           validate_exact_item_keys(item, ["type", "role", "content", "id", "phase", "status"]),
+           validate_exact_item_keys(item, [
+             "type",
+             "role",
+             "content",
+             "id",
+             "phase",
+             "status",
+             "metadata"
+           ]),
          :ok <- validate_optional_id(item),
+         :ok <- validate_optional_metadata(item),
          :ok <- validate_optional_assistant_phase(item),
          :ok <- validate_optional_assistant_status(item) do
       validate_assistant_replay_content(content)
@@ -640,8 +658,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
   defp validate_reasoning_replay_item(%{"id" => id, "summary" => summary} = item)
        when is_binary(id) do
-    with :ok <- validate_exact_item_keys(item, ["type", "id", "summary", "encrypted_content"]),
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "id",
+             "summary",
+             "encrypted_content",
+             "metadata"
+           ]),
          :ok <- validate_nonblank(id),
+         :ok <- validate_optional_metadata(item),
          :ok <- validate_reasoning_replay_encrypted_content(Map.get(item, "encrypted_content")) do
       validate_reasoning_replay_summary(summary)
     end
@@ -651,7 +677,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
          %{"summary" => summary, "encrypted_content" => encrypted_content} = item
        )
        when is_binary(encrypted_content) do
-    with :ok <- validate_exact_item_keys(item, ["type", "summary", "encrypted_content"]),
+    with :ok <-
+           validate_exact_item_keys(item, ["type", "summary", "encrypted_content", "metadata"]),
+         :ok <- validate_optional_metadata(item),
          :ok <- validate_nonblank(encrypted_content) do
       validate_reasoning_replay_summary(summary)
     end
@@ -692,10 +720,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
              "name",
              "arguments",
              "id",
-             "namespace"
+             "namespace",
+             "metadata"
            ]),
          :ok <- validate_nonblank(call_id),
          :ok <- validate_nonblank(name),
+         :ok <- validate_optional_metadata(item),
          :ok <- validate_optional_namespace(item) do
       validate_optional_id(item)
     end
@@ -707,14 +737,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
   defp validate_function_call_output_item(item) do
     cond do
       Map.has_key?(item, "output") ->
-        with :ok <- validate_exact_item_keys(item, ["type", "call_id", "output", "id"]),
+        with :ok <-
+               validate_exact_item_keys(item, ["type", "call_id", "output", "id", "metadata"]),
              :ok <- validate_nonblank(Map.get(item, "call_id")),
+             :ok <- validate_optional_metadata(item),
              :ok <- validate_optional_id(item) do
           validate_function_call_output(Map.get(item, "output"))
         end
 
       Map.has_key?(item, "result") ->
-        with :ok <- validate_exact_item_keys(item, ["type", "call_id", "result", "id"]),
+        with :ok <-
+               validate_exact_item_keys(item, ["type", "call_id", "result", "id", "metadata"]),
+             :ok <- validate_optional_metadata(item),
              :ok <- validate_nonblank(Map.get(item, "call_id")) do
           validate_optional_id(item)
         end
@@ -751,6 +785,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_id(_item), do: :ok
+
+  defp validate_optional_metadata(%{"metadata" => nil}), do: :ok
+
+  defp validate_optional_metadata(%{"metadata" => metadata}) when is_map(metadata),
+    do: validate_json_value(metadata)
+
+  defp validate_optional_metadata(%{"metadata" => _metadata}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_metadata(_item), do: :ok
 
   defp validate_optional_namespace(%{"namespace" => namespace}) when is_binary(namespace),
     do: validate_nonblank(namespace)

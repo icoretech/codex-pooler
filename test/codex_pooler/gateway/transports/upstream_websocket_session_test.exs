@@ -190,7 +190,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     parent = self()
 
     events =
-      [%{"type" => "response.created", "response" => %{"id" => "resp_ws_bounded_body"}}] ++
+      [
+        %{"type" => "response.created", "response" => %{"id" => "resp_ws_bounded_body"}},
+        %{
+          "type" => "item/started",
+          "item" => %{
+            "type" => "sleep",
+            "id" => "item_sleep_fixture",
+            "duration_ms" => 25
+          }
+        }
+      ] ++
         for index <- 1..240 do
           %{
             "type" => "response.output_text.delta",

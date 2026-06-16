@@ -26,7 +26,6 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
         opts
       )
     else
-      {:error, :tokenizer_input_limit} -> {:skip, :tokenizer_input_limit}
       _skip -> :skip
     end
   end

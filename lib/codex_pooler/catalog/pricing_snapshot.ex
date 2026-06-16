@@ -2,6 +2,8 @@ defmodule CodexPooler.Catalog.PricingSnapshot do
   @moduledoc false
   use CodexPooler.Schema
 
+  @type t :: %__MODULE__{}
+
   schema "pricing_snapshots" do
     field :model_identifier, :string
     field :price_version, :string

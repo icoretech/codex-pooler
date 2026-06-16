@@ -67,6 +67,16 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
       json_document?(trimmed) ->
         decision(:json_document, 100)
 
+      true ->
+        scored_decision(content)
+    end
+  end
+
+  def detect(_content), do: decision(:text, 100)
+
+  @spec scored_decision(String.t()) :: decision()
+  defp scored_decision(content) do
+    cond do
       (points = diff_points(content)) >= 70 ->
         decision(:diff, points)
 
@@ -86,8 +96,6 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
         decision(:text, 100)
     end
   end
-
-  def detect(_content), do: decision(:text, 100)
 
   defp decision(kind, points) do
     strategy = Map.get(@strategies, kind)

@@ -337,6 +337,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
             %{
               "role" => "assistant",
               "content" => "",
+              "metadata" => %{"turn_id" => "turn_v1_hermes_assistant"},
               "tool_calls" => [
                 %{
                   "id" => "call_v1_hermes_terminal",
@@ -352,6 +353,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
             %{
               "role" => "tool",
               "tool_call_id" => "call_v1_hermes_terminal",
+              "metadata" => %{"turn_id" => "turn_v1_hermes_tool"},
               "content" => %{
                 "output" => "synthetic hermes terminal output",
                 "exit_code" => 0,
@@ -371,12 +373,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
                  "type" => "function_call",
                  "call_id" => "call_v1_hermes_terminal",
                  "name" => "terminal",
-                 "arguments" => "{\"cmd\":\"date\"}"
+                 "arguments" => "{\"cmd\":\"date\"}",
+                 "metadata" => %{"turn_id" => "turn_v1_hermes_assistant"}
                },
                %{
                  "type" => "function_call_output",
                  "call_id" => "call_v1_hermes_terminal",
-                 "output" => "synthetic hermes terminal output"
+                 "output" => "synthetic hermes terminal output",
+                 "metadata" => %{"turn_id" => "turn_v1_hermes_tool"}
                }
              ] = captured.json["input"]
 
@@ -384,6 +388,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       refute metadata =~ "synthetic hermes terminal output"
       refute metadata =~ "resp_v1_hermes_assistant_previous"
       refute metadata =~ "call_v1_hermes_terminal"
+      refute metadata =~ "turn_v1_hermes_assistant"
+      refute metadata =~ "turn_v1_hermes_tool"
       refute metadata =~ "raw_request"
     end
 

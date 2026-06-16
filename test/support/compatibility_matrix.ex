@@ -243,7 +243,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :control_plane_surface,
       contract:
-        "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve opaque realtime SDP bodies, forward raw AVAS SDP proxy query strings exactly on /backend-api/codex/realtime/calls only, do not expand /v1/realtime or hosted realtime routes, allowlist response headers, and keep logs metadata-only"
+        "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve opaque realtime SDP bodies, forward raw AVAS SDP proxy query strings exactly on /backend-api/codex/realtime/calls only, do not expand /v1/realtime, hosted realtime routes, Codex app-server account reset-credit methods, or thread/realtime app-server controls, allowlist response headers, and keep logs metadata-only"
     },
     %{
       slug: :backend_alpha_search,
@@ -587,6 +587,16 @@ defmodule CodexPooler.CompatibilityMatrix do
         route_expansion: false,
         unsupported_public_routes: ["/v1/realtime"]
       },
+      unsupported_app_server_json_rpc_methods: [
+        "account/rateLimits/read",
+        "account/rateLimitResetCredit/consume",
+        "thread/realtime/appendSpeech"
+      ],
+      unsupported_app_server_fields: [
+        "rateLimitResetCredits",
+        "codexResponsesAsItems",
+        "codexResponseItemPrefix"
+      ],
       privacy: "metadata_only",
       routes: @control_plane_fixture_routes
     },

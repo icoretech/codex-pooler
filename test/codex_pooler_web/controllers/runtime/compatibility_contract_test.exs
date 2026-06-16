@@ -100,6 +100,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "metadata-only"
       assert feature.contract =~ "raw AVAS SDP proxy query strings exactly"
       assert feature.contract =~ "do not expand /v1/realtime"
+      assert feature.contract =~ "account reset-credit methods"
+      assert feature.contract =~ "thread/realtime app-server controls"
       refute feature.contract =~ "placeholder"
       refute feature.contract =~ "not implemented"
       assert fixture.route_class == "proxy_control"
@@ -114,6 +116,18 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                route_expansion: false,
                unsupported_public_routes: ["/v1/realtime"]
              }
+
+      assert fixture.unsupported_app_server_json_rpc_methods == [
+               "account/rateLimits/read",
+               "account/rateLimitResetCredit/consume",
+               "thread/realtime/appendSpeech"
+             ]
+
+      assert fixture.unsupported_app_server_fields == [
+               "rateLimitResetCredits",
+               "codexResponsesAsItems",
+               "codexResponseItemPrefix"
+             ]
 
       assert fixture.privacy == "metadata_only"
     end
@@ -539,6 +553,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         %{method: :post, path: "/backend-api/codex/thread/fork", family: :app_server},
         %{method: :post, path: "/backend-api/codex/turn/start", family: :app_server},
         %{method: :post, path: "/backend-api/codex/configRequirements/read", family: :app_server},
+        %{method: :post, path: "/backend-api/codex/account/rateLimits/read", family: :app_server},
+        %{
+          method: :post,
+          path: "/backend-api/codex/account/rateLimitResetCredit/consume",
+          family: :app_server
+        },
+        %{
+          method: :post,
+          path: "/backend-api/codex/thread/realtime/appendSpeech",
+          family: :app_server
+        },
         %{
           method: :get,
           path: "/backend-api/codex/remote-control/pairing/status",
