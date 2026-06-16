@@ -54,6 +54,5 @@ defmodule CodexPooler.Gateway.Metadata.Accounting do
     |> record_optional(Accounting.record_upstream_identity_metadata_request(identity, attrs))
   end
 
-  defp safe_failure_reason(%{code: code}) when is_atom(code), do: Atom.to_string(code)
-  defp safe_failure_reason(_reason), do: "unknown"
+  defp safe_failure_reason(reason), do: FailureResponse.safe_failure_reason(reason)
 end

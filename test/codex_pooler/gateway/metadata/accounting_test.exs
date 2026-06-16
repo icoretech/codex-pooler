@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Metadata.AccountingTest do
 
     assert log =~ "operation=record_usage_metadata_request"
     assert log =~ "request_id=unknown"
+    assert log =~ "reason=invalid_request"
     refute log =~ "unsafe detail"
   end
 
