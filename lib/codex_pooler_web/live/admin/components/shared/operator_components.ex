@@ -7,17 +7,9 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   alias CodexPooler.Accounts.User
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
-  alias CodexPoolerWeb.Admin.OperatorComponents.{Dialogs, Identity}
+  alias CodexPoolerWeb.Admin.OperatorComponents.Identity
   alias CodexPoolerWeb.DateTimeDisplay
   alias Phoenix.LiveView.JS
-
-  def operator_avatar(assigns), do: Identity.operator_avatar(assigns)
-
-  def operator_create_dialog(assigns), do: Dialogs.operator_create_dialog(assigns)
-
-  def operator_edit_dialog(assigns), do: Dialogs.operator_edit_dialog(assigns)
-
-  def operator_password_dialog(assigns), do: Dialogs.operator_password_dialog(assigns)
 
   attr :form, Phoenix.HTML.Form, required: true
 
@@ -196,14 +188,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
               >
                 <td class="min-w-72 align-middle">
                   <div class="flex items-center gap-3">
-                    <.operator_avatar
+                    <Identity.operator_avatar
                       id={"operator-row-#{operator.id}-avatar"}
                       operator={operator}
                       status={operator.status}
                     />
                     <div class="grid gap-1.5">
                       <span class="font-medium leading-5 text-base-content">
-                        {operator_display_name(operator)}
+                        {Identity.operator_display_name(operator)}
                       </span>
                       <span class="text-sm leading-5 text-base-content/60">{operator.email}</span>
                     </div>
@@ -269,7 +261,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
         type="button"
         class="btn btn-ghost btn-sm btn-square"
         tabindex="0"
-        aria-label={"Actions for #{operator_display_name(@operator)}"}
+        aria-label={"Actions for #{Identity.operator_display_name(@operator)}"}
       >
         <.icon name="hero-ellipsis-vertical" class="size-5" />
       </button>
@@ -329,8 +321,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
     </div>
     """
   end
-
-  def operator_display_name(operator), do: Identity.operator_display_name(operator)
 
   defp password_policy_label(%User{password_change_required: true}),
     do: "Password change required"

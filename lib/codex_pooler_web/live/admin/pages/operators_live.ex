@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents
+  alias CodexPoolerWeb.Admin.OperatorComponents.Dialogs
   alias CodexPoolerWeb.Admin.OperatorForm
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -309,20 +310,20 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           </div>
         </div>
 
-        <OperatorComponents.operator_create_dialog
+        <Dialogs.operator_create_dialog
           :if={!@operator_management_denied?}
           creating_operator={@creating_operator}
           create_form={@create_form}
           temporary_password_receipt={@temporary_password_receipt}
           pool_options={@pool_options}
         />
-        <OperatorComponents.operator_edit_dialog
+        <Dialogs.operator_edit_dialog
           :if={!@operator_management_denied?}
           editing_operator={@editing_operator}
           edit_form={@edit_form}
           pool_options={@pool_options}
         />
-        <OperatorComponents.operator_password_dialog
+        <Dialogs.operator_password_dialog
           :if={!@operator_management_denied?}
           resetting_operator={@resetting_operator}
           password_dialog_receipt={@password_dialog_receipt}

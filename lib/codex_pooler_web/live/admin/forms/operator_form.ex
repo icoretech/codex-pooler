@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   alias CodexPooler.Accounts.User
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
-  alias CodexPoolerWeb.Admin.OperatorComponents
+  alias CodexPoolerWeb.Admin.OperatorComponents.Identity
 
   @operator_statuses ["active", "disabled"]
 
@@ -179,7 +179,7 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   def temporary_password_receipt(result, label) do
     %{
       label: label,
-      operator_label: OperatorComponents.operator_display_name(result.user),
+      operator_label: Identity.operator_display_name(result.user),
       operator_email: result.user.email,
       temporary_password: result.temporary_password,
       emailed?: Map.get(result, :emailed?, false),

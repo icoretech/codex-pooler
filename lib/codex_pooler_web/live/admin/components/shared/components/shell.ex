@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
-  alias CodexPoolerWeb.Admin.OperatorComponents
+  alias CodexPoolerWeb.Admin.OperatorComponents.Identity
 
   @admin_nav_items [
     %{
@@ -198,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
           aria-label="Admin navigation"
         >
           <div class="mb-6 flex min-w-0 shrink-0 justify-center px-3 text-center md:flex-col md:items-start md:gap-1 md:px-4 md:text-left">
-            <OperatorComponents.operator_avatar
+            <Identity.operator_avatar
               id="admin-sidebar-operator-avatar"
               operator={@current_scope.user}
               status={@current_scope.user.status}
