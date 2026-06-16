@@ -45,6 +45,13 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert request.endpoint == "/backend-api/transcribe"
     assert request.status == "succeeded"
     assert request.request_metadata["upload_bytes"] == byte_size(audio_bytes)
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             "/v1/audio/transcriptions"
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
+             "/backend-api/transcribe"
+
     refute inspect(request.request_metadata) =~ transcript
     refute inspect(request.request_metadata) =~ prompt
     refute inspect(request.request_metadata) =~ audio_bytes

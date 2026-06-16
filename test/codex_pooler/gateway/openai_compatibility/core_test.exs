@@ -740,6 +740,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert result.payload["tool_choice"] == %{"type" => "image_generation"}
   end
 
+  @tag :responses_coercion
+  test "Audio transcription builds a backend multipart dispatch envelope" do
+    upload = audio_upload_fixture("synthetic audio bytes")
+
+    payload = %{
+      "model" => "gpt-4o-transcribe",
+      "file" => upload,
+      "prompt" => "synthetic glossary",
+      "response_format" => "json"
+    }
+
+    assert {:ok, result} = Audio.coerce_transcription(payload, request_id: "req_fixture")
+    assert result.endpoint == "/backend-api/transcribe"
+    assert result.payload == payload
+    assert %Plug.Upload{} = result.payload["file"]
+    assert result.audio_payload["file"]["content_type"] == "audio/wav"
+    assert result.audio_payload["file"]["bytes"] == byte_size("synthetic audio bytes")
+    assert result.request_options.transport.route_class == "audio_transcription"
+    assert result.request_options.transport.upstream_endpoint == "/backend-api/transcribe"
+
+    assert result.request_options.payload_context.forced_transcription_model ==
+             "gpt-4o-transcribe"
+
+    assert result.request_options.request_metadata.request_id == "req_fixture"
+  end
+
   @tag :responses_validation
   test "OpenAI shell validation uses validation-only adapter contracts" do
     response_payload = %{
@@ -793,6 +819,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert {:error, ^expected_reason} = Images.coerce_edit(false)
     assert {:error, ^expected_reason} = Files.validate_create("file payload")
     assert {:error, ^expected_reason} = Audio.validate_transcription("audio payload")
+    assert {:error, ^expected_reason} = Audio.coerce_transcription("audio payload")
     assert {:error, ^expected_reason} = Validation.validate_shell(:responses, "not an object")
   end
 
@@ -1700,8 +1727,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert {:error, %{code: "invalid_model", param: "model"}} =
              Audio.validate_transcription(%{"model" => "whisper-1", "file" => upload_metadata()})
 
+    assert {:error, %{code: "invalid_model", param: "model"}} =
+             Audio.coerce_transcription(%{"model" => "whisper-1", "file" => upload_metadata()})
+
     assert {:error, %{code: "invalid_request", param: "file"}} =
              Audio.validate_transcription(%{"model" => "gpt-4o-transcribe"})
+
+    assert {:error, %{code: "invalid_request", param: "file"}} =
+             Audio.coerce_transcription(%{"model" => "gpt-4o-transcribe"})
   end
 
   @tag :unsupported_fields
@@ -3020,6 +3053,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   defp upload_metadata do
     %{"filename" => "fixture.txt", "content_type" => "text/plain", "bytes" => 12}
+  end
+
+  defp audio_upload_fixture(contents) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-audio-coerce-#{System.unique_integer([:positive])}"
+      )
+
+    File.write!(path, contents)
+    on_exit(fn -> File.rm(path) end)
+
+    %Plug.Upload{path: path, filename: "fixture.wav", content_type: "audio/wav"}
   end
 
   defp structured_tool_result_output do

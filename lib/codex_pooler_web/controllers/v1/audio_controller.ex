@@ -1,30 +1,17 @@
 defmodule CodexPoolerWeb.V1.AudioController do
   use CodexPoolerWeb, :controller
 
-  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.OpenAICompatibility.Audio
-  alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Runtime.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPoolerWeb.V1.PublicGatewayDispatch
 
   def transcriptions(conn, params) do
-    PublicGatewayDispatch.authenticated(
+    PublicGatewayDispatch.coerced_multipart(
       conn,
-      RouteClass.audio_transcription(),
-      "/v1/audio/transcriptions",
-      fn auth ->
-        with {:ok, _validated} <- Audio.validate_transcription(params) do
-          opts =
-            conn
-            |> GatewayHelpers.request_opts()
-            |> Map.put(:upstream_endpoint, "/backend-api/transcribe")
-            |> Map.put(:forced_transcription_model, Gateway.backend_transcription_model())
-            |> RequestOptions.from_conn_metadata("/backend-api/transcribe", params)
-
-          Gateway.execute_multipart(auth, "/backend-api/transcribe", params, opts)
-        end
-      end
+      fn -> Audio.coerce_transcription(params, GatewayHelpers.request_opts(conn)) end,
+      &normalize_success/2
     )
   end
+
+  defp normalize_success(decoded, _coerced), do: decoded
 end
