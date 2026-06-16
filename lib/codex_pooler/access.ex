@@ -19,6 +19,8 @@ defmodule CodexPooler.Access do
   @type policy_result :: {:ok, map()} | {:error, atom() | access_error()}
   @type invite_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | access_error()}
   @type pool_invite_email_result :: InviteEmail.pool_invite_result()
+  @type invite_page :: Invites.invite_page()
+  @type invite_page_result :: Invites.invite_page_result()
 
   @spec create_invite(Scope.t(), Pool.t() | Ecto.UUID.t(), map()) ::
           invite_result()
@@ -50,8 +52,11 @@ defmodule CodexPooler.Access do
   @spec consume_invite(Invite.t(), map()) :: invite_result()
   defdelegate consume_invite(invite, attrs), to: Invites
 
-  @spec list_invites(Scope.t(), keyword()) :: map()
+  @spec list_invites(Scope.t(), keyword()) :: invite_page_result()
   defdelegate list_invites(scope, opts \\ []), to: Invites
+
+  @spec list_visible_invites(term(), keyword()) :: invite_page()
+  defdelegate list_visible_invites(scope, opts \\ []), to: Invites
 
   @spec revoke_invite(Scope.t(), Invite.t() | Ecto.UUID.t()) ::
           {:ok, Invite.t()} | {:error, Ecto.Changeset.t() | access_error()}

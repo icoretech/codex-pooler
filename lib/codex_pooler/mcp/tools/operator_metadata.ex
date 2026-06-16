@@ -115,7 +115,7 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
     with {:ok, scope} <- scope_from_context(context) do
       limit = bounded_limit(arguments)
       filters = invite_filters(arguments)
-      page = Access.list_invites(scope, limit: limit, filters: filters)
+      page = Access.list_visible_invites(scope, limit: limit, filters: filters)
       items = Enum.map(page.items, &present_invite/1)
 
       structured = %{
@@ -337,7 +337,7 @@ defmodule CodexPooler.MCP.Tools.OperatorMetadata do
   end
 
   defp invite_matches(scope, selector) do
-    page = Access.list_invites(scope, limit: @max_limit, filters: [])
+    page = Access.list_visible_invites(scope, limit: @max_limit, filters: [])
 
     exact_id = Enum.filter(page.items, &(&1.id == selector))
 

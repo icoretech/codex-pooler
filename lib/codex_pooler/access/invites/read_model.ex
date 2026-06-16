@@ -43,6 +43,11 @@ defmodule CodexPooler.Access.Invites.ReadModel do
           limit: pos_integer()
         }
 
+  @spec empty_page(list_opts()) :: invite_page()
+  def empty_page(opts \\ []) do
+    %{items: [], total: 0, limit: opts |> Keyword.get(:limit, 50) |> clamp_limit()}
+  end
+
   @spec list_invites(Scope.t(), list_opts()) :: invite_page()
   def list_invites(%Scope{} = scope, opts) do
     limit = opts |> Keyword.get(:limit, 50) |> clamp_limit()

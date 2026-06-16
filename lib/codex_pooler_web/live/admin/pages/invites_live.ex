@@ -267,7 +267,10 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     filters = parsed_filters(form_values)
 
     invites =
-      Access.list_invites(socket.assigns.current_scope, limit: @page_size, filters: filters)
+      Access.list_visible_invites(socket.assigns.current_scope,
+        limit: @page_size,
+        filters: filters
+      )
 
     socket = maybe_subscribe_pool_events(socket, pools, form_values["pool_id"])
 

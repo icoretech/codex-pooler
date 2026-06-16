@@ -222,13 +222,20 @@ defmodule CodexPooler.Access.InviteTest do
     {:ok, %{invite: invite}} =
       Access.create_invite(scope, pool, %{invited_email: "listed@example.com"})
 
-    assert %{items: [row], total: 1} = Access.list_invites(scope)
+    assert {:ok, %{items: [row], total: 1}} = Access.list_invites(scope)
     assert row.id == invite.id
     assert row.pool_name == "Invite Rows"
     assert row.pool_slug == "invite-rows"
     assert row.invited_email == "listed@example.com"
     assert row.inviter_email == scope.user.email
     assert row.status == "active"
+  end
+
+  test "list_invites rejects invalid scope while visible invite listing falls back to an empty page" do
+    assert {:error, %{code: :invalid_request}} = Access.list_invites(nil)
+    assert {:error, %{code: :invalid_request}} = Access.list_invites(%{})
+
+    assert %{items: [], total: 0, limit: 25} = Access.list_visible_invites(nil, limit: 25)
   end
 
   test "list_invites projects expired active invites as expired rows" do
@@ -244,7 +251,9 @@ defmodule CodexPooler.Access.InviteTest do
     |> Invite.changeset(%{expires_at: expired_at})
     |> Repo.update!()
 
-    assert %{items: [row], total: 1} = Access.list_invites(scope, filters: [status: "expired"])
+    assert {:ok, %{items: [row], total: 1}} =
+             Access.list_invites(scope, filters: [status: "expired"])
+
     assert row.id == invite.id
     assert row.status == "expired"
     assert row.stored_status == "active"
@@ -261,7 +270,7 @@ defmodule CodexPooler.Access.InviteTest do
     assert revoked.status == "revoked"
     assert revoked.revoked_at
 
-    assert %{items: [row]} = Access.list_invites(scope, filters: [status: "revoked"])
+    assert {:ok, %{items: [row]}} = Access.list_invites(scope, filters: [status: "revoked"])
     assert row.id == invite.id
 
     assert Repo.get_by(CodexPooler.Audit.AuditEvent,
@@ -297,12 +306,12 @@ defmodule CodexPooler.Access.InviteTest do
     assert {:error, %{code: :capability_denied}} =
              Access.create_invite(admin_scope, pool_c, %{invited_email: "admin-c@example.com"})
 
-    assert %{items: rows, total: 3} = Access.list_invites(admin_scope)
+    assert {:ok, %{items: rows, total: 3}} = Access.list_invites(admin_scope)
 
     assert Enum.map(rows, & &1.id) |> Enum.sort() ==
              Enum.sort([created.id, invite_a.id, invite_b.id])
 
-    assert %{items: [], total: 0} =
+    assert {:ok, %{items: [], total: 0}} =
              Access.list_invites(admin_scope, filters: [pool_id: pool_c.id])
   end
 
@@ -317,7 +326,7 @@ defmodule CodexPooler.Access.InviteTest do
 
     admin_scope = Scope.for_user(admin)
 
-    assert %{items: [], total: 0} = Access.list_invites(admin_scope)
+    assert {:ok, %{items: [], total: 0}} = Access.list_invites(admin_scope)
 
     assert {:error, %{code: :capability_denied}} =
              Access.create_invite(admin_scope, pool, %{invited_email: "denied@example.com"})

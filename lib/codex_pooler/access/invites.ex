@@ -28,6 +28,7 @@ defmodule CodexPooler.Access.Invites do
   @type list_opts :: ReadModel.list_opts()
   @type invite_row :: ReadModel.invite_row()
   @type invite_page :: ReadModel.invite_page()
+  @type invite_page_result :: {:ok, invite_page()} | {:error, access_error()}
 
   @spec create_invite(Scope.t(), Pool.t() | Ecto.UUID.t(), map()) ::
           invite_result()
@@ -72,12 +73,21 @@ defmodule CodexPooler.Access.Invites do
   def create_invite(_scope, _pool_or_id, _attrs),
     do: {:error, access_error(:invalid_request, "user scope is required")}
 
-  @spec list_invites(Scope.t(), list_opts()) :: invite_page()
+  @spec list_invites(Scope.t(), list_opts()) :: invite_page_result()
   def list_invites(scope, opts \\ [])
 
-  def list_invites(%Scope{} = scope, opts), do: ReadModel.list_invites(scope, opts)
+  def list_invites(%Scope{} = scope, opts), do: {:ok, ReadModel.list_invites(scope, opts)}
 
-  def list_invites(_scope, _opts), do: %{items: [], total: 0, limit: 50}
+  def list_invites(_scope, _opts),
+    do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec list_visible_invites(term(), list_opts()) :: invite_page()
+  def list_visible_invites(scope, opts \\ []) do
+    case list_invites(scope, opts) do
+      {:ok, page} -> page
+      {:error, _reason} -> ReadModel.empty_page(opts)
+    end
+  end
 
   @spec revoke_invite(Scope.t(), Invite.t() | Ecto.UUID.t()) ::
           {:ok, Invite.t()} | {:error, Ecto.Changeset.t() | access_error()}
