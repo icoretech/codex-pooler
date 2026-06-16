@@ -285,10 +285,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
       Enum.reduce(input, {[], []}, fn item, {items, instruction_texts} ->
         case lift_instruction_item(item) do
           {:ok, texts, nil} ->
-            {items, instruction_texts ++ texts}
+            {items, Enum.reverse(texts, instruction_texts)}
 
           {:ok, texts, residual_item} ->
-            {[residual_item | items], instruction_texts ++ texts}
+            {[residual_item | items], Enum.reverse(texts, instruction_texts)}
 
           :ignore ->
             {[item | items], instruction_texts}
@@ -297,7 +297,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
 
     payload
     |> Map.put("input", Enum.reverse(input))
-    |> put_lifted_instruction_text(instruction_texts)
+    |> put_lifted_instruction_text(Enum.reverse(instruction_texts))
   end
 
   defp lift_instruction_messages(payload), do: payload
@@ -329,9 +329,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input do
     |> Enum.reduce({[], []}, fn part, {texts, preserved_content} ->
       case instruction_content_text(part) do
         {:ok, nil} -> {texts, preserved_content}
-        {:ok, text} -> {texts ++ [text], preserved_content}
-        :error -> {texts, preserved_content ++ [part]}
+        {:ok, text} -> {[text | texts], preserved_content}
+        :error -> {texts, [part | preserved_content]}
       end
+    end)
+    |> then(fn {texts, preserved_content} ->
+      {Enum.reverse(texts), Enum.reverse(preserved_content)}
     end)
   end
 
