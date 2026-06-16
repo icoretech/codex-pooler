@@ -130,6 +130,54 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert Decimal.equal?(long_context_snapshot.output_token_micros, Decimal.new("3.75"))
     assert long_context_snapshot.config["service_tier"] == "standard"
     assert long_context_snapshot.config["price_bucket"] == "long_context"
+    assert long_context_snapshot.config["availability"] == "priced"
+  end
+
+  test "imports explicit unavailable pricing buckets as unpriced markers" do
+    path =
+      write_tmp_json!(%{
+        "generated_at" => "2026-06-15T04:50:14.549006Z",
+        "models" => %{
+          "unavailable-long-context-model" => %{
+            "model" => "unavailable-long-context-model",
+            "pricing_type" => "per_1m_tokens",
+            "category" => "language_model",
+            "categories" => ["language_model"],
+            "prices" => %{
+              "priority" => %{
+                "default" => %{
+                  "cached_input" => Decimal.new("0.5"),
+                  "input" => Decimal.new("5.0"),
+                  "output" => Decimal.new("30.0")
+                },
+                "long_context" => %{
+                  "available" => false
+                }
+              }
+            }
+          }
+        }
+      })
+
+    assert {:ok, result} = OpenAIPricingImporter.import_file(path)
+    assert result.inserted == 2
+    assert result.skipped == 0
+
+    marker =
+      Repo.one!(
+        from s in PricingSnapshot,
+          where:
+            s.model_identifier == "unavailable-long-context-model" and
+              fragment("?->>'service_tier'", s.config) == "priority" and
+              fragment("?->>'price_bucket'", s.config) == "long_context"
+      )
+
+    assert is_nil(marker.input_token_micros)
+    assert is_nil(marker.cached_input_token_micros)
+    assert is_nil(marker.output_token_micros)
+    assert is_nil(marker.reasoning_token_micros)
+    assert is_nil(marker.request_base_micros)
+    assert marker.config["availability"] == "unavailable"
   end
 
   test "skips unsupported pricing_type and missing default buckets" do

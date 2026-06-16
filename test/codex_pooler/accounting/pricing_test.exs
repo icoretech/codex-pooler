@@ -617,6 +617,101 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(5_440_080))
     end
 
+    test "explicit unavailable default bucket overrides older priced snapshot" do
+      setup = accounting_setup()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        config:
+          pricing_config(%{
+            "availability" => "unavailable"
+          }),
+        input_token_micros: nil,
+        cached_input_token_micros: nil,
+        output_token_micros: nil,
+        reasoning_token_micros: nil,
+        request_base_micros: nil,
+        effective_at: DateTime.add(now, -30, :second),
+        captured_at: DateTime.add(now, -30, :second)
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{correlation_id: "corr-default-unavailable"}
+               )
+
+      assert is_nil(reserved.pricing_snapshot)
+      assert reserved.pricing_status == "unpriced_unavailable_price_bucket"
+      assert reserved.reservation.details["price_bucket"] == "default"
+      assert reserved.reservation.details["pricing_status"] == "unpriced_unavailable_price_bucket"
+      assert Decimal.equal?(reserved.reservation.estimated_cost_micros, Decimal.new(0))
+    end
+
+    test "explicit unavailable long-context bucket settles as unpriced instead of default priced" do
+      setup = accounting_setup()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        config:
+          pricing_config(%{
+            "price_bucket" => "long_context"
+          }),
+        input_token_micros: Decimal.new(100),
+        output_token_micros: Decimal.new(200),
+        effective_at: DateTime.add(now, -120, :second),
+        captured_at: DateTime.add(now, -120, :second)
+      })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        config:
+          pricing_config(%{
+            "price_bucket" => "long_context",
+            "availability" => "unavailable"
+          }),
+        input_token_micros: nil,
+        cached_input_token_micros: nil,
+        output_token_micros: nil,
+        reasoning_token_micros: nil,
+        request_base_micros: nil,
+        effective_at: DateTime.add(now, -30, :second),
+        captured_at: DateTime.add(now, -30, :second)
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{correlation_id: "corr-long-context-unavailable"}
+               )
+
+      assert reserved.pricing_snapshot.id == setup.pricing.id
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 272_001,
+                   output_tokens: 2,
+                   total_tokens: 272_003
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert is_nil(result.settlement.pricing_snapshot_id)
+      assert result.settlement.details["pricing_status"] == "unpriced_unavailable_price_bucket"
+      assert result.settlement.details["price_bucket"] == "long_context"
+      assert result.settlement.details["settled_cost_micros"] == nil
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
+    end
+
     test "suffix-inferred long-context usage falls back to default canonical pricing" do
       setup = accounting_setup()
       unique = System.unique_integer([:positive])
@@ -675,6 +770,92 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.details["price_bucket"] == "default"
       assert result.settlement.details["alias"] == expected_alias
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(27_200_500))
+    end
+
+    test "suffix-inferred unavailable long-context bucket blocks default canonical fallback" do
+      setup = accounting_setup()
+      unique = System.unique_integer([:positive])
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      base_identifier = "gpt-example-unavailable-long-context-#{unique}"
+      suffix_identifier = "#{base_identifier}-spark"
+
+      suffix_model =
+        model_fixture(setup.pool, %{
+          exposed_model_id: suffix_identifier,
+          upstream_model_id: suffix_identifier,
+          pricing_ref: suffix_identifier
+        })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        model_identifier: base_identifier,
+        input_token_micros: Decimal.new(100),
+        output_token_micros: Decimal.new(200)
+      })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        model_identifier: base_identifier,
+        config:
+          pricing_config(%{
+            "price_bucket" => "long_context"
+          }),
+        input_token_micros: Decimal.new(300),
+        output_token_micros: Decimal.new(400),
+        effective_at: DateTime.add(now, -120, :second),
+        captured_at: DateTime.add(now, -120, :second)
+      })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        model_identifier: base_identifier,
+        config:
+          pricing_config(%{
+            "price_bucket" => "long_context",
+            "availability" => "unavailable"
+          }),
+        input_token_micros: nil,
+        cached_input_token_micros: nil,
+        output_token_micros: nil,
+        reasoning_token_micros: nil,
+        request_base_micros: nil,
+        effective_at: DateTime.add(now, -30, :second),
+        captured_at: DateTime.add(now, -30, :second)
+      })
+
+      expected_alias = %{
+        "source" => "suffix_inference",
+        "from" => suffix_identifier,
+        "to" => base_identifier
+      }
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 suffix_model,
+                 %{"model" => suffix_model.exposed_model_id},
+                 %{correlation_id: "corr-suffix-long-context-unavailable-#{unique}"}
+               )
+
+      assert reserved.pricing_status == "priced"
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 272_001,
+                   output_tokens: 2,
+                   total_tokens: 272_003
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert is_nil(result.settlement.pricing_snapshot_id)
+      assert result.settlement.details["pricing_status"] == "unpriced_unavailable_price_bucket"
+      assert result.settlement.details["price_bucket"] == "long_context"
+      assert result.settlement.details["alias"] == expected_alias
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
     end
 
     test "websocket final usage overrides reservation estimate for settled tokens and cost" do

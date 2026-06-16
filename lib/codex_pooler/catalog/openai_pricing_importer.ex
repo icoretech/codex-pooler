@@ -7,6 +7,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   @source "openai-json-pricing"
   @pricing_type "per_1m_tokens"
   @supported_price_buckets ~w(default short_context long_context)
+  @unavailable "unavailable"
   @currency_code "USD"
   @billing_unit "token"
 
@@ -277,43 +278,86 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
          price_bucket,
          default_prices
        ) do
-    if Map.has_key?(default_prices, "input") and Map.has_key?(default_prices, "output") do
-      with {:ok, input} <-
-             required_decimal(default_prices, "input", model_identifier, service_tier),
-           {:ok, output} <-
-             required_decimal(default_prices, "output", model_identifier, service_tier),
-           {:ok, cached_input} <- optional_decimal(default_prices, "cached_input", Decimal.new(0)),
-           {:ok, reasoning, reasoning_source} <- reasoning_price(default_prices, output) do
+    cond do
+      unavailable_price_bucket?(default_prices) ->
         {:ok,
          %{
            model_identifier: model_identifier,
            price_version: generated_at_raw,
            currency_code: @currency_code,
            billing_unit: @billing_unit,
-           input_token_micros: usd_per_1m_to_token_micros(input),
-           cached_input_token_micros: usd_per_1m_to_token_micros(cached_input),
-           output_token_micros: usd_per_1m_to_token_micros(output),
-           reasoning_token_micros: usd_per_1m_to_token_micros(reasoning),
-           request_base_micros: Decimal.new(0),
+           input_token_micros: nil,
+           cached_input_token_micros: nil,
+           output_token_micros: nil,
+           reasoning_token_micros: nil,
+           request_base_micros: nil,
            effective_at: generated_at,
            source_url: path,
            captured_at: now,
-           config: %{
-             "source" => @source,
-             "source_generated_at" => generated_at_raw,
-             "source_path" => path,
-             "service_tier" => service_tier,
-             "price_bucket" => price_bucket,
-             "pricing_type" => @pricing_type,
-             "category" => string_or_nil(Map.get(model_payload, "category")),
-             "categories" => string_list_or_empty(Map.get(model_payload, "categories")),
-             "reasoning_price_source" => reasoning_source
-           }
+           config:
+             snapshot_config(model_payload, generated_at_raw, path, service_tier, price_bucket, %{
+               "availability" => @unavailable
+             })
          }}
-      end
-    else
-      {:ok, :skip}
+
+      Map.has_key?(default_prices, "input") and Map.has_key?(default_prices, "output") ->
+        with {:ok, input} <-
+               required_decimal(default_prices, "input", model_identifier, service_tier),
+             {:ok, output} <-
+               required_decimal(default_prices, "output", model_identifier, service_tier),
+             {:ok, cached_input} <-
+               optional_decimal(default_prices, "cached_input", Decimal.new(0)),
+             {:ok, reasoning, reasoning_source} <- reasoning_price(default_prices, output) do
+          {:ok,
+           %{
+             model_identifier: model_identifier,
+             price_version: generated_at_raw,
+             currency_code: @currency_code,
+             billing_unit: @billing_unit,
+             input_token_micros: usd_per_1m_to_token_micros(input),
+             cached_input_token_micros: usd_per_1m_to_token_micros(cached_input),
+             output_token_micros: usd_per_1m_to_token_micros(output),
+             reasoning_token_micros: usd_per_1m_to_token_micros(reasoning),
+             request_base_micros: Decimal.new(0),
+             effective_at: generated_at,
+             source_url: path,
+             captured_at: now,
+             config:
+               snapshot_config(
+                 model_payload,
+                 generated_at_raw,
+                 path,
+                 service_tier,
+                 price_bucket,
+                 %{
+                   "availability" => "priced",
+                   "reasoning_price_source" => reasoning_source
+                 }
+               )
+           }}
+        end
+
+      true ->
+        {:ok, :skip}
     end
+  end
+
+  defp unavailable_price_bucket?(prices), do: Map.get(prices, "available") == false
+
+  defp snapshot_config(model_payload, generated_at_raw, path, service_tier, price_bucket, extra) do
+    Map.merge(
+      %{
+        "source" => @source,
+        "source_generated_at" => generated_at_raw,
+        "source_path" => path,
+        "service_tier" => service_tier,
+        "price_bucket" => price_bucket,
+        "pricing_type" => @pricing_type,
+        "category" => string_or_nil(Map.get(model_payload, "category")),
+        "categories" => string_list_or_empty(Map.get(model_payload, "categories"))
+      },
+      extra
+    )
   end
 
   defp required_decimal(map, key, model_identifier, service_tier) do
