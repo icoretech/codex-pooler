@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Plugs.BackendFilesMultipartGuard do
 
   import Plug.Conn
 
-  alias CodexPoolerWeb.Runtime.GatewayControllerHelpers, as: GatewayHelpers
+  alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
 
   @files_path ["backend-api", "files"]
 
