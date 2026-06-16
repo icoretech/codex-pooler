@@ -795,68 +795,20 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
   end
 
   defp complete_pending_browser_flow(%Scope{} = scope, %OAuthFlow{} = flow, {:code, callback}) do
-    with {:ok, verifier} <- decrypt_code_verifier(flow),
-         {:ok, tokens} <-
-           CodexAuth.exchange_authorization_code(callback.code, verifier, flow.redirect_uri),
-         {:ok, token_info} <- CodexAuth.token_info(tokens.id_token),
-         %Pool{} = pool <- Repo.get(Pool, flow.pool_id) do
-      link_pending_browser_flow!(scope, pool, flow, tokens, token_info)
-    else
-      nil ->
-        reason = OAuthCallback.safe_error(:flow_not_pending)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: code}}
-      when code in [:upstream_oauth_transient_secret_not_found, :codex_id_token_invalid] ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: :codex_oauth_exchange_failed}} ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: :codex_auth_transient}} ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: :codex_auth_unavailable}} ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: code}} when code in [:identity_conflict, :identity_mismatch] ->
-        reason = OAuthCallback.safe_error(code)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, _reason} ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-    end
+    complete_pending_oauth_flow(
+      scope,
+      flow,
+      fn ->
+        with {:ok, verifier} <- decrypt_code_verifier(flow) do
+          CodexAuth.exchange_authorization_code(callback.code, verifier, flow.redirect_uri)
+        end
+      end,
+      browser_completion_config()
+    )
   end
 
   defp poll_pending_device_flow(%Scope{} = scope, %OAuthFlow{} = flow) do
-    with {:ok, device_auth_id} <- decrypt_device_auth_id(flow),
-         {:ok, tokens} <-
-           CodexAuth.poll_device_authorization(%{
-             "device_auth_id" => device_auth_id,
-             "user_code" => flow.device_user_code,
-             "poll_interval_seconds" => flow.interval_seconds
-           }),
-         {:ok, token_info} <- CodexAuth.token_info(tokens.id_token),
-         %Pool{} = pool <- Repo.get(Pool, flow.pool_id) do
-      link_pending_device_flow!(scope, pool, flow, tokens, token_info)
-    else
-      nil ->
-        reason = OAuthCallback.safe_error(:flow_not_pending)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
+    case poll_device_authorization_result(flow) do
       {:error, %{code: code, retry_after_seconds: retry_after_seconds}}
       when code in [:codex_device_authorization_pending, :codex_device_authorization_slow_down] ->
         polled_flow = update_device_poll!(flow, retry_after_seconds)
@@ -866,84 +818,61 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
         expire_locked_flow!(flow)
         oauth_error(OAuthCallback.safe_error(:expired_flow))
 
-      {:error, %{code: :codex_device_authorization_denied}} ->
-        reason = OAuthCallback.safe_error(:provider_denied)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: code}}
-      when code in [
-             :upstream_oauth_transient_secret_not_found,
-             :codex_id_token_invalid,
-             :codex_oauth_exchange_failed,
-             :codex_auth_transient,
-             :codex_auth_unavailable,
-             :codex_auth_malformed
-           ] ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, %{code: code}} when code in [:identity_conflict, :identity_mismatch] ->
-        reason = OAuthCallback.safe_error(code)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-
-      {:error, _reason} ->
-        reason = OAuthCallback.safe_error(:token_exchange_failed)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
+      token_result ->
+        complete_pending_oauth_flow(
+          scope,
+          flow,
+          fn -> token_result end,
+          device_completion_config()
+        )
     end
   end
 
-  defp link_pending_browser_flow!(
+  defp poll_device_authorization_result(%OAuthFlow{} = flow) do
+    with {:ok, device_auth_id} <- decrypt_device_auth_id(flow) do
+      CodexAuth.poll_device_authorization(%{
+        "device_auth_id" => device_auth_id,
+        "user_code" => flow.device_user_code,
+        "poll_interval_seconds" => flow.interval_seconds
+      })
+    end
+  end
+
+  defp complete_pending_oauth_flow(
+         %Scope{} = scope,
+         %OAuthFlow{} = flow,
+         token_result_fun,
+         config
+       ) do
+    with {:ok, tokens} <- token_result_fun.(),
+         {:ok, token_info} <- CodexAuth.token_info(tokens.id_token),
+         %Pool{} = pool <- Repo.get(Pool, flow.pool_id) do
+      link_pending_oauth_flow!(scope, pool, flow, tokens, token_info, config)
+    else
+      error -> oauth_completion_error(flow, error, config)
+    end
+  end
+
+  defp link_pending_oauth_flow!(
          %Scope{} = scope,
          %Pool{} = pool,
          %OAuthFlow{} = flow,
          tokens,
-         token_info
+         token_info,
+         config
        ) do
-    case TokenLinking.link_tokens(scope, pool, browser_link_attrs(tokens, token_info),
-           onboarding_method: "browser",
+    case TokenLinking.link_tokens(scope, pool, oauth_link_attrs(tokens, token_info, config),
+           onboarding_method: config.onboarding_method,
            actor_metadata_key: "oauth_linked_by_user_id",
-           audit_action: "upstream_account.oauth_browser_link",
+           audit_action: config.audit_action,
            broadcast_reason: "upstream_account_oauth_linked",
            quota_trigger_kind: "account_link",
-           token_refresh_trigger_kind: "oauth_browser_link",
+           token_refresh_trigger_kind: config.token_refresh_trigger_kind,
            target_identity_id: flow.upstream_identity_id
          ) do
       {:ok, link_result} ->
-        case mark_browser_flow_completed(flow, scope, link_result) do
-          {:ok, completed_flow} -> browser_completion_result(completed_flow, link_result)
-          {:error, reason} -> Repo.rollback(reason)
-        end
-
-      {:error, link_error} ->
-        reason = oauth_link_failure(link_error)
-        fail_oauth_flow!(flow, reason)
-        oauth_error(reason)
-    end
-  end
-
-  defp link_pending_device_flow!(
-         %Scope{} = scope,
-         %Pool{} = pool,
-         %OAuthFlow{} = flow,
-         tokens,
-         token_info
-       ) do
-    case TokenLinking.link_tokens(scope, pool, device_link_attrs(tokens, token_info),
-           onboarding_method: "device",
-           actor_metadata_key: "oauth_linked_by_user_id",
-           audit_action: "upstream_account.oauth_device_link",
-           broadcast_reason: "upstream_account_oauth_linked",
-           quota_trigger_kind: "account_link",
-           token_refresh_trigger_kind: "oauth_device_link",
-           target_identity_id: flow.upstream_identity_id
-         ) do
-      {:ok, link_result} ->
-        case mark_device_flow_completed(flow, scope, link_result) do
-          {:ok, completed_flow} -> device_completion_result(completed_flow, link_result)
+        case mark_oauth_flow_completed(flow, scope, link_result, config) do
+          {:ok, completed_flow} -> oauth_completion_result(completed_flow, link_result)
           {:error, reason} -> Repo.rollback(reason)
         end
 
@@ -962,7 +891,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
 
   defp oauth_link_failure(_reason), do: OAuthCallback.safe_error(:token_exchange_failed)
 
-  defp browser_link_attrs(tokens, token_info) do
+  defp oauth_link_attrs(tokens, token_info, config) do
     %{
       chatgpt_account_id: token_info.chatgpt_account_id,
       account_email: token_info.email,
@@ -973,13 +902,13 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
       plan_label: token_info.plan_label,
       token: tokens.access_token,
       refresh_token: tokens.refresh_token,
-      identity_metadata: browser_identity_metadata(token_info)
+      identity_metadata: oauth_identity_metadata(token_info, config.identity_onboarding_method)
     }
   end
 
-  defp browser_identity_metadata(token_info) do
+  defp oauth_identity_metadata(token_info, onboarding_method) do
     %{
-      "onboarding_method" => "browser_oauth",
+      "onboarding_method" => onboarding_method,
       "auth_provider" => "openai"
     }
     |> maybe_put_metadata("account_email", token_info.email)
@@ -990,75 +919,38 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
   defp maybe_put_metadata(metadata, key, value) when is_binary(value),
     do: Map.put(metadata, key, value)
 
-  defp device_link_attrs(tokens, token_info) do
-    %{
-      chatgpt_account_id: token_info.chatgpt_account_id,
-      account_email: token_info.email,
-      account_label: token_info.email || token_info.chatgpt_account_id || "Codex account",
-      workspace_id: token_info.workspace_id,
-      workspace_label: token_info.workspace_label,
-      seat_type: token_info.seat_type,
-      plan_label: token_info.plan_label,
-      token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      identity_metadata: device_identity_metadata(token_info)
-    }
-  end
-
-  defp device_identity_metadata(token_info) do
-    %{
-      "onboarding_method" => "device_oauth",
-      "auth_provider" => "openai"
-    }
-    |> maybe_put_metadata("account_email", token_info.email)
-  end
-
-  defp mark_browser_flow_completed(%OAuthFlow{} = flow, %Scope{} = scope, link_result) do
+  defp mark_oauth_flow_completed(%OAuthFlow{} = flow, %Scope{} = scope, link_result, config) do
     timestamp = now()
 
+    attrs =
+      %{
+        status: "completed",
+        completed_at: timestamp,
+        result_upstream_identity_id: link_result.identity.id,
+        error_code: nil,
+        error_message: nil,
+        metadata: completed_flow_metadata(flow.metadata, scope, config.completion_method),
+        updated_at: timestamp
+      }
+      |> maybe_put_last_polled_at(timestamp, config)
+
     flow
-    |> OAuthFlow.changeset(%{
-      status: "completed",
-      completed_at: timestamp,
-      result_upstream_identity_id: link_result.identity.id,
-      error_code: nil,
-      error_message: nil,
-      metadata: completed_flow_metadata(flow.metadata, scope),
-      updated_at: timestamp
-    })
+    |> OAuthFlow.changeset(attrs)
     |> Repo.update()
   end
 
-  defp mark_device_flow_completed(%OAuthFlow{} = flow, %Scope{} = scope, link_result) do
-    timestamp = now()
+  defp maybe_put_last_polled_at(attrs, timestamp, %{touch_last_polled?: true}),
+    do: Map.put(attrs, :last_polled_at, timestamp)
 
-    flow
-    |> OAuthFlow.changeset(%{
-      status: "completed",
-      completed_at: timestamp,
-      last_polled_at: timestamp,
-      result_upstream_identity_id: link_result.identity.id,
-      error_code: nil,
-      error_message: nil,
-      metadata: completed_device_flow_metadata(flow.metadata, scope),
-      updated_at: timestamp
-    })
-    |> Repo.update()
-  end
+  defp maybe_put_last_polled_at(attrs, _timestamp, _config), do: attrs
 
-  defp completed_flow_metadata(metadata, %Scope{} = scope) do
+  defp completed_flow_metadata(metadata, %Scope{} = scope, completion_method) do
     (metadata || %{})
     |> Map.put("completed_by_user_id", scope.user.id)
-    |> Map.put("completion_method", "browser")
+    |> Map.put("completion_method", completion_method)
   end
 
-  defp completed_device_flow_metadata(metadata, %Scope{} = scope) do
-    (metadata || %{})
-    |> Map.put("completed_by_user_id", scope.user.id)
-    |> Map.put("completion_method", "device")
-  end
-
-  defp browser_completion_result(%OAuthFlow{} = flow, link_result) do
+  defp oauth_completion_result(%OAuthFlow{} = flow, link_result) do
     %{
       status: :completed,
       link_status: link_result.status,
@@ -1069,14 +961,74 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
     }
   end
 
-  defp device_completion_result(%OAuthFlow{} = flow, link_result) do
+  defp oauth_completion_error(%OAuthFlow{} = flow, nil, _config) do
+    reason = OAuthCallback.safe_error(:flow_not_pending)
+    fail_oauth_flow!(flow, reason)
+    oauth_error(reason)
+  end
+
+  defp oauth_completion_error(%OAuthFlow{} = flow, {:error, %{code: code}}, config) do
+    reason =
+      cond do
+        code in config.provider_denied_codes ->
+          OAuthCallback.safe_error(:provider_denied)
+
+        code in config.token_exchange_failure_codes ->
+          OAuthCallback.safe_error(:token_exchange_failed)
+
+        code in [:identity_conflict, :identity_mismatch] ->
+          OAuthCallback.safe_error(code)
+
+        true ->
+          OAuthCallback.safe_error(:token_exchange_failed)
+      end
+
+    fail_oauth_flow!(flow, reason)
+    oauth_error(reason)
+  end
+
+  defp oauth_completion_error(%OAuthFlow{} = flow, {:error, _reason}, _config) do
+    reason = OAuthCallback.safe_error(:token_exchange_failed)
+    fail_oauth_flow!(flow, reason)
+    oauth_error(reason)
+  end
+
+  defp browser_completion_config do
     %{
-      status: :completed,
-      link_status: link_result.status,
-      flow: flow,
-      identity: link_result.identity,
-      assignment: link_result.assignment,
-      secret_status: link_result.secret_status
+      onboarding_method: "browser",
+      identity_onboarding_method: "browser_oauth",
+      audit_action: "upstream_account.oauth_browser_link",
+      token_refresh_trigger_kind: "oauth_browser_link",
+      completion_method: "browser",
+      touch_last_polled?: false,
+      provider_denied_codes: [],
+      token_exchange_failure_codes: [
+        :upstream_oauth_transient_secret_not_found,
+        :codex_id_token_invalid,
+        :codex_oauth_exchange_failed,
+        :codex_auth_transient,
+        :codex_auth_unavailable
+      ]
+    }
+  end
+
+  defp device_completion_config do
+    %{
+      onboarding_method: "device",
+      identity_onboarding_method: "device_oauth",
+      audit_action: "upstream_account.oauth_device_link",
+      token_refresh_trigger_kind: "oauth_device_link",
+      completion_method: "device",
+      touch_last_polled?: true,
+      provider_denied_codes: [:codex_device_authorization_denied],
+      token_exchange_failure_codes: [
+        :upstream_oauth_transient_secret_not_found,
+        :codex_id_token_invalid,
+        :codex_oauth_exchange_failed,
+        :codex_auth_transient,
+        :codex_auth_unavailable,
+        :codex_auth_malformed
+      ]
     }
   end
 
