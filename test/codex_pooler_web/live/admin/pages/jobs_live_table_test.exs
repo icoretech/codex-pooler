@@ -219,8 +219,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
     assert has_element?(view, "#{row} [data-role='job-meta']", "##{job.id}")
     assert has_element?(view, "#{row} [data-role='job-event-label']", "Discarded")
     assert has_element?(view, "#{row} [data-role='job-event-time']", "2026-05-04 10:02:00 UTC")
-    refute has_element?(view, "#{row} [data-role='job-event-time'].font-mono")
-    refute has_element?(view, "#{row} [data-role='attempts'].font-mono")
     assert has_element?(view, "#{row} [data-role='failure-title']", "Attempt 2 · RuntimeError")
 
     refute has_element?(view, "#{row} [data-role='inserted-at']")
@@ -243,8 +241,8 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
     rendered = render(view)
 
     assert has_element?(view, "#admin-jobs-explorer")
-    assert rendered =~ ~s(id="admin-jobs-explorer" class="grid min-w-0 gap-3")
-    assert rendered =~ ~s(id="admin-jobs-explorer-table" class="table table-sm admin-log-table)
+    assert has_element?(view, "#admin-jobs-explorer-desktop #admin-jobs-explorer-table")
+    assert has_element?(view, "#admin-jobs-explorer-mobile")
     assert has_element?(view, "#admin-jobs-explorer-total", "55 jobs")
     assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-20 of 55")
     refute has_element?(view, "#admin-jobs-explorer-table th", "State")
@@ -324,7 +322,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
   end
 
   defp state_label_selector(job),
-    do: "#job-#{job.id} [data-role='state-label']:not([class*='bg-'])"
+    do: "#job-#{job.id} [data-role='state-label']"
 
   defp worker_card_selector(worker_group) do
     "#job-worker-card-#{String.replace(Atom.to_string(worker_group), "_", "-")}"

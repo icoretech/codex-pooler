@@ -219,9 +219,12 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     assert has_element?(view, "#admin-jobs-page-header", "System Jobs")
     assert has_element?(view, "#admin-jobs-page-header", "Monitor background work")
     assert has_element?(view, "#admin-jobs-worker-grid")
-    assert has_element?(view, "#admin-jobs-worker-grid.items-start")
     assert has_element?(view, worker_card_selector(:runtime_cleanup), "Runtime cleanup")
-    assert has_element?(view, "#{worker_card_selector(:runtime_cleanup)} .hero-sparkles")
+
+    assert has_element?(
+             view,
+             "#{worker_card_selector(:runtime_cleanup)} [data-role='worker-card-header']"
+           )
 
     refute has_element?(
              view,
@@ -279,7 +282,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
            )
 
     rendered = render(view)
-    assert rendered =~ "2xl:grid-cols-3"
     refute rendered =~ "Per-pool model catalog refreshes and scheduled fan-out"
     refute rendered =~ "OpenAI pricing JSON catalog refreshes for request-log cost reporting"
     refute rendered =~ "Quota, health, token, and catalog checks for upstream assignments"
@@ -926,7 +928,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
   defp unique_slug(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
 
   defp state_label_selector(job),
-    do: "#job-#{job.id} [data-role='state-label']:not([class*='bg-'])"
+    do: "#job-#{job.id} [data-role='state-label']"
 
   defp worker_card_selector(worker_group) do
     "#job-worker-card-#{String.replace(Atom.to_string(worker_group), "_", "-")}"
