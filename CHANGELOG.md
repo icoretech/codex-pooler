@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.1.0...codex-pooler-v0.1.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **accounting:** infer pricing for suffixed model ids ([1ecc85f](https://github.com/icoretech/codex-pooler/commit/1ecc85ff4ea3139cbc72b7ea8e4e1c58f99312b5))
+* **accounting:** preserve sanitized failure reasons ([3b19a26](https://github.com/icoretech/codex-pooler/commit/3b19a26d825ef8e4951f148e5681282deb87d74b))
+* **admin:** type request log user agent icons ([d49c42b](https://github.com/icoretech/codex-pooler/commit/d49c42b031602e06f56b3884e295f26379a27c84))
+* **api:** route audio through gateway adapter ([2c27ab8](https://github.com/icoretech/codex-pooler/commit/2c27ab8584b534fef8b4bf63467d474af02548cb))
+* **deps:** update astro monorepo to v6.4.7 ([b40fde2](https://github.com/icoretech/codex-pooler/commit/b40fde2072fb154712e5834b29f02dea3f718a5e))
+* **gateway:** preserve responses item metadata ([9358914](https://github.com/icoretech/codex-pooler/commit/9358914fdbdff0da135fc65c2173d262dffd3de4))
+
 ## [0.1.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.0.15...codex-pooler-v0.1.0) (2026-06-15)
 
 
