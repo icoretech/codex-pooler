@@ -315,12 +315,14 @@ defmodule CodexPooler.Upstreams.OAuthFlows do
         query
 
       [] ->
-        where(query, [flow], is_nil(flow.upstream_identity_id) and false)
+        empty_oauth_flow_query(query)
 
       upstream_identity_ids ->
         where(query, [flow], flow.upstream_identity_id in ^upstream_identity_ids)
     end
   end
+
+  defp empty_oauth_flow_query(query), do: where(query, [flow], false)
 
   defp result_identity_lookup(flows) do
     result_identity_ids =
