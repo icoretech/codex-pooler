@@ -10,7 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.Format
-  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPoolerWeb.DateTimeDisplay
 
   @quota_priming_labels %{

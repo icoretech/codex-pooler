@@ -1,8 +1,8 @@
-defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadinessTest do
+defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
 
   @as_of ~U[2026-05-30 12:00:00Z]
   @future_reset ~U[2026-05-30 12:15:00Z]

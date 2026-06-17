@@ -13,7 +13,7 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
-  alias CodexPoolerWeb.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Admin.UpstreamQuotaReadiness
 
   import CodexPooler.AccountsFixtures
 

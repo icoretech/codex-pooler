@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.UpstreamQuotaReadiness do
+defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
   @moduledoc """
   Shared admin projection for account-level upstream quota readiness.
   """
