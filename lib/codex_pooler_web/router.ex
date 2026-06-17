@@ -66,15 +66,7 @@ defmodule CodexPoolerWeb.Router do
     get "/metrics", Operations.MetricsController, :show
     get "/api/codex/usage", Runtime.CodexUsageController, :show
 
-    post "/api/codex/rate-limit-reset-credits/consume",
-         Runtime.CodexUsageController,
-         :consume_rate_limit_reset_credit
-
     get "/wham/usage", Runtime.CodexUsageController, :show
-
-    post "/wham/rate-limit-reset-credits/consume",
-         Runtime.CodexUsageController,
-         :consume_rate_limit_reset_credit
   end
 
   scope "/backend-api/codex", CodexPoolerWeb do
@@ -105,10 +97,6 @@ defmodule CodexPoolerWeb.Router do
     post "/files", Runtime.BackendFileController, :create
     post "/files/:file_id/uploaded", Runtime.BackendFileController, :uploaded
     get "/wham/usage", Runtime.CodexUsageController, :show
-
-    post "/wham/rate-limit-reset-credits/consume",
-         Runtime.CodexUsageController,
-         :consume_rate_limit_reset_credit
 
     for %{
           method: method,

@@ -38,7 +38,6 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     first_event_stream_retry
     request_compression
     control_plane_surface
-    backend_reset_credit_consume
     function_tool_schema_lowering
     backend_alpha_search
     v1_supported_surface
@@ -692,70 +691,22 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       end
     end
 
-    test "exposes only the backend HTTP reset-credit consume routes" do
-      route_set =
-        CodexPoolerWeb.Router
-        |> Phoenix.Router.routes()
-        |> Enum.map(&{router_method(&1.verb), &1.path})
+    test "does not list reset-credit consume as a supported compatibility feature" do
+      matrix_routes =
+        CompatibilityMatrix.features()
+        |> Enum.flat_map(& &1.routes)
+        |> Enum.map(&{&1.method, &1.path})
         |> MapSet.new()
 
-      feature = CompatibilityMatrix.by_slug!(:backend_reset_credit_consume)
-      fixture = CompatibilityMatrix.fixture!(:backend_reset_credit_consume)
+      refute :backend_reset_credit_consume in CompatibilityMatrix.feature_slugs()
 
-      expected_routes = [
-        {:post, "/api/codex/rate-limit-reset-credits/consume"},
-        {:post, "/wham/rate-limit-reset-credits/consume"},
-        {:post, "/backend-api/wham/rate-limit-reset-credits/consume"}
-      ]
-
-      for route <- expected_routes do
-        assert MapSet.member?(route_set, route)
+      for route <- [
+            {:post, "/api/codex/rate-limit-reset-credits/consume"},
+            {:post, "/wham/rate-limit-reset-credits/consume"},
+            {:post, "/backend-api/wham/rate-limit-reset-credits/consume"}
+          ] do
+        refute MapSet.member?(matrix_routes, route)
       end
-
-      assert Enum.map(feature.routes, &{&1.method, &1.path}) == expected_routes
-      assert feature.current == :explicit_authenticated_backend_http_proxy_routes
-      assert feature.contract =~ "explicit authenticated backend HTTP routes"
-      assert feature.contract =~ "redeem_request_id"
-      assert feature.contract =~ "idempotency-key"
-      assert feature.contract =~ "rate_limit_reset_credit_consume"
-      assert feature.contract =~ "matching usage accounting endpoint"
-
-      assert feature.contract =~
-               "app-server account/rateLimitResetCredit/consume JSON-RPC unsupported"
-
-      assert fixture.auth == "required_bearer_api_key"
-      assert fixture.route_class == "proxy_http"
-      assert fixture.operation == "rate_limit_reset_credit_consume"
-      assert fixture.body_fields_forwarded == ["redeem_request_id"]
-      assert fixture.stripped_headers == ["idempotency-key"]
-      assert fixture.privacy == "metadata_only"
-
-      assert fixture.routes == [
-               %{
-                 local_path: "/api/codex/rate-limit-reset-credits/consume",
-                 upstream_path: "/api/codex/rate-limit-reset-credits/consume",
-                 accounting_endpoint: "/api/codex/usage"
-               },
-               %{
-                 local_path: "/wham/rate-limit-reset-credits/consume",
-                 upstream_path: "/wham/rate-limit-reset-credits/consume",
-                 accounting_endpoint: "/wham/usage"
-               },
-               %{
-                 local_path: "/backend-api/wham/rate-limit-reset-credits/consume",
-                 upstream_path: "/wham/rate-limit-reset-credits/consume",
-                 accounting_endpoint: "/backend-api/wham/usage"
-               }
-             ]
-
-      assert fixture.unsupported_app_server_json_rpc_methods == [
-               "account/rateLimitResetCredit/consume"
-             ]
-
-      refute MapSet.member?(
-               route_set,
-               {:post, "/backend-api/codex/account/rateLimitResetCredit/consume"}
-             )
     end
 
     test "documents unsupported v1 public surface with exact OpenAI-shaped error contract" do

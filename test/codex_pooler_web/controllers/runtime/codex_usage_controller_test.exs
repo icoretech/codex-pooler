@@ -11,16 +11,13 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
-  alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
 
-  @reset_credit_routes [
-    {"/api/codex/rate-limit-reset-credits/consume",
-     "/api/codex/rate-limit-reset-credits/consume"},
-    {"/wham/rate-limit-reset-credits/consume", "/wham/rate-limit-reset-credits/consume"},
-    {"/backend-api/wham/rate-limit-reset-credits/consume",
-     "/wham/rate-limit-reset-credits/consume"}
+  @removed_reset_credit_paths [
+    "/api/codex/rate-limit-reset-credits/consume",
+    "/wham/rate-limit-reset-credits/consume",
+    "/backend-api/wham/rate-limit-reset-credits/consume"
   ]
 
   test "GET /api/codex/usage returns API-key Codex usage shape", %{conn: conn} do
@@ -434,182 +431,19 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
   end
 
-  test "POST reset-credit consume authenticates before malformed JSON parsing" do
-    for {path, _upstream_path} <- @reset_credit_routes do
+  test "POST reset-credit consume routes are absent before malformed body handling" do
+    for path <- @removed_reset_credit_paths do
+      assert Phoenix.Router.route_info(CodexPoolerWeb.Router, "POST", path, "example.com") ==
+               :error
+
       conn =
         build_conn()
-        |> put_req_header("content-type", "application/json")
+        |> put_req_header("content-type", "application/octet-stream")
         |> post(path, ~s({"redeem_request_id":))
 
-      assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      assert response(conn, 404) =~ "Not Found"
     end
 
-    assert Repo.aggregate(Request, :count, :id) == 0
-  end
-
-  test "POST reset-credit consume forwards exact sanitized JSON and records safe metadata" do
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response_with_headers(
-          %{"outcome" => "reset"},
-          [
-            {"cache-control", "private, max-age=0"},
-            {"request-id", "req_reset_credit_fixture"},
-            {"x-request-id", "xreq_reset_credit_fixture"},
-            {"set-cookie", "upstream_session=do-not-relay"}
-          ]
-        )
-      )
-
-    setup = reset_credit_gateway_setup(upstream)
-    raw_redeem_request_id = "redeem-request-id-do-not-log"
-    raw_idempotency_key = "raw-idempotency-key-do-not-forward"
-    expected_body = Jason.encode!(%{"redeem_request_id" => raw_redeem_request_id})
-
-    for {{path, upstream_path}, index} <- Enum.with_index(@reset_credit_routes, 1) do
-      conn =
-        build_conn()
-        |> auth(setup)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("idempotency-key", raw_idempotency_key)
-        |> put_req_header("x-request-id", "client-reset-credit-request-#{index}")
-        |> post(
-          path,
-          Jason.encode!(%{
-            "redeem_request_id" => raw_redeem_request_id,
-            "ignored" => "not-forwarded"
-          })
-        )
-
-      assert %{"outcome" => "reset"} = json_response(conn, 200)
-      assert get_resp_header(conn, "cache-control") == ["private, max-age=0"]
-      assert get_resp_header(conn, "request-id") == ["req_reset_credit_fixture"]
-      assert get_resp_header(conn, "x-request-id") == ["xreq_reset_credit_fixture"]
-      assert get_resp_header(conn, "set-cookie") == []
-
-      assert length(FakeUpstream.requests(upstream)) == index
-      captured = upstream |> FakeUpstream.requests() |> List.last()
-      captured_headers = Map.new(captured.headers)
-
-      assert captured.method == "POST"
-      assert captured.path == upstream_path
-      assert captured.query_string == ""
-      assert captured.body == expected_body
-      assert captured.json == %{"redeem_request_id" => raw_redeem_request_id}
-      assert captured_headers["authorization"] == "Bearer reset-credit-upstream-token"
-      assert captured_headers["content-type"] == "application/json"
-      refute Map.has_key?(captured_headers, "idempotency-key")
-      refute inspect(captured.headers) =~ raw_idempotency_key
-      refute inspect(captured.headers) =~ setup.raw_key
-
-      request =
-        Repo.one!(
-          from request in Request,
-            where:
-              request.pool_id == ^setup.pool.id and
-                fragment("?->>? = ?", request.request_metadata, "endpoint", ^path),
-            order_by: [desc: request.admitted_at],
-            limit: 1
-        )
-
-      assert request.endpoint == reset_credit_accounting_endpoint(path)
-      assert request.transport == "http_json"
-      assert request.status == "succeeded"
-      assert request.response_status_code == 200
-      assert request.request_metadata["operation"] == "rate_limit_reset_credit_consume"
-      assert request.request_metadata["endpoint"] == path
-      assert request.request_metadata["request"]["body_bytes"] == byte_size(expected_body)
-      assert request.request_metadata["request"]["content_type"] == "application/json"
-
-      assert request.request_metadata["client_request_id"] ==
-               "client-reset-credit-request-#{index}"
-
-      assert request.request_metadata["routing"]["route_class"] == "proxy_http"
-      assert request.request_metadata["routing"]["selected_assignment_id"] == setup.assignment.id
-      assert request.request_metadata["routing"]["upstream_identity_id"] == setup.identity.id
-
-      metadata_text = inspect(request.request_metadata)
-      refute metadata_text =~ raw_redeem_request_id
-      refute metadata_text =~ raw_idempotency_key
-      refute metadata_text =~ setup.raw_key
-      refute metadata_text =~ "reset-credit-upstream-token"
-    end
-  end
-
-  test "POST reset-credit consume relays noCredit outcome status and body intact", %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"outcome" => "noCredit"}, 409))
-    setup = reset_credit_gateway_setup(upstream)
-
-    conn =
-      conn
-      |> auth(setup)
-      |> post_json("/wham/rate-limit-reset-credits/consume", %{
-        "redeem_request_id" => "redeem-request-no-credit"
-      })
-
-    assert %{"outcome" => "noCredit"} = json_response(conn, 409)
-
-    assert [request] =
-             Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
-
-    assert request.endpoint == "/wham/usage"
-    assert request.request_metadata["endpoint"] == "/wham/rate-limit-reset-credits/consume"
-    assert request.status == "failed"
-    assert request.response_status_code == 409
-    assert request.last_error_code == "upstream_status"
-  end
-
-  test "POST reset-credit consume rejects malformed payloads without upstream contact", %{
-    conn: conn
-  } do
-    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
-    setup = reset_credit_gateway_setup(upstream)
-    path = "/api/codex/rate-limit-reset-credits/consume"
-
-    invalid_json_conn =
-      conn
-      |> recycle()
-      |> auth(setup)
-      |> put_req_header("content-type", "application/json")
-      |> post(path, ~s({"redeem_request_id":))
-
-    assert json_response(invalid_json_conn, 400)["error"]["code"] == "invalid_request"
-
-    for payload <- [
-          [],
-          %{},
-          %{"redeem_request_id" => ""},
-          %{"redeem_request_id" => "   "},
-          %{"redeem_request_id" => 123}
-        ] do
-      conn =
-        conn
-        |> recycle()
-        |> auth(setup)
-        |> post_json(path, payload)
-
-      assert %{"error" => error} = json_response(conn, 400)
-      assert error["code"] == "invalid_request"
-      assert error["param"] in ["redeem_request_id", nil]
-    end
-
-    assert FakeUpstream.count(upstream) == 0
-    assert Repo.aggregate(Request, :count, :id) == 0
-  end
-
-  test "POST app-server reset-credit JSON-RPC route remains unsupported", %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
-    setup = reset_credit_gateway_setup(upstream)
-
-    conn =
-      conn
-      |> auth(setup)
-      |> post_json("/backend-api/codex/account/rateLimitResetCredit/consume", %{
-        "redeem_request_id" => "unsupported-app-server-reset-credit"
-      })
-
-    assert response(conn, 404) =~ "Not Found"
-    assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count, :id) == 0
   end
 
@@ -631,49 +465,5 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
-  end
-
-  defp reset_credit_gateway_setup(upstream) do
-    setup = active_api_key_fixture()
-
-    %{identity: identity, assignment: assignment} =
-      active_upstream_assignment_fixture(setup.pool, %{
-        metadata: %{"base_url" => FakeUpstream.url(upstream)},
-        access_token: "reset-credit-upstream-token"
-      })
-
-    model_fixture(setup.pool, %{
-      exposed_model_id: "gpt-reset-credit-fixture",
-      upstream_model_id: "provider-reset-credit-fixture",
-      metadata: %{"source_assignment_ids" => [assignment.id]},
-      supports_responses: true,
-      supports_streaming: false
-    })
-
-    Map.merge(setup, %{identity: identity, assignment: assignment})
-  end
-
-  defp post_json(conn, path, payload) do
-    conn
-    |> put_req_header("content-type", "application/json")
-    |> post(path, Jason.encode!(payload))
-  end
-
-  defp auth(conn, %{authorization: authorization}) do
-    put_req_header(conn, "authorization", authorization)
-  end
-
-  defp reset_credit_accounting_endpoint("/wham/rate-limit-reset-credits/consume"),
-    do: "/wham/usage"
-
-  defp reset_credit_accounting_endpoint("/backend-api/wham/rate-limit-reset-credits/consume"),
-    do: "/backend-api/wham/usage"
-
-  defp reset_credit_accounting_endpoint(_path), do: "/api/codex/usage"
-
-  defp start_upstream(mode) do
-    {:ok, upstream} = FakeUpstream.start_link(mode)
-    on_exit(fn -> FakeUpstream.stop(upstream) end)
-    upstream
   end
 end

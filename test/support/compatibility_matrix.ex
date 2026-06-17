@@ -257,21 +257,6 @@ defmodule CodexPooler.CompatibilityMatrix do
         "control-plane endpoints are explicit authenticated proxy routes under the runtime API, use the proxy_control route class, forward to exact upstream control-plane paths, preserve opaque realtime SDP bodies, forward raw AVAS SDP proxy query strings exactly on /backend-api/codex/realtime/calls only, do not expand /v1/realtime, hosted realtime routes, Codex app-server account reset-credit methods, or thread/realtime app-server controls, allowlist response headers, and keep logs metadata-only"
     },
     %{
-      slug: :backend_reset_credit_consume,
-      status: :supported,
-      current: :explicit_authenticated_backend_http_proxy_routes,
-      categories: [:route, :auth, :error, :ownership],
-      routes: [
-        %{method: :post, path: "/api/codex/rate-limit-reset-credits/consume"},
-        %{method: :post, path: "/wham/rate-limit-reset-credits/consume"},
-        %{method: :post, path: "/backend-api/wham/rate-limit-reset-credits/consume"}
-      ],
-      future_routes: [],
-      fixture: :backend_reset_credit_consume,
-      contract:
-        "backend reset-credit consume compatibility is limited to explicit authenticated backend HTTP routes, forwards only the redeem_request_id JSON field to the mapped upstream reset-credit consume path, never forwards inbound idempotency-key headers, records metadata-only operation rate_limit_reset_credit_consume under the matching usage accounting endpoint, and keeps app-server account/rateLimitResetCredit/consume JSON-RPC unsupported"
-    },
-    %{
       slug: :function_tool_schema_lowering,
       status: :supported,
       current: :non_strict_function_tool_schema_lowering,
@@ -672,32 +657,6 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       privacy: "metadata_only",
       routes: @control_plane_fixture_routes
-    },
-    backend_reset_credit_consume: %{
-      auth: "required_bearer_api_key",
-      route_class: "proxy_http",
-      operation: "rate_limit_reset_credit_consume",
-      body_fields_forwarded: ["redeem_request_id"],
-      stripped_headers: ["idempotency-key"],
-      privacy: "metadata_only",
-      routes: [
-        %{
-          local_path: "/api/codex/rate-limit-reset-credits/consume",
-          upstream_path: "/api/codex/rate-limit-reset-credits/consume",
-          accounting_endpoint: "/api/codex/usage"
-        },
-        %{
-          local_path: "/wham/rate-limit-reset-credits/consume",
-          upstream_path: "/wham/rate-limit-reset-credits/consume",
-          accounting_endpoint: "/wham/usage"
-        },
-        %{
-          local_path: "/backend-api/wham/rate-limit-reset-credits/consume",
-          upstream_path: "/wham/rate-limit-reset-credits/consume",
-          accounting_endpoint: "/backend-api/wham/usage"
-        }
-      ],
-      unsupported_app_server_json_rpc_methods: ["account/rateLimitResetCredit/consume"]
     },
     function_tool_schema_lowering: %{
       lowered_tool_types: [
