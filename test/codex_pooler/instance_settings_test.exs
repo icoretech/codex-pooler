@@ -320,6 +320,25 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   @tag :failure_modes
+  test "current/0 returns fallback defaults before the cache process starts" do
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      settings = InstanceSettings.current()
+
+      assert settings.source == :fallback_defaults
+      assert settings.db_available? == false
+      assert settings.secrets_available? == false
+      assert settings.files.max_size_bytes == 25 * 1024 * 1024
+      assert settings.metrics.bearer_token_status == :unavailable
+      assert settings.smtp.password_status == :unavailable
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
+  end
+
+  @tag :failure_modes
   test "warm-cache DB failure returns last-known-good settings" do
     settings = InstanceSettings.current()
     assert settings.source == :database

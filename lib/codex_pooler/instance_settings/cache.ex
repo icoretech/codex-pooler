@@ -16,7 +16,12 @@ defmodule CodexPooler.InstanceSettings.Cache do
   def start_link(_opts), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @spec current() :: Settings.t()
-  def current, do: GenServer.call(__MODULE__, :current)
+  def current do
+    GenServer.call(__MODULE__, :current)
+  catch
+    :exit, {:noproc, {GenServer, :call, [__MODULE__, :current, _timeout]}} ->
+      Settings.fallback_default()
+  end
 
   @spec put(Settings.t()) :: :ok
   def put(%Settings{} = settings), do: GenServer.call(__MODULE__, {:put, settings})
