@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.1.1...codex-pooler-v0.2.0) (2026-06-17)
+
+
+### Features
+
+* **compression:** handle minimal unified diffs ([f839b41](https://github.com/icoretech/codex-pooler/commit/f839b41bf6b9075ab9892fccd2b21e4ee225002f))
+* **compression:** support grouped search output ([6ee8498](https://github.com/icoretech/codex-pooler/commit/6ee84985e5b0a6d1218aed54486ce7e3816ce351))
+* **gateway:** lower non-strict function schemas ([a99be2e](https://github.com/icoretech/codex-pooler/commit/a99be2e43c0ae316a411430b09d9117f836bbe5f))
+* **runtime:** proxy reset-credit consume routes ([b3a37fd](https://github.com/icoretech/codex-pooler/commit/b3a37fdd8743e36346153cb1bbf046b6466ca825))
+* **v1:** normalize responses reasoning context ([554d048](https://github.com/icoretech/codex-pooler/commit/554d0488f193da2ba41943ae468010d8a1f36b49))
+
+
+### Bug Fixes
+
+* **access:** reject invalid invite list scopes ([192c6cb](https://github.com/icoretech/codex-pooler/commit/192c6cb13e4b3036817291a4c5534e2f03e987d5))
+* **accounting:** honor unavailable pricing buckets ([32e2a45](https://github.com/icoretech/codex-pooler/commit/32e2a45d1c1217849255210fae7fe7c6006ae983))
+* **accounting:** keep legacy proxy-control log redaction ([7fb6004](https://github.com/icoretech/codex-pooler/commit/7fb6004850d297c4cf4d5466b0bf6ca56d0e64cf))
+* **accounting:** reject pruned runtime endpoints for new requests ([c6e3977](https://github.com/icoretech/codex-pooler/commit/c6e3977659108658bc9b642557012eae2fa31a48))
+* **accounting:** remove analytics forwarding metadata residue ([770f6f0](https://github.com/icoretech/codex-pooler/commit/770f6f0cfcb5fb3dee0151bd8e7d2fae208f28c0))
+* **gateway:** strip encrypted websocket agent messages ([4bbd303](https://github.com/icoretech/codex-pooler/commit/4bbd30397be180c9fabc6afab3cc83a0c3038401))
+* make settings reads safe before cache start ([ae53325](https://github.com/icoretech/codex-pooler/commit/ae53325cf8a21b4e5f484b8040f64d82f80174e6))
+* **mcp:** validate metadata lookup arguments ([9c309e6](https://github.com/icoretech/codex-pooler/commit/9c309e6623f9543c9cf936cace715088898cb763))
+* **pools:** remove control-plane analytics setting ([1c042d4](https://github.com/icoretech/codex-pooler/commit/1c042d4d9a9bdcd54cb0a1f4af8d90f9ff2d56dd))
+* preserve request option values on invalid updates ([f62d169](https://github.com/icoretech/codex-pooler/commit/f62d1693858bfa862e2d1a87c2f338f9b59f42b8))
+* **runtime:** remove backend control-plane proxy routes ([72d911c](https://github.com/icoretech/codex-pooler/commit/72d911cb29ba331cc64916cc28985d409bfb41f5))
+* **runtime:** remove reset-credit consume proxy routes ([b9085a7](https://github.com/icoretech/codex-pooler/commit/b9085a7691367f2f306a07004bb2ff8949049042))
+* **runtime:** return pruned helper routes before parsing ([85797ae](https://github.com/icoretech/codex-pooler/commit/85797ae11591c9f291a35cc701a2ed97fd1fe337))
+
 ## [0.1.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.1.0...codex-pooler-v0.1.1) (2026-06-16)
 
 
