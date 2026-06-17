@@ -806,6 +806,46 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["reasoning"] == %{"context" => "current_turn"}
   end
 
+  test "POST /v1/responses forwards lowered non-strict function tool schemas", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_lowered_tool_schema",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic tool schema request",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "lookup_fixture",
+            "strict" => false,
+            "parameters" => non_strict_tool_schema()
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_lowered_tool_schema", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert captured.json["tools"] |> List.first() |> Map.fetch!("parameters") ==
+             lowered_tool_schema()
+  end
+
   test "POST /v1/responses compresses eligible translated tool output before dispatch",
        %{conn: conn} do
     upstream =
@@ -4503,6 +4543,30 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           "parameters" => %{"type" => "object", "properties" => %{}}
         }
       ]
+    }
+  end
+
+  defp non_strict_tool_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me"},
+        "tags" => %{"items" => %{"const" => "tag"}}
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"const" => "extra"}
+    }
+  end
+
+  defp lowered_tool_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "tags" => %{"type" => "array", "items" => %{"enum" => ["tag"]}}
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"enum" => ["extra"]}
     }
   end
 

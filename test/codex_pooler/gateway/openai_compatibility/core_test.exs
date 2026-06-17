@@ -1848,7 +1848,39 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     }
 
     assert {:ok, result} = Responses.coerce(payload)
-    assert result.payload["tools"] == payload["tools"]
+
+    assert get_in(result.payload, ["tools", Access.at(0), "parameters"]) ==
+             payload
+             |> get_in(["tools", Access.at(0), "parameters"])
+             |> Map.delete("$schema")
+  end
+
+  @tag :responses_coercion
+  test "Responses lowers non-strict function tool schemas before validation" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [
+        flat_function_tool("lookup_fixture", non_strict_tool_schema(), false)
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload)
+    assert get_in(result.payload, ["tools", Access.at(0), "parameters"]) == lowered_tool_schema()
+  end
+
+  @tag :responses_coercion
+  test "Responses keeps strict function tool schemas on the strict validation path" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [
+        flat_function_tool("lookup_fixture", non_strict_tool_schema(), true)
+      ]
+    }
+
+    assert {:error, %{code: "invalid_function_parameters", param: "tools.0.parameters.type"}} =
+             Responses.coerce(payload)
   end
 
   describe "Task 5 Responses and Chat tool shape compatibility" do
@@ -2962,6 +2994,70 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   defp translated_chat_tools(tools), do: Enum.map(tools, &translated_chat_tool/1)
+
+  defp non_strict_tool_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me"},
+        "tags" => %{"items" => %{"const" => "tag"}},
+        "nested" => %{
+          "properties" => %{"ok" => true},
+          "required" => ["ok"]
+        },
+        "choice" => %{
+          "oneOf" => [
+            %{"const" => "a"},
+            %{"type" => "string", "default" => "drop me"}
+          ]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"const" => "extra"},
+      "$defs" => %{
+        "Ref" => %{
+          "properties" => %{"value" => %{"const" => "ref"}},
+          "required" => ["value"]
+        }
+      },
+      "definitions" => %{
+        "Legacy" => %{"items" => %{"const" => "legacy"}}
+      }
+    }
+  end
+
+  defp lowered_tool_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "tags" => %{"type" => "array", "items" => %{"enum" => ["tag"]}},
+        "nested" => %{
+          "type" => "object",
+          "properties" => %{"ok" => %{}},
+          "required" => ["ok"]
+        },
+        "choice" => %{
+          "oneOf" => [
+            %{"enum" => ["a"]},
+            %{"type" => "string"}
+          ]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"enum" => ["extra"]},
+      "$defs" => %{
+        "Ref" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"enum" => ["ref"]}},
+          "required" => ["value"]
+        }
+      },
+      "definitions" => %{
+        "Legacy" => %{"type" => "array", "items" => %{"enum" => ["legacy"]}}
+      }
+    }
+  end
 
   defp translated_chat_tool(%{"type" => "function", "function" => function}) do
     function

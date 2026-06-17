@@ -81,6 +81,35 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
     end
 
+    test "lowers backend Codex non-strict function tool schemas for HTTP and websocket upstream JSON" do
+      payload = non_strict_tool_schema_payload()
+      model = %Model{upstream_model_id: "provider-model"}
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      for request_options <- [http_options, websocket_options] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+
+        assert get_in(upstream, ["tools", Access.at(0), "parameters"]) ==
+                 lowered_tool_schema()
+
+        assert get_in(upstream, ["tools", Access.at(1), "function", "parameters"]) ==
+                 lowered_tool_schema()
+
+        assert get_in(upstream, ["tools", Access.at(2), "parameters"]) ==
+                 non_strict_tool_schema()
+      end
+    end
+
     test "removes backend Codex encrypted-only agent messages from websocket upstream JSON" do
       payload = %{
         "model" => "gpt-5.5",
@@ -554,6 +583,99 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           }
         }
       ]
+    }
+  end
+
+  defp non_strict_tool_schema_payload do
+    %{
+      "model" => "gpt-5.5",
+      "input" => [%{"role" => "user", "content" => "hello"}],
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "flat_lookup",
+          "strict" => false,
+          "parameters" => non_strict_tool_schema()
+        },
+        %{
+          "type" => "function",
+          "function" => %{
+            "name" => "nested_lookup",
+            "strict" => false,
+            "parameters" => non_strict_tool_schema()
+          }
+        },
+        %{
+          "type" => "function",
+          "name" => "strict_lookup",
+          "strict" => true,
+          "parameters" => non_strict_tool_schema()
+        }
+      ]
+    }
+  end
+
+  defp non_strict_tool_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me"},
+        "tags" => %{"items" => %{"const" => "tag"}},
+        "nested" => %{
+          "properties" => %{"ok" => true},
+          "required" => ["ok"]
+        },
+        "choice" => %{
+          "anyOf" => [
+            %{"const" => "a"},
+            %{"type" => "string", "default" => "drop me"}
+          ]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"const" => "extra"},
+      "$defs" => %{
+        "Ref" => %{
+          "properties" => %{"value" => %{"const" => "ref"}},
+          "required" => ["value"]
+        }
+      },
+      "definitions" => %{
+        "Legacy" => %{"items" => %{"const" => "legacy"}}
+      }
+    }
+  end
+
+  defp lowered_tool_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "tags" => %{"type" => "array", "items" => %{"enum" => ["tag"]}},
+        "nested" => %{
+          "type" => "object",
+          "properties" => %{"ok" => %{}},
+          "required" => ["ok"]
+        },
+        "choice" => %{
+          "anyOf" => [
+            %{"enum" => ["a"]},
+            %{"type" => "string"}
+          ]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"enum" => ["extra"]},
+      "$defs" => %{
+        "Ref" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"enum" => ["ref"]}},
+          "required" => ["value"]
+        }
+      },
+      "definitions" => %{
+        "Legacy" => %{"type" => "array", "items" => %{"enum" => ["legacy"]}}
+      }
     }
   end
 

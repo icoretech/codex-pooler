@@ -3,7 +3,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Validation}
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.{Input, SSE}
-  alias CodexPooler.Gateway.Payloads.{InputShape, RequestOptions, StrictSchema}
+
+  alias CodexPooler.Gateway.Payloads.{
+    InputShape,
+    RequestOptions,
+    StrictSchema,
+    ToolSchemaLowering
+  }
 
   @reasoning_contexts ~w(auto current_turn all_turns)
   @reasoning_summaries ~w(auto concise detailed)
@@ -22,6 +28,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- reject_locally_unsupported_fields(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
          {:ok, payload} <- Input.normalize_list_input(payload),
+         payload = ToolSchemaLowering.lower_non_strict_function_tools(payload),
          :ok <- Input.validate_input(payload),
          :ok <- Input.validate_previous_response_continuation(payload),
          :ok <- validate_tools(payload),

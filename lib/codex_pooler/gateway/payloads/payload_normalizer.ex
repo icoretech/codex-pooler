@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolResultShape
+  alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
@@ -130,6 +131,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input()
+    |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> maybe_put_websocket_responses_lite_client_metadata(request_options)
   end
@@ -162,6 +164,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
+    |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
   end
 
