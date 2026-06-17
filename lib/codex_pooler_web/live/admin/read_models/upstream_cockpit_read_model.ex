@@ -1,13 +1,11 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @moduledoc false
 
-  import Ecto.Query
-
-  alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Admin.UpstreamCockpitReadModel, as: AdminUpstreamCockpitReadModel
   alias CodexPooler.Audit
   alias CodexPooler.Pools
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
-  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -20,7 +18,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @recovery_statuses ~w(paused refresh_due refresh_failed reauth_required)
   @usable_refresh_statuses ~w(succeeded imported refreshing)
   @request_failed_statuses ~w(failed rejected interrupted cancelled)
-  @request_terminal_statuses ["succeeded" | @request_failed_statuses]
   @recent_event_limit 8
   @recent_event_prefetch_limit 32
 
@@ -258,8 +255,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     header = header(account, safe_identity)
     assignments = assignments(account)
     quota_health = quota_health(account, assignments)
-    request_health = request_health(account.identity)
-    pool_contribution = pool_contribution(account.identity, assignments)
+    request_health = request_health(account.identity, scope)
+    pool_contribution = pool_contribution(account.identity, assignments, scope)
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
     recent_events = recent_events(account.identity, scope)
@@ -374,190 +371,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp pool_contribution(%UpstreamIdentity{} = identity, %{items: assignments}) do
-    as_of = now()
-    start_7d = seven_day_window_start(as_of)
-    rows = pool_contribution_rows(identity.id, start_7d, as_of)
-    successful_requests_7d = length(rows)
-    request_counts_by_pool_id = Enum.frequencies_by(rows, & &1.pool_id)
-
-    items =
-      assignments
-      |> Enum.map(&pool_contribution_item(&1, request_counts_by_pool_id, successful_requests_7d))
-      |> Enum.sort_by(&{&1.pool_label, &1.assignment_label, &1.assignment_id})
-
-    kpis = pool_contribution_kpis(items, successful_requests_7d)
-
-    %{
-      key: :pool_contribution,
-      title: "Pool contribution",
-      items: items,
-      kpis: kpis,
-      empty?: items == [],
-      degraded?: kpis.disabled_assignment_count > 0,
-      missing?: false,
-      state: pool_contribution_state(items, kpis)
-    }
+  @spec pool_contribution(UpstreamIdentity.t(), assignments(), Scope.t() | term()) ::
+          pool_contribution()
+  defp pool_contribution(%UpstreamIdentity{} = identity, %{items: assignments}, %Scope{} = scope) do
+    AdminUpstreamCockpitReadModel.pool_contribution(scope, identity, assignments)
   end
 
-  defp pool_contribution_rows(identity_id, start_7d, as_of) do
-    Request
-    |> join(:inner, [request], attempt in Attempt, on: attempt.request_id == request.id)
-    |> where([request, attempt], attempt.upstream_identity_id == ^identity_id)
-    |> where([request], request.status == "succeeded")
-    |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)
-    |> group_by([request], [request.id, request.pool_id])
-    |> select([request], %{pool_id: request.pool_id})
-    |> Repo.all()
+  defp pool_contribution(%UpstreamIdentity{}, %{items: assignments}, _scope) do
+    AdminUpstreamCockpitReadModel.pool_contribution_without_request_data(assignments)
   end
 
-  defp pool_contribution_item(assignment, request_counts_by_pool_id, successful_requests_7d) do
-    successful_request_count_7d = Map.get(request_counts_by_pool_id, assignment.pool_id, 0)
-    share_percent_value = percentage(successful_request_count_7d, successful_requests_7d)
-    assignment_state = pool_contribution_assignment_state(assignment)
-
-    assignment
-    |> Map.take([
-      :upstream_identity_id,
-      :pool_id,
-      :pool_label,
-      :assignment_label,
-      :health_status,
-      :eligibility_status
-    ])
-    |> Map.put(:assignment_id, assignment.id)
-    |> Map.put(:assignment_status, assignment.status)
-    |> Map.put(:assignment_state, assignment_state)
-    |> Map.put(
-      :assignment_state_label,
-      pool_contribution_assignment_state_label(assignment_state)
-    )
-    |> Map.put(:routing_usable?, pool_contribution_routing_usable?(assignment))
-    |> Map.put(:successful_request_count_7d, successful_request_count_7d)
-    |> Map.put(:share_percent_value, share_percent_value)
-    |> Map.put(:bar_value, share_percent_value)
+  @spec request_health(UpstreamIdentity.t(), Scope.t() | term()) :: request_health()
+  defp request_health(%UpstreamIdentity{} = identity, %Scope{} = scope) do
+    AdminUpstreamCockpitReadModel.request_health(scope, identity)
   end
 
-  defp pool_contribution_kpis(items, successful_requests_7d) do
-    %{
-      assignment_count: length(items),
-      active_assignment_count: Enum.count(items, & &1.routing_usable?),
-      disabled_assignment_count: Enum.count(items, &(not &1.routing_usable?)),
-      successful_requests_7d: successful_requests_7d
-    }
-  end
-
-  defp pool_contribution_state([], _kpis), do: "empty"
-  defp pool_contribution_state(_items, %{successful_requests_7d: 0}), do: "no_successful_requests"
-
-  defp pool_contribution_state(_items, %{disabled_assignment_count: disabled}) when disabled > 0,
-    do: "degraded"
-
-  defp pool_contribution_state(_items, _kpis), do: "contributing"
-
-  defp pool_contribution_assignment_state(assignment) do
-    if pool_contribution_routing_usable?(assignment), do: "active", else: "disabled"
-  end
-
-  defp pool_contribution_assignment_state_label("active"), do: "Active assignment"
-  defp pool_contribution_assignment_state_label("disabled"), do: "Disabled or unusable assignment"
-
-  defp pool_contribution_routing_usable?(assignment) do
-    assignment.status == "active" and assignment.health_status == "active" and
-      assignment.eligibility_status == "eligible"
-  end
-
-  defp request_health(%UpstreamIdentity{} = identity) do
-    as_of = now()
-    start_24h = DateTime.add(as_of, -24, :hour)
-    start_7d = seven_day_window_start(as_of)
-    rows = request_health_rows(identity.id, start_7d, as_of)
-    items = request_health_items(rows, start_7d)
-    kpis = request_health_kpis(rows, start_24h)
-
-    %{
-      key: :request_health,
-      title: "Request health",
-      items: items,
-      kpis: kpis,
-      empty?: kpis.total_requests_7d == 0,
-      degraded?: kpis.failed_requests_24h > 0,
-      missing?: false,
-      state: request_health_state(kpis)
-    }
-  end
-
-  defp request_health_rows(identity_id, start_7d, as_of) do
-    Request
-    |> join(:inner, [request], attempt in Attempt, on: attempt.request_id == request.id)
-    |> where([request, attempt], attempt.upstream_identity_id == ^identity_id)
-    |> where([request], request.status in ^@request_terminal_statuses)
-    |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)
-    |> group_by([request], [request.id, request.status, request.admitted_at])
-    |> select([request], %{status: request.status, admitted_at: request.admitted_at})
-    |> Repo.all()
-  end
-
-  defp request_health_items(rows, start_7d) do
-    start_date = DateTime.to_date(start_7d)
-    rows_by_date = Enum.group_by(rows, &request_health_date/1)
-
-    for offset <- 0..6 do
-      date = Date.add(start_date, offset)
-      bucket_rows = Map.get(rows_by_date, date, [])
-      success_count = Enum.count(bucket_rows, &(&1.status == "succeeded"))
-      failure_count = Enum.count(bucket_rows, &failed_request_status?(&1.status))
-
-      %{
-        date: Date.to_iso8601(date),
-        success_count: success_count,
-        failure_count: failure_count,
-        total_count: success_count + failure_count
-      }
-    end
-  end
-
-  defp request_health_kpis(rows, start_24h) do
-    rows_24h = Enum.filter(rows, &(DateTime.compare(&1.admitted_at, start_24h) != :lt))
-    total_requests_24h = length(rows_24h)
-    failed_requests_24h = Enum.count(rows_24h, &failed_request_status?(&1.status))
-    total_requests_7d = length(rows)
-
-    %{
-      total_requests_24h: total_requests_24h,
-      failed_requests_24h: failed_requests_24h,
-      failure_rate_24h: failure_rate(failed_requests_24h, total_requests_24h),
-      total_requests_7d: total_requests_7d
-    }
-  end
-
-  defp request_health_state(%{total_requests_7d: 0}), do: "empty"
-
-  defp request_health_state(%{total_requests_24h: total, failed_requests_24h: failed})
-       when total > 0 and failed == total,
-       do: "failed"
-
-  defp request_health_state(%{failed_requests_24h: failed}) when failed > 0, do: "degraded"
-  defp request_health_state(_kpis), do: "healthy"
-
-  defp request_health_date(%{admitted_at: %DateTime{} = admitted_at}),
-    do: DateTime.to_date(admitted_at)
-
-  defp failed_request_status?(status), do: status in @request_failed_statuses
-
-  defp failure_rate(_failed, 0), do: 0.0
-
-  defp failure_rate(failed, total), do: percentage(failed, total)
-
-  defp percentage(_count, 0), do: 0.0
-
-  defp percentage(count, total), do: Float.round(count / total * 100.0, 1)
-
-  defp seven_day_window_start(%DateTime{} = as_of) do
-    as_of
-    |> DateTime.to_date()
-    |> Date.add(-6)
-    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+  defp request_health(%UpstreamIdentity{}, _scope) do
+    AdminUpstreamCockpitReadModel.request_health_without_request_data()
   end
 
   defp quota_health(%{identity: %UpstreamIdentity{} = identity}, %{items: assignments}) do
@@ -718,7 +548,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   defp recent_events(%UpstreamIdentity{} = identity, scope) do
     items =
       identity.id
-      |> request_recent_event_items()
+      |> request_recent_event_items(scope)
       |> Enum.concat(audit_recent_event_items(scope, identity.id))
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
       |> Enum.take(@recent_event_limit)
@@ -732,48 +562,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp request_recent_event_items(identity_id) do
+  defp request_recent_event_items(identity_id, scope) do
     identity_id
-    |> request_recent_event_rows()
+    |> request_recent_event_rows(scope)
     |> Enum.map(&request_recent_event_item(&1, identity_id))
   end
 
-  defp request_recent_event_rows(identity_id) do
-    target_requests_query =
-      from attempt in Attempt,
-        where: attempt.upstream_identity_id == ^identity_id,
-        group_by: attempt.request_id,
-        select: %{request_id: attempt.request_id}
-
-    attempt_counts_query =
-      from attempt in Attempt,
-        group_by: attempt.request_id,
-        select: %{request_id: attempt.request_id, attempt_count: count(attempt.id)}
-
-    Request
-    |> join(:inner, [request], target in subquery(target_requests_query),
-      on: target.request_id == request.id
+  defp request_recent_event_rows(identity_id, %Scope{} = scope) do
+    AdminUpstreamCockpitReadModel.recent_request_event_rows(
+      scope,
+      identity_id,
+      @recent_event_prefetch_limit
     )
-    |> join(:inner, [request], attempts in subquery(attempt_counts_query),
-      on: attempts.request_id == request.id
-    )
-    |> where(
-      [request, _target, attempts],
-      request.status in ^@request_failed_statuses or attempts.attempt_count > 1
-    )
-    |> order_by([request], desc: request.admitted_at, desc: request.id)
-    |> limit(^@recent_event_prefetch_limit)
-    |> select([request, _target, attempts], %{
-      id: request.id,
-      status: request.status,
-      admitted_at: request.admitted_at,
-      completed_at: request.completed_at,
-      response_status_code: request.response_status_code,
-      last_error_code: request.last_error_code,
-      attempt_count: attempts.attempt_count
-    })
-    |> Repo.all()
   end
+
+  defp request_recent_event_rows(_identity_id, _scope), do: []
 
   defp request_recent_event_item(row, identity_id) do
     %{

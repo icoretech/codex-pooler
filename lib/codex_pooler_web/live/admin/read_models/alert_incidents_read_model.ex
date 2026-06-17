@@ -1,23 +1,18 @@
 defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   @moduledoc false
 
-  import Ecto.Query
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Admin.AlertIncidentsReadModel, as: AdminAlertIncidentsReadModel
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Schemas.AlertChannel
-  alias CodexPooler.Alerts.Schemas.AlertDeliveryAttempt
   alias CodexPooler.Alerts.Schemas.AlertIncident
-  alias CodexPooler.Alerts.Schemas.AlertIncidentTarget
   alias CodexPooler.Alerts.Schemas.AlertRule
-  alias CodexPooler.Alerts.Schemas.AlertRuleChannel
-  alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AlertRuleForm
   alias CodexPoolerWeb.Admin.PoolFilterComponents
 
   @page_size 50
-  @delivery_attempts_per_incident 3
 
   @type filter_error :: %{required(:field) => atom(), required(:message) => String.t()}
   @type option :: %{
@@ -100,7 +95,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     channels = visible_channels(scope)
     {filters, form_values, filter_errors} = parse_filters(params, pools, rules, channels)
     incidents = load_incidents(scope, filters, filter_errors)
-    rows = incident_rows(incidents, filters, channels)
+    rows = incident_rows(scope, incidents, filters)
 
     %{
       manageable_pools: pools,
@@ -264,26 +259,20 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp load_incidents(_scope, _filters, [_error | _errors]), do: []
 
   defp load_incidents(scope, filters, []) do
-    opts =
-      []
-      |> maybe_put_opt(:pool_id, filters.pool_id)
-      |> maybe_put_opt(:state, filters.state)
-
-    case Alerts.list_incidents(scope, opts) do
+    case AdminAlertIncidentsReadModel.list_incidents(scope, filters) do
       {:ok, incidents} -> incidents
       {:error, _reason} -> []
     end
   end
 
-  defp incident_rows(incidents, filters, channels) do
-    incident_ids = Enum.map(incidents, & &1.id)
-    visible_pool_ids = visible_pool_ids(incidents)
-    visible_channel_ids = Enum.map(channels, & &1.id)
+  defp incident_rows(scope, incidents, filters) do
+    projections = AdminAlertIncidentsReadModel.incident_relationship_projections(scope, incidents)
 
-    linked_rules_by_incident =
-      linked_rules_by_incident(incident_ids, visible_pool_ids, visible_channel_ids)
+    linked_rules_by_incident = projections.linked_rules_by_incident
 
-    delivery_summaries = delivery_summaries(incident_ids, channels)
+    delivery_summaries =
+      projections.delivery_summaries_by_incident
+      |> Map.new(fn {incident_id, summary} -> {incident_id, delivery_summary(summary)} end)
 
     incidents
     |> Enum.filter(&incident_matches_severity?(&1, filters.severity))
@@ -292,7 +281,10 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   end
 
   defp incident_row(incident, linked_rules_by_incident, delivery_summaries) do
-    linked_rules = Map.get(linked_rules_by_incident, incident.id, [])
+    linked_rules =
+      linked_rules_by_incident
+      |> Map.get(incident.id, [])
+      |> linked_rule_options()
 
     %{
       id: incident.id,
@@ -336,71 +328,36 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       incident_matches_channel?(row, filters.channel_id)
   end
 
-  defp visible_pool_ids(incidents) do
-    incidents
-    |> Enum.flat_map(fn incident ->
-      root_pool_ids = if is_binary(incident.pool_id), do: [incident.pool_id], else: []
-      impacted_pool_ids = Enum.map(incident.impacted_pools, & &1.id)
-      root_pool_ids ++ impacted_pool_ids
-    end)
-    |> Enum.uniq()
+  defp delivery_summary(summary) do
+    total_count = summary.total_count
+    sent_count = summary.sent_count
+    attention_count = summary.attention_count
+    latest_status = summary.latest_status
+
+    %{
+      total_count: total_count,
+      sent_count: sent_count,
+      attention_count: attention_count,
+      latest_status: latest_status,
+      label: delivery_label(total_count, sent_count, attention_count, latest_status),
+      attempts: Enum.map(summary.attempts, &delivery_attempt/1)
+    }
   end
 
-  defp linked_rules_by_incident([], _visible_pool_ids, _visible_channel_ids), do: %{}
-  defp linked_rules_by_incident(_incident_ids, [], _visible_channel_ids), do: %{}
-
-  defp linked_rules_by_incident(incident_ids, visible_pool_ids, visible_channel_ids) do
-    rows =
-      Repo.all(
-        from target in AlertIncidentTarget,
-          join: rule in AlertRule,
-          on: rule.id == target.rule_id,
-          left_join: rule_channel in AlertRuleChannel,
-          on: rule_channel.alert_rule_id == rule.id,
-          left_join: channel in AlertChannel,
-          on: channel.id == rule_channel.alert_channel_id and channel.id in ^visible_channel_ids,
-          where: target.incident_id in ^incident_ids and target.pool_id in ^visible_pool_ids,
-          order_by: [
-            asc: rule.display_name,
-            asc: rule.id,
-            asc: channel.display_name,
-            asc: channel.id
-          ],
-          select: %{
-            incident_id: target.incident_id,
-            rule_id: rule.id,
-            rule_label: rule.display_name,
-            channel_id: channel.id,
-            channel_label: channel.display_name,
-            channel_type: channel.channel_type
-          }
-      )
-
-    rows
-    |> Enum.group_by(& &1.incident_id)
-    |> Map.new(fn {incident_id, rows} -> {incident_id, linked_rule_options(rows)} end)
-  end
-
-  defp linked_rule_options(rows) do
-    rows
-    |> Enum.group_by(& &1.rule_id)
-    |> Map.values()
-    |> Enum.map(fn [row | _rows] = rows ->
+  defp linked_rule_options(rules) do
+    Enum.map(rules, fn rule ->
       %{
-        label: row.rule_label,
-        value: row.rule_id,
+        label: rule.label,
+        value: rule.value,
         icon: "hero-bell-alert",
-        channels: linked_channel_options(rows)
+        channels: linked_channel_options(rule.channels)
       }
     end)
   end
 
-  defp linked_channel_options(rows) do
-    rows
-    |> Enum.reject(&is_nil(&1.channel_id))
-    |> Enum.uniq_by(& &1.channel_id)
-    |> Enum.map(fn row ->
-      %{label: row.channel_label, value: row.channel_id, icon: channel_icon(row.channel_type)}
+  defp linked_channel_options(channels) do
+    Enum.map(channels, fn channel ->
+      %{label: channel.label, value: channel.value, icon: channel_icon(channel.channel_type)}
     end)
   end
 
@@ -408,83 +365,6 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     linked_rules
     |> Enum.flat_map(& &1.channels)
     |> Enum.uniq_by(& &1.value)
-  end
-
-  defp delivery_summaries([], _channels), do: %{}
-  defp delivery_summaries(_incident_ids, []), do: %{}
-
-  defp delivery_summaries(incident_ids, channels) do
-    visible_channel_ids = Enum.map(channels, & &1.id)
-    channel_lookup = Map.new(channels, &{&1.id, &1})
-
-    rows = delivery_attempt_rows(incident_ids, visible_channel_ids)
-
-    rows
-    |> Enum.group_by(& &1.incident_id)
-    |> Map.new(fn {incident_id, attempts} ->
-      {incident_id, delivery_summary(attempts, channel_lookup)}
-    end)
-  end
-
-  defp delivery_attempt_rows(_incident_ids, []), do: []
-
-  defp delivery_attempt_rows(incident_ids, visible_channel_ids) do
-    ranked_query =
-      from attempt in AlertDeliveryAttempt,
-        where:
-          attempt.incident_id in ^incident_ids and attempt.channel_id in ^visible_channel_ids,
-        windows: [
-          incident_attempts: [
-            partition_by: attempt.incident_id,
-            order_by: [
-              desc: fragment("coalesce(?, ?)", attempt.attempted_at, attempt.created_at),
-              desc: attempt.id
-            ]
-          ]
-        ],
-        select: %{
-          id: attempt.id,
-          incident_id: attempt.incident_id,
-          channel_id: attempt.channel_id,
-          status: attempt.status,
-          attempt_number: attempt.attempt_number,
-          max_attempts: attempt.max_attempts,
-          attempted_at: attempt.attempted_at,
-          completed_at: attempt.completed_at,
-          created_at: attempt.created_at,
-          response_status_code: attempt.response_status_code,
-          retryable: attempt.retryable,
-          failure_code: attempt.failure_code,
-          failure_message: attempt.failure_message,
-          response_metadata: attempt.response_metadata,
-          failure_metadata: attempt.failure_metadata,
-          rank: over(row_number(), :incident_attempts)
-        }
-
-    Repo.all(
-      from attempt in subquery(ranked_query),
-        where: attempt.rank <= ^@delivery_attempts_per_incident,
-        order_by: [
-          asc: attempt.incident_id,
-          desc: fragment("coalesce(?, ?)", attempt.attempted_at, attempt.created_at),
-          desc: attempt.id
-        ]
-    )
-  end
-
-  defp delivery_summary(attempts, channel_lookup) do
-    sent_count = Enum.count(attempts, &(&1.status == AlertDeliveryAttempt.sent_status()))
-    attention_count = Enum.count(attempts, &(&1.status in ["retryable", "failed"]))
-    latest_status = attempts |> List.first() |> then(&(&1 && &1.status))
-
-    %{
-      total_count: length(attempts),
-      sent_count: sent_count,
-      attention_count: attention_count,
-      latest_status: latest_status,
-      label: delivery_label(length(attempts), sent_count, attention_count, latest_status),
-      attempts: Enum.map(attempts, &delivery_attempt(&1, channel_lookup))
-    }
   end
 
   defp empty_delivery_summary do
@@ -512,11 +392,11 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     |> Enum.join(" · ")
   end
 
-  defp delivery_attempt(attempt, channel_lookup) do
+  defp delivery_attempt(attempt) do
     %{
       id: attempt.id,
       channel_id: attempt.channel_id,
-      channel_label: delivery_channel_label(Map.get(channel_lookup, attempt.channel_id)),
+      channel_label: attempt.channel_label,
       status: attempt.status,
       status_label: delivery_status_label(attempt.status),
       attempt_number: attempt.attempt_number,
@@ -525,20 +405,15 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       completed_at: attempt.completed_at,
       response_status_code: attempt.response_status_code,
       retryable: attempt.retryable,
-      failure_code: safe_optional_text(attempt.failure_code),
-      failure_message: safe_optional_text(attempt.failure_message),
+      failure_code: attempt.failure_code,
+      failure_message: attempt.failure_message,
       details: delivery_attempt_details(attempt)
     }
   end
 
-  defp delivery_channel_label(%{display_name: label}) when is_binary(label) and label != "",
-    do: label
-
-  defp delivery_channel_label(_channel), do: "Visible channel"
-
   defp delivery_attempt_details(attempt) do
-    metadata = safe_attempt_metadata(attempt.response_metadata)
-    failure_metadata = safe_attempt_metadata(attempt.failure_metadata)
+    metadata = attempt.response_metadata || %{}
+    failure_metadata = attempt.failure_metadata || %{}
 
     [
       detail("Adapter", metadata["delivery_adapter"]),
@@ -558,28 +433,6 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
     |> Enum.take(8)
   end
 
-  defp safe_attempt_metadata(%{} = metadata) do
-    metadata
-    |> Alerts.safe_projected_metadata_for_admin()
-    |> Map.take([
-      "delivery_adapter",
-      "channel_type",
-      "endpoint_host",
-      "endpoint_path_prefix",
-      "endpoint_fingerprint",
-      "recipient_domain",
-      "payload_bytes",
-      "response_status_code",
-      "reason_code",
-      "delivery_status",
-      "failure_code",
-      "failure_message",
-      "retryable"
-    ])
-  end
-
-  defp safe_attempt_metadata(_metadata), do: %{}
-
   defp detail(_label, nil), do: nil
   defp detail(_label, ""), do: nil
 
@@ -597,10 +450,6 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp safe_detail_value(value) when is_integer(value), do: Integer.to_string(value)
   defp safe_detail_value(value) when is_boolean(value), do: if(value, do: "yes", else: "no")
   defp safe_detail_value(value), do: value |> to_string() |> safe_text()
-
-  defp safe_optional_text(nil), do: nil
-  defp safe_optional_text(value) when is_binary(value), do: safe_text(value)
-  defp safe_optional_text(value), do: value |> to_string() |> safe_text()
 
   defp safe_text(value) do
     value
@@ -688,10 +537,6 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
         }
       end)
   end
-
-  defp maybe_put_opt(opts, _key, nil), do: opts
-  defp maybe_put_opt(opts, _key, ""), do: opts
-  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp channel_icon("webhook"), do: "hero-globe-alt"
   defp channel_icon(_channel_type), do: "hero-envelope"
