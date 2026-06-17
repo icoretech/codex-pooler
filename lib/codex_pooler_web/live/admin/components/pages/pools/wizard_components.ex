@@ -223,20 +223,10 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                   <div class="min-w-0">
                     <p class="text-sm font-semibold text-base-content">Compatibility</p>
                     <p class="text-xs leading-5 text-base-content/55">
-                      Optional client and analytics surfaces.
+                      Optional client surfaces.
                     </p>
                   </div>
                   <div class="routing-matrix-options">
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:control_plane_analytics_forwarding_enabled]}
-                        type="checkbox"
-                        label="Forward analytics"
-                      />
-                      <p class="routing-option-help">
-                        Forward sanitized OpenAI control-plane analytics.
-                      </p>
-                    </div>
                     <div class="routing-matrix-option">
                       <.input
                         field={@form[:v1_compatibility_enabled]}

@@ -143,7 +143,6 @@ defmodule CodexPooler.PoolsTest do
   end
 
   describe "pool management" do
-    @tag feature_pool_control_plane_analytics: true
     test "routing settings load defaults, feature flags, and persisted strategies by pool id" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
@@ -161,7 +160,6 @@ defmodule CodexPooler.PoolsTest do
                sticky_websocket_sessions: true,
                sticky_http_sessions: false,
                prompt_cache_affinity_enabled: true,
-               control_plane_analytics_forwarding_enabled: true,
                v1_compatibility_enabled: true,
                request_compression_enabled: false
              } = Pools.routing_settings_with_defaults(pool)
@@ -172,7 +170,6 @@ defmodule CodexPooler.PoolsTest do
       assert %RoutingSettings{
                routing_strategy: "bridge_ring",
                prompt_cache_affinity_enabled: true,
-               control_plane_analytics_forwarding_enabled: true,
                v1_compatibility_enabled: true,
                request_compression_enabled: false
              } =
@@ -190,17 +187,13 @@ defmodule CodexPooler.PoolsTest do
                  "sticky_websocket_sessions" => false,
                  "sticky_http_sessions" => true,
                  "prompt_cache_affinity_enabled" => false,
-                 "control_plane_analytics_forwarding_enabled" => false,
                  "v1_compatibility_enabled" => false,
                  "request_compression_enabled" => "true"
                })
 
       refute Pools.get_routing_settings(routed_pool).prompt_cache_affinity_enabled
-      refute Pools.get_routing_settings(routed_pool).control_plane_analytics_forwarding_enabled
       assert Pools.get_routing_settings(routed_pool).request_compression_enabled
       refute Pools.routing_settings_with_defaults(routed_pool).prompt_cache_affinity_enabled
-
-      refute Pools.routing_settings_with_defaults(routed_pool).control_plane_analytics_forwarding_enabled
 
       assert Pools.routing_settings_with_defaults(routed_pool).request_compression_enabled
       refute Pools.v1_compatibility_enabled?(routed_pool)
@@ -208,13 +201,11 @@ defmodule CodexPooler.PoolsTest do
       assert {:ok, %RoutingSettings{} = reenabled_settings} =
                Pools.update_routing_settings(scope, routed_pool, %{
                  "prompt_cache_affinity_enabled" => true,
-                 "control_plane_analytics_forwarding_enabled" => true,
                  "v1_compatibility_enabled" => true,
                  "request_compression_enabled" => false
                })
 
       assert reenabled_settings.prompt_cache_affinity_enabled
-      assert reenabled_settings.control_plane_analytics_forwarding_enabled
       assert reenabled_settings.v1_compatibility_enabled
       refute reenabled_settings.request_compression_enabled
       assert Pools.v1_compatibility_enabled?(routed_pool)
@@ -284,21 +275,18 @@ defmodule CodexPooler.PoolsTest do
                ^pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
-                 control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true,
                  request_compression_enabled: false
                },
                ^routed_pool_id => %RoutingSettings{
                  routing_strategy: "deterministic_rotation",
                  prompt_cache_affinity_enabled: true,
-                 control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true,
                  request_compression_enabled: false
                },
                ^missing_pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
-                 control_plane_analytics_forwarding_enabled: true,
                  v1_compatibility_enabled: true,
                  request_compression_enabled: false
                }

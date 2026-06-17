@@ -916,6 +916,15 @@ defmodule CodexPooler.SchemaContractTest do
              """).rows
   end
 
+  test "pool routing settings omit removed analytics forwarding storage" do
+    columns = table_columns("pool_routing_settings")
+    removed_column = "control_plane" <> "_analytics_forwarding_enabled"
+    schema_field_names = Enum.map(RoutingSettings.__schema__(:fields), &Atom.to_string/1)
+
+    refute Map.has_key?(columns, removed_column)
+    refute removed_column in schema_field_names
+  end
+
   test "codex files expose bridge metadata columns without upload table dependency" do
     columns = table_columns("codex_files")
 

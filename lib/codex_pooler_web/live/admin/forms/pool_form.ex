@@ -85,8 +85,6 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "sticky_websocket_sessions" => settings.sticky_websocket_sessions,
       "sticky_http_sessions" => settings.sticky_http_sessions,
       "prompt_cache_affinity_enabled" => settings.prompt_cache_affinity_enabled,
-      "control_plane_analytics_forwarding_enabled" =>
-        settings.control_plane_analytics_forwarding_enabled,
       "v1_compatibility_enabled" => settings.v1_compatibility_enabled,
       "request_compression_enabled" => settings.request_compression_enabled,
       "upstream_identity_ids" => active_upstream_identity_ids(pool),
@@ -197,7 +195,6 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "sticky_websocket_sessions" => true,
       "sticky_http_sessions" => false,
       "prompt_cache_affinity_enabled" => true,
-      "control_plane_analytics_forwarding_enabled" => true,
       "v1_compatibility_enabled" => true,
       "request_compression_enabled" => false,
       "upstream_identity_ids" => [],

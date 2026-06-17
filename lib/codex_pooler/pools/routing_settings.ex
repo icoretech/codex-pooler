@@ -17,7 +17,6 @@ defmodule CodexPooler.Pools.RoutingSettings do
     field :sticky_websocket_sessions, :boolean
     field :sticky_http_sessions, :boolean
     field :prompt_cache_affinity_enabled, :boolean, default: true
-    field :control_plane_analytics_forwarding_enabled, :boolean, default: true
     field :v1_compatibility_enabled, :boolean, default: true
     field :request_compression_enabled, :boolean, default: false
     field :metadata, :map
@@ -35,7 +34,6 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :sticky_websocket_sessions,
       :sticky_http_sessions,
       :prompt_cache_affinity_enabled,
-      :control_plane_analytics_forwarding_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
       :metadata,
@@ -49,7 +47,6 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :sticky_websocket_sessions,
       :sticky_http_sessions,
       :prompt_cache_affinity_enabled,
-      :control_plane_analytics_forwarding_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
       :metadata,

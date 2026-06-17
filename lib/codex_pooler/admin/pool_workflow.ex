@@ -157,8 +157,6 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       "sticky_websocket_sessions" => Map.get(attrs, "sticky_websocket_sessions", true),
       "sticky_http_sessions" => Map.get(attrs, "sticky_http_sessions", false),
       "prompt_cache_affinity_enabled" => Map.get(attrs, "prompt_cache_affinity_enabled", true),
-      "control_plane_analytics_forwarding_enabled" =>
-        Map.get(attrs, "control_plane_analytics_forwarding_enabled", true),
       "v1_compatibility_enabled" => Map.get(attrs, "v1_compatibility_enabled", true),
       "request_compression_enabled" => Map.get(attrs, "request_compression_enabled", false)
     }
