@@ -8,6 +8,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
   alias CodexPooler.Admin.UpstreamCockpitReadModel
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
 
   test "request health and pool contribution are scoped to the caller's visible pools" do
@@ -87,6 +88,67 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
     refute Map.has_key?(contribution_by_pool, hidden_pool.id)
     refute inspect(request_health) =~ "hidden-cockpit-failed"
     refute inspect(contribution) =~ "Hidden Cockpit"
+  end
+
+  test "quota health is scoped to visible assignments and omits hidden pool labels" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+
+    {:ok, visible_pool} =
+      Pools.create_pool(owner_scope, %{slug: unique_slug("quota-visible"), name: "Quota Visible"})
+
+    {:ok, hidden_pool} =
+      Pools.create_pool(owner_scope, %{slug: unique_slug("quota-hidden"), name: "Quota Hidden"})
+
+    %{identity: identity, assignment: visible_assignment} =
+      upstream_assignment_fixture(visible_pool, %{
+        account_label: "Quota scoped identity",
+        assignment_label: "Quota visible assignment"
+      })
+
+    assert {:ok, hidden_assignment} =
+             PoolAssignments.create_pool_assignment(hidden_pool, identity, %{
+               assignment_label: "Quota hidden assignment",
+               status: "active",
+               health_status: "active",
+               eligibility_status: "eligible"
+             })
+
+    %{user: admin} =
+      operator_fixture(owner_scope, %{
+        "email" => unique_user_email(),
+        "role" => "instance_admin",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: owner.id)
+    admin_scope = Scope.for_user(admin)
+
+    upsert_quota_window!(identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: 100,
+      credits: 90,
+      used_percent: Decimal.new("10"),
+      reset_at: DateTime.add(DateTime.utc_now(), 5, :hour),
+      observed_at: DateTime.utc_now()
+    })
+
+    assignments = [
+      assignment_summary(visible_assignment, visible_pool),
+      assignment_summary(hidden_assignment, hidden_pool)
+    ]
+
+    quota_health = UpstreamCockpitReadModel.quota_health(admin_scope, identity, assignments)
+
+    assert quota_health.kpis.assignment_count == 1
+
+    assert [%{pool_id: visible_pool_id, state: "fresh", remaining_percent_value: 90.0}] =
+             quota_health.items
+
+    assert visible_pool_id == visible_pool.id
+    refute inspect(quota_health) =~ "Quota Hidden"
+    refute inspect(quota_health) =~ "Quota hidden assignment"
   end
 
   test "recent request event rows return only safe metadata for visible retried and failed requests" do
@@ -225,6 +287,23 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
 
   defp request_error_code("succeeded"), do: nil
   defp request_error_code(status), do: "#{status}_error"
+
+  defp upsert_quota_window!(identity, attrs) do
+    attrs =
+      Map.merge(
+        %{
+          quota_key: "account",
+          source: "codex_usage",
+          source_precision: "authoritative",
+          quota_scope: "account",
+          quota_family: "account",
+          freshness_state: "fresh"
+        },
+        attrs
+      )
+
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
 
   defp unique_slug(prefix),
     do: "admin-upstream-cockpit-#{prefix}-#{System.unique_integer([:positive])}"

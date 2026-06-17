@@ -604,6 +604,4 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp safe_account_id_label(_value), do: "stored account id not reported"
-
-  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end
