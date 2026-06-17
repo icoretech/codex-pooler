@@ -122,15 +122,17 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
           pool_contribution()
   def pool_contribution(%Scope{} = scope, identity_or_id, assignments)
       when is_list(assignments) do
+    pool_ids = visible_pool_ids(scope)
+    visible_assignments = filter_assignments_by_pool_ids(assignments, pool_ids)
     as_of = now()
     start_7d = seven_day_window_start(as_of)
 
     rows =
       identity_or_id
       |> identity_id()
-      |> pool_contribution_rows(scope, start_7d, as_of)
+      |> pool_contribution_rows(pool_ids, start_7d, as_of)
 
-    pool_contribution_from_rows(assignments, rows)
+    pool_contribution_from_rows(visible_assignments, rows)
   end
 
   @spec pool_contribution_without_request_data([assignment_summary()]) :: pool_contribution()
@@ -172,15 +174,15 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp pool_contribution_rows(identity_id, %Scope{} = scope, start_7d, as_of)
-       when is_binary(identity_id) do
-    case visible_pool_ids(scope) do
+  defp pool_contribution_rows(identity_id, pool_ids, start_7d, as_of)
+       when is_binary(identity_id) and is_list(pool_ids) do
+    case pool_ids do
       [] -> []
-      pool_ids -> pool_contribution_rows_for_pools(identity_id, pool_ids, start_7d, as_of)
+      [_ | _] -> pool_contribution_rows_for_pools(identity_id, pool_ids, start_7d, as_of)
     end
   end
 
-  defp pool_contribution_rows(_identity_id, _scope, _start_7d, _as_of), do: []
+  defp pool_contribution_rows(_identity_id, _pool_ids, _start_7d, _as_of), do: []
 
   defp pool_contribution_rows_for_pools(identity_id, pool_ids, start_7d, as_of) do
     Request
@@ -379,6 +381,12 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
       attempt_count: attempts.attempt_count
     })
     |> Repo.all()
+  end
+
+  defp filter_assignments_by_pool_ids(assignments, pool_ids) do
+    pool_id_set = MapSet.new(pool_ids)
+
+    Enum.filter(assignments, &MapSet.member?(pool_id_set, &1.pool_id))
   end
 
   defp visible_pool_ids(%Scope{} = scope) do
