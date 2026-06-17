@@ -193,6 +193,146 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              ]
     end
 
+    test "removes backend Codex mixed encrypted agent messages from websocket upstream JSON" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [
+          %{"type" => "message", "role" => "user", "content" => "hello"},
+          %{
+            "type" => "agent_message",
+            "author" => "root",
+            "recipient" => "worker",
+            "content" => [
+              %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
+              %{"type" => "encrypted_content", "encrypted_content" => "opaque-agent-message"}
+            ]
+          },
+          %{
+            "type" => "message",
+            "role" => "assistant",
+            "content" => nil,
+            "encrypted_content" => "preserved-assistant-replay"
+          },
+          %{
+            "type" => "agent_message",
+            "author" => "root",
+            "recipient" => "worker",
+            "content" => [%{"type" => "input_text", "text" => "clear agent message"}]
+          }
+        ]
+      }
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+
+      assert Enum.map(upstream["input"], &Map.fetch!(&1, "type")) == [
+               "message",
+               "message",
+               "agent_message"
+             ]
+
+      assert get_in(upstream, ["input", Access.at(1), "encrypted_content"]) ==
+               "preserved-assistant-replay"
+
+      assert get_in(upstream, ["input", Access.at(2), "content", Access.at(0), "type"]) ==
+               "input_text"
+    end
+
+    test "preserves malformed agent message content shapes while removing encrypted markers" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [
+          %{"type" => "agent_message", "content" => nil},
+          %{"type" => "agent_message", "content" => "not-a-list"},
+          %{
+            "type" => "agent_message",
+            "content" => ["odd-part", %{"type" => "input_text", "text" => "clear note"}]
+          },
+          %{
+            "type" => "agent_message",
+            "content" => [%{"encrypted_content" => "opaque-agent-message"}]
+          }
+        ]
+      }
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+
+      assert Enum.map(upstream["input"], &Map.fetch!(&1, "type")) == [
+               "agent_message",
+               "agent_message",
+               "agent_message"
+             ]
+
+      assert Enum.map(upstream["input"], &Map.get(&1, "content")) |> Enum.map(&content_shape/1) ==
+               [nil, :binary, :list]
+    end
+
+    test "normalizes mixed encrypted agent messages while preserving plaintext-only items" do
+      payload = %{
+        "input" => [
+          %{
+            "type" => "agent_message",
+            "content" => [
+              %{"type" => "input_text", "text" => "plain keeper"},
+              %{"type" => "encrypted_content", "encrypted_content" => "opaque-agent-message"}
+            ]
+          },
+          %{
+            "type" => "agent_message",
+            "content" => [%{"type" => "input_text", "text" => "plain keeper only"}]
+          }
+        ]
+      }
+
+      malformed_payload = %{
+        "input" => %{
+          "type" => "agent_message",
+          "content" => [%{"type" => "encrypted_content", "encrypted_content" => "opaque"}]
+        }
+      }
+
+      assert {:ok,
+              %{
+                "input" => [
+                  %{
+                    "type" => "agent_message",
+                    "content" => [%{"type" => "input_text", "text" => "plain keeper only"}]
+                  }
+                ]
+              }} = PayloadNormalizer.normalize(payload)
+
+      assert {:ok, ^malformed_payload} = PayloadNormalizer.normalize(malformed_payload)
+    end
+
     test "omits absent, auto, and default service tiers while preserving concrete tiers upstream" do
       model = %Model{upstream_model_id: "provider-model"}
 
@@ -416,4 +556,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       ]
     }
   end
+
+  defp content_shape(nil), do: nil
+  defp content_shape(value) when is_binary(value), do: :binary
+  defp content_shape(value) when is_list(value), do: :list
 end

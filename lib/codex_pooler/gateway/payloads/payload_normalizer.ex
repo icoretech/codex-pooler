@@ -53,6 +53,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   def backend_client_metadata_turn_state(%{}), do: nil
 
+  @spec normalize(map()) :: {:ok, map()}
+  def normalize(%{} = payload) do
+    {:ok, normalize_backend_codex_websocket_input(payload)}
+  end
+
   defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
     payload =
       payload
@@ -208,27 +213,30 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp normalize_backend_codex_websocket_input(%{"input" => input} = payload)
        when is_list(input) do
-    input = Enum.reject(input, &backend_codex_encrypted_only_agent_message?/1)
+    input = Enum.reject(input, &backend_codex_encrypted_agent_message?/1)
     Map.put(payload, "input", input)
   end
 
   defp normalize_backend_codex_websocket_input(payload), do: payload
 
-  defp backend_codex_encrypted_only_agent_message?(%{
+  defp backend_codex_encrypted_agent_message?(%{
          "type" => "agent_message",
          "content" => content
        })
-       when is_list(content) and content != [] do
-    Enum.all?(content, &backend_codex_encrypted_content_item?/1)
+       when is_list(content) do
+    Enum.any?(content, &backend_codex_encrypted_content_marker?/1)
   end
 
-  defp backend_codex_encrypted_only_agent_message?(_item), do: false
+  defp backend_codex_encrypted_agent_message?(_item), do: false
 
-  defp backend_codex_encrypted_content_item?(%{"type" => "encrypted_content"} = item) do
-    Map.has_key?(item, "encrypted_content")
+  defp backend_codex_encrypted_content_marker?(%{} = item) do
+    Map.get(item, "type") == "encrypted_content" ||
+      Map.get(item, :type) == "encrypted_content" ||
+      Map.has_key?(item, "encrypted_content") ||
+      Map.has_key?(item, :encrypted_content)
   end
 
-  defp backend_codex_encrypted_content_item?(_item), do: false
+  defp backend_codex_encrypted_content_marker?(_item), do: false
 
   defp backend_codex_encrypted_only_input_item?(%{"content" => nil} = item) do
     Map.has_key?(item, "encrypted_content")

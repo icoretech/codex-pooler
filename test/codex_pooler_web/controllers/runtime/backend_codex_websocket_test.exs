@@ -1172,6 +1172,102 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.usage_status == "usage_known"
   end
 
+  test "websocket response.create strips mixed encrypted agent messages before upstream dispatch" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_mixed_agent_message",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-mixed-agent-message"})
+
+    raw_agent_encrypted_content = "sample-mixed-agent-encrypted-content"
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [
+                   %{"type" => "message", "role" => "user", "content" => "hello"},
+                   %{
+                     "type" => "agent_message",
+                     "author" => "root",
+                     "recipient" => "worker",
+                     "content" => [
+                       %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
+                       %{
+                         "type" => "encrypted_content",
+                         "encrypted_content" => raw_agent_encrypted_content
+                       }
+                     ]
+                   },
+                   %{
+                     "type" => "message",
+                     "role" => "assistant",
+                     "content" => nil,
+                     "encrypted_content" => "sample-assistant-encrypted-replay"
+                   },
+                   %{
+                     "type" => "agent_message",
+                     "author" => "root",
+                     "recipient" => "worker",
+                     "content" => [
+                       %{"type" => "input_text", "text" => "clear agent message"}
+                     ]
+                   }
+                 ],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-mixed-agent-message", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+    assert %{"id" => "resp_ws_mixed_agent_message"} = Jason.decode!(frame)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.json["type"] == "response.create"
+
+    assert Enum.map(captured.json["input"], &Map.fetch!(&1, "type")) == [
+             "message",
+             "message",
+             "agent_message"
+           ]
+
+    assert captured.json["input"] |> Enum.at(1) |> Map.fetch!("encrypted_content")
+
+    assert captured.json["input"]
+           |> Enum.at(2)
+           |> Map.fetch!("content")
+           |> Enum.at(0)
+           |> Map.fetch!("type") ==
+             "input_text"
+
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "websocket"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ raw_agent_encrypted_content
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+  end
+
   test "websocket terminal usage settles priced gpt-5.5 request logs" do
     terminal_usage = %{
       "input_tokens" => 123,
