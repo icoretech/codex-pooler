@@ -66,40 +66,42 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           recent_circuits: [RoutingCircuitState.t()]
         }
 
-  @spec plan_route(
-          routing_auth(),
-          Model.t(),
-          list(),
-          RoutePlanInput.t(),
-          RequestOptions.t()
-        ) ::
-          route_plan()
-  def plan_route(auth, %Model{} = model, candidates, %RoutePlanInput{} = input, opts)
-      when is_list(candidates) do
-    plan_route(auth, model, candidates, input, opts, nil)
-  end
+  @type plan_input :: %{
+          required(:auth) => routing_auth(),
+          required(:model) => Model.t(),
+          required(:candidates) => [candidate()],
+          required(:route_plan_input) => RoutePlanInput.t(),
+          required(:request_options) => RequestOptions.t(),
+          optional(:route_state) => RouteState.t() | nil
+        }
 
-  @spec plan_route(
-          routing_auth(),
-          Model.t(),
-          list(),
-          RoutePlanInput.t(),
-          RequestOptions.t(),
-          RouteState.t() | nil
-        ) ::
-          route_plan()
-  def plan_route(auth, %Model{} = model, candidates, %RoutePlanInput{} = input, opts, route_state)
+  @spec plan_route(plan_input()) :: route_plan()
+  def plan_route(
+        %{
+          auth: auth,
+          model: %Model{} = model,
+          candidates: candidates,
+          route_plan_input: %RoutePlanInput{} = route_plan_input,
+          request_options: %RequestOptions{} = request_options
+        } = input
+      )
       when is_list(candidates) do
+    route_state = Map.get(input, :route_state)
     settings = routing_settings(auth, route_state)
-    affinity = affinity_context(auth, model, input, opts, settings)
+    affinity = affinity_context(auth, model, route_plan_input, request_options, settings)
     demotions = active_demotions(auth, model, candidates)
 
     prompt_cache_locality =
-      prompt_cache_locality_context(auth, model, opts, settings, affinity, candidates)
+      prompt_cache_locality_context(auth, model, request_options, settings, affinity, candidates)
 
     ordered =
       settings.routing_strategy
-      |> strategy_order(candidates, model, affinity.seed || input.correlation_id, route_state)
+      |> strategy_order(
+        candidates,
+        model,
+        affinity.seed || route_plan_input.correlation_id,
+        route_state
+      )
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
       |> apply_demotions(demotions)

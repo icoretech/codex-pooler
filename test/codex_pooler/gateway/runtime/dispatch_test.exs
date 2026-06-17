@@ -71,13 +71,13 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
       request_options: request_options,
       route_state: RouteState.new(%{visible_model: setup.model, candidates: candidates}),
       route_plan:
-        BridgeRing.plan_route(
-          auth,
-          setup.model,
-          candidates,
-          RoutePlanInput.from_reserved(%{request: request}),
-          request_options
-        ),
+        BridgeRing.plan_route(%{
+          auth: auth,
+          model: setup.model,
+          candidates: candidates,
+          route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
+          request_options: request_options
+        }),
       route_class: request_options.transport.route_class
     }
 

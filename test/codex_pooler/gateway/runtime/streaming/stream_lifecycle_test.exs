@@ -264,13 +264,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       candidates: candidates,
       request_options: request_options,
       route_plan:
-        BridgeRing.plan_route(
-          auth,
-          setup.model,
-          candidates,
-          RoutePlanInput.from_reserved(%{request: request}),
-          request_options
-        ),
+        BridgeRing.plan_route(%{
+          auth: auth,
+          model: setup.model,
+          candidates: candidates,
+          route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
+          request_options: request_options
+        }),
       assignment: setup.assignment,
       identity: setup.identity,
       index: 0,

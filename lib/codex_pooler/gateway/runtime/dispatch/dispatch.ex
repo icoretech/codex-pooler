@@ -90,14 +90,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     request_options = Map.fetch!(input, :request_options)
 
     route_plan =
-      BridgeRing.plan_route(
-        input.auth,
-        input.model,
-        input.candidates,
-        RoutePlanInput.from_reserved(input.reserved),
-        request_options,
-        input.route_state
-      )
+      BridgeRing.plan_route(%{
+        auth: input.auth,
+        model: input.model,
+        candidates: input.candidates,
+        route_plan_input: RoutePlanInput.from_reserved(input.reserved),
+        request_options: request_options,
+        route_state: input.route_state
+      })
 
     case Accounting.accumulate_request_metadata(input.reserved.request, %{
            "routing" => route_plan.request_metadata

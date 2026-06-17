@@ -65,14 +65,14 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
     route_state = Map.get(input, :route_state)
 
     route_plan =
-      BridgeRing.plan_route(
-        auth,
-        model,
-        candidates,
-        route_plan_input,
-        request_options,
-        route_state
-      )
+      BridgeRing.plan_route(%{
+        auth: auth,
+        model: model,
+        candidates: candidates,
+        route_plan_input: route_plan_input,
+        request_options: request_options,
+        route_state: route_state
+      })
 
     route_plan.candidates
     |> Enum.with_index()

@@ -12,7 +12,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
-  describe "plan_route/5 leaf ordering" do
+  describe "plan_route/1 leaf ordering" do
     test "bridge_ring keeps rendezvous ordering stable for the same seed and candidate set" do
       setup = routing_setup(3)
       seed = "bridge-ring-stable-seed"
@@ -50,7 +50,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
-  describe "plan_route/5 deterministic distribution" do
+  describe "plan_route/1 deterministic distribution" do
     test "bridge_ring distributes first selection across fixed request seeds" do
       setup = routing_setup(3)
 
@@ -228,7 +228,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
-  describe "plan_route/5 prompt-cache locality" do
+  describe "plan_route/1 prompt-cache locality" do
     test "prompt-cache locality keeps the same selection for the same eligible set and seed" do
       setup = routing_setup(4)
       prompt_cache_key = "synthetic-cache-key-stable"
@@ -440,7 +440,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
-  describe "plan_route/5 quota-first edge cases" do
+  describe "plan_route/1 quota-first edge cases" do
     test "quota_first orders by remaining quota before rendezvous tie-breaking" do
       setup = routing_setup(3)
       [low_remaining, high_remaining, middle_remaining] = setup.assignments
@@ -569,14 +569,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         })
 
       plan =
-        BridgeRing.plan_route(
-          setup.auth,
-          setup.model,
-          setup.candidates,
-          RoutePlanInput.from_reserved(%{request: request}),
-          request_options,
-          route_state
-        )
+        BridgeRing.plan_route(%{
+          auth: setup.auth,
+          model: setup.model,
+          candidates: setup.candidates,
+          route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
+          request_options: request_options,
+          route_state: route_state
+        })
 
       assert plan.strategy == "quota_first"
       assert plan.selected_assignment_id == snapshot_best.id
@@ -584,7 +584,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end
   end
 
-  describe "plan_route/5 affinity/demotion recovery" do
+  describe "plan_route/1 affinity/demotion recovery" do
     test "affinity cannot resurrect a filtered assignment that is absent from eligible candidates" do
       setup = routing_setup(3)
       seed = "filtered-affinity-seed"
@@ -851,13 +851,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         correlation_id: "#{seed}-#{System.unique_integer([:positive])}"
       })
 
-    BridgeRing.plan_route(
-      setup.auth,
-      setup.model,
-      setup.candidates,
-      RoutePlanInput.from_reserved(%{request: request}),
-      RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
-    )
+    BridgeRing.plan_route(%{
+      auth: setup.auth,
+      model: setup.model,
+      candidates: setup.candidates,
+      route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
+      request_options:
+        RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+    })
   end
 
   defp plan_for_prompt_cache(setup, strategy, seed, prompt_cache_key, opts \\ []) do
@@ -886,13 +887,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         payload
       )
 
-    BridgeRing.plan_route(
-      setup.auth,
-      setup.model,
-      candidates,
-      RoutePlanInput.from_reserved(%{request: request}),
-      request_options
-    )
+    BridgeRing.plan_route(%{
+      auth: setup.auth,
+      model: setup.model,
+      candidates: candidates,
+      route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
+      request_options: request_options
+    })
   end
 
   defp update_routing_settings!(pool, strategy, ring_size, opts \\ []) do
