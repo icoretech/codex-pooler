@@ -13,10 +13,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.TimeoutConfig
   alias __MODULE__.Transport
   alias __MODULE__.UsageAuthentication
-  alias __MODULE__.WebsocketOwnerContext
-  alias CodexPooler.Gateway.OperationalSettings
+  alias __MODULE__.Normalization
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
-  alias CodexPooler.RouteClass
 
   @enforce_keys [
     :request_metadata,
@@ -57,16 +55,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
         }
 
   @websocket_responses_endpoint "/backend-api/codex/responses"
-
-  @session_header_sources [
-    "x-codex-window-id",
-    "x-codex-session-id",
-    "session-id",
-    "x-session-id",
-    "x-session-affinity",
-    "session_id",
-    "x-codex-conversation-id"
-  ]
 
   @prompt_cache_key_routes [
     "/v1/responses",
@@ -173,15 +161,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
     %__MODULE__{
       request_metadata: request_metadata(opts, endpoint, payload),
-      transport: transport(opts, endpoint, payload),
-      continuity: continuity(opts),
+      transport: Transport.build(opts, endpoint, payload),
+      continuity: Continuity.build(opts),
       routing: routing(opts, endpoint, payload),
-      timeout_config: timeout_config(opts),
+      timeout_config: TimeoutConfig.build(opts),
       payload_context: payload_context(opts),
-      runtime: runtime_context(opts),
-      openai_compatibility: openai_compatibility(opts),
+      runtime: RuntimeContext.build(opts),
+      openai_compatibility: OpenAICompatibility.build(opts),
       usage_authentication: usage_authentication(opts),
-      file_bridge: file_bridge(opts),
+      file_bridge: FileBridgeContext.build(opts),
       extra: extra(opts)
     }
   end
@@ -282,30 +270,22 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec put_transport(t(), keyword()) :: t()
   def put_transport(%__MODULE__{} = options, updates) when is_list(updates) do
-    updates =
-      updates
-      |> Map.new()
-      |> normalize_transport_updates(options.transport.websocket_owner)
-
-    %{options | transport: struct!(options.transport, updates)}
+    %{options | transport: Transport.update(options.transport, updates)}
   end
 
   @spec put_continuity(t(), keyword()) :: t()
   def put_continuity(%__MODULE__{} = options, updates) when is_list(updates) do
-    updates = updates |> Map.new() |> normalize_continuity_updates()
-    %{options | continuity: struct!(options.continuity, updates)}
+    %{options | continuity: Continuity.update(options.continuity, updates)}
   end
 
   @spec put_file_bridge(t(), keyword()) :: t()
   def put_file_bridge(%__MODULE__{} = options, updates) when is_list(updates) do
-    updates = updates |> Map.new() |> normalize_file_bridge_updates()
-    %{options | file_bridge: struct!(options.file_bridge, updates)}
+    %{options | file_bridge: FileBridgeContext.update(options.file_bridge, updates)}
   end
 
   @spec put_runtime_context(t(), keyword()) :: t()
   def put_runtime_context(%__MODULE__{} = options, updates) when is_list(updates) do
-    updates = updates |> Map.new() |> normalize_runtime_updates()
-    %{options | runtime: struct!(options.runtime, updates)}
+    %{options | runtime: RuntimeContext.update(options.runtime, updates)}
   end
 
   @spec put_payload_context(t(), keyword()) :: t()
@@ -325,28 +305,20 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
         translated_endpoint
       )
       when is_binary(source_endpoint) and is_binary(translated_endpoint) do
-    put_openai_compatibility(options,
-      source_endpoint: safe_endpoint(source_endpoint),
-      translated_endpoint: safe_endpoint(translated_endpoint)
-    )
+    %{
+      options
+      | openai_compatibility:
+          OpenAICompatibility.mark_origin(
+            options.openai_compatibility,
+            source_endpoint,
+            translated_endpoint
+          )
+    }
   end
 
   @spec openai_compatibility_metadata(t()) :: map()
   def openai_compatibility_metadata(%__MODULE__{openai_compatibility: compatibility}) do
-    metadata =
-      %{
-        "surface" => openai_surface(compatibility),
-        "source_endpoint" => compatibility.source_endpoint,
-        "translated_endpoint" => compatibility.translated_endpoint
-      }
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> Map.new()
-
-    if map_size(metadata) == 0 do
-      %{}
-    else
-      %{"openai_compatibility" => metadata}
-    end
+    OpenAICompatibility.metadata(compatibility)
   end
 
   @spec payload_compression_attempt_metadata(t() | map() | term()) :: map()
@@ -374,45 +346,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def route_class(%__MODULE__{transport: %{route_class: nil}}), do: nil
 
   @spec default_transport(String.t(), map()) :: String.t()
-  def default_transport("/backend-api/transcribe", _payload), do: "http_multipart"
-
-  def default_transport(endpoint, payload) do
-    if RouteClass.streaming?(payload), do: "http_sse", else: compact_transport(endpoint)
-  end
+  def default_transport(endpoint, payload), do: Transport.default(endpoint, payload)
 
   @spec timeout_config(map() | keyword()) :: TimeoutConfig.t()
-  def timeout_config(opts) do
-    opts = Map.new(opts)
-    settings = OperationalSettings.current()
-    shared_timeout = Map.get(opts, :timeout)
-
-    %TimeoutConfig{
-      connect_timeout_ms:
-        configured_timeout(
-          opts,
-          :connect_timeout,
-          :connect_timeout_ms,
-          shared_timeout,
-          settings.upstream_connect_timeout_ms
-        ),
-      pool_timeout_ms:
-        configured_timeout(
-          opts,
-          :pool_timeout,
-          :pool_timeout_ms,
-          shared_timeout,
-          settings.upstream_pool_timeout_ms
-        ),
-      receive_timeout_ms:
-        configured_timeout(
-          opts,
-          :receive_timeout,
-          :receive_timeout_ms,
-          shared_timeout,
-          settings.upstream_receive_timeout_ms
-        )
-    }
-  end
+  def timeout_config(opts), do: TimeoutConfig.build(opts)
 
   @spec json_request_bytes(term()) :: non_neg_integer() | nil
   def json_request_bytes(payload) when is_map(payload) do
@@ -445,53 +382,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     }
   end
 
-  defp transport(opts, endpoint, payload) do
-    %Transport{
-      transport: Map.get(opts, :transport) || default_transport(endpoint, payload),
-      upstream_endpoint: Map.get(opts, :upstream_endpoint) || endpoint,
-      websocket_writer: Map.get(opts, :websocket_writer),
-      forwarded_metadata_headers: forwarded_headers(Map.get(opts, :forwarded_headers, [])),
-      upstream_websocket_session: Map.get(opts, :upstream_websocket_session),
-      websocket_owner: websocket_owner_context(opts),
-      route_class: classify_route_class(opts, endpoint, payload)
-    }
-  end
-
   defp retargeted_transport(%Transport{} = transport, endpoint, payload) do
-    transport_name = transport.transport || default_transport(endpoint, payload)
-
-    %Transport{
-      transport
-      | transport: transport_name,
-        upstream_endpoint: endpoint,
-        route_class: classify_route_class(%{transport: transport_name}, endpoint, payload)
-    }
-  end
-
-  defp classify_route_class(opts, endpoint, payload) do
-    transport = Map.get(opts, :transport) || Map.get(opts, "transport")
-    RouteClass.classify(endpoint, payload, transport)
-  end
-
-  defp continuity(opts) do
-    %Continuity{
-      accepted_turn_state: Map.get(opts, :accepted_turn_state),
-      previous_response_id: Map.get(opts, :previous_response_id),
-      response_id: Map.get(opts, :response_id),
-      session_header: Map.get(opts, :session_header),
-      session_header_source:
-        normalized_session_header_source(Map.get(opts, :session_header_source)),
-      session_key: Map.get(opts, :session_key),
-      conversation_key: Map.get(opts, :conversation_key),
-      owner_instance_id: Map.get(opts, :owner_instance_id),
-      bridge_owner_lease_ttl_seconds:
-        optional_positive_integer(Map.get(opts, :bridge_owner_lease_ttl_seconds)),
-      reconnect_window_seconds:
-        optional_non_negative_integer(Map.get(opts, :reconnect_window_seconds)),
-      codex_session: Map.get(opts, :codex_session),
-      codex_turn_id: Map.get(opts, :codex_turn_id),
-      authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true
-    }
+    Transport.retarget(transport, endpoint, payload)
   end
 
   defp routing(opts, endpoint, payload) do
@@ -515,28 +407,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     }
   end
 
-  defp runtime_context(opts) do
-    %RuntimeContext{
-      now: Map.get(opts, :now),
-      interrupt_reason: Map.get(opts, :interrupt_reason) || Map.get(opts, :reason),
-      gateway_debug_payload: Map.get(opts, :gateway_debug_payload),
-      payload_compression:
-        RequestCompressionMetadata.runtime_metadata(Map.get(opts, :payload_compression))
-    }
-  end
-
-  defp openai_compatibility(opts) do
-    %OpenAICompatibility{
-      public_openai_responses_stream: Map.get(opts, :public_openai_responses_stream, false),
-      public_openai_chat_stream: Map.get(opts, :public_openai_chat_stream, false),
-      collect_openai_response_stream: Map.get(opts, :collect_openai_response_stream, false),
-      collect_openai_image_stream: Map.get(opts, :collect_openai_image_stream, false),
-      openai_chat_payload: Map.get(opts, :openai_chat_payload),
-      source_endpoint: safe_endpoint(Map.get(opts, :openai_source_endpoint)),
-      translated_endpoint: safe_endpoint(Map.get(opts, :openai_translated_endpoint))
-    }
-  end
-
   defp usage_authentication(opts) do
     %UsageAuthentication{
       authorization_header:
@@ -545,94 +415,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
         Map.get(opts, :chatgpt_account_id) || Map.get(opts, "chatgpt_account_id")
     }
   end
-
-  defp file_bridge(opts) do
-    %FileBridgeContext{
-      operation: Map.get(opts, :file_bridge_operation),
-      endpoint: Map.get(opts, :file_bridge_endpoint),
-      route_metadata: Map.get(opts, :file_bridge_route_metadata),
-      forwarded_headers: forwarded_headers(Map.get(opts, :forwarded_headers, [])),
-      pool_upstream_assignment_id: Map.get(opts, :pool_upstream_assignment_id),
-      upstream_identity_id: Map.get(opts, :upstream_identity_id),
-      defer_create_request: Map.get(opts, :defer_file_create_request),
-      finalize_retry_timeout_ms:
-        optional_non_negative_integer(Map.get(opts, :finalize_retry_timeout_ms)),
-      finalize_retry_interval_ms:
-        optional_non_negative_integer(Map.get(opts, :finalize_retry_interval_ms))
-    }
-  end
-
-  defp websocket_owner_context(opts) do
-    websocket_owner_context(%WebsocketOwnerContext{}, opts)
-  end
-
-  defp websocket_owner_context(%WebsocketOwnerContext{} = current_owner, opts) do
-    opts = Map.new(opts)
-
-    current_owner
-    |> maybe_replace_websocket_owner_context(Map.get(opts, :websocket_owner))
-    |> struct!(websocket_owner_updates(opts))
-  end
-
-  defp maybe_replace_websocket_owner_context(_current_owner, %WebsocketOwnerContext{} = owner),
-    do: owner
-
-  defp maybe_replace_websocket_owner_context(current_owner, owner_opts) when is_map(owner_opts),
-    do: websocket_owner_context(current_owner, owner_opts)
-
-  defp maybe_replace_websocket_owner_context(current_owner, _owner_opts), do: current_owner
-
-  defp websocket_owner_updates(opts) do
-    %{}
-    |> maybe_put_websocket_owner_update(
-      :enabled?,
-      Map.get(opts, :websocket_owner_forwarding_enabled?, Map.get(opts, :enabled?)),
-      &(&1 == true)
-    )
-    |> maybe_put_websocket_owner_update(
-      :session,
-      Map.get(opts, :websocket_owner_session, Map.get(opts, :session))
-    )
-    |> maybe_put_websocket_owner_update(
-      :lease_token,
-      Map.get(opts, :websocket_owner_lease_token, Map.get(opts, :lease_token))
-    )
-    |> maybe_put_websocket_owner_update(
-      :downstream,
-      Map.get(opts, :websocket_owner_downstream, Map.get(opts, :downstream))
-    )
-    |> maybe_put_websocket_owner_update(
-      :downstream_epoch,
-      Map.get(opts, :websocket_owner_downstream_epoch, Map.get(opts, :downstream_epoch)),
-      &optional_positive_integer/1
-    )
-    |> maybe_put_websocket_owner_update(
-      :proxy_instance_id,
-      Map.get(opts, :websocket_owner_proxy_instance_id, Map.get(opts, :proxy_instance_id))
-    )
-    |> maybe_put_websocket_owner_update(
-      :owner_instance_id,
-      Map.get(opts, :websocket_owner_instance_id, Map.get(opts, :owner_instance_id))
-    )
-    |> maybe_put_websocket_owner_update(
-      :forwarder_opts,
-      Map.get(opts, :websocket_owner_forwarder_opts, Map.get(opts, :forwarder_opts)),
-      &websocket_owner_forwarder_opts/1
-    )
-  end
-
-  defp maybe_put_websocket_owner_update(updates, key, value, normalizer \\ & &1)
-  defp maybe_put_websocket_owner_update(updates, _key, nil, _normalizer), do: updates
-
-  defp maybe_put_websocket_owner_update(updates, key, value, normalizer) do
-    case normalizer.(value) do
-      nil -> updates
-      value -> Map.put(updates, key, value)
-    end
-  end
-
-  defp websocket_owner_forwarder_opts(values) when is_list(values), do: values
-  defp websocket_owner_forwarder_opts(_value), do: []
 
   defp extra(opts) do
     Map.drop(opts, @known_opt_keys)
@@ -654,43 +436,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   defp maybe_put_file_bridge(%__MODULE__{} = options, updates),
     do: put_file_bridge(options, updates)
 
-  defp configured_timeout(opts, opts_key, opts_ms_key, shared_timeout, default) do
-    [Map.get(opts, opts_key), Map.get(opts, opts_ms_key), shared_timeout]
-    |> Enum.find(&non_negative_integer?/1)
-    |> case do
-      nil -> default
-      timeout -> timeout
-    end
-  end
-
-  defp non_negative_integer?(value), do: is_integer(value) and value >= 0
-
-  defp positive_integer?(value), do: is_integer(value) and value > 0
-
-  defp optional_positive_integer(value) do
-    if positive_integer?(value), do: value, else: nil
-  end
-
-  defp optional_non_negative_integer(value) do
-    if non_negative_integer?(value), do: value, else: nil
-  end
-
-  defp forwarded_headers(headers) when is_list(headers) do
-    Enum.filter(headers, fn
-      {name, value} -> is_binary(name) and is_binary(value)
-      _other -> false
-    end)
-  end
-
-  defp forwarded_headers(_headers), do: []
-
-  defp forwarded_headers_update(headers) do
-    case forwarded_headers(headers) do
-      [] -> nil
-      headers -> headers
-    end
-  end
-
   defp safe_client_request_id(value) when is_binary(value) do
     value
     |> String.trim()
@@ -703,18 +448,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp safe_client_request_id(_value), do: nil
 
-  defp safe_endpoint(value) when is_binary(value) do
-    value = value |> String.trim() |> String.slice(0, 160)
-
-    if String.starts_with?(value, "/") and value != "/" do
-      value
-    else
-      nil
-    end
-  end
-
-  defp safe_endpoint(_value), do: nil
-
   defp prompt_cache_key(opts, endpoint, payload) do
     if prompt_cache_key_route?(opts, endpoint, payload) do
       payload
@@ -724,11 +457,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   defp prompt_cache_key_route?(opts, endpoint, payload) do
-    route_endpoint = safe_endpoint(Map.get(opts, :openai_source_endpoint)) || endpoint
+    route_endpoint =
+      Normalization.safe_endpoint(Map.get(opts, :openai_source_endpoint)) || endpoint
 
     route_endpoint in @prompt_cache_key_routes and
       post_request?(Map.get(opts, :request_method) || Map.get(opts, "request_method")) and
-      classify_route_class(opts, endpoint, payload) != "proxy_websocket"
+      Transport.route_class(opts, endpoint, payload) != "proxy_websocket"
   end
 
   defp post_request?(nil), do: true
@@ -757,101 +491,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   defp normalized_prompt_cache_key(_value), do: nil
 
-  defp normalized_session_header_source(value) when is_atom(value) do
-    value
-    |> Atom.to_string()
-    |> normalized_session_header_source()
-  end
-
-  defp normalized_session_header_source(value) when is_binary(value) do
-    value = value |> String.trim() |> String.downcase()
-
-    if value in @session_header_sources do
-      value
-    end
-  end
-
-  defp normalized_session_header_source(_value), do: nil
-
-  defp openai_surface(%OpenAICompatibility{source_endpoint: endpoint}) when is_binary(endpoint),
-    do: "openai_v1"
-
-  defp openai_surface(_compatibility), do: nil
-
   defp payload_compression_metadata_envelope(metadata),
     do: RequestCompressionMetadata.request_envelope(metadata)
-
-  defp normalize_continuity_updates(updates) do
-    updates
-    |> normalize_optional_update(:bridge_owner_lease_ttl_seconds, &optional_positive_integer/1)
-    |> normalize_optional_update(:reconnect_window_seconds, &optional_non_negative_integer/1)
-    |> normalize_optional_update(:session_header_source, &normalized_session_header_source/1)
-  end
-
-  defp normalize_transport_updates(updates, %WebsocketOwnerContext{} = current_owner) do
-    {owner_updates, transport_updates} =
-      Map.split(updates, [
-        :websocket_owner,
-        :websocket_owner_forwarding_enabled?,
-        :websocket_owner_session,
-        :websocket_owner_lease_token,
-        :websocket_owner_downstream,
-        :websocket_owner_downstream_epoch,
-        :websocket_owner_proxy_instance_id,
-        :websocket_owner_instance_id,
-        :websocket_owner_forwarder_opts
-      ])
-
-    transport_updates =
-      normalize_optional_update(
-        transport_updates,
-        :forwarded_metadata_headers,
-        &forwarded_headers_update/1
-      )
-
-    if map_size(owner_updates) == 0 do
-      transport_updates
-    else
-      Map.put(
-        transport_updates,
-        :websocket_owner,
-        websocket_owner_context(current_owner, owner_updates)
-      )
-    end
-  end
-
-  defp normalize_file_bridge_updates(updates) do
-    updates
-    |> normalize_optional_update(:forwarded_headers, &forwarded_headers_update/1)
-    |> normalize_optional_update(:finalize_retry_timeout_ms, &optional_non_negative_integer/1)
-    |> normalize_optional_update(:finalize_retry_interval_ms, &optional_non_negative_integer/1)
-  end
-
-  defp normalize_runtime_updates(updates) do
-    normalize_optional_update(
-      updates,
-      :payload_compression,
-      &RequestCompressionMetadata.runtime_metadata/1
-    )
-  end
-
-  defp normalize_optional_update(updates, key, normalizer) do
-    if Map.has_key?(updates, key) do
-      case normalizer.(Map.fetch!(updates, key)) do
-        nil -> Map.delete(updates, key)
-        value -> Map.put(updates, key, value)
-      end
-    else
-      updates
-    end
-  end
-
-  defp compact_transport(endpoint)
-       when endpoint in [
-              "/backend-api/codex/responses/compact",
-              "/backend-api/codex/v1/responses/compact"
-            ],
-       do: "http_compact_json"
-
-  defp compact_transport(_endpoint), do: "http_json"
 end
