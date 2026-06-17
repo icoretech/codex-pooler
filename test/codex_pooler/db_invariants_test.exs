@@ -55,44 +55,72 @@ defmodule CodexPooler.DBInvariantsTest do
     end
   end
 
-  test "database accepts explicit control-plane request endpoints and rejects unlisted endpoints" do
+  test "database accepts kept request endpoints and rejects pruned runtime endpoints" do
     user_id = create_user!("owner-request-endpoint@example.com")
     pool_id = create_pool!(user_id, "request-endpoint", "Request Endpoint")
     api_key_id = create_api_key!(pool_id, user_id, "sk_request_endpoint")
 
-    allowed_endpoints = [
-      "/backend-api/codex/thread/goal/get",
-      "/backend-api/codex/thread/goal/set",
-      "/backend-api/codex/thread/goal/clear",
-      "/backend-api/codex/analytics-events/events",
-      "/backend-api/codex/memories/trace_summarize",
-      "/backend-api/codex/realtime/calls",
-      "/backend-api/codex/safety/arc",
-      "/backend-api/codex/agent-identities/jwks",
-      "/backend-api/wham/agent-identities/jwks"
+    kept_endpoints = [
+      "/backend-api/codex/models",
+      "/backend-api/codex/responses",
+      "/backend-api/codex/responses/compact",
+      "/backend-api/codex/images/generations",
+      "/backend-api/codex/images/edits",
+      "/backend-api/transcribe",
+      "/backend-api/files",
+      "/backend-api/files/uploaded",
+      "/api/codex/usage",
+      "/wham/usage",
+      "/backend-api/wham/usage",
+      "/v1/models",
+      "/v1/responses",
+      "/v1/usage",
+      "/v1/files",
+      "/v1/files/content",
+      "/v1/files/delete"
     ]
 
-    for endpoint <- allowed_endpoints do
+    for endpoint <- kept_endpoints do
       Repo.query!(
         """
         INSERT INTO requests (
           pool_id, api_key_id, requested_model, endpoint, transport, status, usage_status, correlation_id
         ) VALUES ($1, $2, 'gpt-example', $3, 'http_json', 'accepted', 'usage_pending', $4)
         """,
-        [pool_id, api_key_id, endpoint, "corr-#{endpoint}"]
+        [pool_id, api_key_id, endpoint, "corr-kept-#{:erlang.phash2(endpoint)}"]
       )
     end
 
-    assert_db_error(:check_violation, fn ->
-      Repo.query!(
-        """
-        INSERT INTO requests (
-          pool_id, api_key_id, requested_model, endpoint, transport, status, usage_status, correlation_id
-        ) VALUES ($1, $2, 'gpt-example', '/backend-api/codex/not-added', 'http_json', 'accepted', 'usage_pending', $3)
-        """,
-        [pool_id, api_key_id, "corr-invalid-endpoint"]
-      )
-    end)
+    pruned_endpoints = [
+      "/backend-api/codex/thread/goal/get",
+      "/backend-api/codex/thread/goal/set",
+      "/backend-api/codex/thread/goal/clear",
+      "/backend-api/codex/analytics-events/events",
+      "/backend-api/codex/memories/trace_summarize",
+      "/backend-api/codex/alpha/search",
+      "/backend-api/codex/realtime/calls",
+      "/backend-api/codex/safety/arc",
+      "/backend-api/codex/agent-identities/jwks",
+      "/backend-api/wham/agent-identities/jwks",
+      "/api/codex/rate-limit-reset-credits/consume",
+      "/wham/rate-limit-reset-credits/consume",
+      "/backend-api/wham/rate-limit-reset-credits/consume",
+      "/backend-api/codex/thread/goal",
+      "/backend-api/codex/not-added"
+    ]
+
+    for endpoint <- pruned_endpoints do
+      assert_db_error(:check_violation, fn ->
+        Repo.query!(
+          """
+          INSERT INTO requests (
+            pool_id, api_key_id, requested_model, endpoint, transport, status, usage_status, correlation_id
+          ) VALUES ($1, $2, 'gpt-example', $3, 'http_json', 'accepted', 'usage_pending', $4)
+          """,
+          [pool_id, api_key_id, endpoint, "corr-pruned-#{:erlang.phash2(endpoint)}"]
+        )
+      end)
+    end
   end
 
   test "database rejects orphaned child rows" do

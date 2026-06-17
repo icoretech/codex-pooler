@@ -215,37 +215,46 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["operator_pool_assignments_status_check"] =~ "'revoked'"
     refute constraints["operator_pool_assignments_status_check"] =~ "'disabled'"
 
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/models'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/responses'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/responses/compact'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/images/generations'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/images/edits'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/thread/goal/get'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/thread/goal/set'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/thread/goal/clear'"
+    for endpoint <- [
+          "/backend-api/codex/models",
+          "/backend-api/codex/responses",
+          "/backend-api/codex/responses/compact",
+          "/backend-api/codex/images/generations",
+          "/backend-api/codex/images/edits",
+          "/backend-api/transcribe",
+          "/backend-api/files",
+          "/backend-api/files/uploaded",
+          "/api/codex/usage",
+          "/wham/usage",
+          "/backend-api/wham/usage",
+          "/v1/models",
+          "/v1/responses",
+          "/v1/usage",
+          "/v1/files",
+          "/v1/files/content",
+          "/v1/files/delete"
+        ] do
+      assert constraints["requests_endpoint_check"] =~ "'#{endpoint}'"
+    end
 
-    assert constraints["requests_endpoint_check"] =~
-             "'/backend-api/codex/analytics-events/events'"
-
-    assert constraints["requests_endpoint_check"] =~
-             "'/backend-api/codex/memories/trace_summarize'"
-
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/alpha/search'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/realtime/calls'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/safety/arc'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/codex/agent-identities/jwks'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/wham/agent-identities/jwks'"
-    refute constraints["requests_endpoint_check"] =~ "'/backend-api/codex/not-added'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/transcribe'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/files'"
-    assert constraints["requests_endpoint_check"] =~ "'/backend-api/files/uploaded'"
-    assert constraints["requests_endpoint_check"] =~ "'/api/codex/usage'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/models'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/responses'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/usage'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/files'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/files/content'"
-    assert constraints["requests_endpoint_check"] =~ "'/v1/files/delete'"
+    for endpoint <- [
+          "/backend-api/codex/thread/goal/get",
+          "/backend-api/codex/thread/goal/set",
+          "/backend-api/codex/thread/goal/clear",
+          "/backend-api/codex/analytics-events/events",
+          "/backend-api/codex/memories/trace_summarize",
+          "/backend-api/codex/alpha/search",
+          "/backend-api/codex/realtime/calls",
+          "/backend-api/codex/safety/arc",
+          "/backend-api/codex/agent-identities/jwks",
+          "/backend-api/wham/agent-identities/jwks",
+          "/api/codex/rate-limit-reset-credits/consume",
+          "/wham/rate-limit-reset-credits/consume",
+          "/backend-api/wham/rate-limit-reset-credits/consume",
+          "/backend-api/codex/not-added"
+        ] do
+      refute constraints["requests_endpoint_check"] =~ "'#{endpoint}'"
+    end
 
     assert constraints["requests_transport_check"] =~ "'http_compact_json'"
     assert constraints["requests_transport_check"] =~ "'websocket'"
