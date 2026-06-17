@@ -28,7 +28,7 @@ A Pool controls:
 3. Pool API key assignments, which decide which client credentials can use the Pool
 4. routing strategy, which decides how eligible upstreams are ordered
 5. continuity settings, which decide when related requests should prefer the same upstream
-6. compatibility settings, such as OpenAI-style `/v1` routes and sanitized OpenAI control-plane analytics forwarding
+6. compatibility settings, such as OpenAI-style `/v1` routes
 7. request compression, which can reduce upstream-bound Responses tool-output payloads for eligible route families
 8. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
 
@@ -222,8 +222,6 @@ Routing settings are split into selection policy, continuity, and compatibility.
 `Prompt cache affinity` keeps related prompt-cache-key requests near the same upstream for routing locality. Codex Pooler uses this as a routing input only. It does not store prompts or responses for this control.
 
 ### Compatibility
-
-`Forward analytics` forwards sanitized OpenAI control-plane analytics. This is about OpenAI's control-plane analytics surface, not Codex Pooler's own telemetry.
 
 `Allow /v1 compatibility` enables OpenAI-style `/v1` compatibility routes for clients that use that surface.
 
