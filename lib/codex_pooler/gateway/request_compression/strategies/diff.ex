@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   @default_max_hunks 32
   @default_max_hunks_per_file 8
   @default_context_lines 2
+  @default_model "gpt-4o"
 
   @file_start_regex ~r/^diff --git\s+\S+\s+\S+/
   @hunk_header_regex ~r/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/
@@ -36,7 +37,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
 
         compressed = Strategies.join_lines(compressed_lines)
 
-        Strategies.finalize(
+        finalize(
           @strategy,
           content,
           compressed,
@@ -198,7 +199,14 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
         not changed_line?(line) and index in selected_indexes
       end)
 
-    {[hunk.header | body_lines], kept_context_line_count, omitted_context_line_count}
+    hunk_lines =
+      if kept_context_line_count == 0 and omitted_context_line_count == 0 do
+        body_lines
+      else
+        [hunk.header | body_lines]
+      end
+
+    {hunk_lines, kept_context_line_count, omitted_context_line_count}
   end
 
   defp selected_hunk_indexes(lines, context_lines) do
@@ -280,5 +288,21 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   defp changed_line?(line) do
     (String.starts_with?(line, "+") and not String.starts_with?(line, "+++")) or
       (String.starts_with?(line, "-") and not String.starts_with?(line, "---"))
+  end
+
+  defp finalize(strategy, original, compressed, counts, opts) do
+    Strategies.finalize(strategy, original, compressed, counts, default_model_opts(opts))
+  end
+
+  defp default_model_opts(opts) when is_list(opts) do
+    if Keyword.has_key?(opts, :model), do: opts, else: Keyword.put(opts, :model, @default_model)
+  end
+
+  defp default_model_opts(opts) when is_map(opts) do
+    if Map.has_key?(opts, :model) or Map.has_key?(opts, "model") do
+      opts
+    else
+      Map.put(opts, :model, @default_model)
+    end
   end
 end

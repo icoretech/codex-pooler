@@ -99,6 +99,56 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.DiffTest do
       assert :skip = Diff.compress("ordinary output without diff hunks", min_bytes: 0)
     end
 
+    test "compresses one-sided and replacement hunks without diff git headers" do
+      for {content, expected_additions, expected_deletions} <- [
+            {additions_only_fixture(), 1, 0},
+            {deletions_only_fixture(), 0, 1},
+            {replacement_fixture(), 1, 1}
+          ] do
+        assert {:ok, %{content: compressed, metadata: metadata}} =
+                 Diff.compress(content,
+                   model: @model,
+                   min_bytes: 0,
+                   min_hunks: 1,
+                   context_lines: 0
+                 )
+
+        assert compressed =~ "@@"
+        assert compressed =~ "[compressed diff output: omitted"
+        assert metadata.strategy == :diff
+        assert metadata.original_hunk_count == 1
+        assert metadata.compressed_hunk_count == 1
+        assert metadata.addition_line_count == expected_additions
+        assert metadata.deletion_line_count == expected_deletions
+      end
+    end
+
+    test "compresses minimal bare unified hunks and skips prose plus/minus lines" do
+      minimal = """
+      @@ -1,0 +1,2 @@
+      +one
+      +two
+      """
+
+      prose = """
+      Review notes for the next change:
+      + add a short summary before the examples
+      - remove the stale paragraph near the end
+      """
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               Diff.compress(minimal, min_bytes: 0, min_hunks: 1)
+
+      assert compressed == "+one\n+two"
+      assert metadata.strategy == :diff
+      assert metadata.original_hunk_count == 1
+      assert metadata.compressed_hunk_count == 1
+      assert metadata.addition_line_count == 2
+      assert metadata.deletion_line_count == 0
+
+      assert :skip = Diff.compress(prose, min_bytes: 0, min_hunks: 1)
+    end
+
     test "does not retain state between calls" do
       assert {:ok, _result} =
                Diff.compress(diff_fixture("DROP_ME_STALE_DIFF"),
@@ -148,6 +198,33 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.DiffTest do
      before other
     -old other
     +new other
+    """
+  end
+
+  defp additions_only_fixture do
+    diff_with_context("+added value")
+  end
+
+  defp deletions_only_fixture do
+    diff_with_context("-removed value")
+  end
+
+  defp replacement_fixture do
+    diff_with_context("""
+    -old value
+    +new value
+    """)
+  end
+
+  defp diff_with_context(change) do
+    context =
+      1..24
+      |> Enum.map_join("\n", &" context line #{&1}")
+
+    """
+    @@ -1,25 +1,25 @@
+    #{context}
+    #{String.trim_trailing(change)}
     """
   end
 

@@ -125,16 +125,26 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   end
 
   defp diff_points(content) do
+    hunks = scan_count(@diff_hunk_regex, content)
+    additions = scan_count(@diff_addition_regex, content)
+    deletions = scan_count(@diff_deletion_regex, content)
+    changes = additions + deletions
+
+    if hunks == 0 or changes == 0 do
+      0
+    else
+      diff_points(content, hunks, additions, deletions, changes)
+    end
+  end
+
+  defp diff_points(content, hunks, additions, deletions, changes) do
     [
-      score(regex_match?(@diff_git_regex, content), 25),
-      score(regex_match?(@diff_index_regex, content), 10),
-      score(regex_match?(@diff_file_header_regex, content), 25),
-      score(regex_match?(@diff_hunk_regex, content), 25),
-      score(
-        regex_match?(@diff_addition_regex, content) and
-          regex_match?(@diff_deletion_regex, content),
-        20
-      )
+      cond_score(hunks, [{2, 50}, {1, 45}]),
+      cond_score(changes, [{2, 30}, {1, 25}]),
+      score(additions > 0 and deletions > 0, 10),
+      score(regex_match?(@diff_file_header_regex, content), 15),
+      score(regex_match?(@diff_git_regex, content), 10),
+      score(regex_match?(@diff_index_regex, content), 5)
     ]
     |> Enum.sum()
     |> min(100)

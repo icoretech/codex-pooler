@@ -100,6 +100,53 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
       assert_noop(:text, ContentDetector.detect(negative))
     end
 
+    test "detects one-sided and minimal unified hunks without diff git headers" do
+      additions_only = """
+      @@ -1,0 +1,3 @@
+      +added one
+      +added two
+      +added three
+      """
+
+      deletions_only = """
+      @@ -1,3 +1,0 @@
+      -removed one
+      -removed two
+      -removed three
+      """
+
+      replacement = """
+      @@ -1 +1 @@
+      -old value
+      +new value
+      """
+
+      for body <- [additions_only, deletions_only, replacement] do
+        assert %{kind: :diff, confidence: confidence, compressible: true, strategy: :diff} =
+                 ContentDetector.detect(body)
+
+        assert confidence >= 0.7
+      end
+    end
+
+    test "keeps prose with isolated plus and minus lines out of diff detection" do
+      prose = """
+      Review notes for the next change:
+      + add a short summary before the examples
+      - remove the stale paragraph near the end
+      """
+
+      missing_hunk = """
+      --- a/example.txt
+      +++ b/example.txt
+      +added without a hunk header
+      -removed without a hunk header
+      """
+
+      assert_noop(:text, ContentDetector.detect(prose))
+      assert_noop(:text, ContentDetector.detect(missing_hunk))
+    end
+
     test "detects HTML at request-compression confidence but keeps it no-op" do
       positive = """
       <!doctype html>
