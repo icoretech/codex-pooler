@@ -93,4 +93,48 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
     end
   end
+
+  describe "pruned runtime compatibility contract" do
+    test "does not carry removed control-plane or reset-credit feature rows" do
+      refute :control_plane_surface in CompatibilityMatrix.feature_slugs()
+      refute :backend_reset_credit_consume in CompatibilityMatrix.feature_slugs()
+      refute :backend_alpha_search in CompatibilityMatrix.feature_slugs()
+    end
+
+    test "does not carry fixtures or supported routes for removed runtime surfaces" do
+      refute Map.has_key?(CompatibilityMatrix.fixtures(), :control_plane_surface)
+      refute Map.has_key?(CompatibilityMatrix.fixtures(), :backend_reset_credit_consume)
+      refute Map.has_key?(CompatibilityMatrix.fixtures(), :backend_alpha_search)
+
+      matrix_routes =
+        CompatibilityMatrix.features()
+        |> Enum.flat_map(& &1.routes)
+        |> Enum.map(&{&1.method, &1.path})
+        |> MapSet.new()
+
+      for route <- pruned_runtime_routes() do
+        refute MapSet.member?(matrix_routes, route),
+               "expected #{inspect(route)} to stay outside the supported compatibility matrix"
+      end
+    end
+  end
+
+  defp pruned_runtime_routes do
+    [
+      {:post, "/api/codex/rate-limit-reset-credits/consume"},
+      {:post, "/wham/rate-limit-reset-credits/consume"},
+      {:post, "/backend-api/wham/rate-limit-reset-credits/consume"},
+      {:get, "/backend-api/codex/thread/goal/get"},
+      {:post, "/backend-api/codex/thread/goal/get"},
+      {:post, "/backend-api/codex/thread/goal/set"},
+      {:post, "/backend-api/codex/thread/goal/clear"},
+      {:post, "/backend-api/codex/analytics-events/events"},
+      {:post, "/backend-api/codex/memories/trace_summarize"},
+      {:post, "/backend-api/codex/alpha/search"},
+      {:post, "/backend-api/codex/realtime/calls"},
+      {:post, "/backend-api/codex/safety/arc"},
+      {:get, "/backend-api/codex/agent-identities/jwks"},
+      {:get, "/backend-api/wham/agent-identities/jwks"}
+    ]
+  end
 end

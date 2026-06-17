@@ -2204,8 +2204,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     request =
       request_fixture(%{pool: pool, api_key: api_key}, %{
-        requested_model: "/backend-api/codex/safety/arc",
-        endpoint: "/backend-api/codex/safety/arc",
+        requested_model: "legacy-proxy-control",
+        endpoint: "/backend-api/codex/responses",
         transport: "http_json",
         status: "failed",
         correlation_id: "control-plane-request-log",
@@ -2262,7 +2262,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
     assert log.id == request.id
-    assert log.endpoint == "/backend-api/codex/safety/arc"
+    assert log.endpoint == "/backend-api/codex/responses"
     assert log.response_status_code == 502
     assert log.assignment_label == "Control plane assignment"
     assert log.upstream_identity_label == "Control plane upstream"
@@ -2297,7 +2297,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     assert {:ok, %{request: request}} =
              Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
-               endpoint: "/backend-api/codex/analytics-events/events",
+               endpoint: "/api/codex/usage",
                transport: "http_json",
                status: "succeeded",
                correlation_id: "control-plane-analytics-disabled",
@@ -2330,7 +2330,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert log.id == request.id
     assert log.status == "succeeded"
     assert log.response_status_code == 204
-    assert log.endpoint == "/backend-api/codex/analytics-events/events"
+    assert log.endpoint == "/api/codex/usage"
     assert log.metadata["routing"]["route_class"] == "proxy_control"
     assert log.metadata["request"]["body_bytes"] == 99
     assert log.metadata["request"]["content_type"] == "application/json"

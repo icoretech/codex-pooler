@@ -1831,8 +1831,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         api_key_display_name: "Control plane key",
         account_label: "control-plane-upstream@example.com",
         assignment_label: "Control plane assignment",
-        requested_model: "/backend-api/codex/safety/arc",
-        endpoint: "/backend-api/codex/safety/arc",
+        requested_model: "legacy-proxy-control",
+        endpoint: "/backend-api/codex/responses",
         transport: "http_json",
         status: "failed",
         response_status_code: 502,
@@ -1872,7 +1872,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert {:ok, %{request: disabled_request}} =
              Accounting.record_metadata_request(%{pool: pool, api_key: disabled_api_key}, %{
-               endpoint: "/backend-api/codex/analytics-events/events",
+               endpoint: "/api/codex/usage",
                transport: "http_json",
                status: "succeeded",
                correlation_id: "req-control-plane-disabled",
@@ -1897,7 +1897,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-row-#{proxied_request.id}",
-             "/backend-api/codex/safety/arc"
+             "/backend-api/codex/responses"
            )
 
     assert has_element?(
@@ -1939,7 +1939,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-row-#{disabled_request.id} [data-role='route']",
-             "/backend-api/codex/analytics-events/events"
+             "/api/codex/usage"
            )
 
     assert has_element?(
