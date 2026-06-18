@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.2.0...codex-pooler-v0.2.1) (2026-06-18)
+
+
+### Features
+
+* **accounting:** show compression processing throughput ([8bbb291](https://github.com/icoretech/codex-pooler/commit/8bbb2915a4a7d04966ed8a6e71d2e8034745a1fc))
+
+
+### Bug Fixes
+
+* **admin:** align upstream routing readiness with account lifecycle ([517c0ab](https://github.com/icoretech/codex-pooler/commit/517c0abb1037222590169a217cdfc8635baf941c))
+* **deps:** update astro monorepo to v6.4.8 ([d81bf2c](https://github.com/icoretech/codex-pooler/commit/d81bf2cdb0e13aa301f1192dde909597250dac46))
+* refine admin stats chart and table UI ([8b54759](https://github.com/icoretech/codex-pooler/commit/8b54759b4cff771fb78cc3f0cf6ffece36592dc7))
+* reject OpenAI Responses remote MCP tools ([1630301](https://github.com/icoretech/codex-pooler/commit/16303012e564bc8c6d3ca41b57b179ab001025c5))
+* **runtime:** strip store from compact bridge ([78343c3](https://github.com/icoretech/codex-pooler/commit/78343c33f71a8f395e457875e7669995a8adfb73))
+* **upstreams:** avoid token refresh loops on fresh usage probes ([9458784](https://github.com/icoretech/codex-pooler/commit/9458784ced656c67ce56c8d8dc1853614d016954))
+
+
+### Reverts
+
+* remove compression throughput display ([1fdda21](https://github.com/icoretech/codex-pooler/commit/1fdda21fb62dc09fb7ec12ad9eb4c870e23f3993))
+
+
+### Miscellaneous Chores
+
+* release 0.2.1 ([0a7023b](https://github.com/icoretech/codex-pooler/commit/0a7023b80efc79be07dac7aae47f855e76eefba3))
+
 ## [0.2.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.1.1...codex-pooler-v0.2.0) (2026-06-17)
 
 
