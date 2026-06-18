@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
 
   alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
@@ -348,6 +349,101 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-owner-ws-terminal-do-not-leak"
       refute metadata_text =~ "owner-upstream-token-refreshed"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  @tag :feature_websocket_terminal_auth_refresh
+  test "owner-forwarded websocket handshake 401 refreshes through the same owner without demotion" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_upgrade_error(
+             %{"error" => %{"code" => "invalid_api_key"}},
+             status: 401,
+             headers: [{"x-openai-authorization-error", "invalid_api_key"}]
+           ),
+           FakeUpstream.json_response(
+             %{"access_token" => "owner-upstream-token-handshake-refreshed"},
+             200
+           ),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_auth_handshake_retry_success",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "refresh_token",
+               plaintext: "refresh-token-owner-ws-handshake-do-not-leak"
+             })
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-auth-handshake-refresh", "owner-auth-handshake-refresh")
+
+    try do
+      assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(setup, "owner handshake auth refresh"), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
+      assert %{"id" => "resp_owner_auth_handshake_retry_success"} = Jason.decode!(frame)
+      assert {:ok, _state} = receive_socket_done(state)
+      assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+
+      assert [refresh_request, retried_request] = await_upstream_requests(upstream, 2)
+      assert refresh_request.path == "/oauth/token"
+      assert retried_request.method == "WEBSOCKET"
+      assert retried_request.path == "/backend-api/codex/responses"
+
+      assert Map.new(retried_request.headers)["authorization"] ==
+               "Bearer owner-upstream-token-handshake-refreshed"
+
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "succeeded"
+      assert request.retry_count == 1
+      assert request.last_error_code == nil
+      assert request.request_metadata["auth_refresh"]["status"] == "succeeded"
+
+      owner_metadata = request.request_metadata["websocket_owner_forwarding"]
+      assert owner_metadata["enabled"] == true
+      assert owner_metadata["owner_instance_id"] == Atom.to_string(node())
+      assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+      refute Repo.exists?(from d in BridgeDemotion, where: d.pool_id == ^setup.pool.id)
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.network_error_code == "upstream_unauthorized"
+      assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert second_attempt.status == "succeeded"
+
+      metadata_text =
+        inspect(
+          {request.request_metadata, first_attempt.response_metadata,
+           second_attempt.response_metadata}
+        )
+
+      refute metadata_text =~ setup.authorization
+      refute metadata_text =~ "refresh-token-owner-ws-handshake-do-not-leak"
+      refute metadata_text =~ "owner-upstream-token-handshake-refreshed"
+      refute metadata_text =~ "Bearer "
     after
       CodexResponsesSocket.terminate(:closed, state)
     end

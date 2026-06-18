@@ -138,6 +138,61 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:fake_upstream_chunk_sent, 3}, 1_000
   end
 
+  test "opens a new upstream websocket connection when bearer changes between turns" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{"id" => "resp_ws_old_token", "object" => "response"}),
+           FakeUpstream.json_response(%{"id" => "resp_ws_new_token", "object" => "response"})
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    parent = self()
+    url = FakeUpstream.url(upstream) <> "/backend-api/codex/responses"
+
+    request = fn label, bearer, content ->
+      %Request{
+        url: url,
+        headers: [{"authorization", "Bearer #{bearer}"}],
+        payload:
+          Jason.encode!(%{
+            "model" => "upstream-test-model",
+            "input" => [%{"type" => "message", "role" => "user", "content" => content}],
+            "stream" => true
+          }),
+        timeouts: @timeouts,
+        writer: fn text -> send(parent, {:upstream_websocket_frame, label, text}) end,
+        message_mapper: nil
+      }
+    end
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               request.(:old_token_turn, "old-upstream-token", "first turn")
+             )
+
+    assert_receive {:upstream_websocket_frame, :old_token_turn, old_frame}, 1_000
+    assert %{"id" => "resp_ws_old_token"} = Jason.decode!(old_frame)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               request.(:new_token_turn, "new-upstream-token", "second turn")
+             )
+
+    assert_receive {:upstream_websocket_frame, :new_token_turn, new_frame}, 1_000
+    assert %{"id" => "resp_ws_new_token"} = Jason.decode!(new_frame)
+
+    assert [first_request, second_request] = FakeUpstream.requests(upstream)
+    assert first_request.websocket_connection_id != second_request.websocket_connection_id
+    assert Map.new(first_request.headers)["authorization"] == "Bearer old-upstream-token"
+    assert Map.new(second_request.headers)["authorization"] == "Bearer new-upstream-token"
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
   test "does not treat response.created as upstream websocket terminal success" do
     parent = self()
 
