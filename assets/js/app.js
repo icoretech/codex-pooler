@@ -94,7 +94,7 @@ const escapeChartHTML = value => String(value ?? "")
   .replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;")
   .replace(/'/g, "&#39;")
-const buildChartTooltip = ({categories, series, unit, units, valueKinds, safeTooltip}) => {
+const buildChartTooltip = ({categories, series, unit, units, valueKinds, safeTooltip, colors}) => {
   const tooltip = {
     shared: true,
     intersect: false,
@@ -128,6 +128,7 @@ const buildChartTooltip = ({categories, series, unit, units, valueKinds, safeToo
           name: item.name || `Series ${index + 1}`,
           value,
           label: `${formattedValue}${suffix}`,
+          color: colors[index] || "",
         }
       })
       const visibleRows = rows.filter(row => row.value !== 0)
@@ -139,7 +140,10 @@ const buildChartTooltip = ({categories, series, unit, units, valueKinds, safeToo
           <div class="mb-1 font-semibold">${escapeChartHTML(title)}</div>
           ${renderedRows.map(row => `
             <div class="flex items-center justify-between gap-4">
-              <span>${escapeChartHTML(row.name)}</span>
+              <span class="flex min-w-0 items-center gap-2">
+                <span aria-hidden="true" class="inline-block h-2.5 w-2.5 shrink-0 rounded-sm" style="background-color: ${escapeChartHTML(row.color)}"></span>
+                <span class="truncate">${escapeChartHTML(row.name)}</span>
+              </span>
               <span class="font-semibold">${escapeChartHTML(row.label)}</span>
             </div>
           `).join("")}
@@ -500,8 +504,9 @@ const ApexTimeSeriesChart = {
         lineCap: "round",
         width: seriesTypes.map(type => type === "line" ? (compact ? 1.4 : 2) : 0),
       },
-      tooltip: buildChartTooltip({categories, series, unit, units, valueKinds, safeTooltip}),
+      tooltip: buildChartTooltip({categories, series, unit, units, valueKinds, safeTooltip, colors}),
       xaxis: {
+        tooltip: {enabled: false},
         categories,
         tickAmount: compact ? undefined : Math.min(Math.max(categories.length - 1, 1), 8),
         axisBorder: {show: !compact, color: gridColor},

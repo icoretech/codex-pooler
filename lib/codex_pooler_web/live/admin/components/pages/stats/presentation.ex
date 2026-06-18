@@ -108,7 +108,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     ~H"""
     <AdminComponents.admin_surface
       id="stats-api-key-surface"
-      title="Top API keys"
+      title="Leaderboard"
     >
       <div class="divide-y divide-base-300 md:hidden">
         <p
@@ -132,20 +132,20 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
                 {row.pool_name || "Pool not available"}
               </p>
             </div>
-            <span class="shrink-0 font-mono text-sm font-semibold tabular-nums">
+            <span class="shrink-0 text-sm font-semibold tabular-nums">
               {format_micros(row.settled_cost_micros)}
             </span>
           </div>
           <dl class="grid grid-cols-2 gap-2 text-xs">
             <div>
               <dt class="text-base-content/50">Requests</dt>
-              <dd class="font-mono font-semibold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {format_integer(row.requests)}
               </dd>
             </div>
             <div>
               <dt class="text-base-content/50">Tokens</dt>
-              <dd class="font-mono font-semibold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {Format.token_count(row.total_tokens)}
               </dd>
             </div>
@@ -176,13 +176,13 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <td class="min-w-36 text-base-content/80">
                 {row.pool_name || "Pool not available"}
               </td>
-              <td class="text-right font-mono tabular-nums">
+              <td class="text-right tabular-nums">
                 {format_integer(row.requests)}
               </td>
-              <td class="text-right font-mono tabular-nums">
+              <td class="text-right tabular-nums">
                 {Format.token_count(row.total_tokens)}
               </td>
-              <td class="text-right font-mono tabular-nums">
+              <td class="text-right tabular-nums">
                 {format_micros(row.settled_cost_micros)}
               </td>
             </tr>
@@ -225,13 +225,13 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
           <dl class="grid grid-cols-2 gap-2 text-xs">
             <div>
               <dt class="text-base-content/50">Requests</dt>
-              <dd class="font-mono font-semibold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {format_integer(row.requests)}
               </dd>
             </div>
             <div>
               <dt class="text-base-content/50">Tokens</dt>
-              <dd class="font-mono font-semibold tabular-nums">
+              <dd class="font-semibold tabular-nums">
                 {Format.token_count(row.total_tokens)}
               </dd>
             </div>
@@ -267,10 +267,10 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
                   {row.status || "unknown"}
                 </span>
               </td>
-              <td class="text-right font-mono tabular-nums">
+              <td class="text-right tabular-nums">
                 {format_integer(row.requests)}
               </td>
-              <td class="text-right font-mono tabular-nums">
+              <td class="text-right tabular-nums">
                 {Format.token_count(row.total_tokens)}
               </td>
             </tr>
