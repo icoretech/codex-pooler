@@ -127,9 +127,6 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
 
       compression = compressed_options.runtime.payload_compression
 
-      IO.puts("task16_sanitized_1mib_elapsed_ms=#{elapsed_ms}")
-      IO.puts("task16_sanitized_1mib_metadata_elapsed_ms=#{compression["elapsed_ms"]}")
-
       assert elapsed_ms <= @local_budget_ms
 
       assert %{
