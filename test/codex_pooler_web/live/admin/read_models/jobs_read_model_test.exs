@@ -389,6 +389,183 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     refute projected_job_id?(projection, identity_scoped_failure.id)
   end
 
+  test "projects account reconciliation token-refresh recovery jobs with safe trigger metadata" do
+    pool =
+      pool_fixture(%{name: "Token Refresh Recovery Pool", slug: "token-refresh-recovery-pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Recovery account",
+        assignment_label: "Recovery assignment"
+      })
+
+    recovery_job =
+      insert_job(1,
+        worker: TokenRefreshWorker,
+        queue: "jobs",
+        state: "retryable",
+        attempt: 2,
+        max_attempts: 8,
+        inserted_at: ~U[2026-06-02 10:04:00Z],
+        attempted_at: ~U[2026-06-02 10:05:00Z],
+        args: %{
+          "upstream_identity_id" => identity.id,
+          "trigger_kind" => "account_reconciliation_recovery",
+          "provider_body" => "raw-provider-body-do-not-leak",
+          "access_token" => "token-refresh-do-not-leak",
+          "auth_json" => "auth-json-do-not-leak"
+        },
+        errors: [
+          %{
+            "attempt" => 2,
+            "error" =>
+              "provider failed with safe recovery context. safe credential punctuation context: secret=secret-value-do-not-leak ; secret_token=secret-token-do-not-leak, client_secret=client-secret-do-not-leak. safe punctuation context: id_token=token-id-do-not-leak, session_token=token-session-do-not-leak; api-token=token-api-do-not-leak nested_token=token-nested-do-not-leak. provider_body={\"access_token\":\"token-access-do-not-leak\",\"nested\":{\"refresh_token\":\"token-refresh-do-not-leak\"}} body=first token-refresh-do-not-leak second auth_json={\"refresh_token\":\"token-auth-json-do-not-leak\"}. escaped string context: auth_json=\"{\\\"refresh_token\\\":\\\"escaped-refresh-do-not-leak\\\",\\\"access_token\\\":\\\"escaped-access-do-not-leak\\\"}\" provider_body=\"{\\\"refresh_token\\\":\\\"escaped-provider-refresh-do-not-leak\\\"}\". spaced alias context: client_secret=space-client-secret-do-not-leak first second; password=space-password-do-not-leak tail words"
+          }
+        ]
+      )
+
+    projection =
+      JobsReadModel.load(:system,
+        params: %{
+          "job_id" => Integer.to_string(recovery_job.id),
+          "worker" => worker_name(TokenRefreshWorker)
+        },
+        now: ~U[2026-06-02 10:30:00Z]
+      )
+
+    assert %{
+             id: job_id,
+             worker: worker,
+             state: "retryable",
+             trigger_kind: "account_reconciliation_recovery",
+             target: %{
+               upstream_identity_id: identity_id,
+               direct_identity_label: "Recovery account",
+               direct_identity_status: "active"
+             }
+           } = projection.selected_job
+
+    assert job_id == recovery_job.id
+    assert worker == worker_name(TokenRefreshWorker)
+    assert identity_id == identity.id
+
+    assert projection.worker_jobs_by_group.token_refresh.latest.trigger_kind ==
+             "account_reconciliation_recovery"
+
+    failure_message = projection.selected_job.failure_summary.message
+    assert failure_message =~ "provider failed"
+    assert failure_message =~ "safe recovery context"
+    assert failure_message =~ "safe punctuation context"
+    assert failure_message =~ "safe credential punctuation context"
+    refute failure_message =~ "provider_body"
+    refute failure_message =~ "body=first"
+    refute failure_message =~ "auth_json"
+    refute failure_message =~ "access_token"
+    refute failure_message =~ "refresh_token"
+    refute failure_message =~ "id_token"
+    refute failure_message =~ "session_token"
+    refute failure_message =~ "api-token"
+    refute failure_message =~ "nested_token"
+    refute failure_message =~ "secret="
+    refute failure_message =~ "secret_token"
+    refute failure_message =~ "client_secret"
+    refute failure_message =~ "token-access-do-not-leak"
+    refute failure_message =~ "token-refresh-do-not-leak"
+    refute failure_message =~ "token-auth-json-do-not-leak"
+    refute failure_message =~ "escaped-refresh-do-not-leak"
+    refute failure_message =~ "escaped-access-do-not-leak"
+    refute failure_message =~ "escaped-provider-refresh-do-not-leak"
+    refute failure_message =~ "token-id-do-not-leak"
+    refute failure_message =~ "token-session-do-not-leak"
+    refute failure_message =~ "token-api-do-not-leak"
+    refute failure_message =~ "token-nested-do-not-leak"
+    refute failure_message =~ "secret-value-do-not-leak"
+    refute failure_message =~ "secret-token-do-not-leak"
+    refute failure_message =~ "client-secret-do-not-leak"
+    refute failure_message =~ "space-client-secret-do-not-leak"
+    refute failure_message =~ "space-password-do-not-leak"
+    refute failure_message =~ "first second"
+    refute failure_message =~ "tail words"
+
+    grouped_failure_message =
+      projection.worker_jobs_by_group.token_refresh.latest_failure.failure_summary.message
+
+    assert grouped_failure_message =~ "safe punctuation context"
+    assert grouped_failure_message =~ "safe credential punctuation context"
+    refute grouped_failure_message =~ "provider_body"
+    refute grouped_failure_message =~ "auth_json"
+    refute grouped_failure_message =~ "access_token"
+    refute grouped_failure_message =~ "refresh_token"
+    refute grouped_failure_message =~ "secret="
+    refute grouped_failure_message =~ "secret_token"
+    refute grouped_failure_message =~ "client_secret"
+    refute grouped_failure_message =~ "password"
+    refute grouped_failure_message =~ "escaped-refresh-do-not-leak"
+    refute grouped_failure_message =~ "escaped-access-do-not-leak"
+    refute grouped_failure_message =~ "escaped-provider-refresh-do-not-leak"
+    refute grouped_failure_message =~ "token-id-do-not-leak"
+    refute grouped_failure_message =~ "token-session-do-not-leak"
+    refute grouped_failure_message =~ "token-api-do-not-leak"
+    refute grouped_failure_message =~ "token-nested-do-not-leak"
+    refute grouped_failure_message =~ "secret-value-do-not-leak"
+    refute grouped_failure_message =~ "secret-token-do-not-leak"
+    refute grouped_failure_message =~ "client-secret-do-not-leak"
+    refute grouped_failure_message =~ "space-client-secret-do-not-leak"
+    refute grouped_failure_message =~ "space-password-do-not-leak"
+    refute grouped_failure_message =~ "first second"
+    refute grouped_failure_message =~ "tail words"
+
+    serialized = inspect(projection)
+    refute serialized =~ "raw-provider-body-do-not-leak"
+    refute serialized =~ "token-access-do-not-leak"
+    refute serialized =~ "token-refresh-do-not-leak"
+    refute serialized =~ "token-auth-json-do-not-leak"
+    refute serialized =~ "escaped-refresh-do-not-leak"
+    refute serialized =~ "escaped-access-do-not-leak"
+    refute serialized =~ "escaped-provider-refresh-do-not-leak"
+    refute serialized =~ "token-id-do-not-leak"
+    refute serialized =~ "token-session-do-not-leak"
+    refute serialized =~ "token-api-do-not-leak"
+    refute serialized =~ "token-nested-do-not-leak"
+    refute serialized =~ "secret="
+    refute serialized =~ "secret_token"
+    refute serialized =~ "client_secret"
+    refute serialized =~ "secret-value-do-not-leak"
+    refute serialized =~ "secret-token-do-not-leak"
+    refute serialized =~ "client-secret-do-not-leak"
+    refute serialized =~ "space-client-secret-do-not-leak"
+    refute serialized =~ "space-password-do-not-leak"
+    refute serialized =~ "first second"
+    refute serialized =~ "tail words"
+    refute serialized =~ "auth-json-do-not-leak"
+    refute serialized =~ ":args"
+    refute serialized =~ ":errors"
+  end
+
+  test "drops blank trigger metadata from projected jobs" do
+    blank_trigger_job =
+      insert_job(1,
+        worker: TokenRefreshWorker,
+        queue: "jobs",
+        state: "retryable",
+        inserted_at: ~U[2026-06-02 10:04:00Z],
+        args: %{"trigger_kind" => ""}
+      )
+
+    projection =
+      JobsReadModel.load(:system,
+        params: %{
+          "job_id" => Integer.to_string(blank_trigger_job.id),
+          "worker" => worker_name(TokenRefreshWorker)
+        },
+        now: ~U[2026-06-02 10:30:00Z]
+      )
+
+    assert projection.selected_job.id == blank_trigger_job.id
+    refute Map.has_key?(projection.selected_job, :trigger_kind)
+    refute Map.has_key?(projection.worker_jobs_by_group.token_refresh.latest, :trigger_kind)
+  end
+
   test "keeps invalid URL filter warnings while applying safe defaults" do
     projection =
       JobsReadModel.load(:system,

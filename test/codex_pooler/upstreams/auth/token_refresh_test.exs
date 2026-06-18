@@ -18,6 +18,8 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
   import CodexPooler.PoolerFixtures
 
+  @incomplete_job_states ~w(available scheduled executing retryable)
+
   describe "provider token refresh lifecycle" do
     test "refresh success rotates the access token, preserves encrypted boundaries, and activates refreshable accounts" do
       access_token = secret("access", "old")
@@ -700,11 +702,40 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       assert job.args["upstream_identity_id"] == identity.id
     end
 
-    test "worker discards missing refresh tokens without retry spam" do
+    test "worker discards missing refresh tokens without retry jobs" do
       identity = refreshable_identity_fixture("active")
 
-      assert :discard = perform_job(TokenRefreshWorker, %{"upstream_identity_id" => identity.id})
+      assert {:ok, job} = Jobs.enqueue_token_refresh(identity, trigger_kind: "scheduled")
+
+      assert :discard = perform_job(TokenRefreshWorker, job.args)
       assert Repo.get!(UpstreamIdentity, identity.id).status == "reauth_required"
+      assert_only_incomplete_token_refresh_job(identity, job)
+    end
+
+    test "worker discards revoked refresh tokens without retry jobs" do
+      refresh_token = secret("refresh", "worker-revoked")
+
+      upstream =
+        start_path_upstream(%{
+          "/oauth/token" => {400, %{"error" => "invalid_grant"}}
+        })
+
+      identity =
+        refreshable_identity_fixture("active", %{"base_url" => FakeUpstream.url(upstream)})
+
+      active_assignment_for_identity!(identity)
+      store_secret!(identity, "refresh_token", refresh_token)
+
+      assert {:ok, job} = Jobs.enqueue_token_refresh(identity, trigger_kind: "scheduled")
+
+      assert :discard = perform_job(TokenRefreshWorker, job.args)
+
+      persisted = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted.status == "reauth_required"
+      assert persisted.metadata["token_refresh"]["status"] == "reauth_required"
+      assert persisted.metadata["token_refresh"]["reason"]["code"] == "refresh_token_revoked"
+      assert_only_incomplete_token_refresh_job(identity, job)
+      refute inspect(Repo.all(Oban.Job)) =~ refresh_token
     end
 
     test "worker success does not enqueue another token refresh job" do
@@ -748,13 +779,17 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       identity = refreshable_identity_fixture("refresh_due")
       active_assignment_for_identity!(identity)
 
-      assert :discard = perform_job(TokenRefreshWorker, %{"upstream_identity_id" => identity.id})
+      assert {:ok, job} = Jobs.enqueue_token_refresh(identity, trigger_kind: "scheduled")
+
+      assert :discard = perform_job(TokenRefreshWorker, job.args)
       assert Repo.get!(UpstreamIdentity, identity.id).status == "reauth_required"
+      assert_only_incomplete_token_refresh_job(identity, job)
 
       assert {:ok, %{inserted: [], conflicts: [], errors: []}} =
                Jobs.enqueue_scheduled_token_refreshes(now: DateTime.utc_now())
 
-      assert [] = all_enqueued(worker: TokenRefreshWorker)
+      assert [persisted_job] = all_enqueued(worker: TokenRefreshWorker)
+      assert persisted_job.id == job.id
     end
 
     test "worker snoozes when another non-stale refresh attempt is already in progress" do
@@ -782,8 +817,8 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
       assert FakeUpstream.count(upstream) == 0
     end
 
-    test "paused and deleted accounts are no-op terminal results" do
-      for status <- ["paused", "deleted"] do
+    test "worker discards reauth-required, paused, and deleted noop accounts without retry jobs" do
+      for status <- ["reauth_required", "paused", "deleted"] do
         upstream =
           start_path_upstream(%{
             "/oauth/token" => {200, %{"access_token" => secret("access", status)}}
@@ -791,13 +826,13 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
 
         identity = identity_with_refresh_token!(status, upstream, secret("refresh", status))
 
-        assert {:ok, %{status: :noop, retryable?: false}} =
-                 TokenRefresh.refresh_access_token(identity,
-                   trigger_kind: "unit_test"
-                 )
+        assert {:ok, job} = Jobs.enqueue_token_refresh(identity, trigger_kind: "scheduled")
+
+        assert :discard = perform_job(TokenRefreshWorker, job.args)
 
         assert Repo.get!(UpstreamIdentity, identity.id).status == status
         assert FakeUpstream.count(upstream) == 0
+        assert_only_incomplete_token_refresh_job(identity, job)
       end
     end
   end
@@ -881,6 +916,21 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefreshTest do
   defp store_secret!(identity, kind, plaintext) do
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(identity, %{secret_kind: kind, plaintext: plaintext})
+  end
+
+  defp assert_only_incomplete_token_refresh_job(%UpstreamIdentity{} = identity, %Oban.Job{} = job) do
+    assert [persisted_job] = incomplete_token_refresh_jobs_for_identity(identity)
+    assert persisted_job.id == job.id
+  end
+
+  defp incomplete_token_refresh_jobs_for_identity(%UpstreamIdentity{id: identity_id}) do
+    Repo.all(
+      from oban_job in Oban.Job,
+        where:
+          oban_job.worker == ^worker_name(TokenRefreshWorker) and
+            oban_job.state in ^@incomplete_job_states and
+            fragment("?->>? = ?::text", oban_job.args, "upstream_identity_id", ^identity_id)
+    )
   end
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")

@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   import Ecto.Query
 
+  alias CodexPooler.Jobs
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Auth.TokenRefresh
@@ -17,6 +18,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   @eligible PoolUpstreamAssignment.eligible_status()
   @health_active PoolUpstreamAssignment.active_health_status()
   @account_quota_key "account"
+  @usage_auth_refresh_skew_seconds 5 * 60
   @codex_usage_paths [
     "/api/codex/usage",
     "/backend-api/codex/usage",
@@ -204,7 +206,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
           {:usage, identity, payload, windows}
 
         {:error, {:upstream_status, status}} when status in [401, 403] ->
-          retry_codex_usage_after_token_refresh(identity, assignment, opts)
+          maybe_retry_codex_usage_after_token_refresh(identity, assignment, observed_at, opts)
 
         _error ->
           :usage_unavailable
@@ -214,13 +216,62 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
+  defp maybe_retry_codex_usage_after_token_refresh(identity, assignment, observed_at, opts) do
+    if access_token_refresh_due_after_usage_auth_failure?(identity, observed_at) do
+      retry_codex_usage_after_token_refresh(identity, assignment, opts)
+    else
+      :usage_unavailable
+    end
+  end
+
+  defp access_token_refresh_due_after_usage_auth_failure?(
+         %UpstreamIdentity{} = identity,
+         %DateTime{} = observed_at
+       ) do
+    case access_token_expires_at(identity.metadata) do
+      {:ok, expires_at} ->
+        refresh_at = DateTime.add(observed_at, @usage_auth_refresh_skew_seconds, :second)
+        DateTime.compare(expires_at, refresh_at) in [:lt, :eq]
+
+      :unknown ->
+        true
+    end
+  end
+
+  defp access_token_expires_at(%{} = metadata) do
+    case metadata["access_token_expires_at"] do
+      expires_at when is_binary(expires_at) ->
+        case DateTime.from_iso8601(expires_at) do
+          {:ok, parsed, _offset} -> {:ok, DateTime.truncate(parsed, :microsecond)}
+          _invalid -> :unknown
+        end
+
+      _value ->
+        :unknown
+    end
+  end
+
+  defp access_token_expires_at(_metadata), do: :unknown
+
   defp retry_codex_usage_after_token_refresh(identity, assignment, opts) do
-    with {:ok, %{status: :active, identity: refreshed_identity}} <-
-           TokenRefresh.refresh_access_token(identity,
-             trigger_kind: "account_reconciliation",
-             receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
-           ),
-         {:ok, access_token} <- Secrets.decrypt_active_secret(refreshed_identity, "access_token"),
+    case TokenRefresh.refresh_access_token(identity,
+           trigger_kind: "account_reconciliation",
+           receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
+         ) do
+      {:ok, %{status: :active, identity: refreshed_identity}} ->
+        fetch_codex_usage_after_successful_token_refresh(refreshed_identity, assignment, opts)
+
+      {:ok, %{status: :refresh_failed, retryable?: true, identity: failed_identity}} ->
+        maybe_enqueue_account_reconciliation_token_refresh_recovery(failed_identity)
+        :auth_unavailable
+
+      _unavailable ->
+        :auth_unavailable
+    end
+  end
+
+  defp fetch_codex_usage_after_successful_token_refresh(refreshed_identity, assignment, opts) do
+    with {:ok, access_token} <- Secrets.decrypt_active_secret(refreshed_identity, "access_token"),
          observed_at <- now(),
          {:ok, payload, _url, windows} <-
            fetch_codex_usage_payload(
@@ -233,6 +284,26 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       {:usage, refreshed_identity, payload, windows}
     else
       _unavailable -> :auth_unavailable
+    end
+  end
+
+  defp maybe_enqueue_account_reconciliation_token_refresh_recovery(
+         %UpstreamIdentity{} = failed_identity
+       ) do
+    if account_reconciliation_refresh_failure?(failed_identity) do
+      case Jobs.enqueue_token_refresh(failed_identity,
+             trigger_kind: "account_reconciliation_recovery"
+           ) do
+        {:ok, %Oban.Job{}} -> :ok
+        {:error, _reason} -> :ok
+      end
+    end
+  end
+
+  defp account_reconciliation_refresh_failure?(%UpstreamIdentity{} = identity) do
+    case identity.metadata["token_refresh"] do
+      %{"status" => "failed", "trigger_kind" => "account_reconciliation"} -> true
+      _metadata -> false
     end
   end
 

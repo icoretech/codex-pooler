@@ -29,16 +29,28 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
 
   def with_attention(jobs, opts) when is_list(jobs) do
     now = attention_now(opts)
-    Enum.map(jobs, &HealthPolicy.put_attention(&1, now: now))
+    Enum.map(jobs, &put_attention(&1, now))
   end
 
   def with_attention(nil, _opts), do: nil
 
   def with_attention(job, opts) when is_map(job) do
-    HealthPolicy.put_attention(job, now: attention_now(opts))
+    put_attention(job, attention_now(opts))
   end
 
   def attention_now(opts), do: Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+  defp put_attention(job, now) do
+    job
+    |> drop_blank_trigger_kind()
+    |> HealthPolicy.put_attention(now: now)
+  end
+
+  defp drop_blank_trigger_kind(%{trigger_kind: trigger_kind} = job)
+       when trigger_kind in [nil, ""],
+       do: Map.delete(job, :trigger_kind)
+
+  defp drop_blank_trigger_kind(job), do: job
 
   def group_worker_rows_by_index(worker_groups) do
     worker_groups = Enum.with_index(worker_groups)
@@ -71,6 +83,7 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
         worker: unquote(job).worker,
         queue: unquote(job).queue,
         state: unquote(job).state,
+        trigger_kind: fragment("?->>?", unquote(job).args, "trigger_kind"),
         errors: unquote(job).errors,
         attempt: unquote(job).attempt,
         max_attempts: unquote(job).max_attempts,

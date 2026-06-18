@@ -11,6 +11,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.AccountReconciliationEnqueueWorker
   alias CodexPooler.Jobs.AccountReconciliationWorker
+  alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -20,6 +21,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   import CodexPooler.PoolerFixtures
   import CodexPooler.AccountsFixtures
@@ -328,6 +330,152 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       [window] = QuotaWindows.list_quota_windows(identity)
       assert window.observed_at == DateTime.truncate(stale_observed_at, :microsecond)
+    end
+
+    test "does not refresh OAuth or disable routing when usage rejects a fresh access token" do
+      access_token = "token-access-fresh-usage-rejected-do-not-leak"
+      refresh_token = "token-refresh-fresh-usage-rejected-do-not-leak"
+      provider_body = "raw-provider-body-fresh-usage-rejected-do-not-leak"
+
+      upstream =
+        start_upstream(
+          {:path_json,
+           %{
+             "/api/codex/usage" => {401, %{"error" => "usage_probe_rejected"}},
+             "/oauth/token" => {503, %{"error" => provider_body}}
+           }}
+        )
+
+      future_expiry =
+        DateTime.utc_now()
+        |> DateTime.add(10, :day)
+        |> DateTime.truncate(:microsecond)
+        |> DateTime.to_iso8601()
+
+      {pool, assignment} =
+        active_assignment_fixture(
+          %{"base_url" => FakeUpstream.url(upstream)},
+          access_token: access_token,
+          identity_metadata: %{
+            "base_url" => FakeUpstream.url(upstream),
+            "access_token_expires_at" => future_expiry
+          }
+        )
+
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "refresh_token",
+                 plaintext: refresh_token
+               })
+
+      assert {:ok, result} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      assert result.status == :partial
+      assert result.quota.status == :failed
+      assert result.quota.code == "quota_refresh_unavailable"
+
+      persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted_identity.status == "active"
+      refute persisted_identity.metadata["token_refresh"]
+
+      assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      last_reconciliation = assignment.metadata["last_reconciliation"]
+      assert last_reconciliation["status"] == "partial"
+
+      assert [%{"code" => "quota_refresh_unavailable"}] =
+               Enum.filter(last_reconciliation["steps"], &(&1["status"] == "failed"))
+
+      assert [] = incomplete_token_refresh_jobs(identity.id)
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == ["/api/codex/usage"]
+
+      safe_surfaces = [
+        inspect(persisted_identity.metadata),
+        inspect(last_reconciliation)
+      ]
+
+      for surface <- safe_surfaces do
+        refute surface =~ access_token
+        refute surface =~ refresh_token
+        refute surface =~ provider_body
+      end
+    end
+
+    test "transient account reconciliation token refresh failure enqueues token refresh recovery" do
+      access_token = "token-access-reconciliation-recovery-do-not-leak"
+      refresh_token = "token-refresh-reconciliation-recovery-do-not-leak"
+      provider_body = "raw-provider-body-reconciliation-recovery-do-not-leak"
+
+      upstream =
+        start_upstream(
+          {:path_json,
+           %{
+             "/api/codex/usage" => {401, %{"error" => "expired_access_token"}},
+             "/oauth/token" => {503, %{"error" => provider_body}}
+           }}
+        )
+
+      {pool, assignment} =
+        active_assignment_fixture(
+          %{"base_url" => FakeUpstream.url(upstream)},
+          access_token: access_token,
+          identity_metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "refresh_token",
+                 plaintext: refresh_token
+               })
+
+      assert {:ok, job} = Jobs.enqueue_account_reconciliation(pool, assignment)
+      assert %{discard: 1, success: 0} = Oban.drain_queue(queue: :jobs)
+
+      discarded_job = Repo.get!(Oban.Job, job.id)
+      assert discarded_job.state == "discarded"
+
+      persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+      assert persisted_identity.status == "refresh_failed"
+
+      token_refresh_metadata = persisted_identity.metadata["token_refresh"]
+      assert token_refresh_metadata["trigger_kind"] == "account_reconciliation"
+      assert token_refresh_metadata["status"] == "failed"
+      assert token_refresh_metadata["reason"]["code"] == "codex_auth_transient"
+
+      assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      last_reconciliation = assignment.metadata["last_reconciliation"]
+      assert last_reconciliation["status"] == "partial"
+
+      assert [%{"code" => "quota_refresh_auth_unavailable"}] =
+               Enum.filter(last_reconciliation["steps"], &(&1["status"] == "failed"))
+
+      assert [recovery_job] = incomplete_token_refresh_jobs(identity.id)
+
+      assert recovery_job.args == %{
+               "upstream_identity_id" => identity.id,
+               "trigger_kind" => "account_reconciliation_recovery"
+             }
+
+      safe_surfaces = [
+        inspect(recovery_job.args),
+        inspect(recovery_job.meta),
+        inspect(recovery_job.errors),
+        inspect(discarded_job.args),
+        inspect(discarded_job.meta),
+        inspect(discarded_job.errors),
+        inspect(token_refresh_metadata)
+      ]
+
+      for surface <- safe_surfaces do
+        refute surface =~ access_token
+        refute surface =~ refresh_token
+        refute surface =~ provider_body
+        refute surface =~ "auth_json"
+      end
     end
 
     @tag :scheduled_identity_reconciliation
@@ -675,7 +823,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
-  defp active_assignment_fixture(metadata) do
+  defp active_assignment_fixture(metadata, opts \\ []) do
     pool = pool_fixture()
 
     assert {:ok, identity} =
@@ -683,7 +831,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                chatgpt_account_id: "acct_#{System.unique_integer([:positive])}",
                account_label: "Job account",
                onboarding_method: "import",
-               metadata: %{}
+               metadata: Keyword.get(opts, :identity_metadata, %{})
              })
 
     assert {:ok, identity} =
@@ -694,7 +842,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(identity, %{
                secret_kind: "access_token",
-               plaintext: "token"
+               plaintext: Keyword.get(opts, :access_token, "token")
              })
 
     assert {:ok, assignment} =
@@ -709,6 +857,16 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
              })
 
     {pool, assignment}
+  end
+
+  defp incomplete_token_refresh_jobs(identity_id) do
+    Oban.Job
+    |> where([job], job.worker == ^worker_name(TokenRefreshWorker))
+    |> Repo.all()
+    |> Enum.filter(fn job ->
+      job.args["upstream_identity_id"] == identity_id and
+        job.state not in ["completed", "cancelled", "discarded"]
+    end)
   end
 
   defp active_assignment_for_identity_fixture(identity, attrs) do

@@ -11,6 +11,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
 
   @now ~U[2026-06-11 12:00:00Z]
   @worker_name TokenRefreshWorker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+  @incomplete_job_states ~w(available scheduled executing retryable)
 
   setup do
     Repo.delete_all(Oban.Job)
@@ -42,13 +43,19 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert [] = all_enqueued(worker: TokenRefreshWorker)
     end
 
-    test "only refresh_due and cooled-down refresh_failed identities are candidates" do
+    test "only refresh_due and cooled-down refresh_failed identities are scheduled candidates" do
       due = recovery_identity_fixture("refresh_due", updated_at: DateTime.add(@now, -15, :minute))
 
       failed =
         recovery_identity_fixture("refresh_failed",
           updated_at: DateTime.add(@now, -8, :hour),
           metadata: failed_metadata(DateTime.add(@now, -7, :hour))
+        )
+
+      recent_failed =
+        recovery_identity_fixture("refresh_failed",
+          updated_at: DateTime.add(@now, -8, :hour),
+          metadata: failed_metadata(DateTime.add(@now, -1, :hour))
         )
 
       for status <- [
@@ -72,6 +79,8 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
 
       assert jobs |> Enum.map(& &1.args["upstream_identity_id"]) |> Enum.sort() ==
                Enum.sort([due.id, failed.id])
+
+      refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == recent_failed.id))
     end
 
     test "excludes identities without an active assignment in an active pool" do
@@ -120,7 +129,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert job.args["trigger_kind"] == "scheduled"
     end
 
-    test "excludes identities that already have an incomplete target token refresh job" do
+    test "does not insert duplicate scheduled jobs when an incomplete token refresh job exists" do
       identity = recovery_identity_fixture("refresh_due")
 
       assert {:ok, blocker} = Jobs.enqueue_token_refresh(identity, trigger_kind: "manual")
@@ -132,6 +141,9 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert [job] = all_enqueued(worker: TokenRefreshWorker)
       assert job.id == blocker.id
       assert job.args["trigger_kind"] == "manual"
+
+      assert [persisted_job] = incomplete_token_refresh_jobs_for_identity(identity)
+      assert persisted_job.id == blocker.id
     end
 
     test "fresh in-progress token refresh metadata blocks recovery, but stale or malformed metadata does not" do
@@ -164,11 +176,12 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
                Enum.sort([stale.id, malformed.id])
     end
 
-    test "applies refresh_failed cooldown using finished_at first and updated_at fallback" do
-      recovery_identity_fixture("refresh_failed",
-        updated_at: DateTime.add(@now, -8, :hour),
-        metadata: failed_metadata(DateTime.add(@now, -1, :hour))
-      )
+    test "keeps ordinary refresh_failed identities on a 6 hour cooldown" do
+      recent_finished =
+        recovery_identity_fixture("refresh_failed",
+          updated_at: DateTime.add(@now, -8, :hour),
+          metadata: failed_metadata(DateTime.add(@now, -1, :hour))
+        )
 
       future =
         recovery_identity_fixture("refresh_failed",
@@ -200,6 +213,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert jobs |> Enum.map(& &1.args["upstream_identity_id"]) |> Enum.sort() ==
                Enum.sort([old_finished.id, missing_finished.id, malformed_finished.id])
 
+      refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == recent_finished.id))
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == future.id))
     end
 
@@ -311,5 +325,15 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
         "stale_after_ms" => stale_after_ms
       }
     }
+  end
+
+  defp incomplete_token_refresh_jobs_for_identity(%UpstreamIdentity{id: identity_id}) do
+    Repo.all(
+      from oban_job in Oban.Job,
+        where:
+          oban_job.worker == ^@worker_name and
+            oban_job.state in ^@incomplete_job_states and
+            fragment("?->>? = ?::text", oban_job.args, "upstream_identity_id", ^identity_id)
+    )
   end
 end

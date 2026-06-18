@@ -2,6 +2,15 @@ defmodule CodexPooler.Jobs.ReadModel.FailurePresentation do
   @moduledoc false
 
   @sensitive_projection_keys [:args, :meta, :errors, "args", "meta", "errors"]
+  @sensitive_secret_key_pattern "(?:secret(?:[_-][a-z0-9]+)*|[a-z0-9]+(?:[_-][a-z0-9]+)*[_-]secret(?:[_-][a-z0-9]+)*)"
+  @sensitive_body_key_pattern "(?:auth[_-]?json|provider[_-]?body|request[_-]?body|response[_-]?body|body)"
+  @sensitive_failure_key_pattern "(?:authorization|cookie|set-cookie|api[_-]?key|(?:access|refresh|id|session|api)[_-]?token|[a-z0-9]+(?:[_-][a-z0-9]+)*[_-]token|#{@sensitive_body_key_pattern}|password|prompt|#{@sensitive_secret_key_pattern}|token)"
+  @sensitive_spaced_secret_key_pattern "(?:password|#{@sensitive_secret_key_pattern})"
+  @sensitive_quoted_string_body_failure_fragment ~r/(?i)(?:"?\b#{@sensitive_body_key_pattern}\b"?\s*[:=]\s*)"(?:\\.|[^"\\])*"/
+  @sensitive_jsonish_failure_fragment ~r/(?i)(?:"?\b#{@sensitive_failure_key_pattern}\b"?\s*[:=]\s*)(?:\{(?:[^{}]|\{[^{}]*\})*\}|\[(?:[^\[\]]|\[[^\[\]]*\])*\]|"[^"]*"|'[^']*')/
+  @sensitive_body_failure_fragment ~r/(?i)(?:"?\b#{@sensitive_body_key_pattern}\b"?\s*[:=]\s*).*?(?=\s+"?\b#{@sensitive_failure_key_pattern}\b"?\s*[:=]|\z)/
+  @sensitive_spaced_secret_failure_fragment ~r/(?i)(?:"?\b#{@sensitive_spaced_secret_key_pattern}\b"?\s*[:=]\s*).*?(?=[,;]|\.\s+|\s+"?\b#{@sensitive_failure_key_pattern}\b"?\s*[:=]|\z)/
+  @sensitive_text_failure_fragment ~r/(?i)(?:"?\b#{@sensitive_failure_key_pattern}\b"?\s*[:=]\s*)[^,;\s]+/
 
   @type failure_summary :: %{
           required(:title) => String.t(),
@@ -20,6 +29,12 @@ defmodule CodexPooler.Jobs.ReadModel.FailurePresentation do
   def sanitize_projection(%DateTime{} = value), do: value
   def sanitize_projection(%NaiveDateTime{} = value), do: value
   def sanitize_projection(%Date{} = value), do: value
+
+  def sanitize_projection(%{trigger_kind: trigger_kind} = value) when trigger_kind in [nil, ""] do
+    value
+    |> Map.delete(:trigger_kind)
+    |> sanitize_projection()
+  end
 
   def sanitize_projection(%{errors: errors} = value) when is_list(errors) do
     value
@@ -109,11 +124,12 @@ defmodule CodexPooler.Jobs.ReadModel.FailurePresentation do
   defp redact_failure_secrets(message) do
     message
     |> String.replace(~r/(?i)bearer\s+[a-z0-9._~+\/=:-]+/, "Bearer [redacted]")
+    |> String.replace(@sensitive_quoted_string_body_failure_fragment, "[redacted]")
+    |> String.replace(@sensitive_jsonish_failure_fragment, "[redacted]")
+    |> String.replace(@sensitive_body_failure_fragment, "[redacted]")
+    |> String.replace(@sensitive_spaced_secret_failure_fragment, "[redacted]")
+    |> String.replace(@sensitive_text_failure_fragment, "[redacted]")
     |> String.replace(~r/(?i)\bsecret[-_a-z0-9]*\b/, "[redacted]")
-    |> String.replace(
-      ~r/(?i)\b(authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|prompt|secret|token)\b\s*[:=]\s*[^,;\s]+/,
-      "[redacted]"
-    )
   end
 
   defp unwrap_oban_failure_message(message) do
