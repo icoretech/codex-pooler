@@ -488,6 +488,45 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :v1_websocket
+  test "GET /v1/responses websocket rejects realtime item frames before dispatch" do
+    upstream = start_upstream(public_websocket_completed_response("should_not_dispatch_realtime"))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "v1-realtime-item-ws-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "conversation.item.create",
+          "item" => %{
+            "type" => "message",
+            "role" => "assistant",
+            "content" => [%{"type" => "output_text", "text" => "synthetic realtime text"}]
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
+      assert error["code"] == "invalid_request"
+      assert error["param"] == "model"
+
+      refute frame =~ "synthetic realtime text"
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :v1_websocket
   @tag :tool_result_previous_response
   test "GET /v1/responses websocket forwards the same safe continuation shape and rejects malformed item references" do
     upstream =

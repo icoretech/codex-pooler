@@ -68,6 +68,31 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     refute inspect(request.request_metadata) =~ "B64_GENERATED"
   end
 
+  test "POST /v1/images/generations accepts idless image generation output items", %{
+    conn: conn
+  } do
+    upstream = start_upstream(image_success_stream("B64_IDLESS", nil, id: false))
+    setup = upstream |> gateway_setup() |> use_image_model!("gpt-image-1")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/images/generations", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt" => "synthetic idless image request",
+        "size" => "1024x1024",
+        "quality" => "low",
+        "n" => 1
+      })
+
+    assert %{"data" => [%{"b64_json" => "B64_IDLESS"}]} = json_response(conn, 200)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    refute inspect(request.request_metadata) =~ "synthetic idless image request"
+    refute inspect(request.request_metadata) =~ "B64_IDLESS"
+  end
+
   test "POST /v1/images/generations routes through a visible host model when image model is not listed",
        %{conn: conn} do
     upstream = start_upstream(image_success_stream("B64_HIDDEN", "hidden prompt"))
@@ -198,20 +223,22 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     %{setup | api_key: api_key}
   end
 
-  defp image_success_stream(result, revised_prompt) do
+  defp image_success_stream(result, revised_prompt, opts \\ []) do
+    image_item =
+      %{
+        "type" => "image_generation_call",
+        "status" => "completed",
+        "result" => result
+      }
+      |> maybe_put_id(opts)
+      |> maybe_put("revised_prompt", revised_prompt)
+
     FakeUpstream.sse_stream([
       {"response.output_item.done",
        %{
          "type" => "response.output_item.done",
          "output_index" => 0,
-         "item" =>
-           %{
-             "type" => "image_generation_call",
-             "id" => "ig_fixture",
-             "status" => "completed",
-             "result" => result
-           }
-           |> maybe_put("revised_prompt", revised_prompt)
+         "item" => image_item
        }},
       {"response.completed",
        %{
@@ -223,6 +250,10 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
          }
        }}
     ])
+  end
+
+  defp maybe_put_id(map, opts) do
+    if Keyword.get(opts, :id, true), do: Map.put(map, "id", "ig_fixture"), else: map
   end
 
   defp maybe_put(map, _key, nil), do: map

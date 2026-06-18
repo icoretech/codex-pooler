@@ -50,6 +50,58 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                |> StreamProtocol.decode_sse_data()
     end
 
+    test "synthesizes missing reasoning and message output item ids" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      reasoning = %{
+        "type" => "reasoning",
+        "summary" => [],
+        "encrypted_content" => "synthetic-obfuscated-content"
+      }
+
+      message = %{
+        "type" => "message",
+        "role" => "assistant",
+        "content" => [%{"type" => "output_text", "text" => "synthetic terminal text"}]
+      }
+
+      stream =
+        IO.iodata_to_binary([
+          sse_event("response.output_item.added", %{
+            "type" => "response.output_item.added",
+            "output_index" => 0,
+            "item" => reasoning
+          }),
+          sse_event("response.output_item.done", %{
+            "type" => "response.output_item.done",
+            "output_index" => 1,
+            "item" => message
+          }),
+          sse_event("response.completed", %{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => "resp_idless_output_items",
+              "status" => "completed",
+              "output" => [reasoning, message]
+            }
+          })
+        ])
+
+      assert {chunk, _state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(stream, state)
+
+      events = public_sse_events(chunk)
+
+      assert event_item(events, "response.output_item.added")["id"] == "reasoning_0"
+      assert event_item(events, "response.output_item.done")["id"] == "message_1"
+
+      assert %{"data" => %{"response" => %{"output" => [reasoning_output, message_output]}}} =
+               Enum.find(events, &(&1["event"] == "response.completed"))
+
+      assert reasoning_output["id"] == "reasoning_0"
+      assert message_output["id"] == "message_1"
+    end
+
     test "carries incomplete response stream state explicitly" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
@@ -377,6 +429,38 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       }
     })
   end
+
+  defp public_sse_events(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.flat_map(fn block ->
+      case public_sse_event(block) do
+        nil -> []
+        event -> [event]
+      end
+    end)
+  end
+
+  defp public_sse_event(block) do
+    lines = String.split(block, "\n")
+    event = lines |> Enum.find(&String.starts_with?(&1, "event: ")) |> strip_sse_prefix("event: ")
+    data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_sse_prefix("data: ")
+
+    if is_binary(event) and is_binary(data) and data != "[DONE]" do
+      %{"event" => event, "data" => Jason.decode!(data)}
+    end
+  end
+
+  defp event_item(events, event_type) do
+    events
+    |> Enum.find_value(fn
+      %{"event" => ^event_type, "data" => %{"item" => item}} -> item
+      _event -> nil
+    end)
+  end
+
+  defp strip_sse_prefix(nil, _prefix), do: nil
+  defp strip_sse_prefix(line, prefix), do: String.replace_prefix(line, prefix, "")
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"

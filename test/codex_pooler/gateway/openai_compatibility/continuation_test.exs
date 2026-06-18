@@ -118,6 +118,62 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     end
 
     @tag :tool_result_previous_response
+    test "v1 Responses preserves explicit null Vercel tool-output continuation", %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.require_json_field(
+            "previous_response_id",
+            %{
+              "id" => "resp_v1_ai_sdk_null_tool_output",
+              "object" => "response",
+              "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+            },
+            %{"error" => %{"code" => "missing_tool_context"}}
+          )
+        )
+
+      setup = gateway_setup(upstream)
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_ai_sdk_null_previous",
+          "input" => [
+            %{"type" => "item_reference", "id" => "msg_existing_null_123"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_null_123",
+              "output" => nil
+            },
+            %{"role" => "user", "content" => "synthetic follow-up"}
+          ]
+        })
+
+      assert %{"id" => "resp_v1_ai_sdk_null_tool_output"} = json_response(response_conn, 200)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["previous_response_id"] == "resp_v1_ai_sdk_null_previous"
+
+      assert [
+               %{"type" => "item_reference", "id" => "msg_existing_null_123"},
+               %{"type" => "function_call_output", "call_id" => "call_null_123"} = tool_output,
+               %{"type" => "message", "role" => "user"}
+             ] = captured.json["input"]
+
+      assert Map.has_key?(tool_output, "output")
+      assert is_nil(tool_output["output"])
+
+      metadata = persisted_gateway_metadata(setup.pool.id)
+      refute metadata =~ "synthetic follow-up"
+      refute metadata =~ "msg_existing_null_123"
+      refute metadata =~ "resp_v1_ai_sdk_null_previous"
+      refute metadata =~ "call_null_123"
+      refute metadata =~ "raw_request"
+    end
+
+    @tag :tool_result_previous_response
     test "v1 Responses forwards opencode replay continuation item types without metadata leakage",
          %{
            conn: conn

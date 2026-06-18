@@ -1580,6 +1580,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert [%{"output" => ^structured_output}] = structured_payload["input"]
     end
 
+    test "structured function_call_output preserves explicit null output" do
+      assert {:ok, %{payload: payload}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "previous_response_id" => "resp_fixture_null_previous",
+                 "input" => [
+                   %{
+                     "type" => "function_call_output",
+                     "call_id" => "call_fixture_null",
+                     "output" => nil
+                   }
+                 ]
+               })
+
+      assert [%{"type" => "function_call_output", "call_id" => "call_fixture_null"} = item] =
+               payload["input"]
+
+      assert Map.has_key?(item, "output")
+      assert is_nil(item["output"])
+    end
+
     @tag :structured_tool_result_pass_through
     test "structured function_call_output forwards nested JSON output unchanged" do
       structured_output = structured_tool_result_output()
