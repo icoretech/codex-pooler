@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @moduledoc false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Admin.{UpstreamQuotaReadiness, UpstreamRoutingReadiness}
   alias CodexPooler.Jobs
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams
@@ -10,7 +11,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.Format
-  alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPoolerWeb.DateTimeDisplay
 
   @quota_priming_labels %{
@@ -54,6 +54,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reset_title) => String.t() | nil
         }
   @type quota_readiness :: UpstreamQuotaReadiness.t()
+  @type routing_readiness :: UpstreamRoutingReadiness.t()
   @type token_burn :: %{
           required(:level) => non_neg_integer(),
           required(:label) => String.t(),
@@ -81,6 +82,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:token_burn) => token_burn(),
           required(:assignments) => [assignment_snapshot()],
           required(:quota_readiness) => quota_readiness(),
+          required(:routing_readiness) => routing_readiness(),
           required(:quota_limits) => [quota_limit_row()]
         }
   @type oauth_flow_state :: %{
@@ -205,7 +207,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       account.identity.plan_family,
       account.identity.status,
       account.quota_readiness.label,
-      account.quota_readiness.state
+      account.quota_readiness.state,
+      account.routing_readiness.label,
+      account.routing_readiness.state
       | assignment_search_terms(account.assignments)
     ]
   end
@@ -271,6 +275,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     quota_windows = QuotaWindows.list_quota_windows(identity)
     quota_readiness = quota_readiness(quota_windows)
     identity_assignments = identity_assignments(identity, assignments, quota_readiness)
+
+    routing_readiness =
+      UpstreamRoutingReadiness.from_inputs(identity, identity_assignments, quota_readiness)
+
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
     %{
@@ -296,6 +304,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       token_burn: Map.fetch!(token_burns, identity.id),
       assignments: identity_assignments,
       quota_readiness: quota_readiness,
+      routing_readiness: routing_readiness,
       quota_limits: quota_limit_rows(quota_windows, datetime_preferences)
     }
   end

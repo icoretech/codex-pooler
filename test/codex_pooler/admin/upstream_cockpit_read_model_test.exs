@@ -8,8 +8,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
   alias CodexPooler.Admin.UpstreamCockpitReadModel
   alias CodexPooler.Pools
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   test "request health and pool contribution are scoped to the caller's visible pools" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})

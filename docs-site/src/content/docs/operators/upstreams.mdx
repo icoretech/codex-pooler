@@ -75,7 +75,7 @@ The card body is split into status, token burn, quota windows, and footer metric
     </tr>
     <tr>
       <td>Routing</td>
-      <td>Compact route posture such as quota ready or quota exhausted. It summarizes why this account is likely eligible or blocked before request-specific checks.</td>
+      <td>Compact lifecycle-aware runtime routing readiness summary. It separates identity lifecycle, Pool assignment, credential freshness, and quota evidence so operators can see why this account is likely eligible or blocked before request-specific checks.</td>
     </tr>
     <tr>
       <td>Pools</td>
@@ -115,6 +115,10 @@ Common upstream states are:
     <tr>
       <td>Refreshing</td>
       <td>A background refresh is currently updating account evidence or credentials.</td>
+    </tr>
+    <tr>
+      <td>Refresh failed</td>
+      <td>`refresh_failed` means credential or auth lifecycle refresh failed. Treat it as identity recovery work first; quota readiness may still be unknown or stale until credentials are relinked or refreshed successfully.</td>
     </tr>
     <tr>
       <td>Reauth required</td>
@@ -175,6 +179,13 @@ the page polls only while the operator keeps the dialog open. Device-code
 authorization must be enabled for Codex on the OpenAI account or workspace. If
 device authorization is unavailable or denied, use the browser workflow or ask
 the workspace admin to enable Codex device-code login.
+
+Immediately after a successful link, the new account is not guaranteed to route
+traffic. Codex Pooler creates the initial Pool assignment and enqueues account
+reconciliation to prime quota evidence. That quota refresh can require a token
+refresh first. If token refresh fails, the account can move to `refresh_failed`
+before any user request is routed, and runtime routing excludes it until token
+refresh succeeds or the credentials are relinked.
 
 Operators should never paste callback URLs, authorization codes, tokens, cookies,
 raw auth.json, OpenAI provider payloads, or local credential files into docs,
@@ -325,8 +336,8 @@ When an upstream is not routing as expected, check it in this order:
 1. confirm the upstream state is `active`
 2. confirm it is assigned to the Pool used by the client API key
 3. confirm the Pool itself is active
-4. inspect the routing footer for quota ready or quota exhausted posture
-5. inspect quota bars for exhausted account-level or model-specific windows
+4. inspect the routing footer for lifecycle-aware runtime routing readiness across identity state, Pool assignment, credential freshness, quota signals, and request posture
+5. inspect quota bars for exhausted account-level or model-specific windows; quota readiness is only one input to routing readiness
 6. confirm token freshness and quota freshness are recent enough to trust
 7. open the upstream cockpit when the card shows degraded, stale, or recovery states
 8. use Request logs filtered by Pool or upstream metadata to confirm whether traffic selected this account

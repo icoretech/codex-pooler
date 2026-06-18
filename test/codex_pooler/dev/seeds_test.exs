@@ -4,6 +4,7 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Access.{APIKey, Invite}
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounts.{Scope, User}
+  alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Pools
@@ -13,7 +14,6 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
-  alias CodexPooler.Admin.UpstreamQuotaReadiness
 
   import CodexPooler.AccountsFixtures
 

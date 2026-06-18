@@ -4,9 +4,9 @@ defmodule CodexPooler.Gateway.RequestCompression do
   require Logger
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.RequestCompression.Metadata
   alias CodexPooler.Gateway.RequestCompression.Eligibility
   alias CodexPooler.Gateway.RequestCompression.JsonStringRanges
+  alias CodexPooler.Gateway.RequestCompression.Metadata
   alias CodexPooler.Gateway.RequestCompression.ResponsesLiveZone
   alias CodexPooler.Gateway.RequestCompression.Strategies
   alias CodexPooler.Gateway.RequestCompression.TokenCounter

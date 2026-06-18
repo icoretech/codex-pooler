@@ -40,7 +40,10 @@ defmodule CodexPooler.Admin.AlertIncidentsReadModel do
   ]
 
   @type incident_filters :: %{
+          optional(:channel_id) => Ecto.UUID.t() | nil,
           optional(:pool_id) => Ecto.UUID.t() | nil,
+          optional(:rule_id) => Ecto.UUID.t() | nil,
+          optional(:severity) => String.t() | nil,
           optional(:state) => String.t() | nil
         }
   @type linked_channel :: %{

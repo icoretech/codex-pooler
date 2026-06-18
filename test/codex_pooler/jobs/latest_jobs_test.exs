@@ -737,16 +737,39 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
     end
 
     @tag :unresolved
-    test "grouped worker summaries reject reauth-required reconciliation failures" do
+    test "grouped worker summaries keep refresh-failed reconciliation failures actionable until recovery" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
       scope = Scope.for_user(owner, ["instance_owner"])
 
       healthy_pool =
         pool_fixture(%{name: "Healthy reconciliation", slug: "healthy-reconciliation"})
 
+      refresh_failed_pool =
+        pool_fixture(%{
+          name: "Refresh failed reconciliation",
+          slug: "refresh-failed-reconciliation"
+        })
+
+      recovered_pool =
+        pool_fixture(%{name: "Recovered reconciliation", slug: "recovered-reconciliation"})
+
       reauth_pool = pool_fixture(%{name: "Reauth reconciliation", slug: "reauth-reconciliation"})
 
       %{assignment: healthy_assignment} = upstream_assignment_fixture(healthy_pool)
+
+      %{identity: refresh_failed_identity, assignment: refresh_failed_assignment} =
+        upstream_assignment_fixture(refresh_failed_pool, %{
+          identity_status: "refresh_failed",
+          health_status: "active",
+          eligibility_status: "eligible"
+        })
+
+      %{identity: recovered_identity, assignment: recovered_assignment} =
+        upstream_assignment_fixture(recovered_pool, %{
+          identity_status: "refresh_failed",
+          health_status: "active",
+          eligibility_status: "eligible"
+        })
 
       %{assignment: reauth_assignment} =
         upstream_assignment_fixture(reauth_pool, %{
@@ -767,8 +790,46 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
           }
         )
 
-      filtered_failure =
+      unresolved_refresh_failed_failure =
         insert_listing_job(2,
+          worker: AccountReconciliationWorker,
+          state: "discarded",
+          inserted_at: ~U[2026-05-04 10:30:00Z],
+          discarded_at: ~U[2026-05-04 10:31:00Z],
+          args: %{
+            "pool_id" => refresh_failed_pool.id,
+            "pool_upstream_assignment_id" => refresh_failed_assignment.id,
+            "upstream_identity_id" => refresh_failed_identity.id
+          },
+          errors: [
+            %{
+              "attempt" => 1,
+              "error" => "Quota refresh needs account reauthentication"
+            }
+          ]
+        )
+
+      recovered_refresh_failed_failure =
+        insert_listing_job(3,
+          worker: AccountReconciliationWorker,
+          state: "discarded",
+          inserted_at: ~U[2026-05-04 10:45:00Z],
+          discarded_at: ~U[2026-05-04 10:46:00Z],
+          args: %{
+            "pool_id" => recovered_pool.id,
+            "pool_upstream_assignment_id" => recovered_assignment.id,
+            "upstream_identity_id" => recovered_identity.id
+          },
+          errors: [
+            %{
+              "attempt" => 1,
+              "error" => "Quota refresh needs account reauthentication"
+            }
+          ]
+        )
+
+      filtered_reauth_failure =
+        insert_listing_job(4,
           worker: AccountReconciliationWorker,
           state: "discarded",
           inserted_at: ~U[2026-05-04 11:00:00Z],
@@ -779,14 +840,43 @@ defmodule CodexPooler.Jobs.LatestJobsTest do
           }
         )
 
+      assert {1, _rows} =
+               from(identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+                 where: identity.id == ^recovered_identity.id
+               )
+               |> Repo.update_all(set: [status: "active"])
+
+      insert_listing_job(5,
+        worker: AccountReconciliationWorker,
+        state: "completed",
+        inserted_at: ~U[2026-05-04 11:30:00Z],
+        completed_at: ~U[2026-05-04 11:31:00Z],
+        args: %{
+          "pool_id" => recovered_pool.id,
+          "pool_upstream_assignment_id" => recovered_assignment.id,
+          "upstream_identity_id" => recovered_identity.id
+        }
+      )
+
       summary =
         Jobs.worker_job_summaries_by_group(scope, [
           worker_group(:reconciliation_card, [AccountReconciliationWorker])
         ])
         |> Map.fetch!(:reconciliation_card)
 
-      assert Enum.map(summary.unresolved_failures, & &1.id) == [visible_failure.id]
-      refute filtered_failure.id in Enum.map(summary.unresolved_failures, & &1.id)
+      unresolved_ids = Enum.map(summary.unresolved_failures, & &1.id)
+
+      assert unresolved_ids == [unresolved_refresh_failed_failure.id, visible_failure.id]
+      refute filtered_reauth_failure.id in unresolved_ids
+      refute recovered_refresh_failed_failure.id in unresolved_ids
+
+      assert %{attention_state: :active_failure, target: target} =
+               Enum.find(
+                 summary.unresolved_failures,
+                 &(&1.id == unresolved_refresh_failed_failure.id)
+               )
+
+      assert target.assignment_identity_status == "refresh_failed"
     end
 
     test "grouped worker summaries preserve the single-summary facade shape" do

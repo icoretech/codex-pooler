@@ -328,6 +328,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
     do: "No current quota evidence"
 
   defp quota_item_supporting_label(
+         %{routing_usable?: false, reset_at: %DateTime{} = reset_at} = item,
+         datetime_preferences
+       )
+       when item.routing_readiness_state != "quota_blocked" do
+    [
+      item.routing_readiness_label,
+      item.remaining_percent_value && "#{percent_label(item.remaining_percent_value)} remaining",
+      item.used_percent_value && "#{percent_label(item.used_percent_value)} used",
+      "resets #{Formatting.format_reset_at(reset_at, datetime_preferences)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
+  end
+
+  defp quota_item_supporting_label(
          %{reset_at: %DateTime{} = reset_at} = item,
          datetime_preferences
        ) do
@@ -402,12 +417,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
     |> Map.put(:share_label, percent_label(bar_value))
     |> Map.put(
       :supporting_label,
-      "#{Formatting.pluralize_count(success_count, "success", "successes")} · #{percent_label(bar_value)} of target-upstream successes"
+      pool_contribution_supporting_label(item, success_count, bar_value)
     )
     |> Map.put(
       :aria_label,
       "#{item.pool_label}: #{Formatting.pluralize_count(success_count, "success", "successes")}, #{percent_label(bar_value)} share"
     )
+  end
+
+  defp pool_contribution_supporting_label(
+         %{routing_usable?: false} = item,
+         success_count,
+         bar_value
+       ) do
+    "#{item.routing_readiness_label} · #{Formatting.pluralize_count(success_count, "success", "successes")} · #{percent_label(bar_value)} of target-upstream successes"
+  end
+
+  defp pool_contribution_supporting_label(_item, success_count, bar_value) do
+    "#{Formatting.pluralize_count(success_count, "success", "successes")} · #{percent_label(bar_value)} of target-upstream successes"
   end
 
   defp quota_chart_progress_class("fresh"),

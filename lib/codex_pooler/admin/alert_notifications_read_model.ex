@@ -128,7 +128,6 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModel do
           optional(Ecto.UUID.t()) => [impacted_pool()]
         }
   defp impacted_pools_by_incident([], _pool_ids), do: %{}
-  defp impacted_pools_by_incident(_rows, []), do: %{}
 
   defp impacted_pools_by_incident(rows, pool_ids) do
     incident_ids = rows |> Enum.map(fn {incident, _receipt} -> incident.id end) |> Enum.uniq()

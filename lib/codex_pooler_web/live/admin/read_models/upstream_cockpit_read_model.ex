@@ -52,6 +52,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:status) => String.t(),
           required(:health_status) => String.t(),
           required(:eligibility_status) => String.t(),
+          required(:identity_status) => String.t(),
           required(:quota_priming_status) => String.t(),
           required(:quota_priming_label) => String.t(),
           required(:last_successful_refresh_at) => DateTime.t() | nil,
@@ -72,6 +73,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:state) => String.t(),
           required(:state_label) => String.t(),
           required(:routing_usable?) => boolean(),
+          required(:routing_readiness_state) => String.t(),
+          required(:routing_readiness_label) => String.t(),
+          required(:routing_readiness_reason) => String.t(),
+          required(:routing_readiness_reason_code) => String.t(),
+          required(:routing_readiness_recovery_action) => String.t() | nil,
           required(:window_kind) => String.t() | nil,
           required(:window_minutes) => pos_integer() | nil,
           required(:remaining_percent_value) => float() | nil,
@@ -139,6 +145,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:assignment_state) => String.t(),
           required(:assignment_state_label) => String.t(),
           required(:routing_usable?) => boolean(),
+          required(:routing_readiness_state) => String.t(),
+          required(:routing_readiness_label) => String.t(),
+          required(:routing_readiness_reason) => String.t(),
+          required(:routing_readiness_reason_code) => String.t(),
+          required(:routing_readiness_recovery_action) => String.t() | nil,
           required(:successful_request_count_7d) => non_neg_integer(),
           required(:share_percent_value) => float(),
           required(:bar_value) => float()
@@ -319,8 +330,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp assignments(%{assignments: assignment_snapshots}) when is_list(assignment_snapshots) do
-    items = Enum.map(assignment_snapshots, &assignment/1)
+  defp assignments(%{identity: %UpstreamIdentity{} = identity, assignments: assignment_snapshots})
+       when is_list(assignment_snapshots) do
+    items = Enum.map(assignment_snapshots, &assignment(&1, identity.status))
 
     %{
       items: items,
@@ -330,7 +342,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp assignment(snapshot) do
+  defp assignment(snapshot, identity_status) do
     %{
       id: snapshot.id,
       upstream_identity_id: snapshot.upstream_identity_id,
@@ -339,6 +351,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       status: snapshot.status,
       health_status: snapshot.health_status,
       eligibility_status: snapshot.eligibility_status,
+      identity_status: identity_status,
       quota_priming_status: snapshot.quota_priming_status,
       quota_priming_label: snapshot.quota_priming_label,
       last_successful_refresh_at: snapshot.last_successful_refresh_at,

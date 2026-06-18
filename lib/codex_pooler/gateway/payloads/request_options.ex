@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   alias __MODULE__.Continuity
   alias __MODULE__.FileBridgeContext
+  alias __MODULE__.Normalization
   alias __MODULE__.OpenAICompatibility
   alias __MODULE__.PayloadContext
   alias __MODULE__.RequestMetadata
@@ -13,7 +14,6 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.TimeoutConfig
   alias __MODULE__.Transport
   alias __MODULE__.UsageAuthentication
-  alias __MODULE__.Normalization
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
 
   @enforce_keys [

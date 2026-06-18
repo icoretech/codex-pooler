@@ -52,23 +52,29 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       assert command_count(reuse_commands, "pool_upstream_assignments", "SELECT") == 0
     end
 
-    test "keeps hidden models hidden and rejects disabled assignments and stale identities" do
+    test "keeps hidden models hidden and routes only model-routable identity statuses" do
       pool = pool_fixture()
       active = upstream_assignment_fixture(pool, %{})
       disabled = upstream_assignment_fixture(pool, %{assignment_status: "disabled"})
-      stale_identity = upstream_assignment_fixture(pool, %{identity_status: "refresh_due"})
       refreshing_identity = upstream_assignment_fixture(pool, %{identity_status: "refreshing"})
+
+      blocked_by_identity =
+        UpstreamIdentity.statuses()
+        |> Kernel.--(["active", "refreshing"])
+        |> Map.new(fn status ->
+          {status, upstream_assignment_fixture(pool, %{identity_status: status})}
+        end)
 
       visible_model =
         model_fixture(pool, %{
           exposed_model_id: unique_model_id("gpt-visible"),
           metadata: %{
-            "source_assignment_ids" => [
-              active.assignment.id,
-              disabled.assignment.id,
-              stale_identity.assignment.id,
-              refreshing_identity.assignment.id
-            ]
+            "source_assignment_ids" =>
+              [
+                active.assignment.id,
+                disabled.assignment.id,
+                refreshing_identity.assignment.id
+              ] ++ Enum.map(blocked_by_identity, fn {_status, routed} -> routed.assignment.id end)
           }
         })
 
@@ -92,7 +98,11 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
              ]
 
       refute disabled.assignment.id in candidate_ids(candidates)
-      refute stale_identity.assignment.id in candidate_ids(candidates)
+
+      for {status, routed} <- blocked_by_identity do
+        refute routed.assignment.id in candidate_ids(candidates),
+               "#{status} identities must stay excluded from model routing"
+      end
 
       assert CandidateEligibility.visible_model_context(pool, hidden_model.exposed_model_id) ==
                nil

@@ -8,13 +8,14 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.UpstreamQuotaReadiness
-  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
+  alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Pools
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @request_failed_statuses ~w(failed rejected interrupted cancelled)
   @request_terminal_statuses ["succeeded" | @request_failed_statuses]
@@ -28,7 +29,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
           required(:assignment_label) => String.t(),
           required(:status) => String.t(),
           required(:health_status) => String.t(),
-          required(:eligibility_status) => String.t()
+          required(:eligibility_status) => String.t(),
+          optional(:identity_status) => String.t()
         }
   @type quota_health_item :: %{
           required(:assignment_id) => Ecto.UUID.t(),
@@ -39,6 +41,11 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
           required(:state) => String.t(),
           required(:state_label) => String.t(),
           required(:routing_usable?) => boolean(),
+          required(:routing_readiness_state) => String.t(),
+          required(:routing_readiness_label) => String.t(),
+          required(:routing_readiness_reason) => String.t(),
+          required(:routing_readiness_reason_code) => String.t(),
+          required(:routing_readiness_recovery_action) => String.t() | nil,
           required(:window_kind) => String.t() | nil,
           required(:window_minutes) => pos_integer() | nil,
           required(:remaining_percent_value) => float() | nil,
@@ -106,6 +113,11 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
           required(:assignment_state) => String.t(),
           required(:assignment_state_label) => String.t(),
           required(:routing_usable?) => boolean(),
+          required(:routing_readiness_state) => String.t(),
+          required(:routing_readiness_label) => String.t(),
+          required(:routing_readiness_reason) => String.t(),
+          required(:routing_readiness_reason_code) => String.t(),
+          required(:routing_readiness_recovery_action) => String.t() | nil,
           required(:successful_request_count_7d) => non_neg_integer(),
           required(:share_percent_value) => float(),
           required(:bar_value) => float()
@@ -179,12 +191,12 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
         |> QuotaWindows.list_quota_windows()
       end
 
-    quota_health_from_windows(visible_assignments, windows, now())
+    quota_health_from_windows(identity_or_id, visible_assignments, windows, now())
   end
 
   @spec quota_health_without_quota_data([assignment_summary()]) :: quota_health()
   def quota_health_without_quota_data(assignments) when is_list(assignments) do
-    quota_health_from_windows(assignments, [], now())
+    quota_health_from_windows(nil, assignments, [], now())
   end
 
   @spec pool_contribution(Scope.t(), identity_ref(), [assignment_summary()]) ::
@@ -201,12 +213,26 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
       |> identity_id()
       |> pool_contribution_rows(pool_ids, start_7d, as_of)
 
-    pool_contribution_from_rows(visible_assignments, rows)
+    quota_readiness =
+      if visible_assignments == [] do
+        UpstreamQuotaReadiness.from_windows([], as_of)
+      else
+        identity_or_id
+        |> identity_id()
+        |> quota_readiness_for_identity(as_of)
+      end
+
+    pool_contribution_from_rows(identity_or_id, visible_assignments, rows, quota_readiness)
   end
 
   @spec pool_contribution_without_request_data([assignment_summary()]) :: pool_contribution()
   def pool_contribution_without_request_data(assignments) when is_list(assignments) do
-    pool_contribution_from_rows(assignments, [])
+    pool_contribution_from_rows(
+      nil,
+      assignments,
+      [],
+      UpstreamQuotaReadiness.from_windows([], now())
+    )
   end
 
   @spec recent_request_event_rows(Scope.t(), identity_ref(), pos_integer()) :: [
@@ -220,12 +246,12 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
 
   def recent_request_event_rows(_scope, _identity_or_id, _limit), do: []
 
-  defp quota_health_from_windows(assignments, windows, as_of) do
+  defp quota_health_from_windows(identity_or_status, assignments, windows, as_of) do
     readiness = UpstreamQuotaReadiness.from_windows(windows, as_of)
 
     items =
       assignments
-      |> Enum.map(&quota_health_item(&1, readiness, as_of))
+      |> Enum.map(&quota_health_item(&1, readiness, identity_or_status, as_of))
       |> Enum.sort_by(&{&1.pool_label, &1.assignment_label, &1.assignment_id})
 
     kpis = quota_health_kpis(items)
@@ -243,7 +269,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
     }
   end
 
-  defp quota_health_item(assignment, readiness, as_of) do
+  defp quota_health_item(assignment, readiness, identity_or_status, as_of) do
+    routing_readiness = routing_readiness(identity_or_status, assignment, readiness)
     primary_5h = classified_window(readiness.primary_window, :primary_5h)
     primary_30d = readiness.primary_30d_window
     weekly = readiness.weekly_window
@@ -258,12 +285,13 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
     |> Map.put(:assignment_id, assignment.id)
     |> Map.put(:state, state)
     |> Map.put(:state_label, quota_state_label(state))
-    |> Map.put(:routing_usable?, readiness.routing_ready_now?)
+    |> Map.put(:routing_usable?, routing_readiness.routing_ready_now?)
+    |> Map.merge(routing_readiness_contract(routing_readiness))
     |> Map.put(:window_kind, display_window && display_window.window_kind)
     |> Map.put(:window_minutes, display_window && display_window.window_minutes)
     |> Map.put(:reset_at, display_window && display_window.reset_at)
     |> Map.put(:freshness_state, quota_freshness_state(display_window, as_of))
-    |> Map.put(:reason_codes, readiness.reason_codes)
+    |> Map.put(:reason_codes, quota_reason_codes(readiness.reason_codes, routing_readiness))
     |> Map.put(:remaining, measurements.remaining)
     |> Map.put(:capacity, measurements.capacity)
     |> Map.put(:used, measurements.used)
@@ -305,7 +333,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
   end
 
   defp quota_health_degraded?(kpis) do
-    kpis.stale_or_missing_count > 0 or kpis.exhausted_count > 0 or kpis.blocked_count > 0
+    kpis.stale_or_missing_count > 0 or kpis.exhausted_count > 0 or kpis.blocked_count > 0 or
+      kpis.routing_usable_count < kpis.assignment_count
   end
 
   defp quota_health_state(%{assignment_count: 0}), do: "empty"
@@ -370,13 +399,21 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
   defp decimal_to_float(%Decimal{} = value), do: Decimal.to_float(value)
   defp decimal_to_float(nil), do: nil
 
-  defp pool_contribution_from_rows(assignments, rows) do
+  defp pool_contribution_from_rows(identity_or_status, assignments, rows, quota_readiness) do
     successful_requests_7d = length(rows)
     request_counts_by_pool_id = Enum.frequencies_by(rows, & &1.pool_id)
 
     items =
       assignments
-      |> Enum.map(&pool_contribution_item(&1, request_counts_by_pool_id, successful_requests_7d))
+      |> Enum.map(
+        &pool_contribution_item(
+          &1,
+          request_counts_by_pool_id,
+          successful_requests_7d,
+          identity_or_status,
+          quota_readiness
+        )
+      )
       |> Enum.sort_by(&{&1.pool_label, &1.assignment_label, &1.assignment_id})
 
     kpis = pool_contribution_kpis(items, successful_requests_7d)
@@ -415,10 +452,17 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
     |> Repo.all()
   end
 
-  defp pool_contribution_item(assignment, request_counts_by_pool_id, successful_requests_7d) do
+  defp pool_contribution_item(
+         assignment,
+         request_counts_by_pool_id,
+         successful_requests_7d,
+         identity_or_status,
+         quota_readiness
+       ) do
     successful_request_count_7d = Map.get(request_counts_by_pool_id, assignment.pool_id, 0)
     share_percent_value = percentage(successful_request_count_7d, successful_requests_7d)
-    assignment_state = pool_contribution_assignment_state(assignment)
+    routing_readiness = routing_readiness(identity_or_status, assignment, quota_readiness)
+    assignment_state = pool_contribution_assignment_state(routing_readiness)
 
     assignment
     |> Map.take([
@@ -434,9 +478,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
     |> Map.put(:assignment_state, assignment_state)
     |> Map.put(
       :assignment_state_label,
-      pool_contribution_assignment_state_label(assignment_state)
+      pool_contribution_assignment_state_label(assignment_state, routing_readiness)
     )
-    |> Map.put(:routing_usable?, pool_contribution_routing_usable?(assignment))
+    |> Map.put(:routing_usable?, routing_readiness.routing_ready_now?)
+    |> Map.merge(routing_readiness_contract(routing_readiness))
     |> Map.put(:successful_request_count_7d, successful_request_count_7d)
     |> Map.put(:share_percent_value, share_percent_value)
     |> Map.put(:bar_value, share_percent_value)
@@ -459,16 +504,66 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
 
   defp pool_contribution_state(_items, _kpis), do: "contributing"
 
-  defp pool_contribution_assignment_state(assignment) do
-    if pool_contribution_routing_usable?(assignment), do: "active", else: "disabled"
+  defp pool_contribution_assignment_state(%{routing_ready_now?: true}), do: "active"
+  defp pool_contribution_assignment_state(_routing_readiness), do: "disabled"
+
+  defp pool_contribution_assignment_state_label("active", _routing_readiness),
+    do: "Active assignment"
+
+  defp pool_contribution_assignment_state_label("disabled", %{state: "assignment_unavailable"}),
+    do: "Disabled or unusable assignment"
+
+  defp pool_contribution_assignment_state_label("disabled", %{label: label})
+       when is_binary(label),
+       do: label
+
+  defp pool_contribution_assignment_state_label("disabled", _routing_readiness),
+    do: "Disabled or unusable assignment"
+
+  defp quota_readiness_for_identity(identity_id, as_of) when is_binary(identity_id) do
+    identity_id
+    |> QuotaWindows.list_quota_windows()
+    |> UpstreamQuotaReadiness.from_windows(as_of)
   end
 
-  defp pool_contribution_assignment_state_label("active"), do: "Active assignment"
-  defp pool_contribution_assignment_state_label("disabled"), do: "Disabled or unusable assignment"
+  defp quota_readiness_for_identity(_identity_id, as_of),
+    do: UpstreamQuotaReadiness.from_windows([], as_of)
 
-  defp pool_contribution_routing_usable?(assignment) do
-    assignment.status == "active" and assignment.health_status == "active" and
-      assignment.eligibility_status == "eligible"
+  defp routing_readiness(identity_or_status, assignment, quota_readiness) do
+    identity_or_status
+    |> routing_identity_status(assignment)
+    |> UpstreamRoutingReadiness.from_inputs(assignment, quota_readiness)
+  end
+
+  defp routing_identity_status(identity_or_status, assignment) do
+    assignment_identity_status(assignment) || identity_or_status
+  end
+
+  defp assignment_identity_status(%{identity_status: status}) when is_binary(status), do: status
+
+  defp assignment_identity_status(%{"identity_status" => status}) when is_binary(status),
+    do: status
+
+  defp assignment_identity_status(_assignment), do: nil
+
+  defp routing_readiness_contract(routing_readiness) do
+    %{
+      routing_readiness_state: routing_readiness.state,
+      routing_readiness_label: routing_readiness.label,
+      routing_readiness_reason: routing_readiness.reason,
+      routing_readiness_reason_code: routing_readiness.reason_code,
+      routing_readiness_recovery_action: routing_readiness.recovery_action
+    }
+  end
+
+  defp quota_reason_codes(quota_reason_codes, %{routing_ready_now?: true}), do: quota_reason_codes
+  defp quota_reason_codes(quota_reason_codes, %{state: "quota_blocked"}), do: quota_reason_codes
+
+  defp quota_reason_codes(quota_reason_codes, %{reason_code: reason_code})
+       when is_binary(reason_code) do
+    [reason_code | quota_reason_codes]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   defp request_health_rows(identity_id, %Scope{} = scope, start_7d, as_of)

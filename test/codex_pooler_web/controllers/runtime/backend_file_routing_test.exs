@@ -206,6 +206,40 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     refute persistence_text =~ "broad-codex-file-bridge"
   end
 
+  test "file bridge routing excludes refreshing identities", %{conn: conn} do
+    setup = active_api_key_fixture()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.file_protocol_success(
+          file_id: "file_refreshing_identity_excluded",
+          file_name: "refreshing-identity.txt",
+          mime_type: "text/plain"
+        )
+      )
+
+    %{identity: identity} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        chatgpt_account_id: "acct_file_refreshing_#{System.unique_integer([:positive])}",
+        metadata: %{"base_url" => FakeUpstream.url(upstream)},
+        access_token: "file-refreshing-token"
+      })
+
+    Repo.update!(Ecto.Changeset.change(identity, status: "refreshing"))
+
+    conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/backend-api/files", %{
+        "file_name" => "refreshing-identity.txt",
+        "file_size" => 21
+      })
+
+    assert json_response(conn, 503)["error"]["code"] == "no_eligible_backend"
+    assert FakeUpstream.requests(upstream) == []
+  end
+
   @tag :upstream_file_assignment_continuity
   test "multipart create uploads and finalizes through the selected file bridge assignment", %{
     conn: conn

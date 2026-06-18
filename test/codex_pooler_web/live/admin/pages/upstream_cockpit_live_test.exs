@@ -71,6 +71,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert {:ok, fresh_assignment} =
              PoolAssignments.create_pool_assignment(target_pool, identity, %{
                assignment_label: "another-old-shared-label@example.com",
+               status: "active",
+               health_status: "active",
+               eligibility_status: "eligible",
                metadata: %{"quota_priming" => %{"status" => "known"}}
              })
 
@@ -796,7 +799,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       credits: 40,
       used_percent: Decimal.new("60"),
       reset_at: DateTime.add(now, 4, :hour),
-      observed_at: DateTime.add(now, -Evidence.freshness_ttl_seconds() - 60, :second)
+      observed_at: now
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
@@ -813,7 +816,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "Quota refresh #{datetime_label(~U[2026-05-27 08:15:00.000000Z], scope.user)}"
            )
 
-    assert has_element?(view, "#upstream-status-summary", "Quota refresh needed")
+    assert has_element?(view, "#upstream-status-summary", "Quota fresh")
 
     primary_selector = "#upstream-assignment-#{primary_assignment.id}"
     disabled_selector = "#upstream-assignment-#{disabled_assignment.id}"
@@ -825,7 +828,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, primary_selector, "Health active")
     assert has_element?(view, primary_selector, "Routing eligible")
     assert has_element?(view, primary_selector, "Quota known")
-    assert has_element?(view, primary_selector, "Quota refresh needed")
+    assert has_element?(view, primary_selector, "Quota fresh")
     assert has_element?(view, primary_selector, "Active assignment")
 
     assert has_element?(view, disabled_selector, "Disabled failover assignment")
@@ -834,7 +837,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, disabled_selector, "Assignment disabled")
     assert has_element?(view, disabled_selector, "Health disabled")
     assert has_element?(view, disabled_selector, "Routing ineligible")
-    assert has_element?(view, disabled_selector, "Priming blocked")
+    assert has_element?(view, disabled_selector, "Quota known")
     assert has_element?(view, disabled_selector, "Disabled or unusable assignment")
 
     paused = status_fixture!(scope, "paused", %{identity_status: "paused"})
@@ -1357,6 +1360,102 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert missing_item.weekly == nil
   end
 
+  @tag :routing_lifecycle
+  test "cockpit routing usability blocks refresh_failed identities with fresh quota", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "routing-lifecycle-refresh-failed",
+        name: "Routing Lifecycle Refresh Failed"
+      })
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Routing lifecycle failed Codex",
+        assignment_label: "Routing lifecycle active assignment",
+        identity_status: "refresh_failed",
+        identity_metadata: %{
+          "token_refresh" => %{
+            "status" => "failed",
+            "reason" => %{
+              "code" => "refresh_token_rejected",
+              "message" => "credential refresh failed"
+            }
+          }
+        }
+      })
+
+    upsert_quota_window!(identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: 100,
+      credits: 88,
+      used_percent: Decimal.new("12"),
+      reset_at: DateTime.add(now, 4, :hour),
+      observed_at: now
+    })
+
+    request_health_request_fixture(pool, assignment, %{
+      status: "succeeded",
+      admitted_at: DateTime.add(now, -30, :minute),
+      correlation_id: "routing-lifecycle-refresh-failed-success"
+    })
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+
+    assert cockpit.assignments.count == 1
+    assert cockpit.charts.quota_health.kpis.assignment_count == 1
+    assert cockpit.charts.quota_health.kpis.fresh_count == 1
+    assert cockpit.charts.quota_health.kpis.routing_usable_count == 0
+
+    assert [
+             %{
+               state: "fresh",
+               state_label: "Fresh",
+               routing_usable?: false,
+               routing_readiness_label: "Auth refresh failed"
+             } = quota_item
+           ] = cockpit.charts.quota_health.items
+
+    assert quota_item.remaining_percent_value == 88.0
+    assert quota_item.primary_5h.routing_usable? == true
+    assert "identity_refresh_failed" in quota_item.reason_codes
+
+    contribution = cockpit.charts.pool_contribution
+    assert contribution.kpis.assignment_count == 1
+    assert contribution.kpis.active_assignment_count == 0
+    assert contribution.kpis.disabled_assignment_count == 1
+    assert contribution.kpis.successful_requests_7d == 1
+
+    assert [
+             %{
+               assignment_state: "disabled",
+               assignment_state_label: "Auth refresh failed",
+               routing_usable?: false,
+               successful_request_count_7d: 1,
+               share_percent_value: 100.0
+             }
+           ] = contribution.items
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(view, "#quota-health-chart-bars[data-chart-routing-usable='0']")
+    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "Auth refresh failed")
+    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "88% remaining")
+    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-active='0']")
+    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-disabled='1']")
+
+    assert has_element?(
+             view,
+             "#pool-contribution-chart-item-#{assignment.id}",
+             "Auth refresh failed"
+           )
+  end
+
   @tag :quota_health
   test "read model treats fresh monthly primary evidence as ready 30d quota", %{scope: scope} do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -1718,6 +1817,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         assignment_label: "Unrelated contribution assignment"
       })
 
+    upsert_quota_window!(target_identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: 100,
+      credits: 73,
+      used_percent: Decimal.new("27"),
+      reset_at: DateTime.add(now, 4, :hour),
+      observed_at: now
+    })
+
     for offset <- [1, 2, 3] do
       request_health_request_fixture(primary_pool, primary_assignment, %{
         status: "succeeded",
@@ -1845,6 +1954,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     debug_secret = runtime_secret("pool-contribution-debug")
     attempt_secret = runtime_secret("pool-contribution-attempt")
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    upsert_quota_window!(identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: 100,
+      credits: 69,
+      used_percent: Decimal.new("31"),
+      reset_at: DateTime.add(now, 4, :hour),
+      observed_at: now
+    })
 
     request_health_request_fixture(unrelated_pool, unrelated_assignment, %{
       status: "succeeded",

@@ -21,6 +21,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       |> assign(:reported_quota_limits, reported_quota_limits(assigns.account.quota_limits))
       |> assign(:workspace_context_label, workspace_context_label(assigns.account))
       |> assign(:workspace_context_title, workspace_context_title(assigns.account))
+      |> assign(:routing_readiness, routing_readiness(assigns.account))
 
     ~H"""
     <article
@@ -28,7 +29,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       data-role="upstream-account-card"
       class={[
         "min-w-0 rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors",
-        @account.quota_readiness.border_class
+        @routing_readiness.border_class
       ]}
     >
       <header
@@ -108,7 +109,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
           </div>
         </section>
 
-        <.upstream_reauth_warning account={@account} />
+        <.upstream_lifecycle_blocker_warning
+          account={@account}
+          routing_readiness={@routing_readiness}
+        />
       </div>
       <footer
         data-role="upstream-account-card-footer"
@@ -122,7 +126,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
               Routing
             </dt>
-            <dd class="truncate text-base-content/60">{@account.quota_readiness.label}</dd>
+            <dd class="truncate text-base-content/60" title={@routing_readiness.reason}>
+              {@routing_readiness.label}
+            </dd>
           </div>
           <div class="min-w-0 pl-3" data-role="upstream-pool-count-cell">
             <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
@@ -143,7 +149,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
         </dl>
       </footer>
       <.upstream_refresh_status account={@account} />
-      <.upstream_selector_contracts account={@account} />
+      <.upstream_selector_contracts account={@account} routing_readiness={@routing_readiness} />
     </article>
     """
   end
@@ -298,20 +304,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   end
 
   attr :account, :map, required: true
+  attr :routing_readiness, :map, required: true
 
-  defp upstream_reauth_warning(assigns) do
+  defp upstream_lifecycle_blocker_warning(assigns) do
+    assigns =
+      assigns
+      |> assign(:warning, lifecycle_blocker_warning(assigns.account, assigns.routing_readiness))
+
     ~H"""
     <div
-      :if={@account.reauth_required?}
-      id={"upstream-account-#{@account.identity.id}-reauth-warning"}
+      :if={@warning}
+      id={@warning.id}
       class="rounded-box border border-error/30 bg-error/10 p-3 text-sm text-base-content"
     >
       <div class="flex items-start gap-2">
         <.icon name="hero-exclamation-triangle" class="mt-0.5 size-5 shrink-0 text-error" />
         <div class="space-y-1">
-          <p class="font-semibold text-error">Reauthentication required</p>
+          <p class="font-semibold text-error">{@warning.title}</p>
           <p>
-            This account is excluded from routing until credentials are replaced.
+            {@warning.body}
           </p>
           <p :if={@account.reauth_reason_message} class="text-xs text-base-content/70">
             Reason: {@account.reauth_reason_code || "token refresh failed"} — {@account.reauth_reason_message}
@@ -323,7 +334,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             Reason: {@account.reauth_reason_code}
           </p>
           <p class="text-xs font-medium text-base-content/75">
-            Recovery: use Relink account to complete OpenAI OAuth again, Replace auth.json to load fresh credentials, or Reinvite account when the operator needs to complete hosted sign-in again.
+            Recovery: {@warning.recovery}
           </p>
         </div>
       </div>
@@ -347,10 +358,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   end
 
   attr :account, :map, required: true
+  attr :routing_readiness, :map, required: true
 
   defp upstream_selector_contracts(assigns) do
     ~H"""
     <div class="hidden" data-role="upstream-account-selector-contracts">
+      <section id={"upstream-account-#{@account.identity.id}-routing-readiness-contract"}>
+        routing readiness
+        <span id={"upstream-account-#{@account.identity.id}-routing-readiness-state"}>
+          {@routing_readiness.state}
+        </span>
+        <span id={"upstream-account-#{@account.identity.id}-routing-readiness-label"}>
+          {@routing_readiness.label}
+        </span>
+        <span id={"upstream-account-#{@account.identity.id}-routing-readiness-reason"}>
+          {@routing_readiness.reason}
+        </span>
+      </section>
+
+      <section id={"upstream-account-#{@account.identity.id}-quota-readiness-contract"}>
+        quota readiness
+        <span id={"upstream-account-#{@account.identity.id}-quota-readiness-state"}>
+          {@account.quota_readiness.state}
+        </span>
+        <span id={"upstream-account-#{@account.identity.id}-quota-readiness-label"}>
+          {@account.quota_readiness.label}
+        </span>
+      </section>
+
       <section id={"upstream-account-#{@account.identity.id}-auth-health"}>
         Auth health
         <span id={"upstream-account-#{@account.identity.id}-auth-fresh"}>
@@ -468,6 +503,53 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   defp quota_limit_details?(%{count_label: count_label, reset_label: reset_label}) do
     present_string?(count_label) or present_string?(reset_label)
   end
+
+  @spec routing_readiness(map()) :: map()
+  defp routing_readiness(%{routing_readiness: routing_readiness}) when is_map(routing_readiness),
+    do: routing_readiness
+
+  defp routing_readiness(_account) do
+    %{
+      state: "unavailable",
+      label: "Routing unavailable",
+      tone: :warning,
+      border_class: "border-l-warning",
+      routing_ready_now?: false,
+      reason: "Routing readiness is unavailable for this upstream account.",
+      reason_code: "routing_readiness_unavailable",
+      recovery_action: nil
+    }
+  end
+
+  @spec lifecycle_blocker_warning(map(), map()) :: map() | nil
+  defp lifecycle_blocker_warning(
+         %{identity: %{id: id, status: "refresh_failed"}},
+         _routing_readiness
+       ) do
+    %{
+      id: "upstream-account-#{id}-refresh-failed-warning",
+      title: "Token refresh failed",
+      body:
+        "This account is excluded from runtime routing until token refresh succeeds or credentials are relinked.",
+      recovery:
+        "use Refresh token to retry token refresh, Relink account to complete OpenAI OAuth again, Replace auth.json to load fresh credentials, or Reinvite account when the operator needs to complete hosted sign-in again."
+    }
+  end
+
+  defp lifecycle_blocker_warning(
+         %{identity: %{id: id, status: "reauth_required"}},
+         _routing_readiness
+       ) do
+    %{
+      id: "upstream-account-#{id}-reauth-warning",
+      title: "Reauthentication required",
+      body: "This account is excluded from routing until credentials are replaced.",
+      recovery:
+        "use Relink account to complete OpenAI OAuth again, Replace auth.json to load fresh credentials, or Reinvite account when the operator needs to complete hosted sign-in again."
+    }
+  end
+
+  defp lifecycle_blocker_warning(_account, _routing_readiness), do: nil
 
   defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_string?(_value), do: false

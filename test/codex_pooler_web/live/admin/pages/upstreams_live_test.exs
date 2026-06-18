@@ -1242,6 +1242,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id} footer[data-role='upstream-account-card-footer'] #upstream-account-#{identity.id}-routing-readiness",
+             "Routing ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-quota-readiness-contract",
              "Quota ready"
            )
 
@@ -1485,17 +1491,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "quota-states", name: "Quota States"})
 
     cases = [
-      {"unknown", "Quota missing", "Priming pending"},
-      {"refreshing", "Quota missing", "Reconciling quota"},
-      {"known", "Quota ready", "Quota known"},
-      {"weekly_only_probe", "Weekly quota probe", "Weekly-only probe"},
-      {"stale", "Quota missing", "Quota stale"},
-      {"expired", "Quota missing", "Quota expired"},
-      {"failed", "Quota missing", "Quota failed"},
-      {"blocked", "Quota missing", "Priming blocked"}
+      {"unknown", "Quota missing", "Quota missing", "Priming pending"},
+      {"refreshing", "Quota missing", "Quota missing", "Reconciling quota"},
+      {"known", "Routing ready", "Quota ready", "Quota known"},
+      {"weekly_only_probe", "Routing ready", "Weekly quota probe", "Weekly-only probe"},
+      {"stale", "Quota missing", "Quota missing", "Quota stale"},
+      {"expired", "Quota missing", "Quota missing", "Quota expired"},
+      {"failed", "Quota missing", "Quota missing", "Quota failed"},
+      {"blocked", "Quota missing", "Quota missing", "Priming blocked"}
     ]
 
-    for {status, readiness_label, assignment_label} <- cases do
+    for {status, routing_label, quota_label, assignment_label} <- cases do
       %{identity: identity, assignment: assignment} =
         upstream_assignment_fixture(pool, %{
           account_label: "Quota #{status}",
@@ -1520,7 +1526,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       assert has_element?(
                view,
                "#upstream-account-#{identity.id}-routing-readiness",
-               readiness_label
+               routing_label
+             )
+
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-quota-readiness-contract",
+               quota_label
              )
 
       assert has_element?(
@@ -1713,6 +1725,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{ready_identity.id}-routing-readiness",
+             "Routing ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{ready_identity.id}-quota-readiness-contract",
              "Quota ready"
            )
 
@@ -1734,7 +1752,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       %{
         readiness_state: "ready",
         quota_state: "ready",
-        expected_label: "Quota ready",
+        expected_label: "Routing ready",
+        expected_quota_label: "Quota ready",
         border_class: "border-l-success",
         priming_status: "known",
         priming_label: "Quota known"
@@ -1742,8 +1761,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       %{
         readiness_state: "weekly_only_probe",
         quota_state: "weekly_only_probe",
-        expected_label: "Weekly quota probe",
-        border_class: "border-l-warning",
+        expected_label: "Routing ready",
+        expected_quota_label: "Weekly quota probe",
+        border_class: "border-l-success",
         priming_status: "weekly_only_probe",
         priming_label: "Weekly-only probe"
       },
@@ -1751,6 +1771,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         readiness_state: "exhausted",
         quota_state: "exhausted",
         expected_label: "Quota exhausted",
+        expected_quota_label: "Quota exhausted",
         border_class: "border-l-error",
         priming_status: "known",
         priming_label: "Quota known"
@@ -1759,6 +1780,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         readiness_state: "stale",
         quota_state: "stale",
         expected_label: "Quota refresh needed",
+        expected_quota_label: "Quota refresh needed",
         border_class: "border-l-warning",
         priming_status: "known",
         priming_label: "Quota known"
@@ -1767,6 +1789,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         readiness_state: "missing",
         quota_state: "missing",
         expected_label: "Quota missing",
+        expected_quota_label: "Quota missing",
         border_class: "border-l-warning",
         priming_status: "unknown",
         priming_label: "Priming pending"
@@ -1802,6 +1825,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                view,
                "#upstream-account-#{identity.id}-routing-readiness",
                routing_case.expected_label
+             )
+
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-quota-readiness-contract",
+               routing_case.expected_quota_label
              )
 
       assert has_element?(
@@ -1873,7 +1902,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
   end
 
-  test "renders blocked quota readiness on the account card selector contract" do
+  test "keeps blocked quota readiness separate from missing routing readiness" do
     blocked_id = Ecto.UUID.generate()
     blocked_assignment = recovery_component_assignment(Ecto.UUID.generate(), "Blocked Pool")
 
@@ -1902,7 +1931,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert blocked_html =~
              ~s(class="min-w-0 rounded-box border border-l-2 border-base-300 bg-base-100 shadow-sm transition-colors border-l-warning")
 
-    assert blocked_html =~ "Quota blocked"
+    assert [_match, routing_contract] =
+             Regex.run(
+               ~r/<section id="upstream-account-#{blocked_id}-routing-readiness-contract">(.*?)<\/section>/s,
+               blocked_html
+             )
+
+    assert routing_contract =~ "Routing unavailable"
+    refute routing_contract =~ "Quota blocked"
+
+    assert [_match, quota_contract] =
+             Regex.run(
+               ~r/<section id="upstream-account-#{blocked_id}-quota-readiness-contract">(.*?)<\/section>/s,
+               blocked_html
+             )
+
+    assert quota_contract =~ "Quota blocked"
+
     refute blocked_html =~ "Routing candidate"
   end
 
@@ -1939,11 +1984,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
-    assert has_element?(view, "#upstream-account-#{identity.id}.border-l-success")
+    assert has_element?(view, "#upstream-account-#{identity.id}.border-l-warning")
 
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-routing-readiness",
+             "Token refresh due"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-quota-readiness-contract",
              "Quota ready"
            )
 
@@ -1957,6 +2008,83 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{identity.id}-token-refresh",
              "token refresh failed: synthetic refresh failed (synthetic_refresh_failure)"
+           )
+  end
+
+  test "renders lifecycle-blocked routing for refresh-failed accounts with fresh quota", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "refresh-failed-routing",
+        name: "Refresh Failed Routing"
+      })
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Refresh Failed Routing Codex",
+        identity_status: "refresh_failed",
+        identity_metadata: %{
+          "token_refresh" => %{
+            "status" => "failed",
+            "reason" => %{
+              "code" => "codex_oauth_refresh_failed",
+              "message" => "upstream OAuth refresh failed"
+            }
+          }
+        },
+        assignment_metadata: %{
+          "quota_priming" => %{
+            "status" => "known",
+            "trigger_kind" => "account_link",
+            "enqueued_at" => "2026-05-22T00:00:00Z"
+          }
+        }
+      })
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    assert account.quota_readiness.label == "Quota ready"
+    assert account.quota_readiness.routing_ready_now? == true
+    assert account.routing_readiness.label == "Auth refresh failed"
+    assert account.routing_readiness.routing_ready_now? == false
+    assert account.routing_readiness.reason_code == "identity_refresh_failed"
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}.border-l-error")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Auth refresh failed"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Quota ready"
+           )
+
+    warning_selector = "#upstream-account-#{identity.id}-refresh-failed-warning"
+    assert has_element?(view, warning_selector, "Token refresh failed")
+    assert has_element?(view, warning_selector, "excluded from runtime routing")
+
+    assert has_element?(
+             view,
+             warning_selector,
+             "token refresh succeeds or credentials are relinked"
+           )
+
+    assert has_element?(view, warning_selector, "upstream OAuth refresh failed")
+    assert has_element?(view, warning_selector, "codex_oauth_refresh_failed")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-quota-readiness-contract",
+             "Quota ready"
            )
   end
 
@@ -1995,6 +2123,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       primary_window?: true,
       weekly_window?: false
     )
+
+    assert account.routing_readiness.routing_ready_now? == true
+    assert account.routing_readiness.label == "Routing ready"
   end
 
   test "requires authentication for admin upstreams", %{} do
