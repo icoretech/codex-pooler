@@ -175,6 +175,44 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def compression_savings_line(_log), do: nil
 
+  def compression_throughput_line(%{payload_compression: compression})
+      when is_map(compression) do
+    case Map.get(compression, :processed_tokens_per_second) do
+      value when is_number(value) and value > 0 ->
+        "#{format_compression_rate(value)} compression tokens/s"
+
+      _value ->
+        nil
+    end
+  end
+
+  def compression_throughput_line(_log), do: nil
+
+  def compression_throughput_title(%{payload_compression: compression})
+      when is_map(compression) do
+    with value when is_number(value) and value > 0 <-
+           Map.get(compression, :processed_tokens_per_second),
+         original when is_integer(original) and original > 0 <-
+           Map.get(compression, :original_tokens),
+         elapsed when is_integer(elapsed) and elapsed > 0 <- Map.get(compression, :elapsed_ms) do
+      "compression processing throughput: #{Format.integer(original)} original tokens / #{format_elapsed_ms(elapsed)}"
+    else
+      _value -> nil
+    end
+  end
+
+  def compression_throughput_title(_log), do: nil
+
+  def compression_throughput_value(%{payload_compression: compression})
+      when is_map(compression) do
+    case Map.get(compression, :processed_tokens_per_second) do
+      value when is_number(value) and value > 0 -> format_decimal(value)
+      _value -> nil
+    end
+  end
+
+  def compression_throughput_value(_log), do: nil
+
   def compression_savings_title(%{payload_compression: compression})
       when is_map(compression) do
     [
@@ -475,6 +513,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defp format_compression_count(saved), do: Format.token_count(saved)
 
   defp format_percent(percent), do: "#{format_decimal(percent)}%"
+  defp format_compression_rate(value) when is_integer(value), do: Format.integer(value)
+
+  defp format_compression_rate(value) when is_float(value) do
+    value
+    |> format_decimal()
+    |> add_group_separators()
+  end
 
   defp format_decimal(value) when is_integer(value), do: Integer.to_string(value)
 
@@ -484,6 +529,23 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     |> String.trim_trailing("0")
     |> String.trim_trailing(".")
   end
+
+  defp add_group_separators(value) do
+    [whole | rest] = String.split(value, ".", parts: 2)
+
+    grouped =
+      whole
+      |> String.graphemes()
+      |> Enum.reverse()
+      |> Enum.chunk_every(3)
+      |> Enum.map(&Enum.reverse/1)
+      |> Enum.reverse()
+      |> Enum.map_join(",", &Enum.join/1)
+
+    Enum.join([grouped | rest], ".")
+  end
+
+  defp format_elapsed_ms(value), do: "#{Format.integer(value)} ms"
 
   defp compression_title_part(_label, nil), do: nil
   defp compression_title_part(label, value), do: "#{label}: #{value}"

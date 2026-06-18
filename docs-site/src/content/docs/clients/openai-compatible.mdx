@@ -133,7 +133,7 @@ Per-Pool request compression can apply to `POST /v1/responses`, `POST /v1/chat/c
 
 The feature is request-side only. Codex Pooler may compress upstream-bound Responses tool-output payloads before dispatch, but it does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Public `/v1/responses/compact` remains unsupported.
 
-If compression is enabled but savings do not appear, check the request log's `payload_compression` status and reason. The UI prefers saved token count and token savings percent when local token counts are available, then falls back to saved bytes and byte savings percent.
+If compression is enabled but savings do not appear, check the request log's `payload_compression` status and reason. The UI prefers saved token count and token savings percent when local token counts are available, then falls back to saved bytes and byte savings percent. It may also show compression processing throughput derived from sanitized original-token count and elapsed time.
 
 ## Routed but unsupported boundaries
 

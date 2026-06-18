@@ -11,6 +11,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
       compression_savings_status: 1,
       compression_savings_title: 1,
       compression_savings_unit: 1,
+      compression_throughput_line: 1,
+      compression_throughput_title: 1,
+      compression_throughput_value: 1,
       format_cached_input_cost_summary: 1,
       format_cached_token_breakdown: 1,
       format_errors: 2,
@@ -98,6 +101,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
         <.icon name="hero-arrows-pointing-in" class="size-3.5 shrink-0" />
         <span class="sr-only">compression</span>
         {compression_line}
+      </span>
+      <span
+        :if={throughput_line = compression_throughput_line(@request_log)}
+        id={"#{@prefix}-#{@request_log.id}-compression-throughput"}
+        data-role="compression-throughput"
+        data-compression-throughput-kind="processed_tokens_per_second"
+        data-processed-tokens-per-second={compression_throughput_value(@request_log)}
+        class="block whitespace-nowrap text-base-content/50"
+        title={compression_throughput_title(@request_log)}
+      >
+        {throughput_line}
       </span>
       <span
         :for={error <- format_errors(@request_log, @datetime_preferences)}

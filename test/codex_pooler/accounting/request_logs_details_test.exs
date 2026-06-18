@@ -132,6 +132,7 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
                    "compressed_bytes" => 3_000,
                    "original_tokens" => 900,
                    "compressed_tokens" => 300,
+                   "elapsed_ms" => 300,
                    "strategies" => ["log_output", "diff"],
                    "raw_candidate" => sentinel,
                    "original_output" => sentinel,
@@ -147,13 +148,16 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert log.metadata["payload_compression"]["skipped_count"] == 1
     assert log.metadata["payload_compression"]["saved_bytes"] == 9000
     assert log.metadata["payload_compression"]["saved_tokens"] == 600
-
+    assert log.metadata["payload_compression"]["elapsed_ms"] == 300
+    refute Map.has_key?(log.metadata["payload_compression"], "processed_tokens_per_second")
     assert log.payload_compression.status == "compressed"
     assert log.payload_compression.reason == "rewritten"
     assert log.payload_compression.unit == "tokens"
     assert log.payload_compression.saved_count == 600
     assert log.payload_compression.savings_percent == 66.67
     assert log.payload_compression.compression_ratio == 0.3333
+    assert log.payload_compression.elapsed_ms == 300
+    assert log.payload_compression.processed_tokens_per_second == 3000.0
 
     log_text = inspect(log)
     refute log_text =~ sentinel

@@ -81,7 +81,7 @@ Both providers use the same Pool API key and the same Codex backend compatibilit
 
 Codex CLI and Codex Desktop do not need a client-side switch for Codex Pooler's per-Pool request compression. When an operator enables `request_compression_enabled`, eligible backend Responses, backend compact, backend `/v1/responses` aliases, translated backend chat, and websocket `response.create` requests may have upstream-bound Responses tool-output payloads compressed before dispatch.
 
-The feature is request-side only. Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Request logs may show safe aggregate `payload_compression` savings, preferring saved token count and token savings percent when token counts are available and falling back to byte savings when they are not.
+The feature is request-side only. Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Request logs may show safe aggregate `payload_compression` savings, preferring saved token count and token savings percent when token counts are available and falling back to byte savings when they are not. They may also derive compression processing throughput from sanitized original-token count and elapsed time.
 
 ## Optional operator MCP endpoint
 

@@ -1547,6 +1547,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
                    compressed_bytes: 1024,
                    original_tokens: 1000,
                    compressed_tokens: 400,
+                   elapsed_ms: 250,
                    raw_candidate: sentinel,
                    original_output: sentinel,
                    compressed_output: compressed_sentinel
@@ -1579,7 +1580,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
                    compressed_bytes: 4096,
                    raw_candidate: sentinel,
                    original_output: sentinel,
-                   compressed_output: compressed_sentinel
+                   compressed_output: compressed_sentinel,
+                   elapsed_ms: 500
                  })
              })
 
@@ -1608,19 +1610,97 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert http_log.metadata["payload_compression"]["skipped_count"] == 1
     assert http_log.metadata["payload_compression"]["saved_bytes"] == 3072
     assert http_log.metadata["payload_compression"]["saved_tokens"] == 600
+    assert http_log.metadata["payload_compression"]["elapsed_ms"] == 250
+    refute Map.has_key?(http_log.metadata["payload_compression"], "processed_tokens_per_second")
     assert http_log.payload_compression.saved_count == 600
     assert http_log.payload_compression.unit == "tokens"
     assert http_log.payload_compression.savings_percent == 60.0
     assert http_log.payload_compression.compression_ratio == 0.4
-
+    assert http_log.payload_compression.elapsed_ms == 250
+    assert http_log.payload_compression.processed_tokens_per_second == 4000.0
     assert websocket_log.metadata["payload_compression"]["status"] == "compressed"
     assert websocket_log.metadata["payload_compression"]["reason"] == "rewritten"
     assert websocket_log.metadata["payload_compression"]["saved_bytes"] == 4096
     assert websocket_log.metadata["payload_compression"]["token_savings_percent"] == nil
+    assert websocket_log.metadata["payload_compression"]["elapsed_ms"] == 500
+
+    refute Map.has_key?(
+             websocket_log.metadata["payload_compression"],
+             "processed_tokens_per_second"
+           )
+
     assert websocket_log.payload_compression.saved_count == 4096
     assert websocket_log.payload_compression.unit == "bytes"
     assert websocket_log.payload_compression.savings_percent == 50.0
     assert websocket_log.payload_compression.compression_ratio == 0.5
+    assert websocket_log.payload_compression.elapsed_ms == 500
+    assert is_nil(websocket_log.payload_compression.processed_tokens_per_second)
+
+    log_text = inspect(logs)
+    refute log_text =~ sentinel
+    refute log_text =~ compressed_sentinel
+  end
+
+  test "request logs derive nil compression throughput for invalid token or elapsed metadata" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    sentinel = "SENTINEL_TOOL_OUTPUT_SHOULD_NOT_RENDER"
+    compressed_sentinel = "SENTINEL_COMPRESSED_OUTPUT_SHOULD_NOT_STORE"
+
+    scenarios = [
+      {"missing-elapsed", %{original_tokens: 1000, compressed_tokens: 400}},
+      {"zero-elapsed", %{original_tokens: 1000, compressed_tokens: 400, elapsed_ms: 0}},
+      {"missing-tokens", %{elapsed_ms: 250}},
+      {"invalid-tokens", %{original_tokens: -1000, compressed_tokens: 400, elapsed_ms: 250}},
+      {"byte-only", %{original_bytes: 8192, compressed_bytes: 4096, elapsed_ms: 250}}
+    ]
+
+    request_ids =
+      Enum.map(scenarios, fn {suffix, attrs} ->
+        assert {:ok, %{request: request}} =
+                 Accounting.record_metadata_request(%{pool: pool, api_key: api_key}, %{
+                   endpoint: "/backend-api/codex/responses",
+                   requested_model: "gpt-compression-throughput-#{suffix}",
+                   transport: "http_json",
+                   status: "succeeded",
+                   correlation_id: "compression-throughput-#{suffix}"
+                 })
+
+        metadata_attrs =
+          Map.merge(
+            %{
+              route_class: "proxy_http",
+              transport: "http_json",
+              candidate_count: 1,
+              compressed_count: 1,
+              skipped_count: 0,
+              original_bytes: Map.get(attrs, :original_bytes, 4096),
+              compressed_bytes: Map.get(attrs, :compressed_bytes, 1024),
+              raw_candidate: sentinel,
+              original_output: sentinel,
+              compressed_output: compressed_sentinel
+            },
+            Map.take(attrs, [:original_tokens, :compressed_tokens, :elapsed_ms])
+          )
+
+        assert {:ok, _attempt} =
+                 Accounting.create_attempt(request, assignment, %{
+                   status: "succeeded",
+                   response_metadata: compression_metadata(metadata_attrs)
+                 })
+
+        request.id
+      end)
+
+    assert %{items: logs, total: 5} =
+             Accounting.list_request_logs(pool, filters: [model: "compression-throughput-"])
+
+    assert MapSet.new(Enum.map(logs, & &1.id)) == MapSet.new(request_ids)
+
+    for log <- logs do
+      assert is_nil(log.payload_compression.processed_tokens_per_second)
+      refute Map.has_key?(log.metadata["payload_compression"], "processed_tokens_per_second")
+    end
 
     log_text = inspect(logs)
     refute log_text =~ sentinel
@@ -2476,6 +2556,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
         "compressed_bytes" => Map.fetch!(attrs, :compressed_bytes),
         "original_tokens" => Map.get(attrs, :original_tokens),
         "compressed_tokens" => Map.get(attrs, :compressed_tokens),
+        "elapsed_ms" => Map.get(attrs, :elapsed_ms),
         "strategies" => ["log_output"],
         "raw_candidate" => Map.fetch!(attrs, :raw_candidate),
         "original_output" => Map.fetch!(attrs, :original_output),

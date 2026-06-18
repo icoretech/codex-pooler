@@ -231,7 +231,7 @@ Eligible families are backend Responses, backend `/v1/responses`, backend and pu
 
 Request compression is fail-open. If scanning, token counting, rewriting, or limits fail, the original request body is sent upstream and request logs record a safe `payload_compression` status and reason. JSON bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process using tokenizer data shipped with the application; it does not call OpenAI or load a local model.
 
-Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable.
+Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable. When sanitized original-token count and elapsed time are present, the row also derives compression processing throughput without storing a separate throughput value.
 
 ## Upstreams Step
 

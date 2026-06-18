@@ -1150,6 +1150,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                    original_tokens: 1000,
                    compressed_tokens: 400,
                    tokenizer_input_skipped_count: 1,
+                   elapsed_ms: 250,
                    raw_candidate: sentinel,
                    original_output: sentinel,
                    compressed_output: compressed_sentinel
@@ -1184,6 +1185,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                    transport: "websocket",
                    original_bytes: 8192,
                    compressed_bytes: 4096,
+                   elapsed_ms: 500,
                    raw_candidate: sentinel,
                    original_output: sentinel,
                    compressed_output: compressed_sentinel
@@ -1217,6 +1219,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                    transport: "http_json",
                    original_bytes: 4096,
                    compressed_bytes: 4096,
+                   original_tokens: 1000,
+                   compressed_tokens: 1000,
+                   elapsed_ms: 0,
                    raw_candidate: sentinel,
                    original_output: sentinel,
                    compressed_output: compressed_sentinel
@@ -1271,12 +1276,41 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#mobile-request-log-#{token_request.id}-compression-savings[title*='tokenizer input skipped: 1']"
            )
 
+    assert has_element?(
+             view,
+             "#request-log-#{token_request.id}-compression-throughput[data-compression-throughput-kind='processed_tokens_per_second'][data-processed-tokens-per-second='4000']",
+             "4,000 compression tokens/s"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{token_request.id}-compression-throughput[title*='compression processing throughput']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{token_request.id}-compression-throughput[title*='1,000 original tokens / 250 ms']"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{token_request.id}-compression-throughput[data-compression-throughput-kind='processed_tokens_per_second'][data-processed-tokens-per-second='4000']",
+             "4,000 compression tokens/s"
+           )
+
+    assert has_element?(
+             view,
+             "#mobile-request-log-#{token_request.id}-compression-throughput[title*='1,000 original tokens / 250 ms']"
+           )
+
     refute has_element?(view, "#request-log-#{byte_request.id}-compression-savings")
     refute has_element?(view, "#mobile-request-log-#{byte_request.id}-compression-savings")
-
+    refute has_element?(view, "#request-log-#{byte_request.id}-compression-throughput")
+    refute has_element?(view, "#mobile-request-log-#{byte_request.id}-compression-throughput")
     refute has_element?(view, "#request-log-#{zero_request.id}-compression-savings")
     refute has_element?(view, "#mobile-request-log-#{zero_request.id}-compression-savings")
-
+    refute has_element?(view, "#request-log-#{zero_request.id}-compression-throughput")
+    refute has_element?(view, "#mobile-request-log-#{zero_request.id}-compression-throughput")
     html = render(view)
     refute html =~ sentinel
     refute html =~ compressed_sentinel
@@ -2543,6 +2577,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       metadata
       |> maybe_put("original_tokens", Map.get(attrs, :original_tokens))
       |> maybe_put("compressed_tokens", Map.get(attrs, :compressed_tokens))
+      |> maybe_put("elapsed_ms", Map.get(attrs, :elapsed_ms))
       |> maybe_put(
         "tokenizer_input_skipped_count",
         Map.get(attrs, :tokenizer_input_skipped_count)

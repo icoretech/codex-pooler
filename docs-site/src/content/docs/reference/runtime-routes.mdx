@@ -576,7 +576,7 @@ Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and o
 
 Compression is fail-open. Scanner, tokenizer, compression, and limit errors preserve the original upstream request body and record safe `payload_compression` metadata. JSON request bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process with tokenizer data shipped by the application; it does not call OpenAI or load a local model.
 
-Request logs show safe aggregate savings only. They prefer saved tokens and token savings percent when token counts are available, and fall back to saved bytes and byte savings percent when token counts are unavailable.
+Request logs show safe aggregate savings only. They prefer saved tokens and token savings percent when token counts are available, and fall back to saved bytes and byte savings percent when token counts are unavailable. Compression processing throughput is derived only from sanitized original-token count and elapsed time.
 
 Continuity headers are also local routing inputs. Codex Pooler chooses them in this order:
 

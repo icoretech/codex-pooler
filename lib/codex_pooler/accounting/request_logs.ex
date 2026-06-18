@@ -506,7 +506,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   defp payload_compression_projection(%{"payload_compression" => compression})
        when is_map(compression) do
-    %{
+    summary = %{
       attempted: true,
       enabled: bool_value(Map.get(compression, "enabled")),
       status: safe_payload_compression_text(Map.get(compression, "status")),
@@ -520,6 +520,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       skipped_count: non_negative_integer(Map.get(compression, "skipped_count")),
       tokenizer_input_skipped_count:
         non_negative_integer(Map.get(compression, "tokenizer_input_skipped_count")),
+      elapsed_ms: non_negative_integer(Map.get(compression, "elapsed_ms")),
       original_bytes: non_negative_integer(Map.get(compression, "original_bytes")),
       compressed_bytes: non_negative_integer(Map.get(compression, "compressed_bytes")),
       saved_bytes: non_negative_integer(Map.get(compression, "saved_bytes")),
@@ -530,6 +531,12 @@ defmodule CodexPooler.Accounting.RequestLogs do
       saved_tokens: non_negative_integer(Map.get(compression, "saved_tokens")),
       token_savings_percent: non_negative_number(Map.get(compression, "token_savings_percent"))
     }
+
+    summary
+    |> Map.put(
+      :processed_tokens_per_second,
+      processed_tokens_per_second(summary.original_tokens, summary.elapsed_ms)
+    )
     |> put_payload_compression_display_metrics()
   end
 
@@ -635,6 +642,16 @@ defmodule CodexPooler.Accounting.RequestLogs do
        do: Float.round(compressed / original, 4)
 
   defp compression_ratio(_original, _compressed), do: nil
+
+  @spec processed_tokens_per_second(non_neg_integer() | nil, non_neg_integer() | nil) ::
+          float() | nil
+  defp processed_tokens_per_second(original_tokens, elapsed_ms)
+       when is_integer(original_tokens) and original_tokens > 0 and is_integer(elapsed_ms) and
+              elapsed_ms > 0 do
+    Float.round(original_tokens / (elapsed_ms / 1_000), 2)
+  end
+
+  defp processed_tokens_per_second(_original_tokens, _elapsed_ms), do: nil
 
   defp bool_value(value) when is_boolean(value), do: value
   defp bool_value(_value), do: nil
