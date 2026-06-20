@@ -127,6 +127,8 @@ The `/v1` surface is compatibility over Codex routing, not a separate OpenAI eng
 
 `POST /v1/responses` lifts system and developer input-message text into top-level `instructions` before dispatching to Codex-compatible work. Streaming `/v1/responses` and `/v1/chat/completions` return early upstream terminal errors as the first public SSE event or data chunk, without synthetic assistant/success prefixes. Non-streaming failures remain OpenAI-shaped JSON errors.
 
+Ordinary OpenAI Responses incomplete terminals are preserved. If an upstream returns `response.incomplete` with `status: "incomplete"` for output limits or content filtering and no embedded error, `/v1/responses` streaming and websocket clients receive that incomplete terminal instead of a synthetic failure. Error-coded incomplete terminals, such as context overflow or stale continuation anchors, are still returned through the sanitized failure path.
+
 Accepted `POST /v1/responses` tool definitions are narrow. OpenAI Responses remote MCP tool definitions are rejected before dispatch.
 
 ## Request compression behavior

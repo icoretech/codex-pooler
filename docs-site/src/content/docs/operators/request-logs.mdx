@@ -118,6 +118,8 @@ The table shows the latest matching rows, with a hard page size limit.
 
 Use status and errors together. A completed row with token usage usually means the request reached an upstream and settled successfully. A failed row may still show route, latency, or partial attempt metadata. A rejected row usually means admission or policy failed before upstream work.
 
+OpenAI Responses `response.incomplete` can be a successful delivered terminal response. For example, an upstream may stop at `max_output_tokens` or a content filter and still return safe usage metadata. Those rows stay `succeeded` and should not be treated as upstream health failures. Error-coded incomplete terminals, stale continuation anchors, stream truncation, and client disconnects still appear as failures or interruptions with sanitized error codes.
+
 Common causes to inspect are:
 
 1. Pool API key paused, revoked, expired, or attached to the wrong Pool
@@ -134,7 +136,7 @@ The Errors column should stay safe to copy into operator tickets. It should not 
 
 Usage lines summarize request accounting, including request count context, token totals, cached input tokens, and estimated cost when pricing is available. Treat these as operational attribution and capacity evidence. They are not a replacement for provider billing records.
 
-If usage is blank, check the request status first. A request can be admitted without final usage if it failed before settlement, if pricing was not matched, or if accounting metadata was not available for that route.
+If usage is blank, check the request status first. A request can be admitted without final usage if it failed before settlement, if pricing was not matched, or if accounting metadata was not available for that route. A delivered incomplete response with missing upstream usage remains `usage_unknown` and does not get an invented settled cost from the reservation estimate.
 
 ## Operational Checklist
 

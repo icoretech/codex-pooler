@@ -16,6 +16,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     "websocket_connection_limit_reached"
   ]
   @websocket_auth_refresh_event_codes ["invalid_api_key", "invalid_authentication"]
+  @incomplete_failure_reason_codes @retryable_first_event_codes ++
+                                     @websocket_auth_refresh_event_codes ++
+                                     [
+                                       "context_length_exceeded",
+                                       "insufficient_quota",
+                                       "invalid_previous_response_id",
+                                       "invalid_request",
+                                       "invalid_request_error",
+                                       "previous_response_not_found",
+                                       "rate_limit_exceeded",
+                                       "unauthorized",
+                                       "usage_limit_exceeded",
+                                       "usage_limit_reached",
+                                       "workspace_member_usage_limit_reached",
+                                       "workspace_owner_usage_limit_reached"
+                                     ]
   @metadata_header_names ~w(openai-request-id x-openai-request-id x-request-id)
   @quota_header_prefixes ~w(x-ratelimit-limit- x-ratelimit-remaining- x-ratelimit-reset-)
   @quota_window_header_suffixes ~w(
@@ -33,6 +49,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           optional(:upstream_code) => String.t() | nil,
           optional(:event_type) => String.t() | nil,
           optional(:data_type) => String.t() | nil
+        }
+  @type terminal_outcome :: %{
+          required(:kind) => atom(),
+          required(:event_type) => String.t() | nil,
+          required(:data_type) => String.t() | nil,
+          optional(:failure) => terminal_failure(),
+          optional(:incomplete_reason) => String.t() | nil
         }
   @type public_openai_responses_stream_state :: %{
           required(:buffer) => binary(),
@@ -74,6 +97,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
       encode_codex_responses_error_sse(decoded)
     else
       [block, separator]
+    end
+  end
+
+  @spec normalize_terminal_event(String.t() | nil, map()) :: {String.t() | nil, map()}
+  def normalize_terminal_event(event_type, decoded) when is_map(decoded) do
+    case terminal_outcome(event_type, decoded) do
+      {:ok, %{kind: :failed, event_type: "response.incomplete"}} ->
+        {"response.failed", canonical_codex_responses_error_event(decoded)}
+
+      _outcome ->
+        {event_type, decoded}
     end
   end
 
@@ -140,60 +174,106 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     end
   end
 
-  @spec terminal_failure(binary()) :: {:ok, terminal_failure()} | :error
-  def terminal_failure(data) when is_binary(data) do
+  @spec terminal_outcome(binary()) :: {:ok, terminal_outcome()} | :error
+  def terminal_outcome(data) when is_binary(data) do
     {blocks, _buffer} = complete_sse_blocks(data, bounded?: false)
 
     blocks
-    |> Enum.find_value(fn block -> terminal_failure_event(sse_event_summary(block)) end)
-    |> Kernel.||(direct_terminal_stream_failure(data))
+    |> Enum.find_value(fn block -> terminal_outcome_event(sse_event_summary(block)) end)
+    |> Kernel.||(direct_terminal_outcome(data))
   end
 
-  @spec terminal_failure_event(map()) :: {:ok, terminal_failure()} | nil
-  def terminal_failure_event(%{event_type: event_type} = event)
-      when event_type in @terminal_event_types do
+  @spec terminal_outcome_event(map()) :: {:ok, terminal_outcome()} | nil
+  def terminal_outcome_event(%{event_type: "response.completed"} = event) do
     {:ok,
      %{
-       code: Map.get(event, :error_code) || event_type,
-       upstream_code: Map.get(event, :upstream_error_code),
-       event_type: event_type,
+       kind: :completed,
+       event_type: "response.completed",
        data_type: Map.get(event, :data_type)
      }}
   end
 
-  def terminal_failure_event(_event), do: nil
+  def terminal_outcome_event(%{event_type: "response.incomplete"} = event) do
+    if incomplete_failure_event?(event) do
+      failure = terminal_failure_from_event(event)
 
-  @spec retryable_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
-  def retryable_first_terminal_failure(%{event_type: event_type, error_code: code} = event)
-      when event_type in @terminal_event_types and code in @retryable_first_event_codes do
-    if previous_response_miss_code?(Map.get(event, :upstream_error_code)) do
-      :error
+      {:ok,
+       %{
+         kind: :failed,
+         event_type: "response.incomplete",
+         data_type: Map.get(event, :data_type),
+         incomplete_reason: Map.get(event, :incomplete_reason),
+         failure: failure
+       }}
     else
       {:ok,
        %{
-         code: code,
-         upstream_code: Map.get(event, :upstream_error_code),
-         event_type: event_type,
-         data_type: Map.get(event, :data_type)
+         kind: :incomplete,
+         event_type: "response.incomplete",
+         data_type: Map.get(event, :data_type),
+         incomplete_reason: Map.get(event, :incomplete_reason)
        }}
     end
   end
 
-  def retryable_first_terminal_failure(_event), do: :error
+  def terminal_outcome_event(%{event_type: event_type} = event)
+      when event_type in ["response.failed", "error"] do
+    failure = terminal_failure_from_event(event)
 
-  @spec auth_refresh_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
-  def auth_refresh_first_terminal_failure(%{event_type: event_type, error_code: code} = event)
-      when event_type in @terminal_event_types and code in @websocket_auth_refresh_event_codes do
     {:ok,
      %{
-       code: code,
-       upstream_code: Map.get(event, :upstream_error_code),
+       kind: :failed,
        event_type: event_type,
-       data_type: Map.get(event, :data_type)
+       data_type: Map.get(event, :data_type),
+       failure: failure
      }}
   end
 
-  def auth_refresh_first_terminal_failure(_event), do: :error
+  def terminal_outcome_event(_event), do: nil
+
+  @spec terminal_failure(binary()) :: {:ok, terminal_failure()} | :error
+  def terminal_failure(data) when is_binary(data) do
+    case terminal_outcome(data) do
+      {:ok, %{kind: :failed, failure: failure}} -> {:ok, failure}
+      {:ok, _outcome} -> :error
+      :error -> :error
+    end
+  end
+
+  @spec terminal_outcome(String.t() | nil, map()) :: {:ok, terminal_outcome()} | nil
+  def terminal_outcome(event_type, decoded) when is_map(decoded) do
+    terminal_outcome_event(decoded_event_summary(event_type, decoded))
+  end
+
+  @spec terminal_failure_event(map()) :: {:ok, terminal_failure()} | nil
+  def terminal_failure_event(event) do
+    case terminal_outcome_event(event) do
+      {:ok, %{kind: :failed, failure: failure}} -> {:ok, failure}
+      _outcome -> nil
+    end
+  end
+
+  @spec retryable_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
+  def retryable_first_terminal_failure(event) do
+    with {:ok, %{code: code} = failure} when code in @retryable_first_event_codes <-
+           terminal_failure_event(event),
+         false <- previous_response_miss_code?(failure.upstream_code) do
+      {:ok, failure}
+    else
+      _other -> :error
+    end
+  end
+
+  @spec auth_refresh_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
+  def auth_refresh_first_terminal_failure(event) do
+    case terminal_failure_event(event) do
+      {:ok, %{code: code} = failure} when code in @websocket_auth_refresh_event_codes ->
+        {:ok, failure}
+
+      _other ->
+        :error
+    end
+  end
 
   @spec internal_rate_limit_event?(term()) :: boolean()
   def internal_rate_limit_event?(%{} = event) do
@@ -332,6 +412,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
       not is_nil(sse_error_code(decoded))
   end
 
+  defp codex_responses_error_needs_canonical_response?("response.incomplete", decoded) do
+    match?({:ok, %{kind: :failed}}, terminal_outcome("response.incomplete", decoded))
+  end
+
   defp codex_responses_error_needs_canonical_response?(_event_type, _decoded), do: false
 
   defp encode_codex_responses_error_sse(decoded) do
@@ -440,7 +524,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
     response
     |> Map.put("error", error)
-    |> Map.put_new("status", "failed")
+    |> Map.put("status", "failed")
   end
 
   defp canonical_codex_responses_error_message(_decoded, _code, upstream_code)
@@ -458,12 +542,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   defp sse_event_summary(block) do
     {event_type, decoded} = codex_responses_stream_block_event(block)
+    decoded_event_summary(event_type, decoded)
+  end
 
+  defp decoded_event_summary(event_type, decoded) do
     %{
       event_type: event_type,
       error_code: sse_error_code(decoded),
       upstream_error_code: upstream_error_code(decoded),
-      data_type: decoded_string(decoded, "type")
+      data_type: decoded_string(decoded, "type"),
+      explicit_error?: explicit_terminal_error?(decoded),
+      incomplete_reason: incomplete_reason(decoded)
     }
   end
 
@@ -480,7 +569,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
            event_type: decoded_string(decoded, "type"),
            error_code: sse_error_code(decoded),
            upstream_error_code: upstream_error_code(decoded),
-           data_type: decoded_string(decoded, "type")
+           data_type: decoded_string(decoded, "type"),
+           explicit_error?: explicit_terminal_error?(decoded),
+           incomplete_reason: incomplete_reason(decoded)
          }}
 
       _other ->
@@ -495,12 +586,45 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     end
   end
 
-  defp direct_terminal_stream_failure(data) do
+  defp direct_terminal_outcome(data) do
     case incomplete_sse_or_direct_stream_event_summary(data) do
-      {:ok, event} -> terminal_failure_event(event) || :error
+      {:ok, event} -> terminal_outcome_event(event) || :error
       :incomplete -> :error
     end
   end
+
+  defp terminal_failure_from_event(event) do
+    event_type = Map.get(event, :event_type)
+
+    %{
+      code: Map.get(event, :error_code) || event_type,
+      upstream_code: Map.get(event, :upstream_error_code),
+      event_type: event_type,
+      data_type: Map.get(event, :data_type)
+    }
+  end
+
+  defp explicit_terminal_error?(decoded) when is_map(decoded) do
+    is_map(get_in(decoded, ["response", "error"])) or is_map(get_in(decoded, ["error"])) or
+      is_map(get_in(decoded, ["response", "status_details", "error"])) or
+      is_map(get_in(decoded, ["status_details", "error"])) or typeless_detail_error?(decoded)
+  end
+
+  defp incomplete_reason(decoded) when is_map(decoded) do
+    nested_string(decoded, ["response", "incomplete_details", "reason"]) ||
+      nested_string(decoded, ["incomplete_details", "reason"])
+  end
+
+  defp incomplete_failure_event?(event) do
+    Map.get(event, :explicit_error?) or
+      incomplete_failure_reason?(Map.get(event, :incomplete_reason)) or
+      incomplete_failure_reason?(Map.get(event, :upstream_error_code))
+  end
+
+  defp incomplete_failure_reason?(reason) when reason in @incomplete_failure_reason_codes,
+    do: true
+
+  defp incomplete_failure_reason?(_reason), do: false
 
   defp visible_downstream_event?(event) do
     {event_type, data_type} = event_stream_types(event)

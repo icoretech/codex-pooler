@@ -11,6 +11,49 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "terminal_outcome/1" do
+    test "classifies ordinary response.incomplete as success-like incomplete" do
+      frame =
+        sse_event("response.incomplete", %{
+          "type" => "response.incomplete",
+          "response" => %{
+            "id" => "resp_normal_incomplete",
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "max_output_tokens"},
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+          }
+        })
+
+      assert {:ok, outcome} = StreamProtocol.terminal_outcome(frame)
+      assert outcome.kind == :incomplete
+      assert outcome.event_type == "response.incomplete"
+      assert outcome.incomplete_reason == "max_output_tokens"
+      assert StreamProtocol.terminal_failure(frame) == :error
+    end
+
+    test "classifies failure-coded response.incomplete as failed" do
+      frame =
+        sse_event("response.incomplete", %{
+          "type" => "response.incomplete",
+          "response" => %{
+            "id" => "resp_failed_incomplete",
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "context_length_exceeded"}
+          }
+        })
+
+      assert {:ok, %{kind: :failed, failure: failure}} = StreamProtocol.terminal_outcome(frame)
+      assert failure.code == "context_length_exceeded"
+      assert failure.event_type == "response.incomplete"
+
+      normalized = StreamProtocol.normalize_codex_responses_sse_data(frame)
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(normalized)
+      assert data["type"] == "response.failed"
+      assert data["response"]["status"] == "failed"
+      assert data["error"]["code"] == "context_length_exceeded"
+    end
+  end
+
   describe "normalize_public_openai_responses_sse_data/2" do
     test "preserves oversized split reasoning events until the SSE block is complete" do
       state = StreamProtocol.public_openai_responses_stream_state()

@@ -61,16 +61,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   @spec finalize_terminal(DispatchContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_terminal(context, finalization) do
-    %{
-      body: body,
-      terminal: terminal,
-      status: status,
-      headers: headers,
-      started: started
-    } = finalization
+    %{body: body, terminal: terminal} = finalization
 
-    %{reserved: reserved, attempt: attempt, request_options: request_options} =
-      context
+    case websocket_terminal_outcome(terminal, body) do
+      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
+        finalize_completed(context, finalization)
+
+      _outcome ->
+        finalize_terminal_failure(context, finalization)
+    end
+  end
+
+  defp finalize_terminal_failure(context, finalization) do
+    %{body: body, terminal: terminal, headers: headers} = finalization
 
     upstream_code =
       Map.get(finalization, :upstream_error_code) ||
@@ -80,34 +83,66 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     websocket_frame_headers = Map.get(finalization, :websocket_frame_headers, %{})
     metadata_headers = headers ++ Map.to_list(websocket_frame_headers)
 
-    with :ok <- Streaming.record_terminal_health_failure(upstream_code, metadata_headers, context) do
-      case AttemptSettlement.finalize_partial_stream_failure(
-             reserved.request,
-             attempt,
-             ResponseUsage.from_websocket_body(body),
-             SettlementAttrs.partial_stream_failure(
-               context,
-               status,
-               code,
-               code,
-               metadata_headers
-               |> Metadata.websocket_response_metadata(
-                 code,
-                 request_options,
-                 websocket_frame_headers
-               )
-               |> Metadata.maybe_put_masked_error_metadata(upstream_code, code),
-               started: started
-             )
-           ) do
-        {:ok, _finalized} ->
-          {:ok, %{status: 200, headers: [], websocket_messages: []}}
+    attempt_metadata =
+      terminal_failure_metadata(
+        context,
+        metadata_headers,
+        websocket_frame_headers,
+        code,
+        upstream_code
+      )
 
-        {:error, gateway_error} ->
-          {:error, gateway_error}
-      end
+    case Streaming.record_terminal_health_failure(upstream_code, metadata_headers, context) do
+      :ok ->
+        settle_terminal_failure(context, finalization, body, code, attempt_metadata)
+
+      {:error, _gateway_error} = error ->
+        error
     end
   end
+
+  defp terminal_failure_metadata(
+         context,
+         metadata_headers,
+         websocket_frame_headers,
+         code,
+         upstream_code
+       ) do
+    metadata_headers
+    |> Metadata.websocket_response_metadata(
+      code,
+      context.request_options,
+      websocket_frame_headers
+    )
+    |> Metadata.maybe_put_masked_error_metadata(upstream_code, code)
+  end
+
+  defp settle_terminal_failure(context, finalization, body, code, attempt_metadata) do
+    %{reserved: reserved, attempt: attempt} = context
+
+    case AttemptSettlement.finalize_partial_stream_failure(
+           reserved.request,
+           attempt,
+           ResponseUsage.from_websocket_body(body),
+           SettlementAttrs.partial_stream_failure(
+             context,
+             finalization.status,
+             code,
+             code,
+             attempt_metadata,
+             started: finalization.started
+           )
+         ) do
+      {:ok, _finalized} ->
+        {:ok, %{status: 200, headers: [], websocket_messages: []}}
+
+      {:error, gateway_error} ->
+        {:error, gateway_error}
+    end
+  end
+
+  defp websocket_terminal_outcome("response.completed", _body), do: {:ok, %{kind: :completed}}
+  defp websocket_terminal_outcome(_terminal, body), do: StreamProtocol.terminal_outcome(body)
 
   @spec finalize_failed(DispatchContext.t(), map()) :: {:error, map()}
   def finalize_failed(context, %{reason: :client_disconnected} = finalization) do

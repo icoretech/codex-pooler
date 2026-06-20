@@ -270,6 +270,31 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert state == %{classified?: true, buffer: ""}
     end
 
+    test "writes ordinary response.incomplete after visible output without terminal failure" do
+      state = StreamAttempt.first_event_state()
+
+      assert {{:write, _data}, state} =
+               StreamAttempt.classify_first_event(
+                 sse_event("response.output_text.delta", %{
+                   "type" => "response.output_text.delta",
+                   "delta" => "visible synthetic text"
+                 }),
+                 state
+               )
+
+      terminal =
+        sse_event("response.incomplete", %{
+          "type" => "response.incomplete",
+          "response" => %{
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "max_output_tokens"}
+          }
+        })
+
+      assert {{:write, ^terminal}, state} = StreamAttempt.classify_first_event(terminal, state)
+      assert state == %{classified?: true, buffer: ""}
+    end
+
     test "detects terminal failures after the first event is classified" do
       state = StreamAttempt.first_event_state()
 

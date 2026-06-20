@@ -451,11 +451,14 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
-    assert request.status == "failed"
-    assert request.last_error_code == "max_output_tokens"
+    assert request.status == "succeeded"
+    assert request.usage_status == "usage_known"
+    assert is_nil(request.last_error_code)
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.status == "failed"
+    assert attempt.status == "succeeded"
+    assert attempt.usage_status == "usage_known"
+    assert is_nil(attempt.network_error_code)
   end
 
   @tag :chat_content_filter_finish

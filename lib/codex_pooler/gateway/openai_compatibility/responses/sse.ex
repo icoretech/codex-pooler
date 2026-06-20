@@ -9,7 +9,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
   def response_from_sse(body) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{} = decoded} ->
-        {:ok, Map.put_new(decoded, "object", "response")}
+        response = Map.put_new(decoded, "object", "response")
+
+        case response_terminal_type(response) do
+          nil ->
+            {:ok, response}
+
+          type ->
+            terminal_error(%{"type" => type, "response" => response}, response) || {:ok, response}
+        end
 
       _error ->
         body |> decoded_sse_events() |> response_from_sse_events()
@@ -49,11 +57,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
     )
   end
 
-  defp terminal_error(_event, %{"status" => status})
-       when status in ["completed", "in_progress", "incomplete"],
-       do: nil
-
   defp terminal_error(event, response) do
+    event_type = event["type"] || response_terminal_type(response)
+
+    case StreamProtocol.terminal_outcome(event_type, event) do
+      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
+        nil
+
+      {:ok, %{kind: :failed, failure: failure}} ->
+        terminal_failure_error(event, response, failure)
+
+      _outcome ->
+        terminal_failure_error(event, response, nil)
+    end
+  end
+
+  defp terminal_failure_error(event, response, failure) do
     error = response["error"] || event["error"]
 
     case error do
@@ -70,9 +89,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
          )}
 
       _other ->
-        {:error, Error.reason(502, "upstream_error", "upstream response failed")}
+        {:error, Error.reason(502, failure_code(failure), "upstream request failed")}
     end
   end
+
+  defp failure_code(%{code: code}) when is_binary(code), do: code
+  defp failure_code(_failure), do: "upstream_error"
+
+  defp response_terminal_type(%{"status" => "completed"}), do: "response.completed"
+  defp response_terminal_type(%{"status" => "failed"}), do: "response.failed"
+  defp response_terminal_type(%{"status" => "incomplete"}), do: "response.incomplete"
+  defp response_terminal_type(_response), do: nil
 
   defp maybe_backfill_output(%{"output" => output} = response, _events)
        when is_list(output) and output != [],

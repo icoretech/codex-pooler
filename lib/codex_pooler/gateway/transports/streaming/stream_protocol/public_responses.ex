@@ -85,6 +85,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
     type = event_type || decoded_string(decoded, "type")
+    {type, decoded} = StreamProtocol.normalize_terminal_event(type, decoded)
     decoded = normalize_public_event(type, decoded)
 
     cond do

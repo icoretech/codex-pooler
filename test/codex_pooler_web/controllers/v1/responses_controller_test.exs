@@ -381,6 +381,81 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :v1_websocket
+  test "GET /v1/responses websocket preserves ordinary response.incomplete" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.incomplete",
+             %{
+               "type" => "response.incomplete",
+               "response" => %{
+                 "id" => "resp_v1_websocket_incomplete",
+                 "status" => "incomplete",
+                 "incomplete_details" => %{"reason" => "max_output_tokens"},
+                 "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "v1-public-ws-incomplete-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.incomplete",
+               "response" => %{
+                 "id" => "resp_v1_websocket_incomplete",
+                 "status" => "incomplete",
+                 "incomplete_details" => %{"reason" => "max_output_tokens"}
+               }
+             } = Jason.decode!(frame)
+
+      refute frame =~ "response.failed"
+      assert_receive_finalized_request!()
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+      assert request.usage_status == "usage_known"
+      assert is_nil(request.last_error_code)
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.transport == "websocket"
+      assert attempt.status == "succeeded"
+      assert attempt.usage_status == "usage_known"
+      assert is_nil(attempt.network_error_code)
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :v1_websocket
   test "GET /v1/responses websocket coerces public opencode replay frames before dispatch" do
     upstream =
       start_upstream(public_websocket_completed_response("resp_v1_websocket_opencode_replay"))
@@ -2613,6 +2688,27 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :server_error_redaction
+  test "POST /v1/responses SSE collection rejects failure-coded incomplete" do
+    body =
+      "event: response.incomplete\n" <>
+        "data: " <>
+        Jason.encode!(%{
+          "type" => "response.incomplete",
+          "response" => %{
+            "id" => "resp_v1_collect_failed_incomplete",
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "context_length_exceeded"}
+          }
+        }) <>
+        "\n\n"
+
+    assert {:error, error} = Responses.response_from_sse(body)
+    assert error.status == 502
+    assert error.message == "upstream request failed"
+    assert error.code == "context_length_exceeded"
+  end
+
+  @tag :server_error_redaction
   test "POST /v1/responses JSON redacts server-class upstream errors", %{conn: conn} do
     provider_message =
       "provider failed at https://upstream.internal.example/internal/responses?token=secret"
@@ -3000,6 +3096,123 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming preserves ordinary response.incomplete", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.incomplete",
+           %{
+             "type" => "response.incomplete",
+             "response" => %{
+               "id" => "resp_v1_stream_incomplete",
+               "status" => "incomplete",
+               "incomplete_details" => %{"reason" => "max_output_tokens"},
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic incomplete stream request",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+
+    assert [%{"event" => "response.incomplete", "data" => data}] =
+             public_sse_events(conn.resp_body)
+
+    assert data["type"] == "response.incomplete"
+    assert data["response"]["status"] == "incomplete"
+    assert get_in(data, ["response", "incomplete_details", "reason"]) == "max_output_tokens"
+    refute conn.resp_body =~ "response.failed"
+    refute conn.resp_body =~ "\"error\""
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "succeeded"
+    assert request.usage_status == "usage_known"
+    assert is_nil(request.last_error_code)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.usage_status == "usage_known"
+    assert is_nil(attempt.network_error_code)
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.status == "succeeded"
+    assert log.usage_status == "usage_known"
+    assert log.denial_reason == nil
+    assert log.token_counts.usage_status == "usage_known"
+    assert log.token_counts.input_tokens == 4
+    assert is_nil(log.token_counts.output_tokens)
+    assert log.token_counts.total_tokens == 4
+    assert log.cost.status == "priced"
+    assert Decimal.positive?(log.cost.usd)
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming rewrites failure-coded response.incomplete", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.incomplete",
+           %{
+             "type" => "response.incomplete",
+             "response" => %{
+               "id" => "resp_v1_stream_failed_incomplete",
+               "status" => "incomplete",
+               "incomplete_details" => %{"reason" => "context_length_exceeded"}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic failed incomplete stream request",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
+    assert data["type"] == "response.failed"
+    assert data["response"]["status"] == "failed"
+    assert data["error"]["code"] == "context_length_exceeded"
+    refute conn.resp_body =~ "event: response.incomplete\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.usage_status == "usage_unknown"
+    assert request.last_error_code == "context_length_exceeded"
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.status == "failed"
+    assert log.usage_status == "usage_unknown"
+    assert log.denial_reason == "context_length_exceeded"
+    assert log.token_counts.usage_status == "usage_unknown"
+    assert log.cost.status == "unpriced"
+    assert is_nil(log.cost.usd)
   end
 
   @tag :streaming_sequence

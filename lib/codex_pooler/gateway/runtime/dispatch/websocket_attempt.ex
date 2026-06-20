@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.{AttemptSettlement, Metadata}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
@@ -81,19 +82,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           failure
         )
 
-      {:ok, %{terminal: "response.completed"} = response} ->
-        Finalization.finalize_completed_websocket_response(
-          context,
+      {:ok, %{terminal: terminal} = response} ->
+        finalization =
           response
           |> Map.put(:started, started)
-          |> Map.put(:callbacks, callbacks)
-        )
+          |> maybe_put_websocket_callbacks(callbacks)
 
-      {:ok, response} ->
-        Finalization.finalize_terminal_websocket_response(
-          context,
-          Map.put(response, :started, started)
-        )
+        case websocket_terminal_outcome(terminal, Map.get(response, :body, "")) do
+          {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
+            Finalization.finalize_completed_websocket_response(context, finalization)
+
+          _outcome ->
+            Finalization.finalize_terminal_websocket_response(context, finalization)
+        end
 
       {:error, response} ->
         Finalization.finalize_failed_websocket_response(
@@ -302,6 +303,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         )
     end
   end
+
+  defp maybe_put_websocket_callbacks(%{terminal: terminal} = finalization, callbacks) do
+    case websocket_terminal_outcome(terminal, Map.get(finalization, :body, "")) do
+      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
+        Map.put(finalization, :callbacks, callbacks)
+
+      _outcome ->
+        finalization
+    end
+  end
+
+  defp websocket_terminal_outcome("response.completed", _body), do: {:ok, %{kind: :completed}}
+  defp websocket_terminal_outcome(_terminal, body), do: StreamProtocol.terminal_outcome(body)
 
   defp finalize_exhausted_auth_refresh(context, dispatch_request, response, failure, started) do
     case Map.get(response, :body, "") do

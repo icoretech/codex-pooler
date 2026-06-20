@@ -35,9 +35,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttempt do
 
   defp classify_data_after_first_event(data) do
     classification =
-      case StreamProtocol.terminal_failure(data) do
-        {:ok, failure} -> {:write_terminal_failure, data, failure}
-        :error -> {:write, data}
+      case StreamProtocol.terminal_outcome(data) do
+        {:ok, %{kind: :failed, failure: failure}} -> {:write_terminal_failure, data, failure}
+        _outcome -> {:write, data}
       end
 
     {classification, %{classified?: true, buffer: ""}}
@@ -80,9 +80,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttempt do
     if StreamProtocol.internal_rate_limit_event?(event) do
       {:write, buffer}
     else
-      case StreamProtocol.terminal_failure_event(event) do
-        {:ok, failure} -> {:write_terminal_failure, buffer, failure}
-        nil -> {:write, buffer}
+      case StreamProtocol.terminal_outcome_event(event) do
+        {:ok, %{kind: :failed, failure: failure}} -> {:write_terminal_failure, buffer, failure}
+        _outcome -> {:write, buffer}
       end
     end
   end
