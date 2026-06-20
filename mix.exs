@@ -73,7 +73,7 @@ defmodule CodexPooler.MixProject do
        depth: 1},
       {:swoosh, "== 1.26.1"},
       {:gen_smtp, "== 1.3.0"},
-      {:req, "== 0.6.1"},
+      {:req, "== 0.6.2"},
       {:finch, "== 0.22.0"},
       {:mint, "== 1.9.0"},
       {:mint_web_socket, "== 1.0.5"},
