@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.2.1...codex-pooler-v0.3.0) (2026-06-21)
+
+
+### Features
+
+* accept codex responses web search flags ([0c42bd3](https://github.com/icoretech/codex-pooler/commit/0c42bd3fb1e3deee3b8a063b6c35a5ea29378679))
+* **admin:** inspect request log attempt diagnostics ([8f970ec](https://github.com/icoretech/codex-pooler/commit/8f970ec1eae0b731cd8744757152c29787f0fd8d))
+
+
+### Bug Fixes
+
+* **admin:** deduplicate upstream stats rows ([aab6f80](https://github.com/icoretech/codex-pooler/commit/aab6f80b094b93f0a492a9276e0d6e4b80dd58c2))
+* **deps:** update dependency apexcharts to ^5.15.2 ([#72](https://github.com/icoretech/codex-pooler/issues/72)) ([d4c1bbc](https://github.com/icoretech/codex-pooler/commit/d4c1bbc324d91f476de64a5fb1a0c51d95a8b162))
+* **gateway:** persist http transport failure diagnostics ([bc1e52d](https://github.com/icoretech/codex-pooler/commit/bc1e52d0507b9a80e4b27d372b5f7ee91cad2c81))
+* preserve response incomplete terminal semantics ([51afd75](https://github.com/icoretech/codex-pooler/commit/51afd75ecb77bef8167fadb9f010daea1b2cda59))
+* protect exact tool outputs during compression ([3c062c2](https://github.com/icoretech/codex-pooler/commit/3c062c2d504ce27d27fb119f83959d5b68ed2a1b))
+* **upstreams:** reuse fresh quota evidence for transient reconciliation probes ([e1cbac8](https://github.com/icoretech/codex-pooler/commit/e1cbac8172e3f159d0df459abffa48baefcc1daf))
+
 ## [0.2.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.2.0...codex-pooler-v0.2.1) (2026-06-18)
 
 
