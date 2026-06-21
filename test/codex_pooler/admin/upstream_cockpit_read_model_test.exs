@@ -46,9 +46,11 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
     admin_scope = Scope.for_user(admin)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
+    visible_admitted_at = DateTime.add(now, -1, :hour)
+
     insert_request!(visible_pool, visible_assignment, %{
       status: "succeeded",
-      admitted_at: DateTime.add(now, -1, :hour),
+      admitted_at: visible_admitted_at,
       correlation_id: "visible-cockpit-success"
     })
 
@@ -74,7 +76,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
     assert request_health.state == "healthy"
 
     visible_bucket =
-      Enum.find(request_health.items, &(&1.date == Date.to_iso8601(DateTime.to_date(now))))
+      Enum.find(
+        request_health.items,
+        &(&1.date == Date.to_iso8601(DateTime.to_date(visible_admitted_at)))
+      )
 
     assert visible_bucket.success_count == 1
     assert visible_bucket.failure_count == 0
