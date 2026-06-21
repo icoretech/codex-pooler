@@ -540,9 +540,16 @@ Supported input shapes are explicit. Search-result compression accepts classic
 `path:line[:column]: text`, grouped heading output when a path-like heading has
 enough line matches below it, and portable NUL-delimited output shaped as
 `path\0line[:column]: text`. Diff compression requires a hunk header and accepts
-additions-only, deletions-only, replacement, and minimal unified hunks without a
-leading `diff --git` header. Malformed NUL fragments, prose headings, and
-ordinary prose with plus/minus lines stay text/skip.
+additions-only, deletions-only, replacement, minimal unified, combined unified,
+and long-preamble diffs without a leading `diff --git` header. Malformed NUL
+fragments, prose headings, and ordinary prose with plus/minus lines stay
+text/skip.
+
+Protected exact-output tool results stay byte-for-byte upstream-bound before
+rewriting. This includes default function tools `Read`, `Glob`, `Grep`, `Write`,
+and `Edit`, plus external retrieval outputs. Output-only function tool results
+fail closed as protected when the tool name is unavailable. Metadata records
+aggregate skip counts only.
 
 Eligible route families are exact:
 

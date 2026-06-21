@@ -234,7 +234,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :request_compression,
       contract:
-        "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches; search-result compression covers classic path-line matches, grouped heading matches, and portable NUL-delimited matches, and diff compression covers hunk-based additions-only, deletions-only, replacement, and minimal unified diffs without treating ordinary prose as diff/search input; public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
+        "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches; protected exact-output function tool outputs for Read, Glob, Grep, Write, Edit, and external retrieval are skipped before rewriting with aggregate-only skip counts; output-only function tool results fail closed as protected when their tool name is unavailable; search-result compression covers classic path-line matches, grouped heading matches, and portable NUL-delimited matches, and diff compression covers hunk-based additions-only, deletions-only, replacement, minimal unified diffs, combined unified diffs, and long-preamble diffs without treating ordinary prose as diff/search input; public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
     },
     %{
       slug: :function_tool_schema_lowering,
@@ -278,7 +278,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, keep POST /v1/responses/compact routed only to deterministic unsupported_endpoint with no upstream compact dispatch, reject OpenAI Responses remote MCP tool definitions before upstream dispatch in both top-level tools and nested additional_tools.tools locations with OpenAI-shaped invalid_request errors, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, emit early public streaming terminal errors without synthetic success prefixes, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
+        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, keep POST /v1/responses/compact routed only to deterministic unsupported_endpoint with no upstream compact dispatch, reject OpenAI Responses remote MCP tool definitions before upstream dispatch in both top-level tools and nested additional_tools.tools locations with OpenAI-shaped invalid_request errors, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Codex-native Responses web_search hosted tool shapes with boolean access flags while keeping web_search_preview type-only, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, emit early public streaming terminal errors without synthetic success prefixes, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, translate OpenClaw assistant thinking replays before validation, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow"
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -578,6 +578,14 @@ defmodule CodexPooler.CompatibilityMatrix do
         request_log_metadata: "payload_compression",
         metadata_only: true
       },
+      protected_tool_outputs: %{
+        default_function_names: ["Read", "Glob", "Grep", "Write", "Edit"],
+        lowercase_variants: true,
+        external_retrieval: true,
+        unknown_function_output_behavior: "protected_original_output_preserved",
+        output_behavior: "original_output_preserved",
+        metadata: "aggregate_counts_only"
+      },
       supported_input_shapes: %{
         search_results: [
           "classic_path_line",
@@ -588,7 +596,9 @@ defmodule CodexPooler.CompatibilityMatrix do
           "hunk_additions_only",
           "hunk_deletions_only",
           "hunk_replacement",
-          "minimal_unified_hunk"
+          "minimal_unified_hunk",
+          "combined_unified_hunk",
+          "long_preamble_diff"
         ],
         false_positive_guards: [
           "path_like_group_heading",
@@ -695,6 +705,20 @@ defmodule CodexPooler.CompatibilityMatrix do
       responses_truncation: %{
         accepted_values: ["auto", "disabled"],
         forwarded_upstream: false
+      },
+      responses_builtin_tools: %{
+        web_search_preview: %{accepted_shape: "type_only"},
+        web_search: %{
+          accepted_required: ["type", "external_web_access"],
+          accepted_optional: ["index_gated_web_access"],
+          valid_combinations: [
+            "external_web_access=false",
+            "external_web_access=true",
+            "external_web_access=true,index_gated_web_access=true"
+          ],
+          rejected_options: ["filters", "search_context_size", "user_location"]
+        },
+        image_generation: %{accepted_shape: "type_only_or_exact_known_image_options"}
       },
       instruction_lifting: %{
         roles: ["system", "developer"],

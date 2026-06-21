@@ -8,23 +8,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
 
+  @tag :client_metadata
   test "POST /backend-api/codex/responses bridges terminal compaction_trigger to compact SSE", %{
     conn: conn
   } do
+    request_turn_state = "compact-bridge-request-turn-state-#{System.unique_integer([:positive])}"
+
+    response_turn_state =
+      "compact-bridge-response-turn-state-#{System.unique_integer([:positive])}"
+
     upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_compaction_bridge",
-          "object" => "response.compaction",
-          "output" => [
-            %{
-              "type" => "compaction",
-              "encrypted_content" => "encrypted-compact-fixture"
-            }
-          ],
-          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8},
-          "raw_compact_detail" => "must-not-leak"
-        })
+        FakeUpstream.json_response_with_headers(
+          %{
+            "id" => "resp_compaction_bridge",
+            "object" => "response.compaction",
+            "output" => [
+              %{
+                "type" => "compaction",
+                "encrypted_content" => "encrypted-compact-fixture"
+              }
+            ],
+            "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8},
+            "raw_compact_detail" => "must-not-leak"
+          },
+          [{"x-codex-turn-state", response_turn_state}]
+        )
       )
 
     setup =
@@ -54,6 +63,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     conn =
       conn
+      |> put_req_header("x-codex-turn-state", request_turn_state)
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
@@ -72,6 +82,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert [content_type] = get_resp_header(conn, "content-type")
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
+    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
 
     events = backend_sse_events(response(conn, 200))
     assert Enum.map(events, & &1["event"]) == ["response.output_item.done", "response.completed"]
@@ -104,6 +115,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
+    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["instructions"] == "compact bridge instruction"
     assert captured.json["input"] == input
@@ -124,6 +136,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+
+    persistence_text = inspect({request, attempt})
+    refute persistence_text =~ request_turn_state
+    refute persistence_text =~ response_turn_state
   end
 
   test "POST /backend-api/codex/v1/responses bridges compaction_summary result shape", %{

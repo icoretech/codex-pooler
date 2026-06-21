@@ -1346,6 +1346,12 @@ admin, MCP, usage, and other non-Responses requests are not eligible; public
 `/v1/responses/compact` remains unsupported because it has no upstream compact
 dispatch.
 
+Compression preserves protected exact-output tool results before rewriting:
+default exact-output function tools `Read`, `Glob`, `Grep`, `Write`, and `Edit`,
+plus external retrieval outputs, stay byte-for-byte upstream-bound. Output-only
+function tool results also fail closed as protected when the tool name is not
+available. Only aggregate skip counts are recorded in safe `payload_compression`
+metadata.
 Request compression is request-side only. Codex Pooler does not store raw tool
 outputs or raw response bodies.
 

@@ -167,6 +167,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "additions-only"
       assert feature.contract =~ "deletions-only"
       assert feature.contract =~ "minimal unified diffs"
+      assert feature.contract =~ "combined unified diffs"
+      assert feature.contract =~ "long-preamble diffs"
+      assert feature.contract =~ "protected exact-output function tool outputs"
+      assert feature.contract =~ "external retrieval"
+      assert feature.contract =~ "output-only function tool results fail closed"
+
+      assert fixture.protected_tool_outputs == %{
+               default_function_names: ["Read", "Glob", "Grep", "Write", "Edit"],
+               lowercase_variants: true,
+               external_retrieval: true,
+               unknown_function_output_behavior: "protected_original_output_preserved",
+               output_behavior: "original_output_preserved",
+               metadata: "aggregate_counts_only"
+             }
+
       assert feature.contract =~ "ordinary prose"
 
       assert fixture.supported_input_shapes == %{
@@ -179,7 +194,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "hunk_additions_only",
                  "hunk_deletions_only",
                  "hunk_replacement",
-                 "minimal_unified_hunk"
+                 "minimal_unified_hunk",
+                 "combined_unified_hunk",
+                 "long_preamble_diff"
                ],
                false_positive_guards: [
                  "path_like_group_heading",
@@ -208,6 +225,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "remote MCP tool definitions"
       assert responses_chat.contract =~ "additional_tools.tools"
       assert responses_chat.contract =~ "not forwarded upstream"
+      refute responses_chat.contract =~ "web_search hosted tool shapes"
+      refute responses_chat.contract =~ "web_search_preview remains type-only"
 
       assert responses_chat.contract =~
                "Hermes assistant replay may include safe assistant status metadata"
@@ -243,6 +262,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         dispatch: false
       }
 
+      expected_responses_builtin_tools = %{
+        web_search_preview: %{accepted_shape: "type_only"},
+        web_search: %{
+          accepted_required: ["type", "external_web_access"],
+          accepted_optional: ["index_gated_web_access"],
+          valid_combinations: [
+            "external_web_access=false",
+            "external_web_access=true",
+            "external_web_access=true,index_gated_web_access=true"
+          ],
+          rejected_options: ["filters", "search_context_size", "user_location"]
+        },
+        image_generation: %{accepted_shape: "type_only_or_exact_known_image_options"}
+      }
+
       assert responses_fixture.chat_input_fallback == expected_chat_fallback
       assert v1_fixture.chat_input_fallback == expected_chat_fallback
       assert responses_fixture.additional_tools_input_item == expected_additional_tools
@@ -256,6 +290,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              }
 
       assert v1_fixture.responses_truncation == responses_fixture.responses_truncation
+      refute Map.has_key?(responses_fixture, :responses_builtin_tools)
+      assert v1_fixture.responses_builtin_tools == expected_responses_builtin_tools
     end
 
     test "documents compaction trigger bridge and context-overflow recovery boundary" do
@@ -389,6 +425,19 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "pinned /v1/responses continuations"
       assert feature.contract =~ "restart_with_full_context recovery guidance"
       assert feature.contract =~ "accept Responses truncation auto and disabled locally"
+      assert feature.contract =~ "accept Codex-native Responses web_search hosted tool shapes"
+      assert feature.contract =~ "keeping web_search_preview type-only"
+
+      assert get_in(CompatibilityMatrix.fixture!(:v1_supported_surface), [
+               :responses_builtin_tools,
+               :web_search,
+               :valid_combinations
+             ]) == [
+               "external_web_access=false",
+               "external_web_access=true",
+               "external_web_access=true,index_gated_web_access=true"
+             ]
+
       assert feature.contract =~ "without forwarding it upstream"
       assert feature.contract =~ "lift Responses system/developer input-message text"
       assert feature.contract =~ "early public streaming terminal errors"
