@@ -1,5 +1,5 @@
 defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
