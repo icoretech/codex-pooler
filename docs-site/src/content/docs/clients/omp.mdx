@@ -38,8 +38,8 @@ providers:
         input:
           - text
           - image
-        contextWindow: 400000
-        maxTokens: 128000
+        contextWindow: 272000
+        maxTokens: 64000
 ```
 
 For local setup, change `baseUrl` to `http://localhost:4000/v1`.
@@ -67,6 +67,8 @@ modelRoles:
   plan: codex-pooler/gpt-5.5:xhigh
   task: codex-pooler/gpt-5.5:xhigh
   vision: codex-pooler/gpt-5.5:xhigh
+compaction:
+  reserveTokens: 64000
 ```
 
 `startup.setupWizard: false` keeps OMP from opening the initial setup flow after the provider and roles are already configured.
