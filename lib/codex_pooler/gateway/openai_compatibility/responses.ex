@@ -353,6 +353,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_tool(%{"type" => "web_search_preview"} = tool),
     do: validate_exact_builtin_tool(tool, ["type"])
 
+  defp validate_tool(%{"type" => "web_search"} = tool) do
+    with :ok <-
+           validate_exact_builtin_tool(tool, [
+             "type",
+             "external_web_access",
+             "index_gated_web_access"
+           ]),
+         :ok <- validate_required_boolean_tool_field(tool, "external_web_access"),
+         :ok <- validate_optional_boolean_tool_field(tool, "index_gated_web_access") do
+      validate_index_gated_web_access(tool)
+    end
+  end
+
   defp validate_tool(
          %{"type" => "image_generation", "model" => model, "size" => size, "quality" => quality} =
            tool
@@ -429,6 +442,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       :error -> :ok
     end
   end
+
+  defp validate_required_boolean_tool_field(tool, field) do
+    case Map.fetch(tool, field) do
+      {:ok, value} when is_boolean(value) -> :ok
+      {:ok, _value} -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+      :error -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+    end
+  end
+
+  defp validate_index_gated_web_access(%{
+         "external_web_access" => false,
+         "index_gated_web_access" => true
+       }) do
+    {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+  end
+
+  defp validate_index_gated_web_access(_tool), do: :ok
 
   defp validate_exact_builtin_tool(tool, allowed_keys) do
     validate_exact_tool_keys(tool, allowed_keys)

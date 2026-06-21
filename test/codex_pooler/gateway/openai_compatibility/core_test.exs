@@ -2217,6 +2217,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     test "Responses allows only exact safe passthrough built-in tool shapes" do
       for tool <- [
             %{"type" => "web_search_preview"},
+            %{
+              "type" => "web_search",
+              "external_web_access" => true,
+              "index_gated_web_access" => true
+            },
+            %{
+              "type" => "web_search",
+              "external_web_access" => false
+            },
             %{"type" => "image_generation"},
             %{
               "type" => "image_generation",
@@ -2242,6 +2251,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     test "Responses rejects unsupported hosted built-in and deferred tools" do
       rejected_tools = [
         %{"type" => "web_search_preview", "search_context_size" => "low"},
+        %{"type" => "web_search", "external_web_access" => "true"},
+        %{
+          "type" => "web_search",
+          "external_web_access" => true,
+          "index_gated_web_access" => "true"
+        },
+        %{
+          "type" => "web_search",
+          "external_web_access" => false,
+          "index_gated_web_access" => true
+        },
+        %{"type" => "web_search", "index_gated_web_access" => true},
+        %{"type" => "web_search", "external_web_access" => true, "filters" => %{}},
         %{"type" => "image_generation", "quality" => "high"},
         %{"type" => "file_search", "vector_store_ids" => ["vs_fixture"]},
         %{"type" => "code_interpreter", "container" => %{"type" => "auto"}},
@@ -2825,6 +2847,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         assert {:ok, result} = Responses.coerce(payload)
         assert result.payload["reasoning"] == payload["reasoning"]
       end
+    end
+
+    test "Responses preserves Vercel detailed reasoning summary default shape" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "reasoning" => %{"effort" => "high", "summary" => "detailed"}
+      }
+
+      assert {:ok, result} = Responses.coerce(payload)
+      assert result.payload["reasoning"] == payload["reasoning"]
     end
 
     test "Responses rejects unsupported reasoning shapes deterministically" do

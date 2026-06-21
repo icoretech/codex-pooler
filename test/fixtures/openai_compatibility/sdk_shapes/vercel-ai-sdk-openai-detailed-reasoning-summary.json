@@ -1,0 +1,43 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "vercel-ai-sdk-openai.responses.detailed_reasoning_summary_default.v1",
+  "sdk_name": "Vercel AI SDK OpenAI provider",
+  "sdk_package": "@ai-sdk/openai",
+  "sdk_version": "4.0.0-beta.75",
+  "version_provenance": "Reference checkout references/vercel-ai commit 1772a63243 enabled default detailed reasoning summaries when reasoning effort is set; package version read from packages/openai/package.json after reference refresh on 2026-06-20.",
+  "endpoint": "/v1/responses",
+  "http_method": "POST",
+  "scenario": "Responses request emitted by the Vercel OpenAI Responses provider when a reasoning effort is configured and reasoning summary is not explicitly disabled.",
+  "top_level_keys": ["model", "input", "reasoning"],
+  "input_item_types": ["message:user"],
+  "content_part_types": ["input_text"],
+  "tool_shape_keys": [],
+  "expected_decision": {
+    "status": "accept",
+    "allowed_values": ["accept", "translate", "reject", "passthrough"]
+  },
+  "owner_placeholder": "CodexPooler.Gateway.OpenAICompatibility.Responses",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "user_message_placeholder": "sample-user-message",
+    "reasoning_effort": "high",
+    "reasoning_summary": "detailed"
+  },
+  "structural_summary": {
+    "payload_kind": "responses_reasoning_summary_default",
+    "reasoning_effort_present": true,
+    "reasoning_summary_default": "detailed",
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "The provider defaults reasoning.summary to detailed when reasoning effort is set and the provider option does not override reasoningSummary."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false
+  }
+}
