@@ -10,6 +10,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       json =
         encode_request([
           %{
+            "type" => "function_call",
+            "call_id" => "call_function",
+            "name" => "run_command"
+          },
+          %{
             "type" => "function_call_output",
             "call_id" => "call_function",
             "output" => large_output("function")
@@ -36,9 +41,9 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
              ]
 
       assert Enum.map(candidates, & &1.output_path) == [
-               ["input", 0, "output"],
                ["input", 1, "output"],
-               ["input", 2, "output"]
+               ["input", 2, "output"],
+               ["input", 3, "output"]
              ]
 
       assert Enum.all?(candidates, &(&1.output_byte_size >= @min_candidate_bytes))
@@ -141,6 +146,56 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       assert candidate.output_path == ["input", 4, "output"]
     end
 
+    test "skips outputs whose call id belongs to excluded function tool names" do
+      json =
+        encode_request([
+          %{
+            "type" => "function_call",
+            "call_id" => "call_read",
+            "name" => "Read"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_read",
+            "output" => large_output("read")
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_custom",
+            "name" => "Serena.Find_Symbol"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_custom",
+            "output" => large_output("custom")
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_keep",
+            "name" => "run_command"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_keep",
+            "output" => large_output("kept")
+          }
+        ])
+
+      assert {:ok, [candidate]} =
+               ResponsesLiveZone.plan_candidates(json,
+                 min_bytes: @min_candidate_bytes,
+                 excluded_function_tool_names: ["serena.find_symbol"]
+               )
+
+      assert candidate.output_path == ["input", 5, "output"]
+
+      assert {:ok, %{protected_tool_output_skipped_count: 2, candidate_count: 1}} =
+               ResponsesLiveZone.plan(json,
+                 min_bytes: @min_candidate_bytes,
+                 excluded_function_tool_names: ["serena.find_symbol"]
+               )
+    end
+
     test "does not retain external retrieval state between calls" do
       blocked_json =
         encode_request([
@@ -168,10 +223,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       assert {:ok, []} =
                ResponsesLiveZone.plan_candidates(blocked_json, min_bytes: @min_candidate_bytes)
 
-      assert {:ok, [candidate]} =
+      assert {:ok, []} =
                ResponsesLiveZone.plan_candidates(fresh_json, min_bytes: @min_candidate_bytes)
 
-      assert candidate.output_path == ["input", 0, "output"]
+      assert {:ok, %{candidate_count: 0, protected_tool_output_skipped_count: 1}} =
+               ResponsesLiveZone.plan(fresh_json, min_bytes: @min_candidate_bytes)
     end
 
     test "finds supported candidates nested inside JSON arrays" do
@@ -180,6 +236,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
           "model" => "gpt-fixture",
           "input" => [
             [
+              %{
+                "type" => "function_call",
+                "call_id" => "call_nested",
+                "name" => "run_command"
+              },
               %{
                 "type" => "function_call_output",
                 "call_id" => "call_nested",
@@ -194,7 +255,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
                ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
 
       assert candidate.item_type == "function_call_output"
-      assert candidate.output_path == ["input", 0, 0, "output"]
+      assert candidate.output_path == ["input", 0, 1, "output"]
     end
 
     test "does not plan ordinary message items" do
@@ -225,6 +286,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       json =
         encode_request([
           %{
+            "type" => "function_call",
+            "call_id" => "call_real",
+            "name" => "run_command"
+          },
+          %{
             "type" => "function_call_output",
             "call_id" => "call_real",
             "output" => large_output("real")
@@ -246,7 +312,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
                ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
 
       assert candidate.item_type == "function_call_output"
-      assert candidate.output_path == ["input", 0, "output"]
+      assert candidate.output_path == ["input", 1, "output"]
     end
 
     test "orders candidates deterministically by their output range" do
@@ -256,6 +322,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
             "type" => "apply_patch_call_output",
             "call_id" => "call_patch",
             "output" => large_output("patch")
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_function",
+            "name" => "run_command"
           },
           %{
             "type" => "function_call_output",
@@ -272,7 +343,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
 
       assert Enum.map(first_run, & &1.output_path) == [
                ["input", 0, "output"],
-               ["input", 1, "output"]
+               ["input", 2, "output"]
              ]
 
       assert second_run == first_run
@@ -284,6 +355,11 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
 
       json =
         encode_request([
+          %{
+            "type" => "function_call",
+            "call_id" => call_id,
+            "name" => "run_command"
+          },
           %{
             "type" => "function_call_output",
             "call_id" => call_id,
@@ -314,14 +390,23 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       json =
         encode_request([
           %{
+            "type" => "function_call",
+            "call_id" => "call_plan",
+            "name" => "run_command"
+          },
+          %{
             "type" => "function_call_output",
             "call_id" => "call_plan",
             "output" => large_output("plan")
           }
         ])
 
-      assert {:ok, %{candidate_count: 1, candidates: [candidate]}} =
-               ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
+      assert {:ok,
+              %{
+                candidate_count: 1,
+                protected_tool_output_skipped_count: 0,
+                candidates: [candidate]
+              }} = ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
 
       refute Map.has_key?(Map.from_struct(candidate), :call_id)
       refute Map.has_key?(Map.from_struct(candidate), :output)

@@ -1072,10 +1072,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
 
-      assert [%{"type" => "function_call_output", "call_id" => "call_owner_tool"}] =
+      assert [%{"type" => "function_call_output", "call_id" => "call_owner_tool"} = tool_output] =
                second_request.json["input"]
 
-      assert_owner_tool_output_compressed!(second_request, omitted_sentinel)
+      assert tool_output["output"] == original_output
 
       assert [first_log, second_log] = request_logs(setup.pool.id)
       assert first_log.status == "succeeded"
@@ -1089,7 +1089,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
         )
 
-      assert_compressed_payload_metadata!(second_attempt, "proxy_websocket", "websocket")
+      assert %{
+               "enabled" => true,
+               "attempted" => true,
+               "status" => "skipped",
+               "reason" => "protected_tool_outputs",
+               "route_class" => "proxy_websocket",
+               "transport" => "websocket",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = second_attempt.response_metadata["payload_compression"]
 
       owner_metadata = second_log.request_metadata["websocket_owner_forwarding"]
       assert owner_metadata["enabled"] == true
@@ -4121,41 +4132,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     })
     |> Repo.update!()
-  end
-
-  defp assert_owner_tool_output_compressed!(request, omitted_sentinel) do
-    output = request.json["input"] |> List.first() |> Map.fetch!("output")
-
-    unless is_binary(output) and String.contains?(output, "[compressed log output: omitted") do
-      flunk("expected owner upstream websocket tool output to be compressed")
-    end
-
-    if String.contains?(output, omitted_sentinel) do
-      flunk("compressed owner upstream websocket output retained omitted sentinel")
-    end
-
-    if output |> String.split("[compressed log output: omitted") |> length() != 2 do
-      flunk("expected owner upstream websocket tool output to be compressed exactly once")
-    end
-  end
-
-  defp assert_compressed_payload_metadata!(attempt, route_class, transport) do
-    assert %{
-             "enabled" => true,
-             "attempted" => true,
-             "status" => "compressed",
-             "route_class" => ^route_class,
-             "transport" => ^transport,
-             "candidate_count" => 1,
-             "compressed_count" => 1,
-             "skipped_count" => 0
-           } = metadata = attempt.response_metadata["payload_compression"]
-
-    assert "log_output" in metadata["strategies"]
-    assert metadata["original_bytes"] > metadata["compressed_bytes"]
-    assert metadata["saved_bytes"] > 0
-    assert metadata["original_tokens"] > metadata["compressed_tokens"]
-    assert metadata["saved_tokens"] > 0
   end
 
   defp supported_compression_model_opts do

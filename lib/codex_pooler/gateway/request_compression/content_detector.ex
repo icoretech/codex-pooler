@@ -23,9 +23,10 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   @diff_git_regex ~r/^diff --git\s+\S+\s+\S+/m
   @diff_index_regex ~r/^index\s+[0-9a-f]+\.\.[0-9a-f]+/im
   @diff_file_header_regex ~r/^---\s+\S+.*\n\+\+\+\s+\S+/m
-  @diff_hunk_regex ~r/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m
-  @diff_addition_regex ~r/^\+(?!\+\+).+/m
-  @diff_deletion_regex ~r/^-(?!--).+/m
+  @diff_hunk_regex ~r/^@@{1,2}\s+-\d+(?:,\d+)?(?:\s+-\d+(?:,\d+)?)*\s+\+\d+(?:,\d+)?\s+@@{1,2}/m
+  @diff_addition_regex ~r/^(?!\+\+\+)[ +-]{0,2}\+.+/m
+  @diff_deletion_regex ~r/^(?!---)[ +-]{0,2}-.+/m
+  @combined_diff_hunk_regex ~r/^@@@\s+-\d+(?:,\d+)?\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@@/m
 
   @html_root_regex ~r/<!doctype\s+html|<html(?:\s|>|$)/i
   @html_open_tag_regex ~r/<[a-z][\w:-]*(?:\s[^<>]*)?>/i
@@ -144,13 +145,16 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   end
 
   defp diff_points(content, hunks, additions, deletions, changes) do
+    combined_hunks = scan_count(@combined_diff_hunk_regex, content)
+
     [
       cond_score(hunks, [{2, 50}, {1, 45}]),
       cond_score(changes, [{2, 30}, {1, 25}]),
       score(additions > 0 and deletions > 0, 10),
       score(regex_match?(@diff_file_header_regex, content), 15),
       score(regex_match?(@diff_git_regex, content), 10),
-      score(regex_match?(@diff_index_regex, content), 5)
+      score(regex_match?(@diff_index_regex, content), 5),
+      score(combined_hunks > 0, 10)
     ]
     |> Enum.sum()
     |> min(100)

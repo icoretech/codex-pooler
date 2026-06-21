@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Metadata do
     tokenizer_unavailable
     token_count_failed
     tokenizer_input_limit
+    protected_tool_outputs
     no_token_shrink
     over_body_limit
     over_candidate_limit
@@ -46,6 +47,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Metadata do
     saved_tokens
     skipped_count
     tokenizer_input_skipped_count
+    protected_tool_output_skipped_count
   ))
   @number_keys MapSet.new(~w(
     byte_savings_percent
@@ -78,6 +80,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Metadata do
     token_savings_percent
     token_savings_ratio
     tokenizer_input_skipped_count
+    protected_tool_output_skipped_count
     tokenizer
     transport
   ))
@@ -113,6 +116,10 @@ defmodule CodexPooler.Gateway.RequestCompression.Metadata do
       |> put_optional_integer(
         "tokenizer_input_skipped_count",
         metadata_value(metadata, :tokenizer_input_skipped_count)
+      )
+      |> put_optional_integer(
+        "protected_tool_output_skipped_count",
+        metadata_value(metadata, :protected_tool_output_skipped_count)
       )
       |> put_byte_savings(metadata)
       |> put_token_savings(metadata)

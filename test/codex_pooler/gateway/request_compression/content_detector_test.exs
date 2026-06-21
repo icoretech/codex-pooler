@@ -129,6 +129,35 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
       end
     end
 
+    test "detects combined diffs without broadening prose detection" do
+      combined = """
+      diff --cc lib/example.ex
+      index 1111111,2222222..3333333
+      --- a/lib/example.ex
+      +++ b/lib/example.ex
+      @@@ -1,2 -1,2 +1,2 @@@
+      -old left
+      +new merged
+       context line
+      """
+
+      preamble = """
+      Here is the combined diff requested for review:
+
+      #{combined}
+      """
+
+      assert %{kind: :diff, confidence: combined_confidence, compressible: true, strategy: :diff} =
+               ContentDetector.detect(combined)
+
+      assert combined_confidence >= 0.7
+
+      assert %{kind: :diff, confidence: preamble_confidence, compressible: true, strategy: :diff} =
+               ContentDetector.detect(preamble)
+
+      assert preamble_confidence >= 0.7
+    end
+
     test "keeps prose with isolated plus and minus lines out of diff detection" do
       prose = """
       Review notes for the next change:

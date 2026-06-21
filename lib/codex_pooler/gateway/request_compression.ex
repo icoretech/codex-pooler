@@ -89,10 +89,12 @@ defmodule CodexPooler.Gateway.RequestCompression do
   defp compress_payload(upstream_payload, context, request_options, metadata, started)
        when is_binary(upstream_payload) do
     with {:ok, opts} <- strategy_opts(context, request_options),
-         {:ok, candidates} <- ResponsesLiveZone.plan_candidates(upstream_payload) do
+         {:ok, plan} <- ResponsesLiveZone.plan(upstream_payload, opts) do
+      metadata = put_protected_tool_output_skips(metadata, plan)
+
       maybe_rewrite_candidates(
         upstream_payload,
-        candidates,
+        plan.candidates,
         opts,
         context,
         request_options,
@@ -328,7 +330,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
          skip_reasons,
          started
        ) do
-    reason = no_rewrite_reason(candidates, skip_reasons)
+    reason = no_rewrite_reason(candidates, skip_reasons, metadata)
     status = no_rewrite_status(reason)
 
     metadata =
@@ -374,9 +376,13 @@ defmodule CodexPooler.Gateway.RequestCompression do
 
   defp increment_skip_reason(skip_reasons, _reason), do: skip_reasons
 
-  defp no_rewrite_reason([], _skip_reasons), do: :no_candidates
+  defp no_rewrite_reason([], _skip_reasons, %{protected_tool_output_skipped_count: count})
+       when is_integer(count) and count > 0,
+       do: :protected_tool_outputs
 
-  defp no_rewrite_reason(candidates, skip_reasons) do
+  defp no_rewrite_reason([], _skip_reasons, _metadata), do: :no_candidates
+
+  defp no_rewrite_reason(candidates, skip_reasons, _metadata) do
     if Map.get(skip_reasons, :tokenizer_input_limit, 0) == length(candidates) do
       :tokenizer_input_limit
     else
@@ -385,7 +391,15 @@ defmodule CodexPooler.Gateway.RequestCompression do
   end
 
   defp no_rewrite_status(:tokenizer_input_limit), do: :skipped
+  defp no_rewrite_status(:protected_tool_outputs), do: :skipped
   defp no_rewrite_status(_reason), do: :no_change
+
+  defp put_protected_tool_output_skips(metadata, %{protected_tool_output_skipped_count: count})
+       when is_integer(count) and count > 0 do
+    Map.put(metadata, :protected_tool_output_skipped_count, count)
+  end
+
+  defp put_protected_tool_output_skips(metadata, _plan), do: metadata
 
   defp put_skip_summary(metadata, skip_reasons) do
     case Map.get(skip_reasons, :tokenizer_input_limit, 0) do

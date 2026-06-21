@@ -77,7 +77,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
       body =
         encode_request([
           %{
-            "type" => "function_call_output",
+            "type" => "local_shell_call_output",
             "call_id" => "call_long_run_guard",
             "output" => output
           }
@@ -182,7 +182,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
   defp candidate_items(count) do
     Enum.map(1..count, fn index ->
       %{
-        "type" => "function_call_output",
+        "type" => "local_shell_call_output",
         "call_id" => "call_synthetic_#{index}",
         "output" => plain_output(index, 640)
       }
@@ -193,7 +193,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
     empty_items =
       Enum.map(1..candidate_count, fn index ->
         %{
-          "type" => "function_call_output",
+          "type" => "local_shell_call_output",
           "call_id" => "call_sanitized_#{index}",
           "output" => ""
         }
@@ -207,7 +207,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
     items =
       Enum.map(1..candidate_count, fn index ->
         %{
-          "type" => "function_call_output",
+          "type" => "local_shell_call_output",
           "call_id" => "call_sanitized_#{index}",
           "output" =>
             plain_output(index, per_candidate_bytes + extra_byte(index, extra_candidates))

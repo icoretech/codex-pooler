@@ -960,7 +960,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              lowered_tool_schema()
   end
 
-  test "POST /v1/responses compresses eligible translated tool output before dispatch",
+  test "POST /v1/responses preserves output-only translated tool output before dispatch",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -1007,10 +1007,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert translated_item["type"] == "function_call_output"
     assert translated_item["call_id"] == "call_v1_compressed_tool_output"
 
-    compressed_output = translated_item["output"]
-    assert compressed_output != original_output
-    assert compressed_output =~ "[compressed log output: omitted"
-    refute compressed_output =~ omitted_sentinel
+    assert translated_item["output"] == original_output
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -1025,17 +1022,16 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert %{
              "enabled" => true,
              "attempted" => true,
-             "status" => "compressed",
+             "status" => "skipped",
+             "reason" => "protected_tool_outputs",
              "route_class" => "proxy_stream",
              "transport" => "http_sse",
-             "candidate_count" => 1,
-             "compressed_count" => 1,
-             "skipped_count" => 0
+             "candidate_count" => 0,
+             "compressed_count" => 0,
+             "skipped_count" => 0,
+             "protected_tool_output_skipped_count" => 1
            } = metadata = attempt.response_metadata["payload_compression"]
 
-    assert "log_output" in metadata["strategies"]
-    assert metadata["original_bytes"] > metadata["compressed_bytes"]
-    assert metadata["original_tokens"] > metadata["compressed_tokens"]
     refute inspect(metadata) =~ omitted_sentinel
     refute inspect(metadata) =~ "call_v1_compressed_tool_output"
   end

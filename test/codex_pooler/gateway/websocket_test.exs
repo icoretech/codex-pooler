@@ -303,7 +303,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       )
     end
 
-    test "enabled pool compresses public websocket response.create tool output before upstream send" do
+    test "enabled pool preserves output-only public websocket tool output before upstream send" do
       upstream =
         start_upstream(
           FakeUpstream.json_response(%{
@@ -340,7 +340,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       assert captured.json["input"] |> List.first() |> Map.fetch!("type") ==
                "function_call_output"
 
-      assert_websocket_output_compressed!(captured, omitted_sentinel)
+      assert captured.json["input"] |> List.first() |> Map.fetch!("output") == original_output
 
       assert [request] = request_rows(setup.pool.id)
       assert request.endpoint == "/v1/responses"
@@ -351,7 +351,19 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                "/v1/responses"
 
       assert [attempt] = attempt_rows(request)
-      assert_compressed_metadata!(attempt, "proxy_websocket", "websocket", "log_output")
+
+      assert %{
+               "enabled" => true,
+               "attempted" => true,
+               "status" => "skipped",
+               "reason" => "protected_tool_outputs",
+               "route_class" => "proxy_websocket",
+               "transport" => "websocket",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = attempt.response_metadata["payload_compression"]
 
       refute_payload_compression_leak!(
         attempt.response_metadata["payload_compression"],
@@ -456,7 +468,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "model" => setup.model.exposed_model_id,
       "input" => [
         %{
-          "type" => "function_call_output",
+          "type" => "local_shell_call_output",
           "call_id" => call_id,
           "output" => output
         }

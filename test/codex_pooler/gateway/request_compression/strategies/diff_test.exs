@@ -149,6 +149,32 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.DiffTest do
       assert :skip = Diff.compress(prose, min_bytes: 0, min_hunks: 1)
     end
 
+    test "compresses combined diffs with preamble without treating prose as changes" do
+      sentinel = "DROP_ME_COMBINED_DIFF_SENTINEL"
+      content = combined_diff_fixture(sentinel)
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               Diff.compress(content,
+                 model: @model,
+                 min_bytes: 0,
+                 min_hunks: 1,
+                 context_lines: 0
+               )
+
+      assert compressed =~ "Here is the combined diff requested for review:"
+      assert compressed =~ "diff --cc lib/example.ex"
+      assert compressed =~ "@@@ -1,26 -1,26 +1,26 @@@"
+      assert compressed =~ " -old left"
+      assert compressed =~ "++new merged"
+      refute compressed =~ sentinel
+      assert metadata.strategy == :diff
+      assert metadata.original_hunk_count == 1
+      assert metadata.compressed_hunk_count == 1
+      assert metadata.addition_line_count == 1
+      assert metadata.deletion_line_count == 1
+      assert_safe_metadata(metadata, :diff, sentinel)
+    end
+
     test "does not retain state between calls" do
       assert {:ok, _result} =
                Diff.compress(diff_fixture("DROP_ME_STALE_DIFF"),
@@ -198,6 +224,28 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.DiffTest do
      before other
     -old other
     +new other
+    """
+  end
+
+  defp combined_diff_fixture(sentinel) do
+    context =
+      1..24
+      |> Enum.map_join("\n", fn
+        12 -> " context omitted #{sentinel}"
+        index -> " context omitted #{index}"
+      end)
+
+    """
+    Here is the combined diff requested for review:
+
+    diff --cc lib/example.ex
+    index 1111111,2222222..3333333
+    --- a/lib/example.ex
+    +++ b/lib/example.ex
+    @@@ -1,26 -1,26 +1,26 @@@
+     -old left
+    ++new merged
+    #{context}
     """
   end
 

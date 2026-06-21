@@ -21,7 +21,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           "model" => @supported_model,
           "input" => [
             %{
-              "type" => "function_call_output",
+              "type" => "local_shell_call_output",
               "call_id" => "call_direct_compression",
               "output" => original_output
             }
@@ -64,6 +64,81 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert metadata["saved_tokens"] > 0
       refute inspect(metadata) =~ omitted_sentinel
       refute inspect(metadata) =~ "call_direct_compression"
+    end
+
+    test "preserves excluded function tool outputs before compression" do
+      omitted_sentinel = "excluded tool omitted sentinel"
+      original_output = compression_log_fixture(omitted_sentinel)
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_excluded_read",
+              "name" => "Read",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_excluded_read",
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert %{
+               "status" => "skipped",
+               "reason" => "protected_tool_outputs",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = metadata = compressed_options.runtime.payload_compression
+
+      refute inspect(metadata) =~ omitted_sentinel
+      refute inspect(metadata) =~ "call_excluded_read"
+    end
+
+    test "preserves output-only function tool results before compression" do
+      omitted_sentinel = "output only omitted sentinel"
+      original_output = compression_log_fixture(omitted_sentinel)
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "previous_response_id" => "resp_fixture_previous",
+          "input" => [
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_output_only",
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert %{
+               "status" => "skipped",
+               "reason" => "protected_tool_outputs",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = metadata = compressed_options.runtime.payload_compression
+
+      refute inspect(metadata) =~ omitted_sentinel
+      refute inspect(metadata) =~ "call_output_only"
     end
 
     test "skips unsupported tokenizer models without rewriting tool output" do
@@ -136,7 +211,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           "model" => @supported_model,
           "input" => [
             %{
-              "type" => "function_call_output",
+              "type" => "local_shell_call_output",
               "call_id" => "call_json_document_compression",
               "output" => original_output
             }
@@ -181,7 +256,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
           "model" => @supported_model,
           "input" => [
             %{
-              "type" => "function_call_output",
+              "type" => "local_shell_call_output",
               "call_id" => "call_nul_search_compression",
               "output" => original_output
             }

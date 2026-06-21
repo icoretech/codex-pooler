@@ -1040,7 +1040,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "model" => setup.model.exposed_model_id,
         "input" => [
           %{
-            "type" => "function_call_output",
+            "type" => "local_shell_call_output",
             "call_id" => "call_backend_alias_compressed",
             "output" => original_output
           }

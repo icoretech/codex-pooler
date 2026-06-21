@@ -12,8 +12,8 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   @default_context_lines 2
   @default_model "gpt-4o"
 
-  @file_start_regex ~r/^diff --git\s+\S+\s+\S+/
-  @hunk_header_regex ~r/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/
+  @file_start_regex ~r/^diff --(?:git\s+\S+\s+\S+|(?:cc|combined)\s+\S+)/
+  @hunk_header_regex ~r/^@@{1,2}\s+-\d+(?:,\d+)?(?:\s+-\d+(?:,\d+)?)*\s+\+\d+(?:,\d+)?\s+@@{1,2}/
 
   @spec compress(term(), Strategies.opts()) :: Strategies.result()
   def compress(content, opts \\ [])
@@ -82,14 +82,17 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
     else
       file_start_indexes
       |> Enum.with_index()
-      |> Enum.map(fn {start_index, position} ->
-        end_index = Enum.at(file_start_indexes, position + 1, length(lines))
-
-        lines
-        |> Enum.slice(start_index, end_index - start_index)
-        |> parse_file()
-      end)
+      |> Enum.map(&parse_file_slice(lines, file_start_indexes, &1))
     end
+  end
+
+  defp parse_file_slice(lines, file_start_indexes, {start_index, position}) do
+    slice_start_index = if position == 0, do: 0, else: start_index
+    end_index = Enum.at(file_start_indexes, position + 1, length(lines))
+
+    lines
+    |> Enum.slice(slice_start_index, end_index - slice_start_index)
+    |> parse_file()
   end
 
   defp parse_file(lines) do
@@ -97,7 +100,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
       Enum.reduce(lines, {[], [], nil}, fn line, {header, hunks, current_hunk} ->
         if Regex.match?(@hunk_header_regex, line) do
           hunks = append_hunk(hunks, current_hunk)
-          {header, hunks, %{header: line, body: []}}
+          {header, hunks, new_hunk(line)}
         else
           append_line(line, header, hunks, current_hunk)
         end
@@ -109,6 +112,17 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
       |> Enum.filter(&(change_count(&1) > 0))
 
     %{header: header, hunks: hunks}
+  end
+
+  defp new_hunk(header), do: %{header: header, body: [], prefix_width: hunk_prefix_width(header)}
+
+  defp hunk_prefix_width(header) do
+    header
+    |> String.split(" ", parts: 2)
+    |> List.first()
+    |> String.length()
+    |> Kernel.-(1)
+    |> max(1)
   end
 
   defp append_line(line, header, hunks, nil), do: {header ++ [line], hunks, nil}
@@ -185,7 +199,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   end
 
   defp render_hunk(hunk, context_lines) do
-    selected_indexes = selected_hunk_indexes(hunk.body, context_lines)
+    selected_indexes = selected_hunk_indexes(hunk, context_lines)
 
     {body_lines, omitted_context_line_count} =
       Strategies.collapse_lines(hunk.body, selected_indexes, fn count ->
@@ -196,7 +210,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
       hunk.body
       |> Enum.with_index()
       |> Enum.count(fn {line, index} ->
-        not changed_line?(line) and index in selected_indexes
+        not changed_line?(line, hunk) and index in selected_indexes
       end)
 
     hunk_lines =
@@ -209,12 +223,12 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
     {hunk_lines, kept_context_line_count, omitted_context_line_count}
   end
 
-  defp selected_hunk_indexes(lines, context_lines) do
+  defp selected_hunk_indexes(%{body: lines} = hunk, context_lines) do
     last_index = length(lines) - 1
 
     lines
     |> Enum.with_index()
-    |> Enum.filter(fn {line, _index} -> changed_line?(line) end)
+    |> Enum.filter(fn {line, _index} -> changed_line?(line, hunk) end)
     |> Enum.flat_map(fn {_line, index} ->
       max(index - context_lines, 0)..min(index + context_lines, last_index)//1
       |> Enum.to_list()
@@ -261,7 +275,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
 
   defp addition_count(hunk) do
     Enum.count(hunk.body, fn line ->
-      String.starts_with?(line, "+") and not String.starts_with?(line, "+++")
+      changed_line?(line, hunk, "+")
     end)
   end
 
@@ -274,21 +288,29 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
 
   defp deletion_count(hunk) do
     Enum.count(hunk.body, fn line ->
-      String.starts_with?(line, "-") and not String.starts_with?(line, "---")
+      changed_line?(line, hunk, "-")
     end)
   end
 
   defp context_line_count(files) do
     files
     |> Enum.flat_map(& &1.hunks)
-    |> Enum.map(fn hunk -> Enum.count(hunk.body, &(not changed_line?(&1))) end)
+    |> Enum.map(fn hunk -> Enum.count(hunk.body, &(not changed_line?(&1, hunk))) end)
     |> Enum.sum()
   end
 
-  defp changed_line?(line) do
-    (String.starts_with?(line, "+") and not String.starts_with?(line, "+++")) or
-      (String.starts_with?(line, "-") and not String.starts_with?(line, "---"))
+  defp changed_line?(line, hunk) do
+    changed_line?(line, hunk, "+") or changed_line?(line, hunk, "-")
   end
+
+  defp changed_line?(line, %{prefix_width: prefix_width}, prefix)
+       when is_binary(line) and is_integer(prefix_width) and prefix_width > 0 do
+    line
+    |> String.slice(0, prefix_width)
+    |> String.contains?(prefix)
+  end
+
+  defp changed_line?(_line, _hunk, _prefix), do: false
 
   defp finalize(strategy, original, compressed, counts, opts) do
     Strategies.finalize(strategy, original, compressed, counts, default_model_opts(opts))
