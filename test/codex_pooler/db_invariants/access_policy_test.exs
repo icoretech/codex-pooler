@@ -92,6 +92,20 @@ defmodule CodexPooler.DBInvariants.AccessPolicyTest do
       )
     end)
 
+    [[max_reasoning_id]] =
+      Repo.query!(
+        """
+        INSERT INTO api_keys (
+          pool_id, display_name, key_prefix, key_hash, status, created_by_user_id,
+          enforced_reasoning_effort
+        ) VALUES ($1, 'Max reasoning effort', 'sk_policy_max_reasoning', $2, 'active', $3, 'max')
+        RETURNING id
+        """,
+        [pool_id, <<"policy-max-reasoning">>, user_id]
+      ).rows
+
+    assert count_rows("api_keys", max_reasoning_id) == 1
+
     assert_db_error(:check_violation, fn ->
       Repo.query!(
         """

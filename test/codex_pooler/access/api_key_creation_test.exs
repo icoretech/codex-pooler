@@ -335,7 +335,7 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
           key_hash: <<"typed-policy-valid">>,
           status: "active",
           enforced_model_identifier: "gpt-5.4-mini",
-          enforced_reasoning_effort: "medium",
+          enforced_reasoning_effort: "max",
           enforced_service_tier: "scale"
         })
 

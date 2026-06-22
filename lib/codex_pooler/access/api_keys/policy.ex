@@ -7,7 +7,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
   @status_active "active"
   @status_paused "paused"
   @status_revoked "revoked"
-  @reasoning_efforts ~w(minimal low medium high xhigh)
+  @reasoning_efforts ~w(minimal low medium high xhigh max)
   @service_tiers ~w(auto default flex priority scale)
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}

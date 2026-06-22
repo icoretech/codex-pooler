@@ -471,6 +471,22 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                 }}
     end
 
+    test "normalizes max thinking alias to reasoning effort" do
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "thinking" => "max"}
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+    end
+
     test "omits enforced auto and default service tiers from upstream JSON" do
       model = %Model{upstream_model_id: "provider-model"}
 

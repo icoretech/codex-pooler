@@ -75,7 +75,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
           "allowed_model_identifiers" => ["GPT-Allowed"],
           "manual_model_identifiers_text" => "custom/manual-test-model",
           "enforced_model_identifier" => "custom/manual-test-model",
-          "enforced_reasoning_effort" => "xhigh",
+          "enforced_reasoning_effort" => "max",
           "enforced_service_tier" => "priority",
           "default_max_tokens_per_week" => "100000",
           "operator_notes" => "limited rollout"
@@ -97,7 +97,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert {:ok, policy} = Access.normalize_api_key_policy(persisted)
     assert policy.allowed_model_identifiers == ["gpt-allowed", "custom/manual-test-model"]
     assert policy.enforced_model_identifier == "custom/manual-test-model"
-    assert policy.enforced_reasoning_effort == "xhigh"
+    assert policy.enforced_reasoning_effort == "max"
     assert policy.enforced_service_tier == "priority"
 
     assert %APIKeyPolicyBinding{max_tokens_per_week: 100_000} =

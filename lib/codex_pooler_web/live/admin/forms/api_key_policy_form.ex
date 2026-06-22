@@ -101,7 +101,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       {"Low", "low"},
       {"Medium", "medium"},
       {"High", "high"},
-      {"Extra high", "xhigh"}
+      {"Extra high", "xhigh"},
+      {"Max", "max"}
     ]
   end
 

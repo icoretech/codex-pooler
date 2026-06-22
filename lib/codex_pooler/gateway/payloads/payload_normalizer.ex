@@ -385,7 +385,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp normalize_thinking_string(value) do
     case value |> String.trim() |> String.downcase() do
-      effort when effort in ["low", "medium", "high", "xhigh"] -> %{"effort" => effort}
+      effort when effort in ["low", "medium", "high", "xhigh", "max"] -> %{"effort" => effort}
       enabled when enabled in ["enabled", "true", "on"] -> %{"effort" => "medium"}
       disabled when disabled in ["disabled", "false", "off"] -> nil
       _unknown -> nil

@@ -599,6 +599,12 @@ defmodule CodexPooler.AccessTest do
 
       assert {:error, :api_key_policy_malformed} =
                Access.normalize_api_key_policy(%{metadata: %{"labels" => "production"}})
+
+      assert {:error, :api_key_policy_malformed} =
+               Access.normalize_api_key_policy(%{enforced_reasoning_effort: "ultra"})
+
+      assert {:error, :api_key_policy_malformed} =
+               Access.normalize_api_key_policy(%{enforced_reasoning_effort: 123})
     end
 
     @tag :api_key_policy_contract
@@ -619,6 +625,14 @@ defmodule CodexPooler.AccessTest do
                Access.authorize_api_key_policy(nil_policy, %{
                  model_identifier: "any-other-model"
                })
+    end
+
+    @tag :api_key_policy_contract
+    test "normalizes max enforced reasoning effort" do
+      assert {:ok, policy} =
+               Access.normalize_api_key_policy(%{enforced_reasoning_effort: " Max "})
+
+      assert policy.enforced_reasoning_effort == "max"
     end
 
     @tag :api_key_policy_contract
