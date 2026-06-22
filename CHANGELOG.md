@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.3.0...codex-pooler-v0.3.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* expose model context length in OpenAI catalog ([f31f0e9](https://github.com/icoretech/codex-pooler/commit/f31f0e996a6f306fdc1d498ef32c86c76c7faff8))
+
 ## [0.3.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.2.1...codex-pooler-v0.3.0) (2026-06-21)
 
 
