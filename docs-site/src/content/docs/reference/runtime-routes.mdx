@@ -211,6 +211,7 @@ account helpers, analytics posting, thread-goal helpers, memory summaries,
 search helpers, realtime helper calls, safety helper calls, identity JWKS, or
 reset-credit consume operations. Configure Codex clients by pointing
 `model_providers.*.base_url` at `/backend-api/codex`.
+Supported Responses stream event metadata is relayed on model-provider streams as upstream sends it. Codex Pooler does not synthesize app-server notifications such as `turn/safetyBuffering/updated`.
 
 ## Backend bridge and usage routes
 

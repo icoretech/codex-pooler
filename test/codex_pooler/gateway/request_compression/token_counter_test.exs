@@ -31,6 +31,23 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounterTest do
       assert {:ok, 51, %{encoding: "cl100k_base"}} = TokenCounter.count("gpt-4-turbo", output)
     end
 
+    test "counts literal special-token-looking strings as ordinary text" do
+      content = """
+      tool output can contain <|endoftext|>
+      diff markers can contain <|fim_prefix|>, <|fim_middle|>, and <|fim_suffix|>
+      """
+
+      assert {:ok, o200k_count, %{encoding: "o200k_base"}} =
+               TokenCounter.count("gpt-4o", content)
+
+      assert o200k_count > 0
+
+      assert {:ok, cl100k_count, %{encoding: "cl100k_base"}} =
+               TokenCounter.count("gpt-4-turbo", content)
+
+      assert cl100k_count > 0
+    end
+
     test "matches oracle counts for unicode and diff-like content" do
       unicode = "unicode sample: ciao mondo, こんにちは, Привет, مرحبا, 😀"
 

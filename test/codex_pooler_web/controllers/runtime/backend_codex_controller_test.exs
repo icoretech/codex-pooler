@@ -6615,6 +6615,62 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
+  test "POST /backend-api/codex/responses relays stream safety-buffering metadata without persisting it",
+       %{conn: conn} do
+    safety_buffering = %{
+      "model" => "safety-buffering-model-sentinel",
+      "use_cases" => ["cyber"],
+      "reasons" => ["user-risk-sentinel"]
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "delta" => "visible synthetic safety-buffered text",
+             "safety_buffering" => safety_buffering
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_backend_stream_safety_buffering",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic streaming safety-buffering relay request",
+        "stream" => true
+      })
+
+    assert conn.resp_body =~ "event: response.output_text.delta\n"
+    assert conn.resp_body =~ ~s("safety_buffering":)
+    assert conn.resp_body =~ "safety-buffering-model-sentinel"
+    assert conn.resp_body =~ "user-risk-sentinel"
+    assert conn.resp_body =~ "data: [DONE]\n\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute metadata_text =~ "safety-buffering-model-sentinel"
+    refute metadata_text =~ "user-risk-sentinel"
+  end
+
   test "POST /backend-api/codex/responses/compact keeps opencode continuity headers local without forwarding",
        %{
          conn: conn

@@ -93,6 +93,35 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                |> StreamProtocol.decode_sse_data()
     end
 
+    test "preserves safety-buffering metadata on public Responses stream events" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      event =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => "visible synthetic safety-buffered text",
+          "safety_buffering" => %{
+            "model" => "safety-buffering-model-sentinel",
+            "use_cases" => ["cyber"],
+            "reasons" => ["user-risk-sentinel"]
+          }
+        })
+
+      assert {chunk, _state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(event, state)
+
+      assert [%{"event" => "response.output_text.delta", "data" => data}] =
+               public_sse_events(chunk)
+
+      assert data["delta"] == "visible synthetic safety-buffered text"
+
+      assert data["safety_buffering"] == %{
+               "model" => "safety-buffering-model-sentinel",
+               "use_cases" => ["cyber"],
+               "reasons" => ["user-risk-sentinel"]
+             }
+    end
+
     test "synthesizes missing reasoning and message output item ids" do
       state = StreamProtocol.public_openai_responses_stream_state()
 

@@ -141,6 +141,37 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       refute Process.get({:websocket_sse_buffer, request_id})
     end
 
+    test "preserves safety-buffering metadata from upstream SSE frames" do
+      request_id = "websocket-safety-buffering"
+
+      sse =
+        "event: response.output_text.delta\n" <>
+          "data: " <>
+          Jason.encode!(%{
+            "type" => "response.output_text.delta",
+            "delta" => "visible synthetic safety-buffered text",
+            "safety_buffering" => %{
+              "model" => "safety-buffering-model-sentinel",
+              "use_cases" => ["cyber"],
+              "reasons" => ["user-risk-sentinel"]
+            }
+          }) <>
+          "\n\n"
+
+      assert {[message], ""} = WebsocketCodec.stream_messages(request_id, sse, "")
+
+      assert %{
+               "type" => "response.output_text.delta",
+               "safety_buffering" => safety_buffering
+             } = Jason.decode!(message)
+
+      assert safety_buffering == %{
+               "model" => "safety-buffering-model-sentinel",
+               "use_cases" => ["cyber"],
+               "reasons" => ["user-risk-sentinel"]
+             }
+    end
+
     test "drops oversized incomplete SSE buffers instead of retaining them" do
       attach_stream_buffer_telemetry()
       request_id = "websocket-buffer-oversized"
