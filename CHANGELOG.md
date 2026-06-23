@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.3.1...codex-pooler-v0.4.0) (2026-06-23)
+
+
+### Features
+
+* add Codex saved reset management ([1c50100](https://github.com/icoretech/codex-pooler/commit/1c50100691a8a4cd6f69acc629ff1e8eff3b6887))
+* allow max reasoning effort policies ([421ceb7](https://github.com/icoretech/codex-pooler/commit/421ceb747d068fa7c5a5a3c19d0b32afbcbbe9d8))
+
+
+### Bug Fixes
+
+* advertise effective model context windows ([9e365c0](https://github.com/icoretech/codex-pooler/commit/9e365c0e611e3b298a3e82df26eab1819eb17f26))
+* translate OMP function call replay statuses ([8cfd22e](https://github.com/icoretech/codex-pooler/commit/8cfd22e10ca2f6de37160b0a10efd8523a61c679))
+
 ## [0.3.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.3.0...codex-pooler-v0.3.1) (2026-06-22)
 
 
