@@ -876,6 +876,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "#saved-reset-next-expiration",
              "Next saved reset expires at 2026-07-18 00:40:11 UTC · 2 expiration dates reported"
            )
+
+    refute has_element?(view, "#saved-reset-manual-redemption-expiration")
   end
 
   test "edits saved reset policy from the upstream account dropdown without redeeming resets", %{

@@ -678,14 +678,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             id="saved-reset-manual-redemption"
             class="grid gap-3 rounded-lg border border-base-300 bg-base-200/30 p-4"
           >
-            <div
-              :if={@account.saved_resets.expires_reported?}
-              id="saved-reset-manual-redemption-expiration"
-              class="rounded-lg bg-base-100 p-3 text-xs leading-5 text-base-content/70"
-            >
-              {saved_reset_expiration_summary(@account.saved_resets, @datetime_preferences)}
-            </div>
-
             <div class="grid gap-1">
               <h3 class="text-sm font-semibold text-base-content">Redeem one banked reset now</h3>
               <p class="text-sm leading-6 text-base-content/70">
