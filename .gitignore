@@ -45,6 +45,7 @@ RUNBOOK.md
 /.impeccable/
 /.omo/
 /.omp/
+.codegraphignore
 /references/*
 !/references/.gitkeep
 !/references/README.md
