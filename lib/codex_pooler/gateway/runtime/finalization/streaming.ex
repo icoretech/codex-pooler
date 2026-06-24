@@ -175,7 +175,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def record_health_failure(_reason, code, %DispatchContext{} = context)
       when is_binary(code) do
     if health_neutral_error_code?(code) do
-      :ok
+      RouteLifecycle.neutral_completion(context)
     else
       route_failure(context, code)
     end
@@ -189,7 +189,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def record_terminal_health_failure(code, headers, %DispatchContext{} = context)
       when is_binary(code) do
     if health_neutral_terminal_failure?(code, headers) do
-      :ok
+      RouteLifecycle.neutral_completion(context)
     else
       record_health_failure(code, code, context)
     end
