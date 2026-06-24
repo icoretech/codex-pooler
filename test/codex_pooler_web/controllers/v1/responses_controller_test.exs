@@ -833,6 +833,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   test "POST /v1/responses non-streaming dispatches through the gateway", %{conn: conn} do
+    input_tokens_details = %{"cached_tokens" => 11, "fixture_tokens" => 13}
+    output_tokens_details = %{"reasoning_tokens" => 17, "accepted_prediction_tokens" => 19}
+
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -848,7 +851,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                    "content" => [%{"type" => "output_text", "text" => "synthetic answer"}]
                  }
                ],
-               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+               "usage" => %{
+                 "input_tokens" => 23,
+                 "input_tokens_details" => input_tokens_details,
+                 "output_tokens" => 29,
+                 "output_tokens_details" => output_tokens_details,
+                 "total_tokens" => 52
+               }
              }
            }}
         ])
@@ -865,7 +874,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "reasoning" => %{"effort" => "focused"}
       })
 
-    assert %{"id" => "resp_v1_non_stream", "object" => "response"} = json_response(conn, 200)
+    assert %{"id" => "resp_v1_non_stream", "object" => "response", "usage" => usage} =
+             json_response(conn, 200)
+
+    assert usage["input_tokens"] == 23
+    assert usage["input_tokens_details"] == input_tokens_details
+    assert usage["output_tokens"] == 29
+    assert usage["output_tokens_details"] == output_tokens_details
+    assert usage["total_tokens"] == 52
+
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["stream"] == true
@@ -887,6 +904,32 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.input_tokens == 23
+    assert settlement.cached_input_tokens == 11
+    assert settlement.output_tokens == 29
+    assert settlement.reasoning_tokens == nil
+    assert settlement.total_tokens == 52
+    refute Map.has_key?(settlement.details, "input_tokens_details")
+    refute Map.has_key?(settlement.details, "output_tokens_details")
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.token_counts.input_tokens == 23
+    assert log.token_counts.cached_input_tokens == 11
+    assert log.token_counts.output_tokens == 29
+    assert log.token_counts.reasoning_tokens == nil
+    assert log.token_counts.total_tokens == 52
+    refute Map.has_key?(log.token_counts, :input_tokens_details)
+    refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
   test "POST /v1/responses forwards normalized reasoning context", %{conn: conn} do
@@ -3285,6 +3328,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   test "POST /v1/responses streaming emits public Responses SSE and filters codex events", %{
     conn: conn
   } do
+    input_tokens_details = %{"cached_tokens" => 31, "fixture_stream_tokens" => 37}
+    output_tokens_details = %{"reasoning_tokens" => 41, "rejected_prediction_tokens" => 43}
+
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -3297,7 +3343,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "response" => %{
                "id" => "resp_v1_stream",
                "status" => "completed",
-               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+               "usage" => %{
+                 "input_tokens" => 53,
+                 "input_tokens_details" => input_tokens_details,
+                 "output_tokens" => 59,
+                 "output_tokens_details" => output_tokens_details,
+                 "total_tokens" => 112
+               }
              }
            }}
         ])
@@ -3324,12 +3376,60 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute conn.resp_body =~ "codex.rate_limits"
     refute conn.resp_body =~ "event: codex."
 
+    events = public_sse_events(conn.resp_body)
+
+    assert %{
+             "event" => "response.completed",
+             "data" => %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_stream",
+                 "usage" => usage
+               }
+             }
+           } = Enum.find(events, &(&1["event"] == "response.completed"))
+
+    assert usage["input_tokens"] == 53
+    assert usage["input_tokens_details"] == input_tokens_details
+    assert usage["output_tokens"] == 59
+    assert usage["output_tokens_details"] == output_tokens_details
+    assert usage["total_tokens"] == 112
+
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
     assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.input_tokens == 53
+    assert settlement.cached_input_tokens == 31
+    assert settlement.output_tokens == 59
+    assert settlement.reasoning_tokens == nil
+    assert settlement.total_tokens == 112
+    refute Map.has_key?(settlement.details, "input_tokens_details")
+    refute Map.has_key?(settlement.details, "output_tokens_details")
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.token_counts.input_tokens == 53
+    assert log.token_counts.cached_input_tokens == 31
+    assert log.token_counts.output_tokens == 59
+    assert log.token_counts.reasoning_tokens == nil
+    assert log.token_counts.total_tokens == 112
+    refute Map.has_key?(log.token_counts, :input_tokens_details)
+    refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
   @tag :streaming_sequence
