@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.0...codex-pooler-v0.4.1) (2026-06-24)
+
+
+### Features
+
+* surface saved reset expiration metadata ([74c86b2](https://github.com/icoretech/codex-pooler/commit/74c86b248ed16b14327c08ce18ffebf791b8a0e3))
+
+
+### Bug Fixes
+
+* **gateway:** emit terminal responses failure on stream interruption ([4fcd699](https://github.com/icoretech/codex-pooler/commit/4fcd6999dc3441e577b89a57418722be2c75cc86))
+* **gateway:** guard log output compression failure details ([815fd60](https://github.com/icoretech/codex-pooler/commit/815fd6054777c2b35b6ec2c71697bacfb6481c90))
+* **gateway:** keep interrupted SSE streams health-neutral ([68821c3](https://github.com/icoretech/codex-pooler/commit/68821c3732cea474a6bc01d10580b82e69e63ddb))
+* **gateway:** release neutral stream circuit probes ([7a9e282](https://github.com/icoretech/codex-pooler/commit/7a9e282132be4dd2936f39c4b07eee3cac3d57e0))
+* **openai:** preserve codex turn metadata passthrough ([4830676](https://github.com/icoretech/codex-pooler/commit/483067669c759a303a838aa693a8d2b947daee1d))
+* recover stale saved reset redemptions ([b19bf8f](https://github.com/icoretech/codex-pooler/commit/b19bf8f6ab4d6908c64b9474950d2acced70a9b1))
+* redeem expiring saved resets ([4c83ae7](https://github.com/icoretech/codex-pooler/commit/4c83ae77c49fdaa562d32e5533740b85be200f8f))
+* remove duplicate saved reset expiration banner ([6cb0f03](https://github.com/icoretech/codex-pooler/commit/6cb0f03af4a76c217fc91aa749b91df3d6896d90))
+
+
+### Miscellaneous Chores
+
+* release 0.4.1 ([4c1873f](https://github.com/icoretech/codex-pooler/commit/4c1873f9d994c191d161f58d2ed04114859ef2d6))
+
 ## [0.4.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.3.1...codex-pooler-v0.4.0) (2026-06-23)
 
 
