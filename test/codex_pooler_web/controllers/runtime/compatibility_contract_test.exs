@@ -323,6 +323,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "no server-side hidden replay"
       assert responses_chat.contract =~ "stored prompt/frame reconstruction"
 
+      assert fixture.store_false_policy == %{
+               server_side_hidden_tools: false,
+               memory_tool_injection: false,
+               client_store_false_to_true_override: false
+             }
+
       assert fixture.compaction_recovery_boundary == %{
                backend_compaction_trigger: %{
                  routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
