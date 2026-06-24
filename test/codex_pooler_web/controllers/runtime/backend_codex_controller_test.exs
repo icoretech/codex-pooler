@@ -3181,6 +3181,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
   end
 
+  test "POST /backend-api/codex/responses rejects plain HTTP input_image URLs before dispatch",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+    sentinel_url = "http://example.com/image-reference-do-not-log.png"
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "describe this image"},
+              %{"type" => "input_image", "image_url" => sentinel_url}
+            ]
+          }
+        ]
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "unsupported_input_image_format",
+               "type" => "invalid_request_error",
+               "param" => "input",
+               "message" => message
+             }
+           } = json_response(conn, 400)
+
+    assert message =~
+             "Responses input_image values must use https image URLs or supported image data URLs"
+
+    refute conn.resp_body =~ sentinel_url
+    assert FakeUpstream.requests(upstream) == []
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_input_image_format"
+    assert request.request_metadata["gateway_denial"]["param"] == "input"
+    refute inspect(request.request_metadata) =~ sentinel_url
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+  end
+
   test "POST /backend-api/codex/responses preserves inline data URL input_image payloads for image-capable models",
        %{conn: conn} do
     upstream =

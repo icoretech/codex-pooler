@@ -4556,6 +4556,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
        "unsupported_input_image_format"},
       {%{"type" => "input_image", "image_url" => "file:///tmp/private.png"},
        "unsupported_input_image_format"},
+      {%{"type" => "input_image", "image_url" => "http://example.com/private.png"},
+       "unsupported_input_image_format"},
       {%{
          "type" => "input_file",
          "filename" => "sample.html",

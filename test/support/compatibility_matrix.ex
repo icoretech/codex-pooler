@@ -201,7 +201,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :unsupported_input_image_reference,
       contract:
-        "Responses input_image.file_id and Codex sediment:// file URIs used as input_image.image_url values are rejected before reservation or upstream dispatch"
+        "Responses input_image.file_id, Codex sediment:// file URIs, and unsupported URL schemes such as http:// and file:// used as input_image.image_url values are rejected before reservation or upstream dispatch"
     },
     %{
       slug: :first_event_stream_retry,
@@ -513,6 +513,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     unsupported_input_image_reference: %{
+      accepted_url_schemes: ["https", "data:image"],
+      unsupported_url_schemes: ["http", "sediment", "file"],
       json: %{
         "model" => "gpt-fixture-vision",
         "input" => [

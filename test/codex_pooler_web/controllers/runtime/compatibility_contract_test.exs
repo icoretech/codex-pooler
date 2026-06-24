@@ -121,6 +121,18 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.routes == ["/v1/responses"]
     end
 
+    test "documents input image scheme policy" do
+      feature = CompatibilityMatrix.by_slug!(:unsupported_input_image_reference)
+      fixture = CompatibilityMatrix.fixture!(:unsupported_input_image_reference)
+
+      assert feature.contract =~ "input_image.file_id"
+      assert feature.contract =~ "Codex sediment://"
+      assert feature.contract =~ "unsupported URL schemes"
+
+      assert fixture.accepted_url_schemes == ["https", "data:image"]
+      assert fixture.unsupported_url_schemes == ["http", "sediment", "file"]
+    end
+
     test "documents non-strict function tool schema lowering scope" do
       feature = CompatibilityMatrix.by_slug!(:function_tool_schema_lowering)
       fixture = CompatibilityMatrix.fixture!(:function_tool_schema_lowering)
