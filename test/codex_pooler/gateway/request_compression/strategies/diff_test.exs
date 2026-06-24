@@ -284,6 +284,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.DiffTest do
   defp assert_safe_metadata(metadata, strategy, sentinel) do
     assert Enum.all?(metadata, fn
              {:strategy, ^strategy} -> true
+             {:token_count_mode, value} -> value in [:exact, :bounded_original]
              {_key, value} -> is_integer(value)
            end)
 
