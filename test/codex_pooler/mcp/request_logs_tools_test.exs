@@ -912,6 +912,90 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 
+  test "gets exact request-log detail with synthesized HTTP SSE interruption diagnostics", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-request-log-http-sse", name: "MCP HTTP SSE Detail"})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP HTTP SSE key"})
+
+    %{assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "HTTP SSE upstream",
+        assignment_label: "HTTP SSE assignment"
+      })
+
+    %{request: request, attempt: attempt} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-debug-http-sse-interrupted",
+        codex_session_id: "session-example-http-sse",
+        codex_session_key: "session-key-example-http-sse",
+        request_error: "upstream_stream_error",
+        attempt_error: "upstream_stream_error",
+        transport: "http_sse",
+        response_status_code: 200,
+        upstream_status_code: 200,
+        retryable: false,
+        response_metadata: %{
+          "error_kind" => "stream_interrupted",
+          "status_code" => 200,
+          "raw_body" => "raw stream body should stay hidden",
+          "raw_headers" => %{"authorization" => "Bearer sk-example-hidden"}
+        },
+        error_message: "raw stream body should stay hidden"
+      })
+
+    _turn =
+      debug_turn_fixture(request, %{
+        session: debug_session_fixture(pool, api_key, assignment, "session-key-example-http-sse"),
+        status: "failed",
+        error_code: "upstream_stream_error",
+        final_attempt_id: attempt.id,
+        turn_sequence: 1
+      })
+
+    assert {:ok, list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "model" => "gpt-log-debug-contract", "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert list_result["isError"] == false
+    assert [list_item] = list_result["structuredContent"]["items"]
+    assert list_item["id"] == request.id
+    refute inspect(list_item["debug"]) =~ "transport_failure"
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert %{"status" => "ok", "item" => item} = result["structuredContent"]
+    assert [attempt_debug] = item["debug"]["attempts"]
+
+    assert attempt_debug["transport_failure"] == %{
+             "reason_class" => "upstream_stream_interrupted",
+             "reason" => "closed_before_terminal",
+             "phase" => "upstream_close",
+             "pre_visible_output" => false,
+             "terminal_seen" => false,
+             "text_frame_count" => 1
+           }
+
+    assert text =~ "1 request log returned"
+    assert text =~ "transport=http_sse"
+    assert text =~ "terminal=terminal"
+    refute text =~ "closed_before_terminal"
+    assert_no_debug_raw_session_values(result)
+    refute inspect(result) =~ "session-example-http-sse"
+    refute inspect(result) =~ "session-key-example-http-sse"
+    refute inspect(result) =~ "raw stream body"
+    refute inspect(result) =~ "Bearer sk-example-hidden"
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
   test "request-log debug outputs omit adversarial metadata from list and get results", %{
     auth: auth
   } do
@@ -1730,11 +1814,11 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       request_fixture(%{pool: pool, api_key: api_key}, %{
         requested_model: "gpt-log-debug-contract",
         endpoint: "/backend-api/codex/responses",
-        transport: "websocket",
+        transport: Map.get(attrs, :transport, "websocket"),
         status: "failed",
         usage_status: "usage_unknown",
         correlation_id: Map.fetch!(attrs, :correlation_id),
-        response_status_code: 499,
+        response_status_code: Map.get(attrs, :response_status_code, 499),
         retry_count: 1,
         request_metadata:
           Map.merge(
@@ -1753,8 +1837,8 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       request
       |> attempt_fixture(assignment, %{
         status: "failed",
-        retryable: true,
-        upstream_status_code: 499,
+        retryable: Map.get(attrs, :retryable, true),
+        upstream_status_code: Map.get(attrs, :upstream_status_code, 499),
         usage_status: "usage_unknown"
       })
       |> Ecto.Changeset.change(%{

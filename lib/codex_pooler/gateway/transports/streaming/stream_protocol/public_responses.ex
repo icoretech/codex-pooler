@@ -15,6 +15,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @spec new_state() :: state()
   def new_state, do: %{buffer: "", created?: false, text_delta?: false, passthrough?: false}
 
+  @terminal_buffer_markers [
+    "data: [DONE]",
+    "response.completed",
+    "response.failed",
+    "response.incomplete",
+    "event: error",
+    ~s("type":"error"),
+    ~s("type": "error")
+  ]
+
   @spec normalize_data(binary(), state()) :: {binary(), state()}
   def normalize_data(data, %{passthrough?: true} = state) when is_binary(data) do
     normalize_passthrough_data(data, state)
@@ -25,6 +35,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
 
     cond do
+      terminal_buffer?(buffer) ->
+        normalize_blocks(blocks ++ [buffer], "", state)
+
       blocks == [] and StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
         record_oversized_incomplete(byte_size(buffered_data))
         {buffered_data, %{state | buffer: "", passthrough?: true}}
@@ -267,12 +280,37 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp clean_string(_value), do: nil
 
+  @spec terminal_buffer?(binary()) :: boolean()
+  defp terminal_buffer?(""), do: false
+
+  defp terminal_buffer?(buffer) when is_binary(buffer) do
+    if terminal_buffer_candidate?(buffer) do
+      done_marker?(buffer) or decoded_terminal_buffer?(buffer)
+    else
+      false
+    end
+  end
+
+  @spec terminal_buffer_candidate?(binary()) :: boolean()
+  defp terminal_buffer_candidate?(buffer) do
+    Enum.any?(@terminal_buffer_markers, &String.contains?(buffer, &1))
+  end
+
+  @spec done_marker?(binary()) :: boolean()
+  defp done_marker?(block), do: String.trim(block) == "data: [DONE]"
+
+  @spec decoded_terminal_buffer?(binary()) :: boolean()
+  defp decoded_terminal_buffer?(buffer) do
+    {event_type, decoded} = stream_block_event(buffer)
+
+    decoded != %{} and terminal_event?(event_type || decoded_string(decoded, "type"))
+  end
+
   defp stream_terminal?(blocks) do
     Enum.any?(blocks, fn block ->
       {event_type, decoded} = stream_block_event(block)
 
-      terminal_event?(event_type || decoded_string(decoded, "type")) or
-        block == "data: [DONE]"
+      terminal_event?(event_type || decoded_string(decoded, "type")) or done_marker?(block)
     end)
   end
 

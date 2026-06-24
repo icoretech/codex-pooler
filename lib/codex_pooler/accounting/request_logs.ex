@@ -404,7 +404,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   @spec maybe_put_transport_failure(map(), Attempt.t()) :: map()
   defp maybe_put_transport_failure(projection, %Attempt{} = attempt) do
-    case transport_failure_projection(attempt.response_metadata) do
+    case transport_failure_projection(attempt) do
       transport_failure when map_size(transport_failure) > 0 ->
         Map.put(projection, :transport_failure, transport_failure)
 
@@ -413,9 +413,24 @@ defmodule CodexPooler.Accounting.RequestLogs do
     end
   end
 
-  @spec transport_failure_projection(term()) :: map()
-  defp transport_failure_projection(response_metadata) do
-    response_metadata
+  @spec transport_failure_projection(Attempt.t()) :: map()
+  defp transport_failure_projection(%Attempt{} = attempt) do
+    metadata = Accounting.sanitize_metadata(attempt.response_metadata)
+
+    metadata
+    |> persisted_transport_failure()
+    |> case do
+      transport_failure when map_size(transport_failure) > 0 ->
+        transport_failure
+
+      _transport_failure ->
+        stream_interruption_transport_failure(attempt, metadata)
+    end
+    |> safe_transport_failure()
+  end
+
+  defp persisted_transport_failure(metadata) do
+    metadata
     |> Accounting.sanitize_metadata()
     |> case do
       %{"transport_failure" => transport_failure} when is_map(transport_failure) ->
@@ -427,8 +442,95 @@ defmodule CodexPooler.Accounting.RequestLogs do
       _metadata ->
         %{}
     end
-    |> safe_transport_failure()
   end
+
+  defp stream_interruption_transport_failure(
+         %Attempt{} = attempt,
+         %{"error_kind" => "stream_interrupted"} = metadata
+       ) do
+    cond do
+      attempt.network_error_code == "client_disconnected" ->
+        %{
+          "reason_class" => "downstream_client_disconnect",
+          "reason" => "client_disconnected",
+          "phase" => "send_payload",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => false,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+
+      attempt.network_error_code == "downstream_stream_error" ->
+        %{
+          "reason_class" => "downstream_stream_error",
+          "reason" => "downstream_write_failed",
+          "phase" => "send_payload",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => false,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+
+      attempt.network_error_code == "stream_idle_timeout" ->
+        %{
+          "reason_class" => "upstream_stream_idle_timeout",
+          "reason" => "idle_timeout",
+          "phase" => "receive_timeout",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => false,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+
+      present?(terminal_stream_error_code(metadata)) ->
+        %{
+          "reason_class" => "upstream_terminal_failure",
+          "reason" => terminal_stream_error_code(metadata),
+          "phase" => "receive",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => true,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+
+      attempt.network_error_code == "upstream_stream_error" ->
+        %{
+          "reason_class" => "upstream_stream_interrupted",
+          "reason" => "closed_before_terminal",
+          "phase" => "upstream_close",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => false,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+
+      true ->
+        %{
+          "reason_class" => "stream_interrupted",
+          "reason" => "interrupted",
+          "phase" => "receive",
+          "pre_visible_output" => pre_visible_output?(metadata),
+          "terminal_seen" => false,
+          "text_frame_count" => stream_text_frame_count(metadata)
+        }
+    end
+  end
+
+  defp stream_interruption_transport_failure(_attempt, _metadata), do: %{}
+
+  defp terminal_stream_error_code(metadata) do
+    Map.get(metadata, "stream_error_code") || Map.get(metadata, "upstream_error_code")
+  end
+
+  defp pre_visible_output?(metadata), do: stream_text_frame_count(metadata) == 0
+
+  defp stream_text_frame_count(metadata) do
+    metadata
+    |> Map.get("stream_text_frame_count")
+    |> non_negative_integer()
+    |> case do
+      count when is_integer(count) -> count
+      nil -> default_stream_text_frame_count(metadata)
+    end
+  end
+
+  defp default_stream_text_frame_count(%{"error_kind" => "stream_interrupted"}), do: 1
+  defp default_stream_text_frame_count(_metadata), do: 0
 
   @spec safe_transport_failure(map()) :: map()
   defp safe_transport_failure(transport_failure) when is_map(transport_failure) do

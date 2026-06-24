@@ -1967,6 +1967,145 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute inspect(log.debug) =~ "Bearer sk-example-hidden"
   end
 
+  test "request log debug projection classifies interrupted HTTP SSE attempts" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-debug-http-sse-interrupted",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_sse",
+        status: "failed",
+        correlation_id: "debug-http-sse-interrupted",
+        response_status_code: 200,
+        request_metadata: %{
+          "codex_session_id" => "session-http-sse-interrupted",
+          "codex_session_key" => "session-key-http-sse-interrupted",
+          "request_body" => "raw prompt should stay hidden"
+        }
+      })
+      |> Ecto.Changeset.change(last_error_code: "upstream_stream_error")
+      |> Repo.update!()
+
+    attempt =
+      request
+      |> attempt_fixture(assignment, %{
+        status: "failed",
+        retryable: false,
+        upstream_status_code: 200,
+        usage_status: "usage_known"
+      })
+      |> Ecto.Changeset.change(%{
+        latency_ms: 654,
+        network_error_code: "upstream_stream_error",
+        error_message: "raw stream body must not enter debug",
+        response_metadata: %{
+          "error_kind" => "stream_interrupted",
+          "content_type" => "text/event-stream",
+          "status_code" => 200,
+          "raw_body" => "raw visible response body should stay hidden",
+          "raw_headers" => %{"authorization" => "Bearer sk-example-hidden"}
+        }
+      })
+      |> Repo.update!()
+
+    _turn =
+      debug_turn_fixture(pool, api_key, assignment, request, %{
+        status: "failed",
+        error_code: "upstream_stream_error",
+        final_attempt_id: attempt.id
+      })
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+    assert [attempt_debug] = log.debug.attempts
+
+    assert attempt_debug.transport_failure == %{
+             reason_class: "upstream_stream_interrupted",
+             reason: "closed_before_terminal",
+             phase: "upstream_close",
+             pre_visible_output: false,
+             terminal_seen: false,
+             text_frame_count: 1
+           }
+
+    refute inspect(log.debug) =~ "session-http-sse-interrupted"
+    refute inspect(log.debug) =~ "session-key-http-sse-interrupted"
+    refute inspect(log.debug) =~ "raw prompt should stay hidden"
+    refute inspect(log.debug) =~ "raw stream body"
+    refute inspect(log.debug) =~ "raw visible response body"
+    refute inspect(log.debug) =~ "Bearer sk-example-hidden"
+  end
+
+  test "request log debug projection classifies supported stream interruption families" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-debug-stream-families",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_sse",
+        status: "failed",
+        correlation_id: "debug-stream-families",
+        response_status_code: 200,
+        request_metadata: %{"codex_session_id" => "session-stream-families"}
+      })
+      |> Ecto.Changeset.change(last_error_code: "upstream_stream_error")
+      |> Repo.update!()
+
+    stream_family_attempt(request, assignment, 1, "client_disconnected", %{})
+
+    stream_family_attempt(request, assignment, 2, "upstream_stream_error", %{
+      "stream_error_code" => "server_error"
+    })
+
+    stream_family_attempt(request, assignment, 3, "stream_idle_timeout", %{})
+    stream_family_attempt(request, assignment, 4, "stream_parse_error", %{})
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+
+    attempts_by_number = Map.new(log.debug.attempts, &{&1.attempt_number, &1.transport_failure})
+
+    assert attempts_by_number[1] == %{
+             reason_class: "downstream_client_disconnect",
+             reason: "client_disconnected",
+             phase: "send_payload",
+             pre_visible_output: false,
+             terminal_seen: false,
+             text_frame_count: 1
+           }
+
+    assert attempts_by_number[2] == %{
+             reason_class: "upstream_terminal_failure",
+             reason: "server_error",
+             phase: "receive",
+             pre_visible_output: false,
+             terminal_seen: true,
+             text_frame_count: 1
+           }
+
+    assert attempts_by_number[3] == %{
+             reason_class: "upstream_stream_idle_timeout",
+             reason: "idle_timeout",
+             phase: "receive_timeout",
+             pre_visible_output: false,
+             terminal_seen: false,
+             text_frame_count: 1
+           }
+
+    assert attempts_by_number[4] == %{
+             reason_class: "stream_interrupted",
+             reason: "interrupted",
+             phase: "receive",
+             pre_visible_output: false,
+             terminal_seen: false,
+             text_frame_count: 1
+           }
+
+    refute inspect(log.debug) =~ "session-stream-families"
+  end
+
   test "request log debug projection reports failed request with linked open turn as mismatch" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -2614,6 +2753,22 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
       "upstream_identity_id" => identity.id,
       "operator_action" => @pinned_continuation_operator_action
     }
+  end
+
+  defp stream_family_attempt(request, assignment, attempt_number, network_error_code, metadata) do
+    request
+    |> attempt_fixture(assignment, %{
+      attempt_number: attempt_number,
+      status: "failed",
+      retryable: false,
+      upstream_status_code: 200,
+      usage_status: "usage_unknown"
+    })
+    |> Ecto.Changeset.change(%{
+      network_error_code: network_error_code,
+      response_metadata: Map.merge(%{"error_kind" => "stream_interrupted"}, metadata)
+    })
+    |> Repo.update!()
   end
 
   defp debug_turn_fixture(pool, api_key, assignment, request, attrs) do

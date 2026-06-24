@@ -174,7 +174,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert message_output["id"] == "message_1"
     end
 
-    test "carries incomplete response stream state explicitly" do
+    test "normalizes terminal response buffers without trailing SSE separator" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       terminal =
@@ -197,16 +197,36 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
         ]
         |> IO.iodata_to_binary()
 
-      assert {"", state} =
+      assert {chunk, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
+
+      assert state == StreamProtocol.public_openai_responses_stream_state()
+      assert chunk =~ "event: response.created\n"
+      assert chunk =~ "event: response.output_text.delta\n"
+      assert chunk =~ "event: response.completed\n"
+      assert chunk =~ "split terminal text"
+      refute Process.get({:openai_responses_stream_state, "resp_explicit_state"})
+    end
+
+    test "keeps nonterminal response buffers incomplete until the SSE separator arrives" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      event =
+        [
+          "event: response.output_text.delta\n",
+          "data: ",
+          Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "split text"})
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {"", state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(event, state)
 
       assert {chunk, _state} =
                StreamProtocol.normalize_public_openai_responses_sse_data("\n\n", state)
 
-      assert chunk =~ "event: response.created\n"
       assert chunk =~ "event: response.output_text.delta\n"
-      assert chunk =~ "split terminal text"
-      refute Process.get({:openai_responses_stream_state, "resp_explicit_state"})
+      assert chunk =~ "split text"
     end
 
     test "emits early response.failed without synthetic success prefix" do
