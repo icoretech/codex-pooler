@@ -508,14 +508,14 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   defp diagnostic_popover_root_class(:end),
-    do: "dropdown dropdown-hover dropdown-end inline-flex"
+    do: "dropdown dropdown-hover dropdown-end dropdown-bottom inline-flex"
 
   defp diagnostic_popover_root_class(_placement),
     do: "dropdown dropdown-hover dropdown-right inline-flex"
 
   defp diagnostic_popover_content_class(:end),
     do:
-      "dropdown-content z-20 mt-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
+      "dropdown-content z-50 mt-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   defp diagnostic_popover_content_class(_placement),
     do:

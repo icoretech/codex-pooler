@@ -344,27 +344,58 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       assigns
       |> assign(:badge_class, saved_reset_count_badge_class(assigns.saved_reset_policy))
       |> assign(:badge_icon_class, saved_reset_count_badge_icon_class(assigns.saved_reset_policy))
+      |> assign(:content_id, "upstream-account-#{assigns.identity_id}-saved-reset-bank-popover")
       |> assign(:policy_state_label, saved_reset_policy_state_label(assigns.saved_reset_policy))
-      |> assign(:expiry_label, saved_reset_expiry_label(assigns.saved_resets))
+      |> assign(:expiration_label, saved_reset_expiration_popover_label(assigns.saved_resets))
 
     ~H"""
-    <button
-      id={@id}
-      type="button"
-      data-role="upstream-saved-reset-count-badge"
-      class={@badge_class}
-      aria-label={"Saved resets: #{@saved_resets.available_count}; #{@policy_state_label}#{@expiry_label}"}
-      title={"#{@saved_resets.label}; #{@policy_state_label}#{@expiry_label}"}
-      phx-click="open_saved_reset_policy"
-      phx-value-id={@identity_id}
-      disabled={@disabled}
+    <span
+      id={"upstream-saved-reset-count-popover-#{@identity_id}"}
+      data-role="upstream-saved-reset-count-popover"
+      class="dropdown dropdown-hover dropdown-end dropdown-bottom inline-flex self-center"
     >
-      <.icon
-        name="hero-battery-100"
-        class={@badge_icon_class}
-      />
-      <span>{@saved_resets.available_count}</span>
-    </button>
+      <button
+        id={@id}
+        type="button"
+        data-role="upstream-saved-reset-count-badge"
+        class={@badge_class}
+        aria-label={"Saved reset bank: #{@saved_resets.label}"}
+        aria-describedby={@content_id}
+        phx-click="open_saved_reset_policy"
+        phx-value-id={@identity_id}
+        disabled={@disabled}
+      >
+        <.icon
+          name="hero-battery-100"
+          class={@badge_icon_class}
+        />
+        <span>{@saved_resets.available_count}</span>
+      </button>
+      <span
+        id={@content_id}
+        role="tooltip"
+        tabindex="0"
+        data-role="upstream-saved-reset-bank-popover"
+        class="dropdown-content z-50 mt-2 grid w-64 gap-2 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl sm:w-72"
+      >
+        <span class="font-semibold text-base-content">Saved reset bank</span>
+        <span class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+          <span class="font-medium text-base-content/55">Available</span>
+          <span class="text-base-content" data-role="upstream-saved-reset-available-count">
+            {@saved_resets.label}
+          </span>
+          <span class="font-medium text-base-content/55">Policy</span>
+          <span class="text-base-content" data-role="upstream-saved-reset-policy-state">
+            {@policy_state_label}
+          </span>
+          <span class="font-medium text-base-content/55">Expiration</span>
+          <span class="text-base-content" data-role="upstream-saved-reset-expiration">
+            {@expiration_label}
+          </span>
+        </span>
+        <span class="text-base-content/60">Click to manage redemption policy.</span>
+      </span>
+    </span>
     """
   end
 
@@ -373,10 +404,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
     """
   end
 
-  defp saved_reset_expiry_label(%{next_expires_label: label}) when is_binary(label),
-    do: "; " <> label
+  defp saved_reset_expiration_popover_label(%{next_expires_label: label}) when is_binary(label),
+    do: label
 
-  defp saved_reset_expiry_label(_saved_resets), do: ""
+  defp saved_reset_expiration_popover_label(%{expires_reported?: false}),
+    do: "Expiration dates not reported"
+
+  defp saved_reset_expiration_popover_label(_saved_resets), do: "Expiration unavailable"
 
   defp saved_reset_count_badge_class(%{enabled?: true}) do
     [
@@ -404,8 +438,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
     "size-3 shrink-0 text-violet-600 dark:text-violet-300"
   end
 
-  defp saved_reset_policy_state_label(%{enabled?: true}), do: "auto redeem active"
-  defp saved_reset_policy_state_label(_policy), do: "auto redeem inactive"
+  defp saved_reset_policy_state_label(%{enabled?: true}), do: "Auto redeem active"
+  defp saved_reset_policy_state_label(_policy), do: "Auto redeem inactive"
 
   attr :account, :map, required: true
   attr :routing_readiness, :map, required: true
@@ -535,7 +569,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
 
   defp token_burn_popover(assigns) do
     ~H"""
-    <span class="dropdown dropdown-hover dropdown-end inline-flex justify-end">
+    <span
+      id={"#{@id}-popover"}
+      data-role="upstream-token-burn-popover"
+      class="dropdown dropdown-hover dropdown-end dropdown-bottom inline-flex justify-end"
+    >
       <button
         id={@id}
         type="button"
@@ -543,7 +581,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
         tabindex="0"
         aria-label="Token burn calculation"
         aria-describedby={@content_id}
-        title={@token_burn.title}
       >
         <.icon name="hero-fire" class={token_burn_icon_class(@token_burn)} />
         <span>{@token_burn.label}</span>
@@ -552,9 +589,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
         id={@content_id}
         role="tooltip"
         tabindex="0"
-        class="dropdown-content z-20 mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl sm:w-72"
+        class="dropdown-content z-50 mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl sm:w-72"
       >
-        Compares settled tokens from the last 5 minutes with the previous 1 hour baseline.
+        <span class="block">
+          Compares settled tokens from the last 5 minutes with the previous 1 hour baseline.
+        </span>
+        <span class="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+          <span class="font-medium text-base-content/55">Last 5 minutes</span>
+          <span class="text-base-content">{token_burn_recent_token_label(@token_burn)}</span>
+          <span class="font-medium text-base-content/55">Previous 1 hour</span>
+          <span class="text-base-content">{token_burn_baseline_token_label(@token_burn)}</span>
+        </span>
       </span>
     </span>
     """
@@ -693,6 +738,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       baseline_tokens: 0
     }
   end
+
+  defp token_burn_recent_token_label(%{recent_tokens: tokens})
+       when is_integer(tokens) and tokens >= 0 do
+    "#{Format.token_count(tokens)} tokens"
+  end
+
+  defp token_burn_recent_token_label(_token_burn), do: "0 tokens"
+
+  defp token_burn_baseline_token_label(%{baseline_tokens: tokens})
+       when is_integer(tokens) and tokens >= 0 do
+    "#{Format.token_count(tokens)} tokens"
+  end
+
+  defp token_burn_baseline_token_label(_token_burn), do: "0 tokens"
 
   defp token_burn_icon_class(%{level: 0}), do: "size-3.5 text-base-content/35"
   defp token_burn_icon_class(%{level: level}) when level in 1..2, do: "size-3.5 text-warning/70"

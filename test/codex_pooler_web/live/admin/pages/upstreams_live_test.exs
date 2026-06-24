@@ -815,11 +815,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     active_badge_id = "upstream-account-#{active_identity.id}-saved-reset-count"
 
     active_badge_selector =
-      "##{active_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Saved resets: 2; auto redeem active; Next expires 2026-07-18 00:40:11 UTC']"
+      "##{active_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Saved reset bank: 2 saved resets'][aria-describedby='upstream-account-#{active_identity.id}-saved-reset-bank-popover']"
+
+    active_popover_selector =
+      "#upstream-account-#{active_identity.id}-saved-reset-bank-popover[data-role='upstream-saved-reset-bank-popover'][role='tooltip']"
 
     assert has_element?(view, active_badge_selector, "2")
     assert has_element?(view, "#{active_badge_selector} .hero-battery-100.size-3.text-current")
 
+    assert has_element?(
+             view,
+             "#upstream-saved-reset-count-popover-#{active_identity.id}[data-role='upstream-saved-reset-count-popover'].dropdown-bottom"
+           )
+
+    assert has_element?(view, active_popover_selector, "Saved reset bank")
+    assert has_element?(view, active_popover_selector, "2 saved resets")
+    assert has_element?(view, active_popover_selector, "Auto redeem active")
+    assert has_element?(view, active_popover_selector, "Next expires 2026-07-18 00:40:11 UTC")
+    assert has_element?(view, active_popover_selector, "Click to manage redemption policy")
     active_card = view |> element("#upstream-account-#{active_identity.id}") |> render()
     active_badge_class = html_element_class(active_card, active_badge_id)
 
@@ -839,7 +852,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     inactive_badge_id = "upstream-account-#{inactive_identity.id}-saved-reset-count"
 
     inactive_badge_selector =
-      "##{inactive_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Saved resets: 1; auto redeem inactive']"
+      "##{inactive_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Saved reset bank: 1 saved reset'][aria-describedby='upstream-account-#{inactive_identity.id}-saved-reset-bank-popover']"
+
+    inactive_popover_selector =
+      "#upstream-account-#{inactive_identity.id}-saved-reset-bank-popover[data-role='upstream-saved-reset-bank-popover'][role='tooltip']"
 
     assert has_element?(view, inactive_badge_selector, "1")
 
@@ -847,6 +863,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#{inactive_badge_selector} .hero-battery-100.size-3.text-violet-600"
            )
+
+    assert has_element?(view, inactive_popover_selector, "1 saved reset")
+    assert has_element?(view, inactive_popover_selector, "Auto redeem inactive")
+    assert has_element?(view, inactive_popover_selector, "Expiration dates not reported")
 
     inactive_card = view |> element("#upstream-account-#{inactive_identity.id}") |> render()
     inactive_badge_class = html_element_class(inactive_card, inactive_badge_id)
@@ -1637,8 +1657,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
+             "#upstream-account-#{identity.id}-token-burn-value-popover[data-role='upstream-token-burn-popover'].dropdown-bottom"
+           )
+
+    assert has_element?(
+             view,
              "#upstream-account-#{identity.id}-token-burn-content",
              "last 5 minutes"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-burn-content",
+             "700 tokens"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-token-burn-content",
+             "300 tokens"
            )
 
     refute has_element?(view, "#upstream-account-#{identity.id}", "refresh succeeded")
@@ -2925,7 +2962,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute render(view) =~ "Not reported by account"
 
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label")
-    assert has_element?(view, "#upstream-account-#{identity.id}-plan-label.dropdown-end")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-plan-label.dropdown-end.dropdown-bottom"
+           )
 
     assert has_element?(
              view,
