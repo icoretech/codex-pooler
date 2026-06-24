@@ -111,7 +111,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.transport == "http_sse"
+
+    if health_neutral_retry_code?(code) do
+      refute get_in(request.request_metadata || %{}, ["routing", "demotion_reason"])
+
+      assert Repo.all(from(d in BridgeDemotion)) == []
+      assert Repo.all(from(c in RoutingCircuitState)) == []
+    end
+
     assert_safe_stream_metadata!(request, [first_attempt, second_attempt])
+  end
+
+  defp health_neutral_retry_code?(code) do
+    code in ["server_error", "overloaded_error", "server_is_overloaded"]
   end
 
   def assert_stream_terminal_failure!(setup, code) do

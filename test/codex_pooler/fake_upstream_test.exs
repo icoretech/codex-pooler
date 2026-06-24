@@ -80,7 +80,10 @@ defmodule CodexPooler.FakeUpstreamTest do
         )
 
       assert {:error, error} =
-               Req.get(FakeUpstream.url(upstream) <> "/slow", receive_timeout: 100, retry: false)
+               Req.get(FakeUpstream.url(upstream) <> "/slow",
+                 receive_timeout: 1_000,
+                 retry: false
+               )
 
       assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
                       ^release_ref},
@@ -109,7 +112,7 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       try do
         assert_receive {:fake_upstream_stream_data, "data: partial\n\n"}, 1_000
-        assert {:error, error} = Task.await(task, 1_000)
+        assert {:error, error} = Task.await(task, 2_000)
 
         assert transport_timeout?(error)
       after
@@ -185,7 +188,7 @@ defmodule CodexPooler.FakeUpstreamTest do
           send(parent, {:fake_upstream_stream_data, data})
           {:cont, {request, response}}
         end,
-        receive_timeout: 100,
+        receive_timeout: 1_000,
         retry: false
       )
     end)

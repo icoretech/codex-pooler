@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     "stream_incomplete",
     "server_error",
     "overloaded_error",
+    "server_is_overloaded",
     "websocket_connection_limit_reached"
   ]
   @websocket_auth_refresh_event_codes ["invalid_api_key", "invalid_authentication"]

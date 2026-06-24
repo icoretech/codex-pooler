@@ -5389,6 +5389,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_4_first_event_stream_retry
+  test "SSE first-event server_is_overloaded retries and second attempt succeeds" do
+    {setup, failing_upstream, success_upstream} =
+      stream_retry_setup(first_event_terminal_sse("response.failed", "server_is_overloaded"))
+
+    execute_backend_stream!(setup, "first-event-server-is-overloaded-retry")
+
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "server_is_overloaded")
+  end
+
+  @tag :task_4_first_event_stream_retry
   test "SSE visible output followed by transient failure does not retry" do
     first_upstream =
       FakeUpstream.sse_stream(

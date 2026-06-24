@@ -62,6 +62,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert state == %{classified?: true, buffer: ""}
     end
 
+    test "classifies server_is_overloaded first terminal failures as retryable" do
+      state = StreamAttempt.first_event_state()
+
+      data =
+        "event: response.failed\n" <>
+          "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\"}}}\n\n"
+
+      assert {{:retry, %{code: "server_is_overloaded", event_type: "response.failed"}}, state} =
+               StreamAttempt.classify_first_event(data, state)
+
+      assert state == %{classified?: true, buffer: ""}
+    end
+
     test "classifies exact top-level websocket_connection_limit_reached wrapped errors as retryable before visible output" do
       state = StreamAttempt.first_event_state()
 
