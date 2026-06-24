@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.1...codex-pooler-v0.4.2) (2026-06-24)
+
+
+### Bug Fixes
+
+* correct upstream popover placement ([cb16fe4](https://github.com/icoretech/codex-pooler/commit/cb16fe4062b4537dc05c04ca4a5a588b7859157c))
+* **gateway:** accept trailing terminal response SSE events ([548909e](https://github.com/icoretech/codex-pooler/commit/548909e9c21717afd6ed4e98457829b98c5638bb))
+* **gateway:** release health-neutral stream probes ([5a2d194](https://github.com/icoretech/codex-pooler/commit/5a2d1944d54cf2f5cdb691c93b9eb0ecffc6ac79))
+* **gateway:** track oversized terminal response SSE events ([2a22bd7](https://github.com/icoretech/codex-pooler/commit/2a22bd78494a102c0c4e309195bd8c8ec0fcbb1e))
+* **request-compression:** add bounded token accounting ([a70e0a4](https://github.com/icoretech/codex-pooler/commit/a70e0a4c54f2534381d1601b4c63a864ef29be75))
+* **request-compression:** preserve grep search shape fidelity ([b31d704](https://github.com/icoretech/codex-pooler/commit/b31d7046d133e7229c2b4a29ab0106d7d5a7a249))
+* **streaming:** keep overload failures health-neutral ([a3139ae](https://github.com/icoretech/codex-pooler/commit/a3139aeb3c6c098d3da614ca0cb483776543df88))
+
 ## [0.4.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.0...codex-pooler-v0.4.1) (2026-06-24)
 
 
