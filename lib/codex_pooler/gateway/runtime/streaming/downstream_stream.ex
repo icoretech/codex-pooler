@@ -30,6 +30,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         |> Map.put(:public_openai_responses_terminal_seen?, false)
         |> Map.put(:public_openai_responses_response_id, nil)
         |> Map.put(:public_openai_responses_terminal_kind, nil)
+        |> Map.put(:public_openai_responses_terminal_failure, nil)
 
       true ->
         state
@@ -80,9 +81,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   def keepalive_allowed?(_state), do: true
 
-  @spec terminal_outcome(state()) :: :completed | :incomplete | :failed | nil
+  @spec terminal_outcome(state()) ::
+          :completed | :incomplete | {:failed, StreamProtocol.terminal_failure() | nil} | nil
+  def terminal_outcome(%{
+        public_openai_responses_terminal_kind: :failed,
+        public_openai_responses_terminal_failure: failure
+      }) do
+    {:failed, failure}
+  end
+
   def terminal_outcome(%{public_openai_responses_terminal_kind: kind})
-      when kind in [:completed, :incomplete, :failed],
+      when kind in [:completed, :incomplete],
       do: kind
 
   def terminal_outcome(_state), do: nil
@@ -140,6 +149,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         state
         |> Map.put(:public_openai_responses_terminal_seen?, true)
         |> Map.put(:public_openai_responses_terminal_kind, kind)
+        |> Map.put(
+          :public_openai_responses_terminal_failure,
+          StreamProtocol.public_openai_responses_passthrough_terminal_failure(stream_state)
+        )
 
       _kind ->
         state
@@ -273,7 +286,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp maybe_mark_public_openai_responses_terminal_seen(state, event) do
     case StreamProtocol.terminal_outcome_event(event) do
-      {:ok, %{kind: kind}} when kind in [:completed, :incomplete, :failed] ->
+      {:ok, %{kind: :failed, failure: failure}} ->
+        state
+        |> Map.put(:public_openai_responses_terminal_seen?, true)
+        |> Map.put(:public_openai_responses_terminal_kind, :failed)
+        |> Map.put(:public_openai_responses_terminal_failure, failure)
+
+      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
         state
         |> Map.put(:public_openai_responses_terminal_seen?, true)
         |> Map.put(:public_openai_responses_terminal_kind, kind)

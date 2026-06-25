@@ -15,7 +15,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
           | {:terminal_stream_failure, relay_state(), StreamProtocol.terminal_failure()}
   @type stream_finalization_result :: {:ok, term()} | {:error, term()}
   @type before_finalize_failure_result ::
-          {:ok, relay_state(), iodata()} | {:success, relay_state(), iodata()} | {:error, term()}
+          {:ok, relay_state(), iodata()}
+          | {:success, relay_state(), iodata()}
+          | {:failure, relay_state(), iodata(), term()}
+          | {:error, term()}
   @type before_finalize_success_result ::
           {:ok, relay_state(), iodata()} | {:failure, relay_state(), iodata(), term()}
   @type first_event_retry_result :: {:ok, relay_state()} | {:error, term()}
@@ -227,6 +230,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
         case callback.(state, reason) do
           {:success, state, data} ->
             {:success, state, append_stream_chunk(chunks, data)}
+
+          {:failure, state, data, reason} ->
+            {:failure, state, append_stream_chunk(chunks, data), reason}
 
           {:ok, state, data} ->
             {:failure, state, append_stream_chunk(chunks, data), reason}

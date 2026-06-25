@@ -328,6 +328,125 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
     end
 
+    test "tracks failure-coded oversized public OpenAI Responses incomplete passthrough" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      terminal =
+        [
+          "event: response.incomplete\n",
+          "data: ",
+          Jason.encode!(%{
+            "type" => "response.incomplete",
+            "response" => %{
+              "id" => "resp_public_large_failed_incomplete",
+              "status" => "incomplete",
+              "output" => [
+                %{
+                  "type" => "message",
+                  "content" => [
+                    %{
+                      "type" => "output_text",
+                      "text" => String.duplicate("large incomplete text ", 4_000)
+                    }
+                  ]
+                }
+              ],
+              "incomplete_details" => %{"reason" => "context_length_exceeded"}
+            }
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert byte_size(terminal) > StreamProtocol.max_incomplete_sse_block_bytes()
+
+      split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
+      first = binary_part(terminal, 0, split_at)
+      second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
+
+      assert {^first, state} =
+               DownstreamStream.normalize_data(first, "/v1/responses", opts, state)
+
+      assert is_nil(DownstreamStream.terminal_outcome(state))
+
+      assert {^second, state} =
+               DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.code == "context_length_exceeded"
+      assert failure.event_type == "response.incomplete"
+      assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
+    end
+
+    test "prefers specific error.code in oversized public OpenAI Responses failures" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      terminal =
+        [
+          "event: response.failed\n",
+          "data: ",
+          Jason.encode!(%{
+            "type" => "response.failed",
+            "response" => %{
+              "id" => "resp_public_large_failed_with_specific_code",
+              "status" => "failed",
+              "output" => [
+                %{
+                  "type" => "message",
+                  "content" => [
+                    %{
+                      "type" => "output_text",
+                      "text" => String.duplicate("large failed text ", 4_000)
+                    }
+                  ]
+                }
+              ],
+              "error" => %{
+                "type" => "invalid_request_error",
+                "code" => "context_length_exceeded"
+              }
+            },
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => "context_length_exceeded"
+            }
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert byte_size(terminal) > StreamProtocol.max_incomplete_sse_block_bytes()
+
+      split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
+      first = binary_part(terminal, 0, split_at)
+      second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
+
+      assert {^first, state} =
+               DownstreamStream.normalize_data(first, "/v1/responses", opts, state)
+
+      assert is_nil(DownstreamStream.terminal_outcome(state))
+
+      assert {^second, state} =
+               DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.code == "context_length_exceeded"
+      assert failure.upstream_code == "context_length_exceeded"
+      assert failure.event_type == "response.failed"
+    end
+
     test "synthesizes a sanitized terminal failure with the observed public response id" do
       opts =
         RequestOptions.build(

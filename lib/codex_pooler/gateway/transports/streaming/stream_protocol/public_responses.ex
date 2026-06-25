@@ -11,7 +11,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:depth) => non_neg_integer(),
           required(:in_string?) => boolean(),
           required(:escaped?) => boolean(),
-          required(:complete?) => boolean()
+          required(:complete?) => boolean(),
+          required(:scan_tail) => binary(),
+          required(:explicit_error?) => boolean(),
+          required(:incomplete_reason) => String.t() | nil,
+          required(:failure_code) => String.t() | nil
         }
   @type state :: %{
           required(:buffer) => binary(),
@@ -20,6 +24,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:passthrough?) => boolean(),
           required(:passthrough_terminal) => passthrough_terminal_state() | nil,
           required(:passthrough_terminal_kind) => atom() | nil,
+          required(:passthrough_terminal_failure) => StreamProtocol.terminal_failure() | nil,
           required(:passthrough_terminal_seen?) => boolean()
         }
 
@@ -32,6 +37,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       passthrough?: false,
       passthrough_terminal: nil,
       passthrough_terminal_kind: nil,
+      passthrough_terminal_failure: nil,
       passthrough_terminal_seen?: false
     }
   end
@@ -45,6 +51,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     ~s("type":"error"),
     ~s("type": "error")
   ]
+  @passthrough_scan_tail_bytes 4_096
+  @incomplete_reason_pattern ~r/"incomplete_details"\s*:\s*\{[^{}]{0,4096}"reason"\s*:\s*"([^"]+)"/
+  @error_code_pattern ~r/"error"\s*:\s*\{[^{}]{0,4096}"code"\s*:\s*"([^"]+)"/
+  @error_type_pattern ~r/"error"\s*:\s*\{[^{}]{0,4096}"type"\s*:\s*"([^"]+)"/
+  @explicit_error_pattern ~r/"(?:error|status_details)"\s*:\s*\{/
 
   @spec normalize_data(binary(), state()) :: {binary(), state()}
   def normalize_data(data, %{passthrough?: true} = state) when is_binary(data) do
@@ -100,6 +111,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   def passthrough_terminal_kind(%{passthrough_terminal_kind: kind}) when is_atom(kind), do: kind
   def passthrough_terminal_kind(_state), do: nil
 
+  @spec passthrough_terminal_failure(state()) :: StreamProtocol.terminal_failure() | nil
+  def passthrough_terminal_failure(%{passthrough_terminal_failure: %{} = failure}), do: failure
+  def passthrough_terminal_failure(_state), do: nil
+
   defp enter_passthrough(data, state) do
     data
     |> passthrough_terminal_event_type()
@@ -122,7 +137,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       depth: 0,
       in_string?: false,
       escaped?: false,
-      complete?: false
+      complete?: false,
+      scan_tail: "",
+      explicit_error?: false,
+      incomplete_reason: nil,
+      failure_code: nil
     }
   end
 
@@ -168,18 +187,46 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp track_passthrough_terminal_data(state, _data), do: state
 
-  defp maybe_put_passthrough_terminal_kind(state, %{complete?: true, event_type: event_type}) do
-    Map.put(state, :passthrough_terminal_kind, terminal_kind(event_type))
+  defp maybe_put_passthrough_terminal_kind(state, %{complete?: true} = terminal) do
+    case passthrough_terminal_outcome(terminal) do
+      {:ok, %{kind: kind} = outcome} ->
+        state
+        |> Map.put(:passthrough_terminal_kind, kind)
+        |> maybe_put_passthrough_terminal_failure(outcome)
+
+      _outcome ->
+        state
+    end
   end
 
   defp maybe_put_passthrough_terminal_kind(state, _terminal), do: state
 
-  defp terminal_kind("response.completed"), do: :completed
-  defp terminal_kind("response.incomplete"), do: :incomplete
-  defp terminal_kind(_event_type), do: :failed
+  defp maybe_put_passthrough_terminal_failure(
+         state,
+         %{kind: :failed, failure: %{} = failure}
+       ) do
+    Map.put(state, :passthrough_terminal_failure, failure)
+  end
 
-  defp scan_passthrough_terminal_json(data, terminal),
-    do: scan_passthrough_terminal_json(data, 0, terminal)
+  defp maybe_put_passthrough_terminal_failure(state, _outcome), do: state
+
+  defp passthrough_terminal_outcome(%{event_type: event_type} = terminal) do
+    failure_code = terminal.failure_code
+
+    StreamProtocol.terminal_outcome_event(%{
+      event_type: event_type,
+      data_type: event_type,
+      error_code: StreamProtocol.client_visible_error_code(failure_code),
+      upstream_error_code: failure_code,
+      incomplete_reason: terminal.incomplete_reason || failure_code,
+      explicit_error?: terminal.explicit_error?
+    })
+  end
+
+  defp scan_passthrough_terminal_json(data, terminal) do
+    terminal = track_passthrough_terminal_metadata(data, terminal)
+    scan_passthrough_terminal_json(data, 0, terminal)
+  end
 
   defp scan_passthrough_terminal_json(data, offset, terminal)
        when offset >= byte_size(data) or terminal.complete?,
@@ -242,6 +289,42 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       _byte ->
         scan_passthrough_terminal_json(data, offset + 1, terminal)
     end
+  end
+
+  defp track_passthrough_terminal_metadata(data, terminal) when is_binary(data) do
+    sample = if terminal.scan_tail == "", do: data, else: terminal.scan_tail <> data
+
+    incomplete_reason =
+      terminal.incomplete_reason || capture_pattern(@incomplete_reason_pattern, sample)
+
+    error_code = capture_pattern(@error_code_pattern, sample)
+    error_type = capture_pattern(@error_type_pattern, sample)
+
+    %{
+      terminal
+      | scan_tail: scan_tail(sample),
+        explicit_error?:
+          terminal.explicit_error? or Regex.match?(@explicit_error_pattern, sample),
+        incomplete_reason: incomplete_reason,
+        failure_code: error_code || terminal.failure_code || error_type || incomplete_reason
+    }
+  end
+
+  defp capture_pattern(pattern, data) do
+    case Regex.run(pattern, data, capture: :all_but_first) do
+      [value | _rest] when is_binary(value) and value != "" -> value
+      _match -> nil
+    end
+  end
+
+  defp scan_tail(data) when byte_size(data) <= @passthrough_scan_tail_bytes, do: data
+
+  defp scan_tail(data) do
+    binary_part(
+      data,
+      byte_size(data) - @passthrough_scan_tail_bytes,
+      @passthrough_scan_tail_bytes
+    )
   end
 
   defp record_oversized_incomplete(bytes) do

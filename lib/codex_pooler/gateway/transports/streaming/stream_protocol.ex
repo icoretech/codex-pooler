@@ -67,6 +67,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           required(:passthrough?) => boolean(),
           required(:passthrough_terminal) => PublicResponses.passthrough_terminal_state() | nil,
           required(:passthrough_terminal_kind) => atom() | nil,
+          required(:passthrough_terminal_failure) => terminal_failure() | nil,
           required(:passthrough_terminal_seen?) => boolean()
         }
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
@@ -129,6 +130,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           atom() | nil
   def public_openai_responses_passthrough_terminal_kind(state),
     do: PublicResponses.passthrough_terminal_kind(state)
+
+  @spec public_openai_responses_passthrough_terminal_failure(
+          public_openai_responses_stream_state()
+        ) ::
+          terminal_failure() | nil
+  def public_openai_responses_passthrough_terminal_failure(state),
+    do: PublicResponses.passthrough_terminal_failure(state)
 
   @spec synthetic_public_openai_responses_failure_sse(String.t() | nil, term()) :: binary()
   def synthetic_public_openai_responses_failure_sse(response_id, _reason) do
