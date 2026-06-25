@@ -2267,12 +2267,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
             %{"type" => "web_search_preview"},
             %{
               "type" => "web_search",
+              "external_web_access" => false
+            },
+            %{
+              "type" => "web_search",
               "external_web_access" => true,
               "index_gated_web_access" => true
             },
             %{
               "type" => "web_search",
-              "external_web_access" => false
+              "external_web_access" => true
             },
             %{"type" => "image_generation"},
             %{
@@ -2304,6 +2308,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "web_search",
           "external_web_access" => true,
           "index_gated_web_access" => "true"
+        },
+        %{
+          "type" => "web_search",
+          "external_web_access" => true,
+          "index_gated_web_access" => false
         },
         %{
           "type" => "web_search",

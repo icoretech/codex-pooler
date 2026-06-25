@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.RequestCompression
+  alias CodexPooler.Gateway.RequestCompression.TokenCounter
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools.RoutingSettings
@@ -17,6 +18,11 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
   @max_candidate_count 50
   @local_budget_ms 500
   @supported_model "gpt-4o"
+
+  setup_all do
+    assert {:ok, _count, _metadata} = TokenCounter.count(@supported_model, "warm tokenizer ranks")
+    :ok
+  end
 
   describe "request compression guardrails" do
     test "skips over-limit bodies before JSON scanning" do
@@ -199,6 +205,92 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
       refute inspect(compression) =~ "call_oversized_shell_output"
     end
 
+    test "returns a large completed rewrite when a sibling candidate hits tokenizer input limit" do
+      rewrite_item = %{
+        "type" => "local_shell_call_output",
+        "call_id" => "call_near_limit_completed_rewrite",
+        "output" =>
+          oversized_log_fixture("near-limit shell", "SANITIZED_NEAR_LIMIT_REWRITE_SENTINEL")
+      }
+
+      skipped_output =
+        "[\n  " <>
+          Jason.encode!(
+            String.duplicate("a", TokenCounter.max_input_bytes() + 1) <>
+              "SANITIZED_NEAR_LIMIT_SKIP_SENTINEL"
+          ) <> "\n]"
+
+      skip_item = %{
+        "type" => "local_shell_call_output",
+        "call_id" => "call_near_limit_tokenizer_skip",
+        "output" => skipped_output
+      }
+
+      base_items = [rewrite_item, skip_item]
+      body = encode_request(base_items ++ [near_limit_padding_item(@max_body_bytes, base_items)])
+
+      assert byte_size(body) == @max_body_bytes
+
+      {context, request_options} = request_context()
+      started = System.monotonic_time(:millisecond)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      elapsed_ms = System.monotonic_time(:millisecond) - started
+      compression = compressed_options.runtime.payload_compression
+
+      assert elapsed_ms <= @local_budget_ms
+      assert compressed_body != body
+
+      decoded_outputs =
+        compressed_body
+        |> Jason.decode!()
+        |> Map.fetch!("input")
+        |> Map.new(&{&1["call_id"], &1["output"]})
+
+      rewritten_output = Map.fetch!(decoded_outputs, "call_near_limit_completed_rewrite")
+      assert rewritten_output =~ "[compressed log output: omitted"
+      refute rewritten_output =~ "SANITIZED_NEAR_LIMIT_REWRITE_SENTINEL"
+
+      assert Map.fetch!(decoded_outputs, "call_near_limit_tokenizer_skip") == skipped_output
+
+      assert Map.fetch!(decoded_outputs, "call_near_limit_tokenizer_skip") =~
+               "SANITIZED_NEAR_LIMIT_SKIP_SENTINEL"
+
+      assert %{
+               "enabled" => true,
+               "attempted" => true,
+               "status" => "compressed",
+               "reason" => "rewritten",
+               "route_class" => "proxy_http",
+               "transport" => "http_json",
+               "candidate_count" => 2,
+               "compressed_count" => 1,
+               "skipped_count" => 1,
+               "tokenizer_input_skipped_count" => 1,
+               "original_bytes" => @max_body_bytes,
+               "compressed_bytes" => compressed_bytes,
+               "original_tokens_lower_bound" => original_tokens_lower_bound,
+               "compressed_tokens" => compressed_tokens
+             } = compression
+
+      assert compressed_bytes == byte_size(compressed_body)
+      assert compressed_bytes < @max_body_bytes
+      assert compression["token_count_mode"] == "bounded_original"
+      assert compressed_tokens < original_tokens_lower_bound
+      assert "log_output" in compression["strategies"]
+      assert finite_elapsed_ms?(compression)
+      refute Map.has_key?(compression, "original_tokens")
+      refute Map.has_key?(compression, "saved_tokens")
+      refute Map.has_key?(compression, "token_savings_ratio")
+      refute Map.has_key?(compression, "token_savings_percent")
+      refute inspect(compression) =~ "SANITIZED_NEAR_LIMIT_REWRITE_SENTINEL"
+      refute inspect(compression) =~ "SANITIZED_NEAR_LIMIT_SKIP_SENTINEL"
+      refute inspect(compression) =~ "call_near_limit_completed_rewrite"
+      refute inspect(compression) =~ "call_near_limit_tokenizer_skip"
+    end
+
     test "handles a sanitized one MiB fixture within the local dispatch budget" do
       body = fixed_size_request(@max_body_bytes, @max_candidate_count)
       {context, request_options} = request_context()
@@ -302,6 +394,17 @@ defmodule CodexPooler.Gateway.RequestCompression.PerformanceTest do
     body = encode_request(items)
     assert byte_size(body) == target_bytes
     body
+  end
+
+  defp near_limit_padding_item(target_body_bytes, base_items) do
+    empty_padding_item = %{"type" => "message", "role" => "user", "content" => ""}
+    empty_body = encode_request(base_items ++ [empty_padding_item])
+    remaining_bytes = target_body_bytes - byte_size(empty_body)
+    padding = String.duplicate("p", remaining_bytes)
+    padding_item = %{empty_padding_item | "content" => padding}
+    body = encode_request(base_items ++ [padding_item])
+    assert byte_size(body) == target_body_bytes
+    padding_item
   end
 
   defp plain_output(index, bytes) do

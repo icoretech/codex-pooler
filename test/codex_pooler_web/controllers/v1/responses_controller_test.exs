@@ -2084,6 +2084,54 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["store"] == false
   end
 
+  test "POST /v1/responses forwards indexed web search tool shape upstream", %{conn: conn} do
+    tool = %{
+      "type" => "web_search",
+      "external_web_access" => true,
+      "index_gated_web_access" => true
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_indexed_web_search_tool",
+               "status" => "completed",
+               "output" => [
+                 %{
+                   "type" => "message",
+                   "content" => [%{"type" => "output_text", "text" => "indexed search accepted"}]
+                 }
+               ],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic indexed web search request",
+        "tools" => [tool]
+      })
+
+    assert %{"id" => "resp_v1_indexed_web_search_tool"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [tool]
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+  end
+
   test "POST /v1/responses keeps opencode continuity headers local without forwarding", %{
     conn: conn
   } do

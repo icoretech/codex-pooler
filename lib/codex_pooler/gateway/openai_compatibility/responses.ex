@@ -451,6 +451,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
+  defp validate_index_gated_web_access(%{"index_gated_web_access" => false}) do
+    {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+  end
+
   defp validate_index_gated_web_access(%{
          "external_web_access" => false,
          "index_gated_web_access" => true

@@ -68,6 +68,51 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       refute inspect(metadata) =~ "call_direct_compression"
     end
 
+    test "preserves indexed web search tools while rewriting eligible outputs" do
+      tool = %{
+        "type" => "web_search",
+        "external_web_access" => true,
+        "index_gated_web_access" => true
+      }
+
+      original_output = compression_log_fixture("indexed tool compression sentinel")
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "tools" => [tool],
+          "input" => [
+            %{
+              "type" => "local_shell_call_output",
+              "call_id" => "call_indexed_tool_compression",
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert compressed_body != body
+      assert Jason.decode!(compressed_body)["tools"] == [tool]
+
+      compressed_output = first_output(compressed_body)
+      assert compressed_output =~ "[compressed log output: omitted"
+      refute compressed_output =~ "indexed tool compression sentinel"
+
+      assert %{
+               "status" => "compressed",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0
+             } = metadata = compressed_options.runtime.payload_compression
+
+      refute inspect(metadata) =~ "indexed tool compression sentinel"
+      refute inspect(metadata) =~ "call_indexed_tool_compression"
+    end
+
     test "preserves original output when failure summaries prove compression incomplete" do
       omitted_sentinel = "incomplete failure detail omitted sentinel"
       original_output = incomplete_failure_log_fixture(omitted_sentinel)
