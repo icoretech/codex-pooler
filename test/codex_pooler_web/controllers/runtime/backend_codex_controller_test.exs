@@ -6558,7 +6558,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt_cache_key" => raw_prompt_cache_key,
         "max_output_tokens" => 128,
         "temperature" => 0.2,
-        "top_p" => 0.9
+        "top_p" => 0.9,
+        "reasoning" => %{"effort" => "ultra"}
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
@@ -6567,6 +6568,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["max_output_tokens"] == 128
     assert captured.json["temperature"] == 0.2
     assert captured.json["top_p"] == 0.9
+    assert captured.json["reasoning"] == %{"effort" => "max"}
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"

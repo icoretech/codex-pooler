@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     backend_v1_alias_surface
     websocket_continuity
     reasoning_minimal
+    reasoning_ultra
     reasoning_context
     unsupported_upstream_fields
     firewall
@@ -1198,6 +1199,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert %{"id" => "resp_reasoning_minimal"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.json["reasoning"] == %{"effort" => "low"}
+    end
+
+    test "supported reasoning ultra contract rewrites ultra to max before dispatch",
+         %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_ultra"}))
+      setup = gateway_setup(upstream)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post(~p"/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic reasoning request",
+          "reasoning" => %{"effort" => "ultra"}
+        })
+
+      assert %{"id" => "resp_reasoning_ultra"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["reasoning"] == %{"effort" => "max"}
     end
 
     test "supported reasoning contract preserves non-minimal efforts", %{conn: conn} do

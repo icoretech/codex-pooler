@@ -67,7 +67,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> Map.put("model", model.upstream_model_id)
       |> apply_enforced_payload_policy(request_options)
       |> omit_upstream_auto_default_service_tier()
-      |> normalize_minimal_reasoning_effort()
+      |> normalize_client_reasoning_effort()
 
     upstream_payload =
       payload
@@ -131,9 +131,30 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input()
+    |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> maybe_put_websocket_responses_lite_client_metadata(request_options)
+  end
+
+  defp strip_backend_codex_fields(
+         payload,
+         _endpoint,
+         %RequestOptions{
+           transport: %{
+             upstream_endpoint: "/backend-api/codex/responses/compact"
+           }
+         }
+       ) do
+    normalize_backend_codex_compact_payload(payload)
+  end
+
+  defp strip_backend_codex_fields(
+         payload,
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{}
+       ) do
+    normalize_backend_codex_compact_payload(payload)
   end
 
   defp strip_backend_codex_fields(
@@ -164,8 +185,13 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
+    |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
+  end
+
+  defp normalize_backend_codex_compact_payload(payload) do
+    normalize_backend_codex_reasoning_effort(payload)
   end
 
   defp remove_backend_codex_encrypted_tool_schema_markers(%{"tools" => tools} = payload)
@@ -281,11 +307,25 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp omit_upstream_auto_default_service_tier(payload), do: payload
 
-  defp normalize_minimal_reasoning_effort(payload) do
+  defp normalize_client_reasoning_effort(payload) do
     case payload do
       %{"reasoning" => %{"effort" => effort} = reasoning} when is_binary(effort) ->
         if String.downcase(String.trim(effort)) == "minimal" do
           Map.put(payload, "reasoning", Map.put(reasoning, "effort", "low"))
+        else
+          payload
+        end
+
+      _payload ->
+        payload
+    end
+  end
+
+  defp normalize_backend_codex_reasoning_effort(payload) do
+    case payload do
+      %{"reasoning" => %{"effort" => effort} = reasoning} when is_binary(effort) ->
+        if String.downcase(String.trim(effort)) == "ultra" do
+          Map.put(payload, "reasoning", Map.put(reasoning, "effort", "max"))
         else
           payload
         end

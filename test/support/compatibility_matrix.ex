@@ -107,6 +107,20 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "minimal reasoning is rewritten to low before upstream dispatch"
     },
     %{
+      slug: :reasoning_ultra,
+      status: :supported,
+      current: :normalized_to_max,
+      categories: [:route, :auth, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/responses/compact"}
+      ],
+      future_routes: [],
+      fixture: :reasoning_ultra,
+      contract:
+        "client-facing ultra reasoning is accepted and rewritten to backend-compatible max before backend Codex regular and compact upstream dispatch"
+    },
+    %{
       slug: :reasoning_context,
       status: :supported,
       current: :openai_sdk_literal_normalization,
@@ -475,6 +489,13 @@ defmodule CodexPooler.CompatibilityMatrix do
         "model" => "gpt-fixture-text",
         "input" => "synthetic reasoning request",
         "reasoning" => %{"effort" => "minimal"}
+      }
+    },
+    reasoning_ultra: %{
+      json: %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic reasoning request",
+        "reasoning" => %{"effort" => "ultra"}
       }
     },
     reasoning_context: %{

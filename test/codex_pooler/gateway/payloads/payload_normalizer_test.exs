@@ -487,6 +487,50 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
     end
 
+    test "maps client-facing ultra reasoning effort to max for backend Codex HTTP, compact, and websocket JSON" do
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "ultra"}}
+      model = %Model{upstream_model_id: "provider-model"}
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      compact_options = RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      for request_options <- [http_options, compact_options, websocket_options] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   request_options.transport.upstream_endpoint,
+                   request_options
+                 )
+
+        assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+      end
+    end
+
+    test "maps enforced ultra reasoning effort to max only in the backend Codex upstream payload" do
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "low"}}
+
+      request_options =
+        RequestOptions.build(
+          %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+    end
+
     test "omits enforced auto and default service tiers from upstream JSON" do
       model = %Model{upstream_model_id: "provider-model"}
 
