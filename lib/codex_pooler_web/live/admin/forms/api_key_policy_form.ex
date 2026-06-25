@@ -5,6 +5,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.APIKeyPolicyBinding
+  alias CodexPooler.Pools.Pool
+
+  @type params :: %{String.t() => term()}
+  @type attrs :: %{atom() => term()}
+  @type option :: {String.t(), String.t()}
+  @type review_row :: {String.t(), String.t()}
+  @type review_section :: {String.t(), [review_row()]}
+  @type selector_state :: map()
+  @type selector_attrs :: %{String.t() => term()}
 
   @limit_fields ~w(
     max_requests_per_minute
@@ -14,11 +23,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     max_output_tokens_per_request
   )
 
+  @spec limit_fields() :: [String.t()]
   def limit_fields, do: @limit_fields
 
+  @spec empty_params([Pool.t()]) :: params()
   def empty_params([]), do: default_params(%{"pool_id" => ""})
   def empty_params([pool | _pools]), do: default_params(%{"pool_id" => pool.id})
 
+  @spec params_for(APIKey.t(), [APIKeyPolicyBinding.t()]) :: params()
   def params_for(%APIKey{} = api_key, policy_bindings) do
     default_binding = Enum.find(policy_bindings, &(&1.binding_scope == "default"))
     model_binding = Enum.find(policy_bindings, &(&1.binding_scope == "model"))
@@ -40,10 +52,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     |> merge_binding_params("model", model_binding)
   end
 
+  @spec form(params()) :: Phoenix.HTML.Form.t()
   def form(params) when is_map(params) do
     params |> default_params() |> to_form(as: :api_key)
   end
 
+  @spec normalize_params(params(), [Pool.t()]) :: params()
   def normalize_params(params, pools) do
     params
     |> default_params()
@@ -57,9 +71,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     |> normalize_list_param("allowed_model_identifiers")
   end
 
+  @spec merge_params(params() | nil, params() | nil) :: params()
   def merge_params(current_params, incoming_params),
     do: Map.merge(current_params || %{}, incoming_params || %{})
 
+  @spec attrs(params()) :: attrs()
   def attrs(params) do
     pool_id = blank_to_nil(params["pool_id"])
 
@@ -82,6 +98,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     }
   end
 
+  @spec review_errors(params()) :: [String.t()]
   def review_errors(params) do
     []
     |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, "Display name is required")
@@ -94,6 +111,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     |> Enum.reverse()
   end
 
+  @spec reasoning_effort_options() :: [option()]
   def reasoning_effort_options do
     [
       {"Do not enforce", ""},
@@ -107,6 +125,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     ]
   end
 
+  @spec service_tier_options() :: [option()]
   def service_tier_options do
     [
       {"Leave unchanged", ""},
@@ -118,6 +137,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     ]
   end
 
+  @spec enforced_model_options(selector_state(), Phoenix.HTML.Form.t()) :: [option()]
   def enforced_model_options(selector_state, form) do
     selected_values =
       (selector_state.options ++
@@ -133,6 +153,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     [{"Do not enforce", ""} | Enum.map(selected_values, &{&1, &1})]
   end
 
+  @spec review_sections(Phoenix.HTML.Form.t(), selector_state()) :: [review_section()]
   def review_sections(form, selector_state) do
     [
       {"Basics", basics_review_rows(form)},
@@ -141,6 +162,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     ]
   end
 
+  @spec model_selector_attrs(params()) :: selector_attrs()
   def model_selector_attrs(params) do
     %{
       "model_mode" => params["model_mode"],
