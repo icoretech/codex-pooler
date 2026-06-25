@@ -78,6 +78,7 @@ docs-site/.astro/
 !.env.example
 !.env.dev.example
 __pycache__/
+.desloppify/
 scorecard.png
 .omo/
 output/imagegen/
