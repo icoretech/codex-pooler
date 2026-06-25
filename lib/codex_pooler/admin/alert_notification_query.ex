@@ -1,4 +1,4 @@
-defmodule CodexPooler.Admin.AlertNotificationsReadModel do
+defmodule CodexPooler.Admin.AlertNotificationQuery do
   @moduledoc """
   Metadata-only alert notification projections for admin surfaces.
   """

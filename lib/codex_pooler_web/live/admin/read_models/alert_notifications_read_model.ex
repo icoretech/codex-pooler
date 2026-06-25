@@ -1,9 +1,9 @@
 defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   @moduledoc false
 
-  alias CodexPooler.Admin.AlertNotificationsReadModel, as: AdminAlertNotificationsReadModel
+  alias CodexPooler.Admin.AlertNotificationQuery
 
-  @type impacted_pool :: AdminAlertNotificationsReadModel.impacted_pool()
+  @type impacted_pool :: AlertNotificationQuery.impacted_pool()
   @type row :: %{
           required(:id) => Ecto.UUID.t(),
           required(:anchor_id) => String.t(),
@@ -28,7 +28,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   @spec load(term()) :: page_state()
   def load(scope) do
     scope
-    |> AdminAlertNotificationsReadModel.load()
+    |> AlertNotificationQuery.load()
     |> page_state()
   end
 
@@ -43,7 +43,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   def state_label("acknowledged"), do: "Acknowledged"
   def state_label(_state), do: "Unknown state"
 
-  @spec page_state(AdminAlertNotificationsReadModel.page_state()) :: page_state()
+  @spec page_state(AlertNotificationQuery.page_state()) :: page_state()
   defp page_state(%{rows: rows, unread_count: unread_count, page_size: page_size}) do
     rows = Enum.map(rows, &notification_row/1)
 
@@ -57,7 +57,7 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
     }
   end
 
-  @spec notification_row(AdminAlertNotificationsReadModel.row()) :: row()
+  @spec notification_row(AlertNotificationQuery.row()) :: row()
   defp notification_row(row) do
     %{
       id: row.id,

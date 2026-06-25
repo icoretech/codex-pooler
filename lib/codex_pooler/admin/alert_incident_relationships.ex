@@ -1,4 +1,4 @@
-defmodule CodexPooler.Admin.AlertIncidentsReadModel do
+defmodule CodexPooler.Admin.AlertIncidentRelationships do
   @moduledoc """
   Durable alert incident relationship projections for admin surfaces.
 

@@ -4,7 +4,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.AlertIncidentsReadModel, as: AdminAlertIncidentsReadModel
+  alias CodexPooler.Admin.AlertIncidentRelationships
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Schemas.AlertChannel
   alias CodexPooler.Alerts.Schemas.AlertIncident
@@ -259,14 +259,14 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp load_incidents(_scope, _filters, [_error | _errors]), do: []
 
   defp load_incidents(scope, filters, []) do
-    case AdminAlertIncidentsReadModel.list_incidents(scope, filters) do
+    case AlertIncidentRelationships.list_incidents(scope, filters) do
       {:ok, incidents} -> incidents
       {:error, _reason} -> []
     end
   end
 
   defp incident_rows(scope, incidents, filters) do
-    projections = AdminAlertIncidentsReadModel.incident_relationship_projections(scope, incidents)
+    projections = AlertIncidentRelationships.incident_relationship_projections(scope, incidents)
 
     linked_rules_by_incident = projections.linked_rules_by_incident
 

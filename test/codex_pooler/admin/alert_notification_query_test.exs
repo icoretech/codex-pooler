@@ -1,11 +1,11 @@
-defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
+defmodule CodexPooler.Admin.AlertNotificationQueryTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.AlertNotificationsReadModel
+  alias CodexPooler.Admin.AlertNotificationQuery
   alias CodexPooler.Alerts
   alias CodexPooler.Alerts.Schemas.AlertIncident
   alias CodexPooler.Repo
@@ -25,7 +25,7 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
     resolved = bell_incident_fixture(pool, %{state: "resolved", resolved_at: now()})
     targetless = alert_incident_fixture(pool: pool, dedupe_key: unique_dedupe("targetless"))
 
-    page = AlertNotificationsReadModel.load(scope)
+    page = AlertNotificationQuery.load(scope)
     row_ids = Enum.map(page.rows, & &1.id)
 
     assert open.id in row_ids
@@ -68,7 +68,7 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
     mixed = multi_target_incident_fixture(assigned_pool, hidden_pool)
     hidden = bell_incident_fixture(hidden_pool, %{dedupe_key: unique_dedupe("hidden")})
 
-    page = AlertNotificationsReadModel.load(admin_scope)
+    page = AlertNotificationQuery.load(admin_scope)
     row_ids = Enum.map(page.rows, & &1.id)
 
     assert mixed.id in row_ids
@@ -93,16 +93,16 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
       bell_incident_fixture(pool, %{first_seen_at: first_seen_at, last_seen_at: first_seen_at})
 
     assert %{rows: [%{id: incident_id, unread?: true}], unread_count: 1} =
-             AlertNotificationsReadModel.load(scope)
+             AlertNotificationQuery.load(scope)
 
     assert incident_id == incident.id
     assert {:ok, _receipt} = Alerts.mark_incident_notification_read(scope, incident.id)
 
     assert %{rows: [%{id: ^incident_id, unread?: false}], unread_count: 0} =
-             AlertNotificationsReadModel.load(scope)
+             AlertNotificationQuery.load(scope)
 
     assert {:ok, _receipt} = Alerts.dismiss_incident_notification(scope, incident.id)
-    assert %{rows: [], unread_count: 0} = AlertNotificationsReadModel.load(scope)
+    assert %{rows: [], unread_count: 0} = AlertNotificationQuery.load(scope)
 
     recurred_at = DateTime.add(now(), 60, :second)
 
@@ -115,7 +115,7 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
     |> Repo.update!()
 
     assert %{rows: [%{id: ^incident_id, unread?: true}], unread_count: 1} =
-             AlertNotificationsReadModel.load(scope)
+             AlertNotificationQuery.load(scope)
   end
 
   test "load/1 caps rows while unread_count covers all visible unread notifications" do
@@ -130,7 +130,7 @@ defmodule CodexPooler.Admin.AlertNotificationsReadModelTest do
       })
     end
 
-    page = AlertNotificationsReadModel.load(scope)
+    page = AlertNotificationQuery.load(scope)
 
     assert length(page.rows) == 50
     assert page.page_size == 50

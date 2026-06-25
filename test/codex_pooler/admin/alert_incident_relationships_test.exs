@@ -1,11 +1,11 @@
-defmodule CodexPooler.Admin.AlertIncidentsReadModelTest do
+defmodule CodexPooler.Admin.AlertIncidentRelationshipsTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.AlertIncidentsReadModel
+  alias CodexPooler.Admin.AlertIncidentRelationships
 
   alias CodexPooler.Alerts.Schemas.{
     AlertDeliveryAttempt,
@@ -55,11 +55,11 @@ defmodule CodexPooler.Admin.AlertIncidentsReadModelTest do
         failure_metadata: %{"failure_code" => "webhook_http_401", "token" => raw_bearer}
       )
 
-    assert {:ok, incidents} = AlertIncidentsReadModel.list_incidents(scope, %{state: "open"})
+    assert {:ok, incidents} = AlertIncidentRelationships.list_incidents(scope, %{state: "open"})
     assert Enum.any?(incidents, &(&1.id == incident.id))
 
     incident_id = incident.id
-    projections = AlertIncidentsReadModel.incident_relationship_projections(scope, incidents)
+    projections = AlertIncidentRelationships.incident_relationship_projections(scope, incidents)
 
     assert %{
              linked_rules_by_incident: %{^incident_id => [linked_rule]},
@@ -160,12 +160,12 @@ defmodule CodexPooler.Admin.AlertIncidentsReadModelTest do
       failure_message: raw_hidden
     )
 
-    assert {:ok, incidents} = AlertIncidentsReadModel.list_incidents(admin_scope, %{})
+    assert {:ok, incidents} = AlertIncidentRelationships.list_incidents(admin_scope, %{})
     incident_id = incident.id
     assert Enum.any?(incidents, &(&1.id == incident_id))
 
     projections =
-      AlertIncidentsReadModel.incident_relationship_projections(admin_scope, incidents)
+      AlertIncidentRelationships.incident_relationship_projections(admin_scope, incidents)
 
     assert %{^incident_id => [linked_rule]} = projections.linked_rules_by_incident
     assert linked_rule.label == "Visible incident rule"
@@ -181,10 +181,10 @@ defmodule CodexPooler.Admin.AlertIncidentsReadModelTest do
     refute inspect(projections) =~ hidden_channel.display_name
     refute inspect(projections) =~ raw_hidden
 
-    assert {:ok, owner_incidents} = AlertIncidentsReadModel.list_incidents(owner_scope, %{})
+    assert {:ok, owner_incidents} = AlertIncidentRelationships.list_incidents(owner_scope, %{})
 
     owner_projections =
-      AlertIncidentsReadModel.incident_relationship_projections(owner_scope, owner_incidents)
+      AlertIncidentRelationships.incident_relationship_projections(owner_scope, owner_incidents)
 
     assert %{^incident_id => owner_summary} = owner_projections.delivery_summaries_by_incident
     assert owner_summary.total_count == 2
