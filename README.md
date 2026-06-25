@@ -1493,25 +1493,18 @@ mail send or credential-test paths.
 
 ## Deployment
 
-Docker Compose is the easiest way to try the software. For Kubernetes, use the
-`icoretech/codex-pooler` Helm chart from the
-[iCoreTech Helm repository](https://github.com/icoretech/helm). The chart
-deploys the same release image with separate app, worker, scheduler, and
-migration roles. It expects an explicit immutable image tag for real
-deployments. Official release images include the OS IANA timezone database used
-for operator timezone display. Custom runtime images or hosts must provide
-zoneinfo files at `/usr/share/zoneinfo` or set `TZDIR`. The chart defaults the
-web app to one replica because backend
-websocket continuity owns a live upstream websocket in an app pod. Owner-alive
-cross-node forwarding is wired, but scaling web replicas still requires
-clustering, owner-forwarding, and the explicit unsafe topology acknowledgement
-until Kubernetes deployment validation relaxes that guard.
+Choose the deployment path that matches how you want to operate Codex Pooler:
 
-The Helm migration hook runs database migrations and imports the vendored OpenAI
-pricing feed so request-log cost reporting has pricing snapshots after install
-or upgrade. The scheduler also refreshes pricing hourly from the OpenAI pricing
-catalog URL in Instance Settings, which defaults to
-`https://icoretech.github.io/openai-json-pricing/pricing.json`.
+| Path | Use it for | Start here |
+| --- | --- | --- |
+| Docker Compose | A quick self-hosted install on a laptop, lab server, or small single node | [Docker Compose deployment guide](https://docs.codex-pooler.com/deployment/docker-compose/) |
+| Kubernetes | Production installs, managed ingress, external Postgres, metrics, and separate runtime roles | [Helm deployment guide](https://docs.codex-pooler.com/deployment/helm/) |
+
+The Kubernetes path uses the
+[`icoretech/codex-pooler` chart](https://github.com/icoretech/helm/tree/main/charts/codex-pooler)
+from the iCoreTech Helm repository. The chart runs one release image as separate
+web, worker, scheduler, and migration roles. For a real install, pin `image.tag`
+to an immutable release instead of using `latest`.
 
 ## Need more Codex?
 

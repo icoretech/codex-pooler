@@ -140,4 +140,4 @@ Only use `down -v` when you intentionally want to remove local Codex Pooler data
 
 Docker Compose is a simple self-host flow, not a high-availability topology. It is best for a single web process and local Postgres.
 
-Backend websocket sessions keep live upstream websocket state inside the web app process. Don't scale Compose web replicas unless you also design clustering and owner-forwarding for that environment. If you need multiple web replicas, use the Helm chart and keep the replica caveat in that deployment plan.
+Backend websocket sessions keep live upstream websocket state inside the web app process. Don't scale Compose web replicas unless you also design clustering and owner-forwarding for that environment. If you need multiple web replicas, use the Helm chart and review the current chart requirements in that deployment plan.

@@ -197,24 +197,26 @@ The [monitoring and runtime triage guide](/operators/monitoring/) includes a sta
 
 ## Websocket replica caveat
 
-Keep the web app at one replica unless you intentionally configure the multi-replica websocket topology.
+The chart defaults the web app to one replica. If `app.replicaCount` is `2` or
+higher, the chart treats websocket owner forwarding as required.
 
-Backend websocket sessions own a live upstream websocket inside an app pod. Multiple app replicas need clustering, owner-forwarding, and the explicit unsafe topology acknowledgement:
+The current chart guard rejects multi-replica app rendering unless app clustering
+is enabled and app pods participate in that cluster:
 
 ```yaml
 clustering:
   enabled: true
   query: <headless-service-dns-name>
+  participants:
+    app: true
 
 app:
   replicaCount: 2
-  websocketContinuity:
-    ownerForwarding:
-      enabled: true
-    allowUnsafeMultiReplica: true
 ```
 
-Only set `allowUnsafeMultiReplica: true` after you have verified the topology you are running. Without that proof, keep `app.replicaCount: 1`.
+With that shape, the chart renders `CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING=true`
+on app pods automatically. Render the chart and verify the topology before
+raising `app.replicaCount`.
 
 ## Render safely before install
 
