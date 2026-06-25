@@ -48,7 +48,7 @@ local nodeImage = 'node:26.3.1-slim';
       },
       {
         name: 'quality',
-        image: 'elixir:1.20.0-otp-28-slim',
+        image: 'elixir:1.20.1-otp-28-slim',
         depends_on: ['assets-deps'],
         commands: [
           'apt-get update',
