@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.2...codex-pooler-v0.4.3) (2026-06-25)
+
+
+### Features
+
+* **access:** allow ultra reasoning policy effort ([8eb58f5](https://github.com/icoretech/codex-pooler/commit/8eb58f5e14d3954e21b2af1c40fd3a814b40bda2))
+
+
+### Bug Fixes
+
+* accept indexed web search tool shape ([0f3f743](https://github.com/icoretech/codex-pooler/commit/0f3f74343de1638b9e2811a4fd35c0c6852414e1))
+* avoid request log shared memory exhaustion ([13bda2e](https://github.com/icoretech/codex-pooler/commit/13bda2e7187b338d7957b7053667f501c83cb8c6))
+* **gateway:** let websocket owner supervise upstream tasks ([67b3b6a](https://github.com/icoretech/codex-pooler/commit/67b3b6a3e5f0653906b6f05f35f2a292979fa89f))
+* **gateway:** map backend ultra reasoning to max ([ba67b07](https://github.com/icoretech/codex-pooler/commit/ba67b07ec08162c4ad9ca25259c3036285468ff4))
+* **gateway:** preserve oversized responses terminal failures ([a5d876e](https://github.com/icoretech/codex-pooler/commit/a5d876ef7077d2050751bb5d0100391e306aa5c7))
+* **mailer:** preserve disabled SMTP probe result ([bb7f8d7](https://github.com/icoretech/codex-pooler/commit/bb7f8d753b12592c6b148ea3aa04c5aea24e017d))
+
 ## [0.4.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.1...codex-pooler-v0.4.2) (2026-06-24)
 
 
