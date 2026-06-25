@@ -220,7 +220,7 @@ raising `app.replicaCount`.
 ## Flux multi-replica example
 
 This example shows a Flux `HelmRepository` and `HelmRelease` for two app
-replicas. It uses public placeholders only. It assumes:
+replicas. It assumes:
 
 - a Kubernetes Secret named `codex-pooler-secrets` exists in that namespace
 - the Secret contains the required release keys plus `release-cookie`
@@ -228,9 +228,9 @@ replicas. It uses public placeholders only. It assumes:
 - `https://codex-pooler.example.com` is the public app URL
 
 The example leaves chart defaults out of `values`. In particular, it does not set
-`image.pullPolicy`, `secrets.create`, `secrets.existingSecret`, app probes,
-rollout strategy, termination grace, worker or scheduler replica counts, or
-explicit websocket owner-forwarding values.
+image values, `secrets.create`, `secrets.existingSecret`, app probes, rollout
+strategy, termination grace, worker or scheduler replica counts, or explicit
+websocket owner-forwarding values.
 
 ```yaml
 apiVersion: v1
@@ -273,9 +273,6 @@ spec:
       strategy: uninstall
       remediateLastFailure: true
   values:
-    image:
-      repository: ghcr.io/icoretech/codex-pooler
-      tag: 0.4.2
     config:
       host: codex-pooler.example.com
     ingress:
