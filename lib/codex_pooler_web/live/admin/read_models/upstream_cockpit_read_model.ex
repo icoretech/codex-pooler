@@ -2,7 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @moduledoc false
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.UpstreamCockpitReadModel, as: AdminUpstreamCockpitReadModel
+  alias CodexPooler.Admin.UpstreamCockpitMetrics
   alias CodexPooler.Audit
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams.SavedResets
@@ -408,29 +408,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @spec pool_contribution(UpstreamIdentity.t(), assignments(), Scope.t() | term()) ::
           pool_contribution()
   defp pool_contribution(%UpstreamIdentity{} = identity, %{items: assignments}, %Scope{} = scope) do
-    AdminUpstreamCockpitReadModel.pool_contribution(scope, identity, assignments)
+    UpstreamCockpitMetrics.pool_contribution(scope, identity, assignments)
   end
 
   defp pool_contribution(%UpstreamIdentity{}, %{items: assignments}, _scope) do
-    AdminUpstreamCockpitReadModel.pool_contribution_without_request_data(assignments)
+    UpstreamCockpitMetrics.pool_contribution_without_request_data(assignments)
   end
 
   @spec request_health(UpstreamIdentity.t(), Scope.t() | term()) :: request_health()
   defp request_health(%UpstreamIdentity{} = identity, %Scope{} = scope) do
-    AdminUpstreamCockpitReadModel.request_health(scope, identity)
+    UpstreamCockpitMetrics.request_health(scope, identity)
   end
 
   defp request_health(%UpstreamIdentity{}, _scope) do
-    AdminUpstreamCockpitReadModel.request_health_without_request_data()
+    UpstreamCockpitMetrics.request_health_without_request_data()
   end
 
   @spec quota_health(UpstreamIdentity.t(), assignments(), Scope.t() | term()) :: quota_health()
   defp quota_health(%UpstreamIdentity{} = identity, %{items: assignments}, %Scope{} = scope) do
-    AdminUpstreamCockpitReadModel.quota_health(scope, identity, assignments)
+    UpstreamCockpitMetrics.quota_health(scope, identity, assignments)
   end
 
   defp quota_health(%UpstreamIdentity{}, %{items: assignments}, _scope) do
-    AdminUpstreamCockpitReadModel.quota_health_without_quota_data(assignments)
+    UpstreamCockpitMetrics.quota_health_without_quota_data(assignments)
   end
 
   defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
@@ -460,7 +460,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   end
 
   defp request_recent_event_rows(identity_id, %Scope{} = scope) do
-    AdminUpstreamCockpitReadModel.recent_request_event_rows(
+    UpstreamCockpitMetrics.recent_request_event_rows(
       scope,
       identity_id,
       @recent_event_prefetch_limit

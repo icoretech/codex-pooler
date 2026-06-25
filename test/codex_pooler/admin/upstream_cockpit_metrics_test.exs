@@ -1,11 +1,11 @@
-defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
+defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.UpstreamCockpitReadModel
+  alias CodexPooler.Admin.UpstreamCockpitMetrics
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -65,10 +65,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
       assignment_summary(hidden_assignment, hidden_pool)
     ]
 
-    request_health = UpstreamCockpitReadModel.request_health(admin_scope, visible_identity)
+    request_health = UpstreamCockpitMetrics.request_health(admin_scope, visible_identity)
 
     contribution =
-      UpstreamCockpitReadModel.pool_contribution(admin_scope, visible_identity, assignments)
+      UpstreamCockpitMetrics.pool_contribution(admin_scope, visible_identity, assignments)
 
     assert request_health.kpis.total_requests_7d == 1
     assert request_health.kpis.total_requests_24h == 1
@@ -144,7 +144,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
       assignment_summary(hidden_assignment, hidden_pool)
     ]
 
-    quota_health = UpstreamCockpitReadModel.quota_health(admin_scope, identity, assignments)
+    quota_health = UpstreamCockpitMetrics.quota_health(admin_scope, identity, assignments)
 
     assert quota_health.kpis.assignment_count == 1
 
@@ -191,7 +191,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitReadModelTest do
       network_error_code: "retryable_failure"
     })
 
-    rows = UpstreamCockpitReadModel.recent_request_event_rows(scope, identity, 10)
+    rows = UpstreamCockpitMetrics.recent_request_event_rows(scope, identity, 10)
 
     assert Enum.map(rows, & &1.id) == [failed.id, retried.id]
 

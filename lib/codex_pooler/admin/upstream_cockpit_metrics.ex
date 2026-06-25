@@ -1,6 +1,6 @@
-defmodule CodexPooler.Admin.UpstreamCockpitReadModel do
+defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
   @moduledoc """
-  Scoped admin-domain projections for upstream cockpit request activity.
+  Scoped admin-domain metrics for upstream cockpit request, quota, and pool activity.
   """
 
   import Ecto.Query
