@@ -3,6 +3,7 @@ name: codex-pooler
 services:
   db:
     image: postgres:18
+    shm_size: "256mb"
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-codex_pooler_prod}

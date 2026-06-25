@@ -127,6 +127,7 @@ defmodule CodexPooler.SchemaContractTest do
           "ledger_entries_settlement_request_uq",
           "ledger_entries_api_key_recorded_occurred_idx",
           "request_log_facts_latest_upstream_identity_request_idx",
+          "requests_admitted_id_idx",
           "daily_rollups_pool_uq",
           "hourly_model_usage_rollups_bucket_pool_model_code_uq",
           "hourly_model_usage_rollups_pool_bucket_model_idx",
@@ -187,6 +188,8 @@ defmodule CodexPooler.SchemaContractTest do
     assert indexes["requests_api_key_admitted_idx"] =~ "api_key_id"
     assert indexes["requests_api_key_admitted_idx"] =~ "admitted_at DESC"
     assert indexes["requests_api_key_admitted_idx"] =~ "id DESC"
+
+    assert indexes["requests_admitted_id_idx"] =~ "(admitted_at DESC, id DESC)"
 
     assert indexes["account_quota_windows_evidence_identity_uq"] =~
              "COALESCE(lower(model), ''::text)"
