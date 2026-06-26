@@ -1006,6 +1006,9 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert %{items: [log], total: 1} = Accounting.list_request_logs(setup.pool, limit: 1)
       assert log.id == result.request.id
       assert log.token_counts.usage_status == "usage_unknown"
+      assert is_nil(log.token_counts.input_tokens)
+      assert is_nil(log.token_counts.output_tokens)
+      assert is_nil(log.token_counts.total_tokens)
       assert log.cost.status == "unpriced"
       assert is_nil(log.cost.usd)
     end

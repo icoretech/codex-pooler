@@ -30,6 +30,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @proxy_control_route_class RouteClass.proxy_control()
+  @usage_known "usage_known"
   @spec list(term(), keyword()) :: map()
   def list(pool_or_id, opts \\ []) do
     pool_id = id_for(pool_or_id)
@@ -252,22 +253,88 @@ defmodule CodexPooler.Accounting.RequestLogs do
         request_id: fact.request_id,
         usage_status: fact.latest_settlement_usage_status,
         pricing_status: fact.latest_settlement_pricing_status,
-        input_tokens: fact.latest_input_tokens,
-        cached_input_tokens: fact.latest_cached_input_tokens,
-        output_tokens: fact.latest_output_tokens,
-        reasoning_tokens: fact.latest_reasoning_tokens,
-        total_tokens: fact.latest_total_tokens,
-        settled_cost_micros: fact.latest_settled_cost_micros,
+        input_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_input_tokens
+            ),
+            :integer
+          ),
+        cached_input_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_cached_input_tokens
+            ),
+            :integer
+          ),
+        output_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_output_tokens
+            ),
+            :integer
+          ),
+        reasoning_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_reasoning_tokens
+            ),
+            :integer
+          ),
+        total_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_total_tokens
+            ),
+            :integer
+          ),
+        settled_cost_micros:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_settled_cost_micros
+            ),
+            :integer
+          ),
         cached_input_token_micros:
-          type(fragment("?::numeric", fact.latest_cached_input_token_micros), :decimal),
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ?::numeric ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_cached_input_token_micros
+            ),
+            :decimal
+          ),
         details:
           type(
             fragment(
-              "CASE WHEN ? IS NULL THEN NULL WHEN ? = 'priced' THEN jsonb_strip_nulls(jsonb_build_object('pricing_status', ?, 'settled_cost_micros', (?::bigint)::text, 'cached_input_cost_micros', (?::bigint)::text)) ELSE jsonb_build_object('pricing_status', COALESCE(?, 'unpriced')) END",
+              "CASE WHEN ? IS NULL THEN NULL WHEN ? = 'priced' THEN jsonb_strip_nulls(jsonb_build_object('pricing_status', ?, 'settled_cost_micros', CASE WHEN ? = ? THEN (?::bigint)::text ELSE NULL END, 'cached_input_cost_micros', CASE WHEN ? = ? THEN (?::bigint)::text ELSE NULL END)) ELSE jsonb_build_object('pricing_status', COALESCE(?, 'unpriced')) END",
               fact.latest_settlement_pricing_status,
               fact.latest_settlement_pricing_status,
               fact.latest_settlement_pricing_status,
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
               fact.latest_settled_cost_micros,
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
               fact.latest_cached_input_cost_micros,
               fact.latest_settlement_pricing_status
             ),

@@ -27,12 +27,30 @@ defmodule CodexPooler.Accounting.Rollups do
       COALESCE(request.retry_count, 0) AS retry_count,
       entry.pool_upstream_assignment_id,
       entry.upstream_identity_id,
-      COALESCE(entry.input_tokens, 0) AS input_tokens,
-      COALESCE(entry.cached_input_tokens, 0) AS cached_input_tokens,
-      COALESCE(entry.output_tokens, 0) AS output_tokens,
-      COALESCE(entry.reasoning_tokens, 0) AS reasoning_tokens,
-      COALESCE(entry.total_tokens, 0) AS total_tokens,
-      COALESCE(entry.estimated_cost_micros, 0::numeric) AS estimated_cost_micros,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.input_tokens, 0)
+        ELSE 0
+      END AS input_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.cached_input_tokens, 0)
+        ELSE 0
+      END AS cached_input_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.output_tokens, 0)
+        ELSE 0
+      END AS output_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.reasoning_tokens, 0)
+        ELSE 0
+      END AS reasoning_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.total_tokens, 0)
+        ELSE 0
+      END AS total_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.estimated_cost_micros, 0::numeric)
+        ELSE 0::numeric
+      END AS estimated_cost_micros,
       CASE
         WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.settled_cost_micros, 0::numeric)
         ELSE 0::numeric
@@ -247,12 +265,30 @@ defmodule CodexPooler.Accounting.Rollups do
       END AS model_code,
       request.status AS request_status,
       COALESCE(request.retry_count, 0) AS retry_count,
-      COALESCE(entry.input_tokens, 0) AS input_tokens,
-      COALESCE(entry.cached_input_tokens, 0) AS cached_input_tokens,
-      COALESCE(entry.output_tokens, 0) AS output_tokens,
-      COALESCE(entry.reasoning_tokens, 0) AS reasoning_tokens,
-      COALESCE(entry.total_tokens, 0) AS total_tokens,
-      COALESCE(entry.estimated_cost_micros, 0::numeric) AS estimated_cost_micros,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.input_tokens, 0)
+        ELSE 0
+      END AS input_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.cached_input_tokens, 0)
+        ELSE 0
+      END AS cached_input_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.output_tokens, 0)
+        ELSE 0
+      END AS output_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.reasoning_tokens, 0)
+        ELSE 0
+      END AS reasoning_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.total_tokens, 0)
+        ELSE 0
+      END AS total_tokens,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.estimated_cost_micros, 0::numeric)
+        ELSE 0::numeric
+      END AS estimated_cost_micros,
       CASE
         WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.settled_cost_micros, 0::numeric)
         ELSE 0::numeric
@@ -627,12 +663,12 @@ defmodule CodexPooler.Accounting.Rollups do
       success_count: success_count(request),
       failure_count: failure_count(request),
       retry_count: request.retry_count || 0,
-      input_tokens: settlement.input_tokens || 0,
-      cached_input_tokens: settlement.cached_input_tokens || 0,
-      output_tokens: settlement.output_tokens || 0,
-      reasoning_tokens: settlement.reasoning_tokens || 0,
-      total_tokens: settlement.total_tokens || 0,
-      estimated_cost_micros: settlement.estimated_cost_micros || Decimal.new(0),
+      input_tokens: known_usage_integer(settlement, :input_tokens),
+      cached_input_tokens: known_usage_integer(settlement, :cached_input_tokens),
+      output_tokens: known_usage_integer(settlement, :output_tokens),
+      reasoning_tokens: known_usage_integer(settlement, :reasoning_tokens),
+      total_tokens: known_usage_integer(settlement, :total_tokens),
+      estimated_cost_micros: known_usage_decimal(settlement, :estimated_cost_micros),
       settled_cost_micros: settled_rollup_cost(settlement)
     }
   end
@@ -647,6 +683,16 @@ defmodule CodexPooler.Accounting.Rollups do
     do: cost || Decimal.new(0)
 
   defp settled_rollup_cost(%LedgerEntry{}), do: Decimal.new(0)
+
+  defp known_usage_integer(%LedgerEntry{usage_status: @usage_known} = settlement, field),
+    do: Map.fetch!(settlement, field) || 0
+
+  defp known_usage_integer(%LedgerEntry{}, _field), do: 0
+
+  defp known_usage_decimal(%LedgerEntry{usage_status: @usage_known} = settlement, field),
+    do: Map.fetch!(settlement, field) || Decimal.new(0)
+
+  defp known_usage_decimal(%LedgerEntry{}, _field), do: Decimal.new(0)
 
   defp maybe_where_dimension(query, nil), do: query
 

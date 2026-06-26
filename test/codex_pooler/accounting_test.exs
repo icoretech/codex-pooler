@@ -746,7 +746,7 @@ defmodule CodexPooler.AccountingTest do
                2
 
       assert rollup_row(actual_rows, "api_key", api_key_id: fixture.primary.api_key.id).estimated_cost_micros ==
-               "150.625"
+               "100.125"
 
       assert rollup_row(actual_rows, "model", model_id: fixture.primary.model.id).total_tokens ==
                22

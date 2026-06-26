@@ -37,12 +37,54 @@ defmodule CodexPooler.Accounting.UsageReadModel do
           select: {
             entry.api_key_id,
             sum(entry.request_count),
-            sum(entry.input_tokens),
-            sum(entry.cached_input_tokens),
-            sum(entry.output_tokens),
-            sum(entry.reasoning_tokens),
-            sum(entry.total_tokens),
-            sum(entry.settled_cost_micros)
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.input_tokens
+              )
+            ),
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.cached_input_tokens
+              )
+            ),
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.output_tokens
+              )
+            ),
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.reasoning_tokens
+              )
+            ),
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.total_tokens
+              )
+            ),
+            sum(
+              fragment(
+                "CASE WHEN ? = ? THEN COALESCE(?, 0::numeric) ELSE 0::numeric END",
+                entry.usage_status,
+                ^@usage_known,
+                entry.settled_cost_micros
+              )
+            )
           }
       )
       |> Map.new(&api_key_usage_summary_from_row/1)
