@@ -71,7 +71,7 @@ defmodule CodexPooler.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:swoosh, "== 1.26.1"},
+      {:swoosh, "== 1.26.2"},
       {:gen_smtp, "== 1.3.0"},
       {:req, "== 0.6.2"},
       {:finch, "== 0.23.0"},
