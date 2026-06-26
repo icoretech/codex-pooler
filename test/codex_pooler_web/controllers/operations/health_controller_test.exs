@@ -4,11 +4,14 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Repo
 
   setup do
     previous_config =
       Application.get_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
+
+    previous_rollout_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
 
     on_exit(fn ->
       if previous_config do
@@ -19,6 +22,12 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
         )
       else
         Application.delete_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
+      end
+
+      if previous_rollout_drain_config do
+        Application.put_env(:codex_pooler, RolloutDrain, previous_rollout_drain_config)
+      else
+        Application.delete_env(:codex_pooler, RolloutDrain)
       end
     end)
   end
@@ -60,6 +69,27 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       drain_marker_path: drain_marker_path,
       readiness_probe: __MODULE__.UnexpectedReadinessProbe
     )
+
+    {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
+
+    assert json_response(conn, 503) == %{"status" => "unavailable"}
+    refute log =~ "readiness probe failed"
+    refute_received :unexpected_readiness_probe_called
+  end
+
+  test "GET /readyz returns unavailable while runtime rollout drain is active without marker",
+       %{conn: conn} do
+    drain_name = :"health-rollout-drain-#{System.unique_integer([:positive])}"
+    start_supervised!({RolloutDrain, name: drain_name})
+    Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
+
+    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
+      drain_marker_path: drain_marker_path(),
+      readiness_probe: __MODULE__.UnexpectedReadinessProbe
+    )
+
+    assert %{result: :ok, owners_seen: 0} =
+             RolloutDrain.start_drain(name: drain_name, timeout_ms: 100)
 
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
