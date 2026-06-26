@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Websocket do
   alias CodexPooler.Gateway.Transports.Admission
 
   alias CodexPooler.Gateway.Transports.Websocket.{
+    RolloutDrain,
     UpstreamWebsocketSession,
     WebsocketOwnerContract,
     WebsocketOwnerForwarder,
@@ -57,9 +58,17 @@ defmodule CodexPooler.Gateway.Websocket do
   def prepare_websocket_session(auth, opts \\ %{}) do
     opts = websocket_request_options(opts)
 
-    if websocket_owner_forwarding_enabled?(),
-      do: prepare_owner_websocket_session(auth, opts),
-      else: prepare_local_websocket_session(auth, opts)
+    with :ok <- reject_if_rollout_draining() do
+      if websocket_owner_forwarding_enabled?(),
+        do: prepare_owner_websocket_session(auth, opts),
+        else: prepare_local_websocket_session(auth, opts)
+    end
+  end
+
+  defp reject_if_rollout_draining do
+    if RolloutDrain.draining?(),
+      do: {:error, :owner_drained},
+      else: :ok
   end
 
   defp prepare_local_websocket_session(auth, opts) do
