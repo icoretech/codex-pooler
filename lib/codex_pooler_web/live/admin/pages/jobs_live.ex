@@ -7,12 +7,12 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   alias CodexPooler.Jobs
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
-  alias CodexPoolerWeb.Admin.JobDetailDrawer
-  alias CodexPoolerWeb.Admin.JobExplorer
+  alias CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer
+  alias CodexPoolerWeb.Admin.JobsPageComponents.Explorer
   alias CodexPoolerWeb.Admin.JobFilterForm
-  alias CodexPoolerWeb.Admin.JobFilters
+  alias CodexPoolerWeb.Admin.JobsPageComponents.Filters
   alias CodexPoolerWeb.Admin.JobsReadModel
-  alias CodexPoolerWeb.Admin.JobWorkerCards
+  alias CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -206,7 +206,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
               id="admin-jobs-worker-grid"
               class="grid items-start gap-4 xl:grid-cols-2 2xl:grid-cols-3"
             >
-              <JobWorkerCards.job_worker_card
+              <WorkerCards.job_worker_card
                 :for={card <- @worker_cards}
                 card={card}
                 datetime_preferences={@datetime_preferences}
@@ -214,7 +214,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
               />
             </div>
 
-            <JobFilters.job_filters
+            <Filters.job_filters
               :if={@owner_authorized?}
               filter_form={@filter_form}
               filters={@filters}
@@ -222,7 +222,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
               filter_errors={@filter_errors}
             />
 
-            <JobExplorer.jobs_explorer
+            <Explorer.jobs_explorer
               :if={@owner_authorized?}
               explorer={@explorer}
               current_params={@current_params}
@@ -231,7 +231,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
           </section>
         </div>
 
-        <JobDetailDrawer.job_detail_drawer
+        <DetailDrawer.job_detail_drawer
           selected_job={@selected_job}
           datetime_preferences={@datetime_preferences}
         />

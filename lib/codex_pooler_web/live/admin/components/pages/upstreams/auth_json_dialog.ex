@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.UpstreamAuthJsonDialog do
+defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
   @moduledoc false
 
   use CodexPoolerWeb, :html

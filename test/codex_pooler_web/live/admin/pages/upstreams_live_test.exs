@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   }
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
-  alias CodexPoolerWeb.Admin.UpstreamAccountCard
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -2292,7 +2292,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       })
 
     blocked_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: blocked_account,
         account_index: 0
       )
@@ -3642,7 +3642,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     no_assignment_id = Ecto.UUID.generate()
 
     no_assignment_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: recovery_component_account(no_assignment_id, "paused", []),
         account_index: 0
       )
@@ -3662,7 +3662,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     deleted_id = Ecto.UUID.generate()
 
     deleted_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: recovery_component_account(deleted_id, "deleted", []),
         account_index: 0
       )
@@ -3674,7 +3674,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     usable_id = Ecto.UUID.generate()
 
     usable_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account:
           recovery_component_account(
             usable_id,

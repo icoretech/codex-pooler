@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
+defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   @moduledoc false
 
   use CodexPoolerWeb, :html

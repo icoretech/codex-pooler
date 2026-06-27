@@ -5,8 +5,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolFilterComponents
-  alias CodexPoolerWeb.Admin.UpstreamAccountCard
-  alias CodexPoolerWeb.Admin.UpstreamAuthJsonDialog
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -62,7 +62,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </:actions>
       </AdminComponents.page_header>
 
-      <UpstreamAuthJsonDialog.auth_json_import_dialog
+      <AuthJsonDialog.auth_json_import_dialog
         auth_json_form={@auth_json_form}
         importing_auth_json={@importing_auth_json}
         pool_options={@dialog_pool_options}
@@ -795,7 +795,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       id="upstream-account-grid"
       class="grid min-w-0 items-start gap-3 lg:grid-cols-2 2xl:grid-cols-3 [@media(width>=112rem)]:grid-cols-4"
     >
-      <UpstreamAccountCard.account_card
+      <AccountCard.account_card
         :for={{account, account_index} <- Enum.with_index(@accounts)}
         account={account}
         account_index={account_index}
