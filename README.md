@@ -473,7 +473,7 @@ model:
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
-  context_length: 272000
+  context_length: 258400
   supports_vision: true
 
 agent:
@@ -495,10 +495,11 @@ mcp_servers:
 ```
 
 Current Codex Pooler releases also expose an SDK-readable `context_length` value
-on `/v1/models`, derived from the Codex `context_window` metadata, so Hermes'
-automatic probes can resolve the 272k Pooler window. Keep `context_length: 272000`
-in Hermes config as a safe explicit override for older Pooler deployments or stale
-model metadata.
+on `/v1/models`, derived from the effective Codex `context_window` metadata, so
+Hermes' automatic probes can resolve the Pooler window. For `gpt-5.5`, the raw
+Codex window remains 272000 and the effective advertised value is currently
+258400. Keep `context_length: 258400` in Hermes config as a safe explicit
+override for older Pooler deployments or stale model metadata.
 
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
@@ -531,7 +532,7 @@ model:
   default: gpt-5.5
   provider: openai-codex
   base_url: http://localhost:4000/v1
-  context_length: 272000
+  context_length: 258400
   supports_vision: true
 
 agent:
