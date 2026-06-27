@@ -15,8 +15,8 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
   }
 
   alias CodexPooler.Alerts.{WebhookPayload, WebhookSigning}
-  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.InstanceSettings.AppSecretCrypto
+  alias CodexPooler.TransportFailureReason
   alias CodexPooler.Repo
 
   @delivery_adapter "webhook"
