@@ -12,7 +12,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
-    CodexTurn
+    CodexTurn,
+    RuntimeCleanup
   }
 
   alias CodexPooler.Pools.Pool
@@ -102,23 +103,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
   def list_codex_turns_for_sessions(_session_ids), do: []
 
   @spec active_runtime_request?(Request.t() | Ecto.UUID.t(), DateTime.t()) :: boolean()
-  def active_runtime_request?(%Request{id: request_id}, %DateTime{} = now) do
-    active_runtime_request?(request_id, now)
-  end
-
-  def active_runtime_request?(request_id, %DateTime{} = now) when is_binary(request_id) do
-    Repo.exists?(
-      from turn in CodexTurn,
-        join: session in CodexSession,
-        on: session.id == turn.codex_session_id,
-        left_join: lease in BridgeOwnerLease,
-        on:
-          lease.codex_session_id == session.id and
-            lease.status == ^@owner_lease_active and lease.expires_at > ^now,
-        where:
-          turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
-            (session.owner_lease_expires_at > ^now or not is_nil(lease.id))
-    )
+  def active_runtime_request?(request_ref, %DateTime{} = now) do
+    RuntimeCleanup.active_runtime_request?(request_ref, now)
   end
 
   # Reason: session row projection flattens persisted gateway state for admin reads.
