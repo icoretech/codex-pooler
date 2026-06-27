@@ -6,7 +6,7 @@ defmodule CodexPooler.Admin.GatewayReadModel do
   import Ecto.Query
 
   alias CodexPooler.Accounting.{Attempt, Request}
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.SessionReadModel
   alias CodexPooler.Repo
 
   @type bucket_granularity :: :hour | :day
@@ -151,27 +151,14 @@ defmodule CodexPooler.Admin.GatewayReadModel do
   def active_session_count_for_pool_ids([]), do: 0
 
   def active_session_count_for_pool_ids(pool_ids) do
-    Repo.one(
-      from session in CodexSession,
-        where: session.pool_id in ^pool_ids and session.status == "active",
-        select: count(session.id)
-    )
+    SessionReadModel.active_session_count_for_pool_ids(pool_ids)
   end
 
   @spec turns_for_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: [map()]
   def turns_for_pool_ids([], _started_at, _ended_at), do: []
 
   def turns_for_pool_ids(pool_ids, started_at, ended_at) do
-    Repo.all(
-      from turn in CodexTurn,
-        join: request in Request,
-        on: request.id == turn.request_id,
-        where:
-          request.pool_id in ^pool_ids and turn.started_at >= ^started_at and
-            turn.started_at <= ^ended_at,
-        order_by: [desc: turn.started_at],
-        select: %{status: turn.status}
-    )
+    SessionReadModel.turn_statuses_for_pool_ids(pool_ids, started_at, ended_at)
   end
 
   defp non_negative_integer(%Decimal{} = value),

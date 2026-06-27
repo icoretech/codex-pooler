@@ -2103,7 +2103,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     try do
       assert %{items: logs, total: 3} = Accounting.list_request_logs(pool)
       assert Enum.all?(logs, fn log -> Enum.any?(log.errors, &(&1.source == "attempt")) end)
-      assert :counters.get(counter, 1) <= 3
+      assert :counters.get(counter, 1) <= 4
     after
       :telemetry.detach(handler_id)
     end

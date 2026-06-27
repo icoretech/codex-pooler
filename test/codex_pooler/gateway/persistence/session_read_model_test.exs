@@ -198,6 +198,61 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModelTest do
     end
   end
 
+  describe "reporting projections" do
+    test "projects request turns and pool-level session/turn summaries" do
+      now = usec(~U[2026-06-08 09:30:00Z])
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+      session =
+        session_fixture(pool, api_key, assignment, now, %{
+          owner_lease_expires_at: DateTime.add(now, 60, :second)
+        })
+
+      request =
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          correlation_id: "gateway-reporting-turn",
+          status: "failed"
+        })
+
+      attempt = attempt_fixture(request, assignment, %{status: "failed"})
+
+      turn =
+        turn_fixture(session, request, attempt, now, %{
+          status: "failed",
+          error_code: "owner_unavailable",
+          completed_at: DateTime.add(now, 10, :second)
+        })
+
+      request_id = request.id
+
+      assert %{^request_id => projected_turn} =
+               SessionReadModel.request_turns_by_request_ids([request_id, "not-a-uuid"])
+
+      assert projected_turn.id == turn.id
+      assert projected_turn.codex_session_id == session.id
+      assert projected_turn.status == "failed"
+      assert projected_turn.error_code == "owner_unavailable"
+      assert projected_turn.final_attempt_id == attempt.id
+      assert projected_turn.created_at == turn.created_at
+      assert projected_turn.updated_at == turn.updated_at
+      assert projected_turn.completed_at == turn.completed_at
+
+      assert SessionReadModel.request_turns_by_request_ids(:invalid) == %{}
+      assert SessionReadModel.active_session_count_for_pool_ids([pool.id, "not-a-uuid"]) == 1
+      assert SessionReadModel.active_session_count_for_pool_ids(:invalid) == 0
+
+      assert [%{status: "failed"}] =
+               SessionReadModel.turn_statuses_for_pool_ids(
+                 [pool.id, "not-a-uuid"],
+                 DateTime.add(now, -60, :second),
+                 DateTime.add(now, 60, :second)
+               )
+
+      assert [] = SessionReadModel.turn_statuses_for_pool_ids(:invalid, now, now)
+    end
+  end
+
   describe "active_runtime_request?/2" do
     test "detects in-progress turns owned by session lease timestamps or active lease rows" do
       now = usec(~U[2026-06-08 10:00:00Z])

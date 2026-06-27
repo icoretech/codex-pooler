@@ -22,7 +22,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
     SettlementPresentation
   }
 
-  alias CodexPooler.Gateway.Persistence.CodexTurn
+  alias CodexPooler.Gateway.Persistence.SessionReadModel
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -116,35 +116,40 @@ defmodule CodexPooler.Accounting.RequestLogs do
       left_join: identity in UpstreamIdentity,
       on: identity.id == latest.upstream_identity_id,
       left_join: settlement in subquery(projected_latest_settlement_query()),
-      on: settlement.request_id == r.id,
-      left_join: turn in CodexTurn,
-      on: turn.request_id == r.id
+      on: settlement.request_id == r.id
   end
 
   defp request_log_rows(query, limit, offset) do
     Repo.all(
-      from [r, pool, key, latest, assignment, identity, settlement, turn] in query,
+      from [r, pool, key, latest, assignment, identity, settlement] in query,
         order_by: [desc: r.admitted_at, desc: r.id],
         limit: ^limit,
         offset: ^offset,
-        select: {r, pool, key, latest, assignment, identity, settlement, turn}
+        select: {r, pool, key, latest, assignment, identity, settlement}
     )
   end
 
   defp request_log_items(rows) do
     attempts_by_request =
       request_log_attempts_by_request(
-        Enum.map(rows, fn {request, _, _, _, _, _, _, _} -> request.id end)
+        Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end)
       )
 
-    Enum.map(rows, fn row -> request_log_item(row, attempts_by_request) end)
+    turns_by_request =
+      rows
+      |> Enum.map(fn {request, _, _, _, _, _, _} -> request.id end)
+      |> SessionReadModel.request_turns_by_request_ids()
+
+    Enum.map(rows, fn row -> request_log_item(row, attempts_by_request, turns_by_request) end)
   end
 
   defp request_log_item(
-         {request, pool, key, latest, assignment, identity, settlement, turn},
-         attempts
+         {request, pool, key, latest, assignment, identity, settlement},
+         attempts,
+         turns_by_request
        ) do
     request_attempts = Map.get(attempts, request.id, [])
+    turn = Map.get(turns_by_request, request.id)
     metadata = safe_request_log_metadata(request.request_metadata || %{}, request_attempts)
 
     %{
@@ -383,7 +388,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   defp maybe_filter_request_log_upstream(query, nil), do: query
 
   defp maybe_filter_request_log_upstream(query, upstream_identity_id) do
-    from([_request, _pool, _key, latest, _assignment, identity, _settlement, _turn] in query,
+    from([_request, _pool, _key, latest, _assignment, identity, _settlement] in query,
       where:
         latest.upstream_identity_id == ^upstream_identity_id or
           identity.id == ^upstream_identity_id
