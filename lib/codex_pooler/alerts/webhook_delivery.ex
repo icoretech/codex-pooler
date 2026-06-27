@@ -46,14 +46,12 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
          :ok <- ensure_not_suppressed(incident, channel, timestamp),
          {:ok, endpoint_url} <- recover_endpoint_url(channel),
          {:ok, pending_attempt} <-
-           insert_pending_attempt(incident, channel, attempt_number, timestamp),
-         {:ok, signing_secret} <- recover_signing_secret(channel) do
-      deliver_pending_attempt(
+           insert_pending_attempt(incident, channel, attempt_number, timestamp) do
+      deliver_after_pending_attempt(
         pending_attempt,
         incident,
         channel,
         endpoint_url,
-        signing_secret,
         timestamp
       )
     else
@@ -73,6 +71,16 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
       {:failure, %AlertDeliveryAttempt{} = attempt, code, message} ->
         finalize_failed_attempt(attempt, code, message, false, nil, timestamp)
     end
+  rescue
+    error ->
+      record_failed_attempt(
+        incident_id,
+        channel_id,
+        attempt_number,
+        timestamp(opts),
+        "alert_webhook_delivery_exception",
+        exception_message(error)
+      )
   end
 
   def deliver_incident_to_channel(_incident_id, _channel_id, _attempt_number, _opts),
@@ -80,6 +88,32 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
 
   @spec retry_delay_seconds(pos_integer()) :: non_neg_integer()
   def retry_delay_seconds(attempt_number), do: Map.get(@retry_delays_seconds, attempt_number, 0)
+
+  defp deliver_after_pending_attempt(attempt, incident, channel, endpoint_url, timestamp) do
+    with {:ok, signing_secret} <- recover_signing_secret(channel) do
+      deliver_pending_attempt(
+        attempt,
+        incident,
+        channel,
+        endpoint_url,
+        signing_secret,
+        timestamp
+      )
+    else
+      {:failure, code, message} ->
+        finalize_failed_attempt(attempt, code, message, false, nil, timestamp)
+    end
+  rescue
+    error ->
+      finalize_failed_attempt(
+        attempt,
+        "alert_webhook_delivery_exception",
+        exception_message(error),
+        false,
+        nil,
+        timestamp
+      )
+  end
 
   defp deliver_pending_attempt(
          attempt,
@@ -518,6 +552,10 @@ defmodule CodexPooler.Alerts.WebhookDelivery do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp exception_message(%{__struct__: struct}) do
+    "#{inspect(struct)} raised during alert webhook delivery"
+  end
 
   defp compact_map(map) do
     map
