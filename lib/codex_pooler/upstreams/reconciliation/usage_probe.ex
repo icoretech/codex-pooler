@@ -133,12 +133,13 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
          %UpstreamIdentity{} = failed_identity
        ) do
     if account_reconciliation_refresh_failure?(failed_identity) do
-      case Jobs.enqueue_token_refresh(failed_identity,
-             trigger_kind: "account_reconciliation_recovery"
-           ) do
-        {:ok, %Oban.Job{}} -> :ok
-        {:error, _reason} -> :ok
-      end
+      # Best-effort recovery nudge: the foreground reconciliation result stays
+      # auth-unavailable whether the follow-up Oban enqueue wins a unique lock,
+      # is already queued, or cannot be persisted.
+      _ =
+        Jobs.enqueue_token_refresh(failed_identity,
+          trigger_kind: "account_reconciliation_recovery"
+        )
     end
 
     :ok
