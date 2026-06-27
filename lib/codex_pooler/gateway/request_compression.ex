@@ -23,7 +23,7 @@ defmodule CodexPooler.Gateway.RequestCompression do
   @max_body_bytes 1_048_576
   # At most 50 planned output candidates are processed for one dispatch.
   @max_candidate_count 50
-  @type upstream_payload :: binary() | {:multipart, list()} | term()
+  @type upstream_payload :: binary() | {:multipart, list()}
 
   @spec maybe_compress(upstream_payload(), term(), RequestOptions.t()) ::
           {upstream_payload(), RequestOptions.t()}
