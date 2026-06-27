@@ -11,8 +11,30 @@ defmodule CodexPooler.Admin.Stats.Filters do
   }
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
+  @type window :: :one_hour | :five_hours | :twenty_four_hours | :seven_days
+  @type pool_summary :: %{
+          required(:id) => Ecto.UUID.t(),
+          required(:name) => String.t(),
+          required(:slug) => String.t(),
+          required(:status) => String.t()
+        }
+  @type normalized :: %{
+          required(:pool_id) => String.t() | nil,
+          required(:selected_pool) => Pool.t() | nil,
+          required(:window) => window(),
+          required(:window_key) => String.t(),
+          required(:started_at) => DateTime.t(),
+          required(:ended_at) => DateTime.t()
+        }
+  @type public_filters :: %{
+          required(:pool_id) => String.t() | nil,
+          required(:window) => String.t(),
+          required(:started_at) => DateTime.t(),
+          required(:ended_at) => DateTime.t(),
+          required(:pool_options) => [pool_summary()]
+        }
 
-  @spec normalize(map() | keyword(), [Pool.t()]) :: {:ok, map()} | {:error, access_error()}
+  @spec normalize(map() | keyword(), [Pool.t()]) :: {:ok, normalized()} | {:error, access_error()}
   def normalize(filters, pools) do
     filters = Map.new(filters)
     pool_id = blank_to_nil(value_for(filters, :pool_id))
@@ -35,11 +57,11 @@ defmodule CodexPooler.Admin.Stats.Filters do
     end
   end
 
-  @spec dashboard_pool_ids(map(), [Pool.t()]) :: [Ecto.UUID.t()]
+  @spec dashboard_pool_ids(normalized(), [Pool.t()]) :: [Ecto.UUID.t()]
   def dashboard_pool_ids(%{selected_pool: %Pool{id: id}}, _pools), do: [id]
   def dashboard_pool_ids(_normalized, pools), do: Enum.map(pools, & &1.id)
 
-  @spec public(map(), [Pool.t()]) :: map()
+  @spec public(normalized(), [Pool.t()]) :: public_filters()
   def public(normalized, pools) do
     %{
       pool_id: normalized.pool_id,
@@ -50,7 +72,7 @@ defmodule CodexPooler.Admin.Stats.Filters do
     }
   end
 
-  @spec pool_summary(Pool.t() | nil) :: map() | nil
+  @spec pool_summary(Pool.t() | nil) :: pool_summary() | nil
   def pool_summary(nil), do: nil
 
   def pool_summary(%Pool{} = pool),

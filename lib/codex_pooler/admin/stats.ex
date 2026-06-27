@@ -25,11 +25,21 @@ defmodule CodexPooler.Admin.Stats do
   alias CodexPooler.Upstreams.Quota
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
+  @type dashboard :: %{
+          required(:filters) => Filters.public_filters(),
+          required(:selected_pool) => Filters.pool_summary() | nil,
+          required(:kpis) => map(),
+          required(:tables) => map(),
+          required(:charts) => map(),
+          required(:quota) => map(),
+          required(:sources) => map(),
+          required(:empty_states) => [map()]
+        }
   @type pool_usage_opt :: PoolUsage.pool_usage_opt()
   @type pool_usage_metrics :: PoolUsage.pool_usage_metrics()
 
   @spec build_dashboard(Scope.t(), map() | keyword()) ::
-          {:ok, map()} | {:error, access_error()}
+          {:ok, dashboard()} | {:error, access_error()}
   def build_dashboard(scope, filters \\ %{})
 
   def build_dashboard(%Scope{} = scope, filters) when is_map(filters) or is_list(filters) do
@@ -68,6 +78,8 @@ defmodule CodexPooler.Admin.Stats do
     end
   end
 
+  @spec build_dashboard_for_pool_ids(Filters.normalized(), [Pools.Pool.t()], [Ecto.UUID.t()]) ::
+          {:ok, dashboard()}
   defp build_dashboard_for_pool_ids(normalized, pools, pool_ids) do
     requests =
       GatewayReadModel.requests_for_pool_ids(
@@ -105,7 +117,8 @@ defmodule CodexPooler.Admin.Stats do
         normalized.ended_at
       )
 
-    model_usage = Charts.model_usage_series(model_usage_report.rows, normalized)
+    chart_context = chart_context(normalized)
+    model_usage = Charts.model_usage_series(model_usage_report.rows, chart_context)
     active_session_count = GatewayReadModel.active_session_count_for_pool_ids(pool_ids)
 
     turns =
@@ -148,9 +161,9 @@ defmodule CodexPooler.Admin.Stats do
         recent_activity: recent_activity
       },
       charts: %{
-        requests: Charts.request_series(requests, normalized),
-        tokens: Charts.token_series(settlements, normalized),
-        settled_cost: Charts.cost_series(settlements, normalized),
+        requests: Charts.request_series(requests, chart_context),
+        tokens: Charts.token_series(settlements, chart_context),
+        settled_cost: Charts.cost_series(settlements, chart_context),
         model_usage: model_usage
       },
       quota: %{
@@ -174,6 +187,15 @@ defmodule CodexPooler.Admin.Stats do
     {:ok, dashboard}
   end
 
+  @spec chart_context(Filters.normalized()) :: Charts.bucket_context()
+  defp chart_context(normalized) do
+    %{
+      window: normalized.window,
+      ended_at: normalized.ended_at
+    }
+  end
+
+  @spec empty_dashboard(Filters.normalized(), [Pools.Pool.t()]) :: dashboard()
   defp empty_dashboard(normalized, pools) do
     quota_summary = Quota.ReadModel.summary([])
 

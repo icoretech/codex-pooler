@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   @moduledoc false
 
   alias CodexPooler.Upstreams.SavedResets
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -11,8 +12,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
           required(:available?) => boolean(),
           required(:reason) => String.t() | nil
         }
+  @type snapshot :: %{
+          required(:status) => String.t(),
+          required(:available_count) => non_neg_integer() | nil,
+          required(:reported?) => boolean(),
+          required(:available?) => boolean(),
+          required(:label) => String.t(),
+          required(:source) => String.t() | nil,
+          required(:path_style) => String.t() | nil,
+          required(:usage_path) => String.t() | nil,
+          required(:observed_at) => String.t() | nil,
+          required(:available_expires_at) => [String.t()],
+          required(:next_expires_at) => String.t() | nil,
+          required(:next_expires_label) => String.t() | nil,
+          required(:next_expires_title) => String.t() | nil,
+          required(:expires_observed_at) => String.t() | nil,
+          required(:expires_refresh_attempted_at) => String.t() | nil,
+          required(:expires_reported?) => boolean(),
+          required(:in_progress?) => boolean(),
+          required(:redemption_stale?) => boolean(),
+          required(:last_redemption) => map() | nil
+        }
 
-  @spec snapshot(map(), DateTimeDisplay.preferences()) :: SavedResets.snapshot_projection()
+  @spec snapshot(UpstreamIdentity.t() | map() | nil, DateTimeDisplay.preferences()) :: snapshot()
   def snapshot(identity, datetime_preferences) do
     snapshot = SavedResets.snapshot(identity)
 

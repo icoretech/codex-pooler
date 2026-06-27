@@ -7,7 +7,25 @@ defmodule CodexPooler.Admin.Stats.Charts do
   @succeeded "succeeded"
   @failed_statuses ~w(failed rejected interrupted cancelled)
 
-  @spec request_series([map()], map()) :: [map()]
+  @type bucket_context :: %{
+          required(:ended_at) => DateTime.t(),
+          required(:window) => atom(),
+          optional(atom()) => term()
+        }
+  @type model_usage_row :: %{
+          required(:bucket) => String.t() | nil,
+          required(:model_code) => String.t(),
+          required(:request_count) => non_neg_integer(),
+          required(:input_tokens) => non_neg_integer(),
+          required(:cached_input_tokens) => non_neg_integer(),
+          required(:output_tokens) => non_neg_integer(),
+          required(:reasoning_tokens) => non_neg_integer(),
+          required(:total_tokens) => non_neg_integer(),
+          required(:estimated_cost_micros) => non_neg_integer(),
+          required(:settled_cost_micros) => non_neg_integer()
+        }
+
+  @spec request_series(Enumerable.t(), bucket_context()) :: [map()]
   def request_series(requests, normalized) do
     buckets = Buckets.labels(normalized)
     grouped = Enum.group_by(requests, &Buckets.label(&1.admitted_at, normalized.window))
@@ -24,7 +42,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
     end)
   end
 
-  @spec token_series([map()], map()) :: [map()]
+  @spec token_series(Enumerable.t(), bucket_context()) :: [map()]
   def token_series(settlements, normalized) do
     buckets = Buckets.labels(normalized)
     grouped = Enum.group_by(settlements, &Buckets.label(&1.occurred_at, normalized.window))
@@ -47,7 +65,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
     end)
   end
 
-  @spec cost_series([map()], map()) :: [map()]
+  @spec cost_series(Enumerable.t(), bucket_context()) :: [map()]
   def cost_series(settlements, normalized) do
     buckets = Buckets.labels(normalized)
     grouped = Enum.group_by(settlements, &Buckets.label(&1.occurred_at, normalized.window))
@@ -62,7 +80,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
     end)
   end
 
-  @spec model_usage_series([map()], map()) :: [map()]
+  @spec model_usage_series(Enumerable.t(), bucket_context()) :: [model_usage_row()]
   def model_usage_series(rows, normalized) do
     buckets = Buckets.labels(normalized)
     bucket_set = MapSet.new(buckets)

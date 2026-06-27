@@ -37,6 +37,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @type quota_readiness :: UpstreamQuotaReadiness.t()
   @type routing_readiness :: UpstreamRoutingReadiness.t()
   @type token_burn :: TokenBurnProjection.token_burn()
+  @type saved_reset_snapshot :: SavedResetProjection.snapshot()
   @type action :: SavedResetProjection.action()
   @type account_snapshot :: %{
           required(:identity) => UpstreamIdentity.t(),
@@ -55,7 +56,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:reauth_required?) => boolean(),
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
-          required(:saved_resets) => SavedResets.snapshot_projection(),
+          required(:saved_resets) => saved_reset_snapshot(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection(),
           required(:saved_reset_redemption_action) => action(),
           required(:token_burn) => token_burn(),
