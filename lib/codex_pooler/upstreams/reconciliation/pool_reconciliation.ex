@@ -31,6 +31,12 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type lifecycle_result :: {:ok, map()} | {:error, lifecycle_error()}
+  @type usage_fetch_result :: {:ok, term(), String.t(), [map()]} | {:error, term()}
+  @type usage_probe_result ::
+          {:ok, term(), String.t(), [map()]}
+          | :not_found
+          | {:continue_error, term()}
+          | {:halt_error, term()}
 
   @spec reconcile_pool_account(
           Pool.t() | Ecto.UUID.t() | term(),
@@ -424,55 +430,90 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   defp fetch_codex_usage_payload(identity, assignment, access_token, observed_at, opts) do
     base = upstream_usage_base_url(identity, assignment)
     timeout = Keyword.get(opts, :receive_timeout, 30_000)
+    headers = codex_usage_headers(access_token, identity.chatgpt_account_id)
 
     Enum.reduce_while(@codex_usage_paths, {:error, :not_found}, fn path, last_result ->
-      url = String.trim_trailing(base, "/") <> path
-
-      case Req.get(url,
-             headers: codex_usage_headers(access_token, identity.chatgpt_account_id),
-             retry: false,
-             receive_timeout: timeout
-           ) do
-        {:ok, %{status: status, body: body}} when status in 200..299 ->
-          case Quota.Windows.codex_usage_quota_windows_from_payload(body, observed_at) do
-            {:ok, windows} ->
-              body =
-                maybe_enrich_saved_reset_payload(
-                  identity,
-                  access_token,
-                  body,
-                  url,
-                  observed_at,
-                  timeout
-                )
-
-              result = {:ok, body, url, windows}
-
-              # Reason: successful usage probes prefer account-primary quota evidence immediately.
-              # credo:disable-for-next-line Credo.Check.Refactor.Nesting
-              if account_primary_usage_window?(windows) do
-                {:halt, prefer_current_usage_result(last_result, result)}
-              else
-                {:cont, accumulate_successful_usage_result(last_result, result)}
-              end
-
-            {:error, reason} ->
-              {:cont, accumulate_successful_usage_result(last_result, {:error, reason})}
-          end
-
-        {:ok, %{status: 404}} ->
-          {:cont, last_result}
-
-        {:ok, %{status: status}} when status in [401, 403, 429] ->
-          {:halt, {:error, {:upstream_status, status}}}
-
-        {:ok, %{status: status}} ->
-          {:halt, {:error, {:upstream_status, status}}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
+      base
+      |> codex_usage_url(path)
+      |> probe_usage_url(identity, access_token, headers, observed_at, timeout)
+      |> reduce_usage_probe_result(last_result)
     end)
+  end
+
+  @spec codex_usage_url(String.t(), String.t()) :: String.t()
+  defp codex_usage_url(base, path), do: String.trim_trailing(base, "/") <> path
+
+  @spec probe_usage_url(
+          String.t(),
+          UpstreamIdentity.t(),
+          String.t(),
+          [{String.t(), String.t()}],
+          DateTime.t(),
+          timeout()
+        ) :: usage_probe_result()
+  defp probe_usage_url(url, identity, access_token, headers, observed_at, timeout) do
+    case Req.get(url, headers: headers, retry: false, receive_timeout: timeout) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
+        usage_probe_success(body, identity, access_token, url, observed_at, timeout)
+
+      {:ok, %{status: 404}} ->
+        :not_found
+
+      {:ok, %{status: status}} when status in [401, 403, 429] ->
+        {:halt_error, {:upstream_status, status}}
+
+      {:ok, %{status: status}} ->
+        {:halt_error, {:upstream_status, status}}
+
+      {:error, reason} ->
+        {:halt_error, reason}
+    end
+  end
+
+  @spec usage_probe_success(
+          term(),
+          UpstreamIdentity.t(),
+          String.t(),
+          String.t(),
+          DateTime.t(),
+          timeout()
+        ) :: usage_probe_result()
+  defp usage_probe_success(body, identity, access_token, url, observed_at, timeout) do
+    case Quota.Windows.codex_usage_quota_windows_from_payload(body, observed_at) do
+      {:ok, windows} ->
+        body =
+          maybe_enrich_saved_reset_payload(
+            identity,
+            access_token,
+            body,
+            url,
+            observed_at,
+            timeout
+          )
+
+        {:ok, body, url, windows}
+
+      {:error, reason} ->
+        {:continue_error, reason}
+    end
+  end
+
+  @spec reduce_usage_probe_result(usage_probe_result(), usage_fetch_result()) ::
+          {:cont, usage_fetch_result()} | {:halt, usage_fetch_result()}
+  defp reduce_usage_probe_result(:not_found, last_result), do: {:cont, last_result}
+
+  defp reduce_usage_probe_result({:halt_error, reason}, _last_result),
+    do: {:halt, {:error, reason}}
+
+  defp reduce_usage_probe_result({:continue_error, reason}, last_result),
+    do: {:cont, accumulate_successful_usage_result(last_result, {:error, reason})}
+
+  defp reduce_usage_probe_result({:ok, _body, _url, windows} = result, last_result) do
+    if account_primary_usage_window?(windows) do
+      {:halt, prefer_current_usage_result(last_result, result)}
+    else
+      {:cont, accumulate_successful_usage_result(last_result, result)}
+    end
   end
 
   defp maybe_enrich_saved_reset_payload(
