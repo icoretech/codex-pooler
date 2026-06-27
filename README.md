@@ -1503,8 +1503,8 @@ Choose the deployment path that matches how you want to operate Codex Pooler:
 The Kubernetes path uses the
 [`icoretech/codex-pooler` chart](https://github.com/icoretech/helm/tree/main/charts/codex-pooler)
 from the iCoreTech Helm repository. The chart runs one release image as separate
-web, worker, scheduler, and migration roles. For a real install, pin `image.tag`
-to an immutable release instead of using `latest`.
+web, worker, scheduler, and migration roles. For a real install, pin the chart
+`--version`; the chart defaults `image.tag` to the matching `appVersion`.
 
 ## Need more Codex?
 
