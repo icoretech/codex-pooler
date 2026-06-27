@@ -1,6 +1,13 @@
 defmodule CodexPooler.Repo.Migrations.AddPoolerPrimaryKeysAndChecks do
   use Ecto.Migration
 
+  # Migration lifecycle note:
+  # A generated 20260426220333 monolithic bootstrap migration briefly existed before
+  # this schema was split into the 20260426220335-20260426220340 cluster. That
+  # monolithic file is intentionally absent from the repository, but early local or
+  # pre-release databases may still have its version recorded in schema_migrations.
+  # Keep this guard so those databases skip duplicate DDL while fresh installs run
+  # the split migrations normally.
   @monolithic_migration_version "20260426220333"
 
   def up do
