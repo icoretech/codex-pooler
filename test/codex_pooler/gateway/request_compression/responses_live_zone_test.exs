@@ -109,6 +109,35 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       end
     end
 
+    test "does not plan unknown newer tool-result item shapes" do
+      json =
+        encode_request([
+          %{
+            "type" => "tool_result",
+            "call_id" => "call_unknown_tool_result",
+            "output" => large_output("unknown tool result")
+          },
+          %{
+            "type" => "completed_tool",
+            "call_id" => "call_completed_tool",
+            "output" => large_output("completed tool")
+          },
+          %{
+            "type" => "tool-result",
+            "toolCallId" => "call_acp_tool_result",
+            "toolName" => "execute_command",
+            "output" => %{"output" => large_output("acp tool result"), "exitCode" => 0},
+            "isError" => false
+          }
+        ])
+
+      assert {:ok, []} =
+               ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
+
+      assert {:ok, %{candidate_count: 0, protected_tool_output_skipped_count: 0}} =
+               ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
+    end
+
     test "skips outputs whose call id belongs to external retrieval calls" do
       json =
         encode_request([

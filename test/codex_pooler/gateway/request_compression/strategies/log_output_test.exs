@@ -178,6 +178,50 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutputTest do
                )
     end
 
+    test "retains every grep-shaped failure detail referenced by a summary" do
+      sentinel = "DROP_ME_GREP_FAILURE_DETAILS"
+
+      content =
+        grep_failure_log_fixture(3, summary: "search completed with 3 errors", sentinel: sentinel)
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               LogOutput.compress(content,
+                 model: @model,
+                 min_bytes: 0,
+                 min_lines: 1,
+                 head_lines: 0,
+                 tail_lines: 0,
+                 context_lines: 0,
+                 max_important_lines: 1
+               )
+
+      assert compressed =~ "rg: error: fixture_1.ex: No such file or directory"
+      assert compressed =~ "grep: error: fixture_2.ex: Permission denied"
+      assert compressed =~ "error: search backend fixture 3 exited with status 2"
+      assert compressed =~ "search completed with 3 errors"
+      refute compressed =~ sentinel
+      assert_safe_metadata(metadata, :log_output, sentinel)
+    end
+
+    test "skips grep-shaped summaries when a referenced detail would be omitted" do
+      content =
+        grep_failure_log_fixture(2,
+          summary: "search completed with 3 errors",
+          sentinel: "DROP_ME_INCOMPLETE_GREP_FAILURE_DETAILS"
+        )
+
+      assert :skip =
+               LogOutput.compress(content,
+                 model: @model,
+                 min_bytes: 0,
+                 min_lines: 1,
+                 head_lines: 0,
+                 tail_lines: 0,
+                 context_lines: 0,
+                 max_important_lines: 2
+               )
+    end
+
     test "recognizes terse count-before-failed summary formats" do
       content =
         failure_log_fixture(3,
@@ -292,6 +336,38 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutputTest do
 
     ["test suite started"]
     |> Kernel.++(failure_blocks)
+    |> Kernel.++(filler)
+    |> Kernel.++([summary])
+    |> Enum.join("\n")
+  end
+
+  defp grep_failure_log_fixture(failure_count, opts) do
+    summary = Keyword.fetch!(opts, :summary)
+    sentinel = Keyword.fetch!(opts, :sentinel)
+
+    details =
+      Enum.flat_map(1..failure_count//1, fn
+        1 ->
+          ["rg: error: fixture_1.ex: No such file or directory"] ++
+            Enum.map(1..4//1, &"ordinary search separator 1.#{&1}")
+
+        2 ->
+          ["grep: error: fixture_2.ex: Permission denied"] ++
+            Enum.map(1..4//1, &"ordinary search separator 2.#{&1}")
+
+        index ->
+          ["error: search backend fixture #{index} exited with status 2"] ++
+            Enum.map(1..4//1, &"ordinary search separator #{index}.#{&1}")
+      end)
+
+    filler =
+      Enum.map(1..120//1, fn
+        60 -> "ordinary search line 60 #{sentinel}"
+        index -> "ordinary search line #{index}"
+      end)
+
+    ["search command started"]
+    |> Kernel.++(details)
     |> Kernel.++(filler)
     |> Kernel.++([summary])
     |> Enum.join("\n")

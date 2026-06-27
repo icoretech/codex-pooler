@@ -20,6 +20,10 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
   @heading_extension_regex ~r/(?:^|\/)[\w.-]+\.[A-Za-z0-9][A-Za-z0-9_-]*$/u
   @heading_sentence_punctuation_regex ~r/[!?;]|\.\s*$/
   @separator_regex ~r/^\s*--\s*$/
+  @binary_match_regex ~r/^\s*(?:Binary file .+ matches|.+?:\s*(?:WARNING:\s*)?(?:stopped searching )?binary file (?:matches|after match)\b.*)$/i
+  @engine_command_regex ~r/^\s*(?:[$>]|\++)?\s*(?:\S+=\S+\s+)*(?:(?:rg|ripgrep|grep|ag|ack|ugrep)|git\s+grep|(?:(?:\/|\.\.?\/)[\w.\/-]*)(?:rg|ripgrep|grep|ag|ack|ugrep))(?:\s|$)/i
+  @engine_stderr_regex ~r/^\s*(?:(?:(?:(?:\/|\.\.?\/)[\w.\/-]*)?(?:rg|ripgrep|grep|ag|ack|ugrep)|git grep):|stderr\b|standard error\b)/i
+  @exit_code_regex ~r/^\s*(?:exit\s+(?:code|status)|status|returned)\s*[:=]?\s*[1-9]\d*\b/i
 
   @spec compress(term(), Strategies.opts()) :: Strategies.result()
   def compress(content, opts \\ [])
@@ -30,6 +34,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
 
     with true <- byte_size(content) >= min_bytes,
          {:ok, lines} <- Strategies.lines(content),
+         false <- unsafe_search_output?(lines),
          entries <- parse_entries(lines),
          true <- count_matches(entries) >= min_matches,
          groups when groups != [] <- group_entries(entries) do
@@ -75,6 +80,30 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
   end
 
   def compress(_content, _opts), do: :skip
+
+  defp unsafe_search_output?(lines) do
+    Enum.any?(lines, &unsafe_passthrough_line?/1) or ungrouped_line_match_output?(lines)
+  end
+
+  defp unsafe_passthrough_line?(line) do
+    Regex.match?(@binary_match_regex, line) or Regex.match?(@engine_command_regex, line) or
+      Regex.match?(@engine_stderr_regex, line) or Regex.match?(@exit_code_regex, line)
+  end
+
+  defp ungrouped_line_match_output?(lines) do
+    grouped_indexes =
+      lines
+      |> parse_grouped_entries()
+      |> Enum.map(& &1.index)
+      |> MapSet.new()
+
+    lines
+    |> Enum.with_index()
+    |> Enum.any?(fn {line, index} ->
+      (Regex.match?(@line_match_regex, line) or Regex.match?(@line_context_regex, line)) and
+        not MapSet.member?(grouped_indexes, index)
+    end)
+  end
 
   defp parse_entries(lines) do
     direct_entries =

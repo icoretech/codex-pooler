@@ -225,6 +225,51 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       refute inspect(metadata) =~ "call_output_only"
     end
 
+    test "leaves unknown newer tool-result item shapes unchanged" do
+      original_output = compression_log_fixture("unknown tool result omitted sentinel")
+
+      payloads = [
+        %{
+          "type" => "tool_result",
+          "call_id" => "call_unknown_tool_result",
+          "output" => original_output
+        },
+        %{
+          "type" => "tool-result",
+          "toolCallId" => "call_acp_tool_result",
+          "toolName" => "execute_command",
+          "output" => %{"output" => original_output, "exitCode" => 0},
+          "isError" => false
+        }
+      ]
+
+      for item <- payloads do
+        body = Jason.encode!(%{"model" => @supported_model, "input" => [item]})
+
+        {context, request_options} = request_context(body)
+
+        assert {^body, compressed_options} =
+                 RequestCompression.maybe_compress(body, context, request_options)
+
+        assert body |> Jason.decode!() |> Map.fetch!("input") |> List.first() == item
+
+        assert %{
+                 "enabled" => true,
+                 "attempted" => true,
+                 "status" => "no_change",
+                 "reason" => "no_candidates",
+                 "candidate_count" => 0,
+                 "compressed_count" => 0,
+                 "skipped_count" => 0
+               } = metadata = compressed_options.runtime.payload_compression
+
+        refute Map.has_key?(metadata, "protected_tool_output_skipped_count")
+        refute inspect(metadata) =~ "unknown tool result omitted sentinel"
+        refute inspect(metadata) =~ "call_unknown_tool_result"
+        refute inspect(metadata) =~ "call_acp_tool_result"
+      end
+    end
+
     test "rewrites oversized non-protected function output with bounded accounting" do
       omitted_sentinel = "oversized function baseline omitted sentinel"
       original_output = oversized_log_fixture("function", omitted_sentinel)
@@ -601,6 +646,50 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       refute inspect(metadata) =~ "call_column_search_compression"
     end
 
+    test "leaves grep-like shell output unchanged when engine evidence must stay exact" do
+      original_output = grep_engine_failure_fixture("grep engine omitted sentinel")
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "input" => [
+            %{
+              "type" => "local_shell_call_output",
+              "call_id" => "call_grep_engine_failure",
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert first_output(body) == original_output
+      assert original_output =~ "rg --engine auto"
+      assert original_output =~ "rg: regex parse error"
+      assert original_output =~ "exit code: 2"
+      assert original_output =~ "Binary file priv/static/example.bin matches"
+
+      assert %{
+               "enabled" => true,
+               "attempted" => true,
+               "status" => "no_change",
+               "reason" => "no_rewrites",
+               "candidate_count" => 1,
+               "compressed_count" => 0,
+               "skipped_count" => 1
+             } = metadata = compressed_options.runtime.payload_compression
+
+      assert metadata["original_bytes"] == byte_size(body)
+      assert metadata["compressed_bytes"] == byte_size(body)
+      refute Map.has_key?(metadata, "strategies")
+      refute Map.has_key?(metadata, "original_tokens")
+      refute inspect(metadata) =~ "grep engine omitted sentinel"
+      refute inspect(metadata) =~ "call_grep_engine_failure"
+    end
+
     test "leaves unsupported grep shape-only outputs unchanged" do
       unsupported = [
         {:files_with_matches, unsupported_files_with_matches_fixture()},
@@ -843,6 +932,27 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       index ->
         "lib/column_result.ex:#{index}:#{index * 3}: column match #{index} kept"
     end)
+  end
+
+  defp grep_engine_failure_fixture(omitted_sentinel) do
+    matches =
+      1..48
+      |> Enum.map(fn
+        24 -> "lib/search_result.ex:24: kept match with #{omitted_sentinel}"
+        index -> "lib/search_result.ex:#{index}: kept match #{index}"
+      end)
+
+    [
+      "$ rg --engine auto '(' lib priv/static",
+      "rg: regex parse error:",
+      "    (",
+      "    ^",
+      "error: unclosed group",
+      "exit code: 2",
+      "Binary file priv/static/example.bin matches"
+      | matches
+    ]
+    |> Enum.join("\n")
   end
 
   defp unsupported_files_with_matches_fixture do
