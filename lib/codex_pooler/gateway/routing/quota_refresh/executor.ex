@@ -86,7 +86,9 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Executor do
     log_refresh_failure(:error, reason, assignment)
   end
 
-  defp log_refresh_result(_other, _assignment), do: :ok
+  defp log_refresh_result(other, %PoolUpstreamAssignment{} = assignment) do
+    log_refresh_failure(:unexpected_result, other, assignment)
+  end
 
   defp log_refresh_failure(kind, reason, %PoolUpstreamAssignment{} = assignment) do
     Logger.warning(
