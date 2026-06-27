@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.3...codex-pooler-v0.4.4) (2026-06-27)
+
+
+### Features
+
+* **gateway:** coordinate websocket rollout drains ([5c990ad](https://github.com/icoretech/codex-pooler/commit/5c990ad10867467f2929e5f2ee8369a319e08433))
+
+
+### Bug Fixes
+
+* **accounting:** exclude unknown usage from consumption totals ([4d32260](https://github.com/icoretech/codex-pooler/commit/4d322607bf4e49572b74a665395635822d16c647))
+* **accounting:** exclude unknown usage from reporting totals ([7e0a0a2](https://github.com/icoretech/codex-pooler/commit/7e0a0a2af5003a65f90332c3be3b6555151c672d))
+* **deps:** update dependency daisyui to ^5.6.0 ([#85](https://github.com/icoretech/codex-pooler/issues/85)) ([724a4e6](https://github.com/icoretech/codex-pooler/commit/724a4e6ebbecb8df6f08cae8ab74b42775915c28))
+* **gateway:** classify public sse transport interruptions ([e03967d](https://github.com/icoretech/codex-pooler/commit/e03967d3ed2894701a4e833cca58bf31d6d6ca72))
+* **gateway:** reject websocket starts during rollout drain ([bf5b3a8](https://github.com/icoretech/codex-pooler/commit/bf5b3a82aa50dc519bd1b9f3d4f6d483d9f76332))
+* **operations:** mark readiness unavailable during rollout drain ([59e0f34](https://github.com/icoretech/codex-pooler/commit/59e0f34e0f1f347a8cd04c1195668e2aa67aff23))
+* **websocket:** finalize rollout drains as owner drained ([166879e](https://github.com/icoretech/codex-pooler/commit/166879efa6c47cc7786830d301c240f8cfb6f8ee))
+
 ## [0.4.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.2...codex-pooler-v0.4.3) (2026-06-25)
 
 
