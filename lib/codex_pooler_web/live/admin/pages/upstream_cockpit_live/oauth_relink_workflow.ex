@@ -23,26 +23,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
                                                                    Phoenix.LiveView.Socket.t())) ::
           Phoenix.LiveView.Socket.t()
   def start_browser(socket, pool, refresh_fun) do
-    start_oauth(
-      socket,
-      pool,
-      &Upstreams.start_browser_oauth/3,
-      &assign_browser_started/2,
-      refresh_fun
-    )
+    start_oauth_relink(socket, pool, :browser, refresh_fun)
   end
 
   @spec start_device(Phoenix.LiveView.Socket.t(), map() | nil, (Phoenix.LiveView.Socket.t() ->
                                                                   Phoenix.LiveView.Socket.t())) ::
           Phoenix.LiveView.Socket.t()
   def start_device(socket, pool, refresh_fun) do
-    start_oauth(
-      socket,
-      pool,
-      &Upstreams.start_device_oauth/3,
-      &assign_device_started/2,
-      refresh_fun
-    )
+    start_oauth_relink(socket, pool, :device, refresh_fun)
   end
 
   @spec submit_callback(Phoenix.LiveView.Socket.t(), map(), (Phoenix.LiveView.Socket.t() ->
@@ -139,24 +127,39 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.OAuthRelinkWorkflow do
   def flow_id?(%OAuthFlow{id: id}, id), do: true
   def flow_id?(_flow, _id), do: false
 
-  defp start_oauth(socket, nil, _start_fun, _assign_started_fun, _refresh_fun) do
+  defp start_oauth_relink(socket, nil, _mode, _refresh_fun) do
     assign_error(socket, OAuthCallback.safe_error(:unauthorized_pool))
   end
 
-  defp start_oauth(socket, pool, start_fun, assign_started_fun, refresh_fun) do
-    case start_fun.(socket.assigns.current_scope, pool,
-           upstream_identity_id: socket.assigns.cockpit.identity.id,
-           metadata: %{"source" => @reason}
-         ) do
+  defp start_oauth_relink(socket, pool, mode, refresh_fun) do
+    case do_start_oauth_relink(socket, pool, mode) do
       {:ok, result} ->
         socket
-        |> assign_started_fun.(result)
+        |> assign_started(mode, result)
         |> refresh_fun.()
 
       {:error, reason} ->
         assign_error(socket, reason)
     end
   end
+
+  defp do_start_oauth_relink(socket, pool, :browser) do
+    Upstreams.start_browser_oauth(socket.assigns.current_scope, pool, start_opts(socket))
+  end
+
+  defp do_start_oauth_relink(socket, pool, :device) do
+    Upstreams.start_device_oauth(socket.assigns.current_scope, pool, start_opts(socket))
+  end
+
+  defp start_opts(socket) do
+    [
+      upstream_identity_id: socket.assigns.cockpit.identity.id,
+      metadata: %{"source" => @reason}
+    ]
+  end
+
+  defp assign_started(socket, :browser, result), do: assign_browser_started(socket, result)
+  defp assign_started(socket, :device, result), do: assign_device_started(socket, result)
 
   defp assign_browser_started(
          socket,
