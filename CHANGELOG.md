@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.4...codex-pooler-v0.4.5) (2026-06-28)
+
+
+### Features
+
+* support custom tool replay and cap upstream responses ([61ff473](https://github.com/icoretech/codex-pooler/commit/61ff4730ed25d0015e219dec76adb7b07f5450aa))
+
+
+### Bug Fixes
+
+* **alerts:** finalize webhook delivery exceptions ([c3d4328](https://github.com/icoretech/codex-pooler/commit/c3d43287943ae561aec922b21771fea72d7370b0))
+* **catalog:** preserve active source assignments for seen models ([65831f5](https://github.com/icoretech/codex-pooler/commit/65831f58cddc1c0739e9cddcf40a12c6f6118950))
+* **deps:** update dependency daisyui to ^5.6.3 ([#88](https://github.com/icoretech/codex-pooler/issues/88)) ([05ffd1b](https://github.com/icoretech/codex-pooler/commit/05ffd1bbd1eddda7438c37e1b98c00e93ba7a4d7))
+* **deps:** update dependency starlight-page-actions to v0.6.2 ([#89](https://github.com/icoretech/codex-pooler/issues/89)) ([e4219ab](https://github.com/icoretech/codex-pooler/commit/e4219ab1d93b10b165df61a9a6593b67faaa8349))
+* enqueue catalog sync after pool assignment changes ([2779388](https://github.com/icoretech/codex-pooler/commit/2779388e2d56d1c13197c373527b9944fe57723f))
+* **gateway:** log unexpected quota refresh results ([c35306c](https://github.com/icoretech/codex-pooler/commit/c35306cea5e6432821c879286aa09b0db27c85f0))
+* **gateway:** support attemptless turn completion ([1f38e41](https://github.com/icoretech/codex-pooler/commit/1f38e41efc92aa92c97c967fd8b3b42e22ee88e6))
+* **openai-compat:** preserve nested response failure codes ([9aeb942](https://github.com/icoretech/codex-pooler/commit/9aeb942f2fe435fba9f383df10faa8dcf33883d3))
+* preserve grep search evidence during compression ([3fc4c38](https://github.com/icoretech/codex-pooler/commit/3fc4c3814aedb0171bef12b30879d8eac1399889))
+* raise non-stream upstream body cap to 64 MiB ([34a3092](https://github.com/icoretech/codex-pooler/commit/34a30925b65865aba226fd8bbcd95d982214d474))
+
 ## [0.4.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.3...codex-pooler-v0.4.4) (2026-06-27)
 
 
