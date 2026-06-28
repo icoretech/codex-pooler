@@ -15,6 +15,7 @@ defmodule CodexPooler.FakeUpstream do
   @type mode ::
           {:json, non_neg_integer(), map()}
           | {:json_headers, non_neg_integer(), map(), [{String.t(), String.t()}]}
+          | {:raw_body, non_neg_integer(), binary(), [{String.t(), String.t()}]}
           | {:barrier_json, non_neg_integer(), map(), pid(), reference()}
           | {:path_json, map()}
           | {:file_protocol, map()}
@@ -23,6 +24,7 @@ defmodule CodexPooler.FakeUpstream do
           | {:sse, [String.t()]}
           | {:sse_headers, [String.t()], [{String.t(), String.t()}]}
           | {:delayed_sse, [String.t()], pos_integer(), pid() | nil}
+          | {:abrupt_close_mid_stream, [String.t()]}
           | {:websocket_text, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
           | {:sequence, [mode()]}
@@ -109,6 +111,10 @@ defmodule CodexPooler.FakeUpstream do
   def json_response_with_headers(payload, headers, status \\ 200),
     do: {:json_headers, status, payload, headers}
 
+  def raw_response(body, opts \\ []) when is_binary(body) and is_list(opts) do
+    {:raw_body, Keyword.get(opts, :status, 200), body, Keyword.get(opts, :headers, [])}
+  end
+
   def barrier_json_response(payload, opts) when is_map(payload) and is_list(opts) do
     {:barrier_json, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
      Keyword.fetch!(opts, :release_ref)}
@@ -175,6 +181,10 @@ defmodule CodexPooler.FakeUpstream do
     chunks = if include_done?, do: chunks ++ ["data: [DONE]\n\n"], else: chunks
 
     {:delayed_sse, chunks, interval_ms, notify}
+  end
+
+  def abrupt_close_mid_stream(events) when is_list(events) do
+    {:abrupt_close_mid_stream, Enum.map(events, &sse_chunk/1)}
   end
 
   def barrier_sse_stream(events, opts) do
@@ -343,6 +353,15 @@ defmodule CodexPooler.FakeUpstream do
     |> Plug.Conn.send_resp(status, Jason.encode!(payload))
   end
 
+  defp respond(_pid, conn, {:raw_body, status, body, headers}, _request) do
+    conn =
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        Plug.Conn.put_resp_header(conn, key, value)
+      end)
+
+    Plug.Conn.send_resp(conn, status, body)
+  end
+
   defp respond(_pid, conn, {:barrier_json, status, payload, notify, release_ref}, _request) do
     wait_for_timeout_release(:before_headers, notify, release_ref)
 
@@ -475,6 +494,20 @@ defmodule CodexPooler.FakeUpstream do
       notify_chunk_sent(notify, index)
       conn
     end)
+  end
+
+  defp respond(_pid, conn, {:abrupt_close_mid_stream, chunks}, _request) do
+    conn =
+      conn
+      |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    Enum.each(chunks, fn chunk ->
+      {:ok, _conn} = Plug.Conn.chunk(conn, chunk)
+    end)
+
+    Process.exit(self(), :kill)
   end
 
   defp respond(_pid, conn, {:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do

@@ -3,11 +3,12 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure
-  alias CodexPooler.Gateway.Persistence.CodexTurn
+  alias CodexPooler.Gateway.Persistence.SessionReadModel
 
   @bounded_detail_attempts 10
 
-  @spec build(Request.t(), map(), CodexTurn.t() | nil, [Attempt.t()]) :: map()
+  @spec build(Request.t(), map(), SessionReadModel.request_turn_row() | nil, [Attempt.t()]) ::
+          map()
   def build(%Request{} = request, metadata, turn, attempts) do
     attempts = Enum.sort_by(attempts, & &1.attempt_number)
     latest_attempt = List.last(attempts)
@@ -122,7 +123,11 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   defp source_for_turn(nil), do: nil
 
   defp source_for_turn(turn) do
-    %{source: "turn_state", status: turn.status, error_code: turn.error_code}
+    %{
+      source: "turn_state",
+      status: maybe_field(turn, :status),
+      error_code: maybe_field(turn, :error_code)
+    }
   end
 
   defp source_for_attempt(nil), do: nil
@@ -134,7 +139,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   defp failure_projection(request, turn, latest_attempt) do
     cond do
       terminal_status?(maybe_field(turn, :status)) and present?(maybe_field(turn, :error_code)) ->
-        %{error_code: turn.error_code, error_source: "turn_error"}
+        %{error_code: maybe_field(turn, :error_code), error_source: "turn_error"}
 
       present?(request.last_error_code) ->
         %{error_code: request.last_error_code, error_source: "request_error"}
@@ -143,7 +148,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
         %{error_code: latest_attempt.network_error_code, error_source: "attempt_error"}
 
       present?(maybe_field(turn, :error_code)) ->
-        %{error_code: turn.error_code, error_source: "turn_error"}
+        %{error_code: maybe_field(turn, :error_code), error_source: "turn_error"}
 
       true ->
         %{error_code: nil, error_source: nil}
@@ -174,19 +179,19 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
 
   defp turn_projection(request, turn, attempts) do
     %{
-      turn_ref: ref(:turn, turn.id),
-      status: turn.status,
-      error_code: turn.error_code,
+      turn_ref: ref(:turn, maybe_field(turn, :id)),
+      status: maybe_field(turn, :status),
+      error_code: maybe_field(turn, :error_code),
       final_attempt_ref: final_attempt_ref(request, turn, attempts),
-      inserted_at: iso8601(turn.created_at),
-      updated_at: iso8601(turn.updated_at),
-      completed_at: iso8601(turn.completed_at)
+      inserted_at: iso8601(maybe_field(turn, :created_at)),
+      updated_at: iso8601(maybe_field(turn, :updated_at)),
+      completed_at: iso8601(maybe_field(turn, :completed_at))
     }
   end
 
   defp final_attempt_ref(request, turn, attempts) do
     attempts
-    |> Enum.find(&(&1.id == turn.final_attempt_id))
+    |> Enum.find(&(&1.id == maybe_field(turn, :final_attempt_id)))
     |> case do
       nil -> nil
       attempt -> attempt_ref(request.id, attempt.attempt_number)

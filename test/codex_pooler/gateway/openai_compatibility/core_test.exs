@@ -1193,6 +1193,151 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   describe "Task 4 Responses continuation and input-reference validation" do
+    @describetag :tool_result_previous_response
+    @tag :custom_tool_replay
+    test "custom tool replay preserves namespace and internal metadata" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "previous_response_id" => "resp_fixture_custom_tool_previous",
+        "store" => false,
+        "input" => [
+          %{
+            "type" => "custom_tool_call",
+            "id" => "ctc_fixture_call",
+            "call_id" => "call_fixture_custom",
+            "namespace" => "browser.search",
+            "name" => "lookup",
+            "input" => "{}",
+            "status" => "completed",
+            "metadata" => %{"turn_id" => "turn_custom_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_custom"}
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "id" => "ctco_fixture_call",
+            "call_id" => "call_fixture_custom",
+            "name" => "lookup",
+            "output" => "synthetic custom output",
+            "metadata" => %{"turn_id" => "turn_custom_output_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_custom_output"}
+          }
+        ]
+      }
+
+      assert {:ok, result} = Responses.coerce(payload, request_id: "req_fixture_custom_tool")
+
+      assert [custom_call, custom_output] = result.payload["input"]
+
+      assert Enum.map(result.payload["input"], & &1["type"]) == [
+               "custom_tool_call",
+               "custom_tool_call_output"
+             ]
+
+      assert custom_call["namespace"] == "browser.search"
+      assert custom_call["name"] == "lookup"
+      assert custom_call["input"] == "{}"
+      assert custom_call["metadata"] == %{"turn_id" => "turn_custom_legacy"}
+
+      assert custom_call["internal_chat_message_metadata_passthrough"] == %{
+               "turn_id" => "turn_custom"
+             }
+
+      refute Map.has_key?(custom_call, "status")
+
+      assert custom_output["name"] == "lookup"
+      assert custom_output["output"] == "synthetic custom output"
+      assert custom_output["metadata"] == %{"turn_id" => "turn_custom_output_legacy"}
+
+      assert custom_output["internal_chat_message_metadata_passthrough"] == %{
+               "turn_id" => "turn_custom_output"
+             }
+    end
+
+    @tag :custom_tool_replay
+    test "custom tool replay rejects malformed custom item shapes" do
+      invalid_payloads = [
+        [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_fixture_custom",
+            "namespace" => " ",
+            "name" => "lookup",
+            "input" => "{}"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "output" => "ok"
+          }
+        ],
+        [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_fixture_custom",
+            "namespace" => 123,
+            "name" => "lookup",
+            "input" => "{}"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "output" => "ok"
+          }
+        ],
+        [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_fixture_custom",
+            "name" => "lookup"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "output" => "ok"
+          }
+        ],
+        [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_fixture_custom",
+            "namespace" => "browser.search",
+            "name" => "lookup",
+            "input" => "{}",
+            "status" => "in_progress"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "output" => "ok"
+          }
+        ],
+        [
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "namespace" => "browser.search",
+            "output" => "ok"
+          }
+        ],
+        [
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom",
+            "result" => "ok"
+          }
+        ]
+      ]
+
+      Enum.each(invalid_payloads, fn input ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "previous_response_id" => "resp_fixture_custom_tool_previous",
+                   "input" => input
+                 })
+      end)
+    end
+
     test "opencode replay continuations accept only the supported replay item shapes" do
       payload = %{
         "model" => "gpt-fixture-text",

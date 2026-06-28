@@ -5,6 +5,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.LedgerEntry
+  alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Repo
@@ -138,6 +139,118 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
       assert result.settlement.output_tokens == reserved.reservation.output_tokens
       assert result.settlement.total_tokens == reserved.reservation.total_tokens
       assert result.settlement.details["estimated_from_reserve"] == true
+    end
+
+    test "known final usage remains consumed after settlement releases the reservation" do
+      setup = accounting_setup()
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: 60,
+        max_tokens_per_day: 10_000,
+        max_tokens_per_week: 10_000
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 10},
+                 %{correlation_id: "corr-known-consumed-contract"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 7,
+                   cached_input_tokens: 0,
+                   output_tokens: 3,
+                   reasoning_tokens: 0,
+                   total_tokens: 10,
+                   recorded_at: as_of
+                 },
+                 %{now: as_of}
+               )
+
+      assert result.settlement.usage_status == "usage_known"
+
+      window_usage =
+        setup.api_key.id
+        |> LedgerEntries.window_usages(weekly: DateTime.add(as_of, -60, :second))
+        |> Map.fetch!(:weekly)
+
+      assert window_usage.effective_request_count == 1
+      assert window_usage.effective_total_tokens == 10
+      assert Decimal.equal?(window_usage.effective_cost_micros, Decimal.new(130))
+
+      assert [rollup] =
+               Accounting.list_daily_rollups(setup.pool,
+                 date: DateTime.to_date(as_of),
+                 dimension_kind: "api_key"
+               )
+
+      assert rollup.request_count == 1
+      assert rollup.success_count == 1
+      assert rollup.failure_count == 0
+      assert rollup.total_tokens == 10
+      assert Decimal.equal?(rollup.settled_cost_micros, Decimal.new(130))
+    end
+
+    test "usage_unknown final usage keeps counts but consumes zero local tokens and cost" do
+      setup = accounting_setup()
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: 60,
+        max_tokens_per_day: 10_000,
+        max_tokens_per_week: 10_000
+      })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 10},
+                 %{correlation_id: "corr-unknown-zero-consumption-contract"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_failure(reserved.request, attempt, %{
+                 last_error_code: "stream_interrupted",
+                 usage: %{status: "usage_unknown", recorded_at: as_of},
+                 now: as_of
+               })
+
+      assert result.request.status == "failed"
+      assert result.settlement.usage_status == "usage_unknown"
+      assert result.settlement.total_tokens == reserved.reservation.total_tokens
+      assert result.release.total_tokens == reserved.reservation.total_tokens
+      assert result.settlement.details["estimated_from_reserve"] == true
+
+      assert [rollup] =
+               Accounting.list_daily_rollups(setup.pool,
+                 date: DateTime.to_date(as_of),
+                 dimension_kind: "api_key"
+               )
+
+      assert rollup.request_count == 1
+      assert rollup.failure_count == 1
+
+      window_usage =
+        setup.api_key.id
+        |> LedgerEntries.window_usages(weekly: DateTime.add(as_of, -60, :second))
+        |> Map.fetch!(:weekly)
+
+      assert window_usage.effective_request_count == 1
+      assert window_usage.effective_total_tokens == 0
+      assert Decimal.equal?(window_usage.effective_cost_micros, Decimal.new(0))
     end
 
     test "model policy takes precedence over default policy at reservation time" do
@@ -354,6 +467,13 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
                ),
                :count
              ) == 1
+
+      window_usage =
+        setup.api_key.id
+        |> LedgerEntries.window_usages(daily: DateTime.add(DateTime.utc_now(), -1, :day))
+        |> Map.fetch!(:daily)
+
+      assert window_usage.effective_total_tokens == 512
     end
 
     test "concurrent request limits serialize so two over-limit reservations cannot both succeed" do

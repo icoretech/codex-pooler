@@ -165,6 +165,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_input_item(%{"type" => "function_call"} = item), do: {:ok, item}
 
+  defp normalize_input_item(%{"type" => "custom_tool_call", "status" => status} = item)
+       when status in ["completed", "incomplete"],
+       do: {:ok, Map.delete(item, "status")}
+
+  defp normalize_input_item(%{"type" => "custom_tool_call"} = item), do: {:ok, item}
+
+  defp normalize_input_item(%{"type" => "custom_tool_call_output"} = item), do: {:ok, item}
+
   defp normalize_input_item(%{"type" => "function_call_output"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{"role" => "assistant", "content" => content} = item)

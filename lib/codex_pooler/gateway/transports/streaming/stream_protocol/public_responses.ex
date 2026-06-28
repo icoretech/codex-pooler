@@ -485,6 +485,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     )
   end
 
+  defp normalize_response_error(
+         %{"error" => %{} = public_error, "response" => %{} = response} = decoded
+       ) do
+    Map.put(decoded, "response", Map.put(response, "error", public_error))
+  end
+
   defp normalize_response_error(decoded), do: decoded
 
   defp normalize_terminal_error(error) do

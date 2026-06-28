@@ -122,7 +122,7 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
       candidates: candidates
     }
     |> CandidateEligibility.FilterInput.new()
-    |> RouteFiltering.filter_candidates(route_state, quota_mode: :optional)
+    |> RouteFiltering.filter_candidates_with_route_state(route_state, quota_mode: :optional)
   end
 
   defp route_selection_error(%{status: status, code: code, message: message} = reason, opts) do

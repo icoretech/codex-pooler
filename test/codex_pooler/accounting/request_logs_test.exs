@@ -5,8 +5,11 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
   import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
 
+  alias Ecto.Migration.Runner
+
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFact, RequestLogFacts}
+  alias CodexPooler.Accounting.RequestLogs.SettlementPresentation
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -110,6 +113,227 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert fact.latest_total_tokens == 18
     assert fact.latest_settlement_occurred_at == settlement.occurred_at
     assert fact.latest_settlement_created_at == settlement.created_at
+  end
+
+  test "usage_unknown settlement facts preserve status but clear display token and cost fields" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-facts-unknown-usage",
+        status: "failed",
+        usage_status: "usage_unknown",
+        response_status_code: 502,
+        last_error_code: "upstream_status",
+        correlation_id: "facts-unknown-usage"
+      })
+
+    settlement =
+      ledger_entry_fixture(request, %{
+        usage_status: "usage_unknown",
+        input_tokens: 8_000,
+        cached_input_tokens: 500,
+        output_tokens: 1_400,
+        reasoning_tokens: 99,
+        total_tokens: 9_999,
+        settled_cost_micros: 9_999_999,
+        details: %{
+          "pricing_status" => "priced",
+          "settled_cost_micros" => "9999999",
+          "cached_input_cost_micros" => "123456",
+          "usage_source" => "websocket_usage_missing"
+        }
+      })
+
+    fact = Repo.get!(RequestLogFact, request.id)
+    assert fact.latest_settlement_entry_id == settlement.id
+    assert fact.latest_settlement_usage_status == "usage_unknown"
+    assert fact.latest_settlement_pricing_status == "priced"
+    assert is_nil(fact.latest_input_tokens)
+    assert is_nil(fact.latest_cached_input_tokens)
+    assert is_nil(fact.latest_output_tokens)
+    assert is_nil(fact.latest_reasoning_tokens)
+    assert is_nil(fact.latest_total_tokens)
+    assert is_nil(fact.latest_settled_cost_micros)
+    assert is_nil(fact.latest_cached_input_cost_micros)
+    assert is_nil(fact.latest_cached_input_token_micros)
+  end
+
+  test "request logs hide stale fact token projections for usage_unknown rows" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-stale-facts-unknown-usage",
+        status: "failed",
+        usage_status: "usage_unknown",
+        response_status_code: 502,
+        last_error_code: "duplicate_downstream",
+        correlation_id: "facts-stale-unknown-usage",
+        request_metadata: %{
+          "response" => %{"usage_source" => "websocket_usage_missing"},
+          "audit" => %{"status" => "preserved"}
+        }
+      })
+
+    ledger_entry_fixture(request, %{
+      usage_status: "usage_unknown",
+      input_tokens: 8_000,
+      cached_input_tokens: 500,
+      output_tokens: 1_400,
+      reasoning_tokens: 99,
+      total_tokens: 9_999,
+      settled_cost_micros: 9_999_999,
+      details: %{"pricing_status" => "priced", "settled_cost_micros" => "9999999"}
+    })
+
+    Repo.update_all(
+      from(fact in RequestLogFact, where: fact.request_id == ^request.id),
+      set: [
+        latest_input_tokens: 8_000,
+        latest_cached_input_tokens: 500,
+        latest_output_tokens: 1_400,
+        latest_reasoning_tokens: 99,
+        latest_total_tokens: 9_999,
+        latest_settled_cost_micros: 9_999_999,
+        latest_cached_input_cost_micros: 123_456
+      ]
+    )
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+    assert log.id == request.id
+    assert log.status == "failed"
+    assert log.response_status_code == 502
+    assert log.denial_reason == "duplicate_downstream"
+    assert log.usage_status == "usage_unknown"
+    assert log.metadata["response"]["usage_source"] == "websocket_usage_missing"
+    assert log.token_counts.usage_status == "usage_unknown"
+    assert is_nil(log.token_counts.input_tokens)
+    assert is_nil(log.token_counts.cached_input_tokens)
+    assert is_nil(log.token_counts.output_tokens)
+    assert is_nil(log.token_counts.reasoning_tokens)
+    assert is_nil(log.token_counts.total_tokens)
+    assert is_nil(log.token_counts.cached_input_cost_usd)
+    assert log.cost.status == "unpriced"
+    assert is_nil(log.cost.usd)
+  end
+
+  test "automatic migration reprojects usage_unknown facts without altering ledger rows" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    started_at = ~U[2026-06-16 10:00:00.000000Z]
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-repair-facts-unknown-usage",
+        status: "failed",
+        usage_status: "usage_unknown",
+        response_status_code: 502,
+        last_error_code: "duplicate_downstream",
+        correlation_id: "facts-repair-unknown-usage",
+        request_metadata: %{"response" => %{"usage_source" => "websocket_usage_missing"}}
+      })
+      |> Ecto.Changeset.change(%{admitted_at: DateTime.add(started_at, 900, :second)})
+      |> Repo.update!()
+
+    attempt_fixture(request, assignment, %{
+      latency_ms: 44,
+      network_error_code: "safe_repair_code"
+    })
+
+    settlement =
+      ledger_entry_fixture(request, %{
+        usage_status: "usage_unknown",
+        occurred_at: DateTime.add(started_at, 1_200, :second),
+        input_tokens: 8_000,
+        cached_input_tokens: 500,
+        output_tokens: 1_400,
+        reasoning_tokens: 99,
+        total_tokens: 9_999,
+        settled_cost_micros: 9_999_999,
+        details: %{"pricing_status" => "priced", "settled_cost_micros" => "9999999"}
+      })
+
+    known_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-repair-facts-known-usage",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "facts-repair-known-usage"
+      })
+      |> Ecto.Changeset.change(%{admitted_at: DateTime.add(started_at, 1_800, :second)})
+      |> Repo.update!()
+
+    ledger_entry_fixture(known_request, %{
+      usage_status: "usage_known",
+      occurred_at: DateTime.add(started_at, 2_100, :second),
+      input_tokens: 700,
+      total_tokens: 700,
+      details: %{"pricing_status" => "priced", "settled_cost_micros" => "700000"}
+    })
+
+    poison_request_log_fact!(request.id, 8_000)
+    poison_request_log_fact!(known_request.id, 700)
+
+    run_unknown_usage_projection_migration!()
+    run_unknown_usage_projection_migration!()
+
+    repaired_fact = Repo.get!(RequestLogFact, request.id)
+    assert repaired_fact.latest_settlement_entry_id == settlement.id
+    assert repaired_fact.latest_settlement_usage_status == "usage_unknown"
+    assert repaired_fact.latest_settlement_pricing_status == "priced"
+    assert is_nil(repaired_fact.latest_input_tokens)
+    assert is_nil(repaired_fact.latest_total_tokens)
+    assert is_nil(repaired_fact.latest_settled_cost_micros)
+
+    unchanged_known_fact = Repo.get!(RequestLogFact, known_request.id)
+    assert unchanged_known_fact.latest_input_tokens == 700
+    assert unchanged_known_fact.latest_total_tokens == 700
+
+    unchanged_settlement = Repo.get!(LedgerEntry, settlement.id)
+    assert unchanged_settlement.input_tokens == 8_000
+    assert unchanged_settlement.total_tokens == 9_999
+    assert Decimal.equal?(unchanged_settlement.settled_cost_micros, Decimal.new(9_999_999))
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(pool, filters: [request_id: "facts-repair-unknown"])
+
+    assert log.id == request.id
+    assert log.token_counts.usage_status == "usage_unknown"
+    assert is_nil(log.token_counts.input_tokens)
+    assert is_nil(log.token_counts.total_tokens)
+    assert log.cost.status == "unpriced"
+    assert is_nil(log.cost.usd)
+  end
+
+  test "settlement presentation hides direct usage_unknown projection token facts" do
+    settlement = %{
+      usage_status: "usage_unknown",
+      input_tokens: 8_000,
+      cached_input_tokens: 500,
+      output_tokens: 1_400,
+      reasoning_tokens: 99,
+      total_tokens: 9_999,
+      settled_cost_micros: 9_999_999,
+      cached_input_token_micros: Decimal.new(100),
+      details: %{
+        "pricing_status" => "priced",
+        "settled_cost_micros" => "9999999",
+        "cached_input_cost_micros" => "123456"
+      }
+    }
+
+    assert %{
+             usage_status: "usage_unknown",
+             input_tokens: nil,
+             cached_input_tokens: nil,
+             output_tokens: nil,
+             reasoning_tokens: nil,
+             total_tokens: nil,
+             cached_input_cost_usd: nil
+           } = SettlementPresentation.token_counts(settlement)
+
+    assert %{status: "unpriced", usd: nil} = SettlementPresentation.cost(settlement)
   end
 
   test "voided and non-settlement ledger entries do not become latest facts" do
@@ -357,6 +581,48 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
     assert log.cost.status == "unpriced_missing_model"
     assert is_nil(log.cost.usd)
+  end
+
+  defp poison_request_log_fact!(request_id, token_count) do
+    Repo.update_all(
+      from(fact in RequestLogFact, where: fact.request_id == ^request_id),
+      set: [
+        latest_input_tokens: token_count,
+        latest_cached_input_tokens: 0,
+        latest_output_tokens: 0,
+        latest_reasoning_tokens: 0,
+        latest_total_tokens: token_count,
+        latest_settled_cost_micros: token_count,
+        latest_cached_input_cost_micros: token_count,
+        latest_cached_input_token_micros: token_count
+      ]
+    )
+  end
+
+  defp run_unknown_usage_projection_migration! do
+    Runner.run(
+      Repo,
+      Repo.config(),
+      20_260_626_133_501,
+      unknown_usage_projection_migration(),
+      :forward,
+      :up,
+      :up,
+      log: false
+    )
+  end
+
+  defp unknown_usage_projection_migration do
+    module = CodexPooler.Repo.Migrations.RepairUnknownUsageAccountingProjections
+
+    unless Code.ensure_loaded?(module) do
+      Code.require_file(
+        "../../../priv/repo/migrations/20260626133501_repair_unknown_usage_accounting_projections.exs",
+        __DIR__
+      )
+    end
+
+    module
   end
 
   test "usage total_cost_usd sums persisted 0.100000 and 0.200000 to 0.300000 while ignoring unpriced rows" do
@@ -1837,7 +2103,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     try do
       assert %{items: logs, total: 3} = Accounting.list_request_logs(pool)
       assert Enum.all?(logs, fn log -> Enum.any?(log.errors, &(&1.source == "attempt")) end)
-      assert :counters.get(counter, 1) <= 3
+      assert :counters.get(counter, 1) <= 4
     after
       :telemetry.detach(handler_id)
     end
@@ -2035,6 +2301,86 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute inspect(log.debug) =~ "raw stream body"
     refute inspect(log.debug) =~ "raw visible response body"
     refute inspect(log.debug) =~ "Bearer sk-example-hidden"
+  end
+
+  test "request log debug projection prefers persisted stream transport failure metadata" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-debug-http-sse-persisted-transport-failure",
+        endpoint: "/v1/responses",
+        transport: "http_sse",
+        status: "failed",
+        correlation_id: "debug-http-sse-persisted-transport-failure",
+        response_status_code: 200,
+        request_metadata: %{
+          "codex_session_id" => "session-http-sse-persisted-transport-failure",
+          "codex_session_key" => "session-key-http-sse-persisted-transport-failure",
+          "request_body" => "todo6 raw prompt sentinel should stay hidden"
+        }
+      })
+      |> Ecto.Changeset.change(last_error_code: "upstream_stream_error")
+      |> Repo.update!()
+
+    request
+    |> attempt_fixture(assignment, %{
+      status: "failed",
+      retryable: false,
+      upstream_status_code: 200,
+      usage_status: "usage_known"
+    })
+    |> Ecto.Changeset.change(%{
+      latency_ms: 765,
+      network_error_code: "stream_parse_error",
+      error_message: "todo6 raw attempt body sentinel must stay hidden",
+      response_metadata: %{
+        "error_kind" => "stream_interrupted",
+        "content_type" => "text/event-stream",
+        "status_code" => 200,
+        "raw_body" => "todo6 raw response body sentinel should stay hidden",
+        "raw_headers" => %{"authorization" => "Bearer sk-todo6-header-sentinel"},
+        "transport_failure" => %{
+          "exception" => "Finch.TransportError",
+          "reason_class" => "upstream_stream_interrupted",
+          "reason" => "closed_before_terminal",
+          "phase" => "upstream_close",
+          "pre_visible_output" => false,
+          "terminal_seen" => false,
+          "text_frame_count" => 2,
+          "raw_message" => "todo6 raw transport sentinel should stay hidden",
+          "headers" => %{"authorization" => "Bearer sk-todo6-transport-sentinel"}
+        }
+      }
+    })
+    |> Repo.update!()
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+    assert [attempt_debug] = log.debug.attempts
+
+    assert attempt_debug.network_error_code == "stream_parse_error"
+
+    assert attempt_debug.transport_failure == %{
+             exception: "Finch.TransportError",
+             reason_class: "upstream_stream_interrupted",
+             reason: "closed_before_terminal",
+             phase: "upstream_close",
+             pre_visible_output: false,
+             terminal_seen: false,
+             text_frame_count: 2
+           }
+
+    debug = inspect(log.debug)
+
+    refute debug =~ "session-http-sse-persisted-transport-failure"
+    refute debug =~ "session-key-http-sse-persisted-transport-failure"
+    refute debug =~ "todo6 raw prompt sentinel"
+    refute debug =~ "todo6 raw attempt body sentinel"
+    refute debug =~ "todo6 raw response body sentinel"
+    refute debug =~ "todo6 raw transport sentinel"
+    refute debug =~ "Bearer sk-todo6-header-sentinel"
+    refute debug =~ "Bearer sk-todo6-transport-sentinel"
   end
 
   test "request log debug projection classifies supported stream interruption families" do

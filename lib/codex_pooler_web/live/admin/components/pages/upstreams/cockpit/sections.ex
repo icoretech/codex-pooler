@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias Phoenix.HTML.Form
 
   def assignments_section(assigns) do
@@ -186,6 +187,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   attr :saved_reset_policy_form, :any, required: true
   attr :confirming_saved_reset_redemption, :map, default: nil
 
+  attr :datetime_preferences, :map, required: true
+
   def actions_section(assigns) do
     ~H"""
     <AdminComponents.admin_surface
@@ -294,6 +297,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             phx-click="cancel_saved_reset_redemption"
           />
         </div>
+      </div>
+      <div
+        :if={@cockpit.saved_resets.available?}
+        id="cockpit-saved-reset-expiration-summary"
+        class="mx-4 mb-4 grid gap-3 rounded-box border border-base-300 bg-base-200/30 p-4"
+      >
+        <div class="grid gap-1">
+          <h3 class="text-sm font-semibold text-base-content">Banked reset expirations</h3>
+          <p class="text-xs leading-5 text-base-content/60">
+            {@cockpit.saved_resets.label} currently available for this upstream account.
+          </p>
+        </div>
+        <SavedResetComponents.saved_reset_expiration_table
+          id="cockpit-saved-reset-expiration"
+          saved_resets={@cockpit.saved_resets}
+          datetime_preferences={@datetime_preferences}
+          empty_label="No expiration dates reported for the available saved resets yet."
+        />
       </div>
       <.form
         id="saved-reset-policy-form"

@@ -18,6 +18,10 @@ defmodule CodexPooler.Accounting.PricingResolution do
            distance: pos_integer()
          }
 
+  @typep snapshots_by_identifier :: %{optional(String.t()) => PricingSnapshot.t()}
+  @typep suffix_snapshot_lookup ::
+           ([String.t()], String.t(), String.t(), DateTime.t() -> snapshots_by_identifier())
+
   @typep pricing_context :: %{
            identifiers: [String.t()],
            requested_tier: String.t() | nil,
@@ -385,20 +389,13 @@ defmodule CodexPooler.Accounting.PricingResolution do
   @spec suffix_inference_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
           {PricingSnapshot.t(), map()} | nil
   defp suffix_inference_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
-    candidates = suffix_inference_candidates(identifiers)
-    candidate_identifiers = candidates |> Enum.map(& &1.to) |> Enum.uniq()
-
-    snapshots_by_identifier =
-      pricing_snapshots_by_identifier(
-        candidate_identifiers,
-        service_tier,
-        price_bucket,
-        timestamp
-      )
-
-    candidates
-    |> Enum.flat_map(&candidate_snapshot_match(&1, snapshots_by_identifier))
-    |> nearest_suffix_inference_match()
+    suffix_inference_snapshot(
+      identifiers,
+      service_tier,
+      price_bucket,
+      timestamp,
+      &pricing_snapshots_by_identifier/4
+    )
   end
 
   @spec suffix_inference_unavailable_pricing_snapshot(
@@ -413,16 +410,28 @@ defmodule CodexPooler.Accounting.PricingResolution do
          price_bucket,
          timestamp
        ) do
+    suffix_inference_snapshot(
+      identifiers,
+      service_tier,
+      price_bucket,
+      timestamp,
+      &unavailable_pricing_snapshots_by_identifier/4
+    )
+  end
+
+  @spec suffix_inference_snapshot(
+          [String.t()],
+          String.t(),
+          String.t(),
+          DateTime.t(),
+          suffix_snapshot_lookup()
+        ) :: {PricingSnapshot.t(), map()} | nil
+  defp suffix_inference_snapshot(identifiers, service_tier, price_bucket, timestamp, lookup_fun) do
     candidates = suffix_inference_candidates(identifiers)
     candidate_identifiers = candidates |> Enum.map(& &1.to) |> Enum.uniq()
 
     snapshots_by_identifier =
-      unavailable_pricing_snapshots_by_identifier(
-        candidate_identifiers,
-        service_tier,
-        price_bucket,
-        timestamp
-      )
+      lookup_fun.(candidate_identifiers, service_tier, price_bucket, timestamp)
 
     candidates
     |> Enum.flat_map(&candidate_snapshot_match(&1, snapshots_by_identifier))
@@ -430,7 +439,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
   end
 
   @spec pricing_snapshots_by_identifier([String.t()], String.t(), String.t(), DateTime.t()) ::
-          map()
+          snapshots_by_identifier()
   defp pricing_snapshots_by_identifier([], _service_tier, _price_bucket, _timestamp), do: %{}
 
   defp pricing_snapshots_by_identifier(identifiers, service_tier, price_bucket, timestamp) do
@@ -444,7 +453,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
           String.t(),
           String.t(),
           DateTime.t()
-        ) :: map()
+        ) :: snapshots_by_identifier()
   defp unavailable_pricing_snapshots_by_identifier([], _service_tier, _price_bucket, _timestamp),
     do: %{}
 
@@ -466,7 +475,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
           String.t(),
           String.t(),
           DateTime.t()
-        ) :: map()
+        ) :: snapshots_by_identifier()
   defp latest_pricing_snapshots_by_identifier(identifiers, service_tier, price_bucket, timestamp) do
     PricingSnapshot
     |> where(

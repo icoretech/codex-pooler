@@ -4,8 +4,16 @@ if System.get_env("PHX_SERVER") in ~w(true 1) do
   config :codex_pooler, CodexPoolerWeb.Endpoint, server: true
 end
 
+websocket_drain_timeout_ms =
+  CodexPooler.Gateway.Transports.Websocket.RolloutDrain.configured_timeout_ms()
+
+endpoint_shutdown_timeout_ms = websocket_drain_timeout_ms + 5_000
+
 config :codex_pooler, CodexPoolerWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+  http: [
+    port: String.to_integer(System.get_env("PORT", "4000")),
+    thousand_island_options: [shutdown_timeout: endpoint_shutdown_timeout_ms]
+  ]
 
 config :codex_pooler,
        :websocket_owner_forwarding_enabled,
@@ -93,7 +101,8 @@ if config_env() == :prod do
     url: [host: host, port: 443, scheme: "https"],
     http: [
       port: String.to_integer(System.get_env("PORT", "4000")),
-      ip: {0, 0, 0, 0}
+      ip: {0, 0, 0, 0},
+      thousand_island_options: [shutdown_timeout: endpoint_shutdown_timeout_ms]
     ],
     secret_key_base: secret_key_base
 

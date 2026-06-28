@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
+defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   @moduledoc false
 
   use CodexPoolerWeb, :html
@@ -8,6 +8,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.PoolInviteForm
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @reactivatable_statuses ~w(paused refresh_due refresh_failed)
   @recovery_statuses ~w(paused refresh_due refresh_failed reauth_required)
@@ -16,9 +18,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   attr :account, :map, required: true
   attr :account_index, :integer, required: true
 
+  attr :datetime_preferences, :map, default: nil
+
   def account_card(assigns) do
+    datetime_preferences =
+      Map.get(assigns, :datetime_preferences) || DateTimeDisplay.preferences_for_user(nil)
+
     assigns =
       assigns
+      |> assign(:datetime_preferences, datetime_preferences)
       |> assign(:reported_quota_limits, reported_quota_limits(assigns.account.quota_limits))
       |> assign(:workspace_context_label, workspace_context_label(assigns.account))
       |> assign(:workspace_context_title, workspace_context_title(assigns.account))
@@ -71,6 +79,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
             disabled={@account.identity.status == "deleted"}
             saved_resets={@saved_resets}
             saved_reset_policy={@saved_reset_policy}
+            datetime_preferences={@datetime_preferences}
           />
           <.upstream_plan_indicator account={@account} account_index={@account_index} />
           <.upstream_account_actions account={@account} />
@@ -335,6 +344,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
   attr :saved_resets, :map, required: true
   attr :saved_reset_policy, :map, required: true
   attr :disabled, :boolean, default: false
+  attr :datetime_preferences, :map, required: true
 
   defp saved_reset_count_badge(
          %{saved_resets: %{reported?: true, available_count: count}} = assigns
@@ -346,7 +356,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
       |> assign(:badge_icon_class, saved_reset_count_badge_icon_class(assigns.saved_reset_policy))
       |> assign(:content_id, "upstream-account-#{assigns.identity_id}-saved-reset-bank-popover")
       |> assign(:policy_state_label, saved_reset_policy_state_label(assigns.saved_reset_policy))
-      |> assign(:expiration_label, saved_reset_expiration_popover_label(assigns.saved_resets))
 
     ~H"""
     <span
@@ -376,24 +385,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
         role="tooltip"
         tabindex="0"
         data-role="upstream-saved-reset-bank-popover"
-        class="dropdown-content z-50 mt-2 grid w-64 gap-2 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl sm:w-72"
+        class="dropdown-content z-50 mt-1.5 grid w-64 max-w-[calc(100vw-1rem)] gap-1.5 rounded-box border border-base-300 bg-base-100 p-2.5 text-left text-xs font-normal leading-4 text-base-content/70 shadow-xl"
       >
-        <span class="font-semibold text-base-content">Saved reset bank</span>
-        <span class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-          <span class="font-medium text-base-content/55">Available</span>
-          <span class="text-base-content" data-role="upstream-saved-reset-available-count">
-            {@saved_resets.label}
-          </span>
+        <span class="text-xs font-semibold uppercase text-primary">Saved reset bank</span>
+        <span class="grid grid-cols-[3.75rem_minmax(0,1fr)] gap-x-2 gap-y-0.5">
           <span class="font-medium text-base-content/55">Policy</span>
           <span class="text-base-content" data-role="upstream-saved-reset-policy-state">
             {@policy_state_label}
           </span>
-          <span class="font-medium text-base-content/55">Expiration</span>
-          <span class="text-base-content" data-role="upstream-saved-reset-expiration">
-            {@expiration_label}
+          <span
+            class="col-span-2 grid gap-1 text-base-content"
+            data-role="upstream-saved-reset-expiration"
+          >
+            <SavedResetComponents.saved_reset_expiration_table
+              id={"upstream-account-#{@identity_id}-saved-reset-expiration"}
+              saved_resets={@saved_resets}
+              datetime_preferences={@datetime_preferences}
+              compact={true}
+              empty_label="Expiration dates not reported"
+            />
           </span>
         </span>
-        <span class="text-base-content/60">Click to manage redemption policy.</span>
       </span>
     </span>
     """
@@ -403,14 +415,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountCard do
     ~H"""
     """
   end
-
-  defp saved_reset_expiration_popover_label(%{next_expires_label: label}) when is_binary(label),
-    do: label
-
-  defp saved_reset_expiration_popover_label(%{expires_reported?: false}),
-    do: "Expiration dates not reported"
-
-  defp saved_reset_expiration_popover_label(_saved_resets), do: "Expiration unavailable"
 
   defp saved_reset_count_badge_class(%{enabled?: true}) do
     [

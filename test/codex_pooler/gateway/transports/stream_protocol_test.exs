@@ -51,6 +51,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["type"] == "response.failed"
       assert data["response"]["status"] == "failed"
       assert data["error"]["code"] == "context_length_exceeded"
+      assert data["response"]["error"]["code"] == "context_length_exceeded"
     end
   end
 
@@ -320,6 +321,32 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert String.starts_with?(chunk, "event: response.failed\n")
       refute chunk =~ "event: response.created\n"
       refute chunk =~ "event: response.output_text.delta\n"
+    end
+
+    test "adds redacted nested response error for top-level context overflow failures" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      failed =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "context_length_exceeded",
+            "message" => "synthetic untrusted overflow detail"
+          },
+          "response" => %{"id" => "resp_context_overflow", "status" => "failed"}
+        })
+
+      assert {chunk, _state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(failed, state)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
+      assert data["error"]["code"] == "context_length_exceeded"
+      assert data["error"]["message"] == "upstream request failed"
+
+      assert %{"error" => response_error} = data["response"]
+      assert response_error["code"] == "context_length_exceeded"
+      assert response_error["message"] == "upstream request failed"
     end
 
     test "emits early top-level error without synthetic success prefix" do

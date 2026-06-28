@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Operations.HealthController do
 
   require Logger
 
+  alias CodexPooler.Gateway.OperationalStatus
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL
 
@@ -32,12 +33,7 @@ defmodule CodexPoolerWeb.Operations.HealthController do
   end
 
   @spec draining?() :: boolean()
-  defp draining? do
-    case drain_marker_path() do
-      path when is_binary(path) and path != "" -> File.exists?(path)
-      _path -> false
-    end
-  end
+  defp draining?, do: OperationalStatus.draining?(drain_marker_path: drain_marker_path())
 
   @spec drain_marker_path() :: String.t() | nil
   defp drain_marker_path do

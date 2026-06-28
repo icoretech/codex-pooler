@@ -1,6 +1,9 @@
 defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.TransportFailureReason, as: SharedTransportFailureReason
+
   @max_reason_length 96
   @allowed_phases ~w(
     connect
@@ -24,37 +27,10 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
         }
 
   @spec safe_reason(term()) :: String.t() | nil
-  def safe_reason(%Finch.TransportError{source: %Mint.TransportError{} = source}),
-    do: safe_reason(source)
-
-  def safe_reason(%Finch.HTTPError{source: %Mint.HTTPError{} = source}), do: safe_reason(source)
-  def safe_reason(%{__struct__: _module, reason: reason}), do: safe_reason(reason)
-  def safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-
-  def safe_reason(reason) when is_binary(reason) do
-    reason
-    |> String.downcase()
-    |> String.replace(~r/[^a-z0-9]+/, "_")
-    |> String.trim("_")
-    |> truncate_reason()
-    |> blank_to_nil()
-  end
-
-  def safe_reason(reason) when is_tuple(reason) do
-    reason
-    |> Tuple.to_list()
-    |> Enum.map(&safe_tuple_reason/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.take(3)
-    |> Enum.join("_")
-    |> blank_to_nil()
-  end
-
-  def safe_reason(_reason), do: nil
+  defdelegate safe_reason(reason), to: SharedTransportFailureReason
 
   @spec safe_exception(term()) :: String.t() | nil
-  def safe_exception(%module{}) when is_atom(module), do: inspect(module)
-  def safe_exception(_reason), do: nil
+  defdelegate safe_exception(reason), to: SharedTransportFailureReason
 
   @spec transport_failure_metadata(term(), map()) :: transport_failure_metadata()
   def transport_failure_metadata(reason, attrs) when is_map(attrs) do
@@ -69,6 +45,39 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     }
     |> compact_metadata()
   end
+
+  @spec upstream_stream_interrupted_metadata(term(), map()) :: transport_failure_metadata()
+  def upstream_stream_interrupted_metadata(reason, attrs) when is_map(attrs) do
+    %{
+      "exception" => safe_transport_exception(reason),
+      "reason_class" => "upstream_stream_interrupted",
+      "reason" => "closed_before_terminal",
+      "phase" => safe_phase(Map.get(attrs, :phase) || Map.get(attrs, "phase")),
+      "pre_visible_output" => safe_boolean(Map.get(attrs, :pre_visible_output)),
+      "terminal_seen" => safe_boolean(Map.get(attrs, :terminal_seen)),
+      "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count))
+    }
+    |> compact_metadata()
+  end
+
+  @spec maybe_put_upstream_stream_interrupted_metadata(map(), term(), term()) :: map()
+  def maybe_put_upstream_stream_interrupted_metadata(
+        metadata,
+        {:upstream_stream_interrupted, original_reason},
+        body
+      ) do
+    transport_failure =
+      upstream_stream_interrupted_metadata(original_reason, %{
+        phase: :upstream_close,
+        pre_visible_output: false,
+        terminal_seen: false,
+        text_frame_count: sse_text_frame_count(body)
+      })
+
+    Map.put(metadata, "transport_failure", transport_failure)
+  end
+
+  def maybe_put_upstream_stream_interrupted_metadata(metadata, _reason, _body), do: metadata
 
   @spec upstream_transport_error(term(), map()) :: upstream_transport_error()
   def upstream_transport_error(reason, attrs) when is_map(attrs) do
@@ -116,6 +125,26 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   defp safe_metadata_reason(reason) when is_atom(reason), do: safe_reason(reason)
   defp safe_metadata_reason(reason) when is_tuple(reason), do: safe_reason(reason)
   defp safe_metadata_reason(_reason), do: nil
+
+  defp safe_transport_exception(%Finch.TransportError{}), do: "Finch.TransportError"
+  defp safe_transport_exception(%Mint.TransportError{}), do: "Mint.TransportError"
+  defp safe_transport_exception(_reason), do: nil
+
+  defp sse_text_frame_count(body) when is_binary(body) do
+    {blocks, _buffer} = StreamProtocol.complete_sse_blocks(body, bounded?: false)
+
+    Enum.count(blocks, &sse_text_frame?/1)
+  end
+
+  defp sse_text_frame_count(_body), do: 0
+
+  defp sse_text_frame?(block) do
+    case StreamProtocol.sse_field(block, "data") do
+      nil -> false
+      "[DONE]" -> false
+      data -> String.trim(data) != ""
+    end
+  end
 
   defp safe_phase(phase) when is_atom(phase), do: phase |> Atom.to_string() |> safe_phase()
 

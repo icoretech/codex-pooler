@@ -202,7 +202,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
       refute tool.description =~ "not implemented until Task 7"
 
       assert tool.handler ==
-               {CodexPooler.MCP.Tools.PoolMetadata, handler_for_pool_api_key_tool(name)}
+               {CodexPooler.MCP.Tools.PoolMetadata.ApiKeys, handler_for_pool_api_key_tool(name)}
 
       assert get_in(tool.output_schema, ["properties", "status", "type"]) == "string"
 

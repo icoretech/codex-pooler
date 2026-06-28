@@ -9,6 +9,7 @@ defmodule CodexPooler.CatalogTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Schemas.EncryptedSecret
 
   import CodexPooler.PoolerFixtures
 
@@ -300,6 +301,93 @@ defmodule CodexPooler.CatalogTest do
       assert masterkain_only.metadata["source_assignment_ids"] == [masterkain_assignment.id]
     end
 
+    test "preserves an active absent source for one successful sync before retiring it" do
+      pool = pool_fixture()
+
+      {_pool, source_a} =
+        active_assignment_fixture(pool, %{}, %{
+          account_label: "Synthetic source A",
+          assignment_label: "Synthetic assignment A"
+        })
+
+      {_pool, source_b} =
+        active_assignment_fixture(pool, %{}, %{
+          account_label: "Synthetic source B",
+          assignment_label: "Synthetic assignment B"
+        })
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 source_a.id => [shared_sync_model(%{"source_marker" => "a-first"})],
+                 source_b.id => [shared_sync_model(%{"source_marker" => "b-first"})]
+               })
+
+      assert_shared_source_assignments(pool, [source_a.id, source_b.id])
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 source_a.id => [],
+                 source_b.id => [shared_sync_model(%{"source_marker" => "b-second"})]
+               })
+
+      model = Catalog.get_model_by_exposed_id(pool, "gpt-preserved-shared")
+
+      assert model.source_assignment_count == 2
+      assert model.metadata["source_assignment_ids"] == Enum.sort([source_a.id, source_b.id])
+      assert model.metadata["source_assignment_models"][source_a.id]["source_marker"] == "a-first"
+
+      assert model.metadata["source_assignment_models"][source_b.id]["source_marker"] ==
+               "b-second"
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 source_a.id => [],
+                 source_b.id => [shared_sync_model(%{"source_marker" => "b-third"})]
+               })
+
+      model = Catalog.get_model_by_exposed_id(pool, "gpt-preserved-shared")
+
+      assert model.source_assignment_count == 1
+      assert model.metadata["source_assignment_ids"] == [source_b.id]
+      assert model.metadata["source_assignment_models"][source_b.id]["source_marker"] == "b-third"
+    end
+
+    test "does not preserve disabled absent sources" do
+      assert_absent_source_not_preserved("disabled", fn _pool, assignment ->
+        assert {:ok, _assignment} = PoolAssignments.disable_pool_assignment(assignment)
+      end)
+    end
+
+    test "does not preserve deleted absent sources" do
+      assert_absent_source_not_preserved("deleted", fn pool, assignment ->
+        assert {:ok, _result} = PoolAssignments.delete_pool_assignment(pool, assignment)
+      end)
+    end
+
+    test "does not preserve ineligible absent sources" do
+      assert_absent_source_not_preserved("ineligible", fn _pool, assignment ->
+        assert {:ok, _assignment} =
+                 PoolAssignments.update_pool_assignment(assignment, %{
+                   eligibility_status: "ineligible"
+                 })
+      end)
+    end
+
+    test "does not preserve secretless absent sources" do
+      assert_absent_source_not_preserved("secretless", fn _pool, assignment ->
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+        Repo.update_all(
+          from(secret in EncryptedSecret,
+            where:
+              secret.upstream_identity_id == ^assignment.upstream_identity_id and
+                secret.status == "active"
+          ),
+          set: [status: "revoked", superseded_at: now]
+        )
+      end)
+    end
+
     test "attributes model metadata to the highest-plan active source identity" do
       pool = pool_fixture()
 
@@ -442,6 +530,77 @@ defmodule CodexPooler.CatalogTest do
     {:ok, upstream} = FakeUpstream.start_link(mode)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     upstream
+  end
+
+  defp sync_catalog_step(pool, assignment_models) when is_map(assignment_models) do
+    Catalog.sync_pool_catalog(pool,
+      fetcher: fn %{assignment: assignment} ->
+        {:ok, Map.fetch!(assignment_models, assignment.id)}
+      end
+    )
+  end
+
+  defp assert_shared_source_assignments(pool, expected_assignment_ids) do
+    model = Catalog.get_model_by_exposed_id(pool, "gpt-preserved-shared")
+
+    assert model.source_assignment_count == length(expected_assignment_ids)
+    assert model.metadata["source_assignment_ids"] == Enum.sort(expected_assignment_ids)
+  end
+
+  defp shared_sync_model(attrs) when is_map(attrs) do
+    Map.merge(
+      %{
+        "id" => "gpt-preserved-shared",
+        "display_name" => "Synthetic Preserved Shared",
+        "owned_by" => "synthetic",
+        "capabilities" => %{"responses" => true, "streaming" => true}
+      },
+      attrs
+    )
+  end
+
+  defp assert_absent_source_not_preserved(case_name, invalidate_source)
+       when is_binary(case_name) and is_function(invalidate_source, 2) do
+    pool = pool_fixture()
+
+    {_pool, missing_source} =
+      active_assignment_fixture(pool, %{}, %{
+        account_label: "Synthetic #{case_name} source A",
+        assignment_label: "Synthetic #{case_name} assignment A"
+      })
+
+    {_pool, current_source} =
+      active_assignment_fixture(pool, %{}, %{
+        account_label: "Synthetic #{case_name} source B",
+        assignment_label: "Synthetic #{case_name} assignment B"
+      })
+
+    assert {:ok, %{models: [_model]}} =
+             sync_catalog_step(pool, %{
+               missing_source.id => [
+                 shared_sync_model(%{"source_marker" => "#{case_name}-a-first"})
+               ],
+               current_source.id => [
+                 shared_sync_model(%{"source_marker" => "#{case_name}-b-first"})
+               ]
+             })
+
+    invalidate_source.(pool, missing_source)
+
+    assert {:ok, %{models: [_model]}} =
+             sync_catalog_step(pool, %{
+               current_source.id => [
+                 shared_sync_model(%{"source_marker" => "#{case_name}-b-second"})
+               ]
+             })
+
+    model = Catalog.get_model_by_exposed_id(pool, "gpt-preserved-shared")
+
+    assert model.source_assignment_count == 1
+    assert model.metadata["source_assignment_ids"] == [current_source.id]
+
+    assert model.metadata["source_assignment_models"][current_source.id]["source_marker"] ==
+             "#{case_name}-b-second"
   end
 
   defp sync_run_fixture(pool, attrs) do

@@ -4,14 +4,15 @@ defmodule CodexPooler.Gateway.Websocket do
   require Logger
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
-  alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
 
   alias CodexPooler.Gateway.Transports.Websocket.{
+    RolloutDrain,
     UpstreamWebsocketSession,
     WebsocketOwnerContract,
     WebsocketOwnerForwarder,
@@ -57,9 +58,17 @@ defmodule CodexPooler.Gateway.Websocket do
   def prepare_websocket_session(auth, opts \\ %{}) do
     opts = websocket_request_options(opts)
 
-    if websocket_owner_forwarding_enabled?(),
-      do: prepare_owner_websocket_session(auth, opts),
-      else: prepare_local_websocket_session(auth, opts)
+    with :ok <- reject_if_rollout_draining() do
+      if websocket_owner_forwarding_enabled?(),
+        do: prepare_owner_websocket_session(auth, opts),
+        else: prepare_local_websocket_session(auth, opts)
+    end
+  end
+
+  defp reject_if_rollout_draining do
+    if RolloutDrain.draining?(),
+      do: {:error, :owner_drained},
+      else: :ok
   end
 
   defp prepare_local_websocket_session(auth, opts) do
@@ -473,11 +482,11 @@ defmodule CodexPooler.Gateway.Websocket do
   defp recovered_websocket_owner_response_options({:error, reason}, _opts), do: {:error, reason}
 
   @spec run_websocket_response(auth(), binary(), opts(), (binary() -> any())) ::
-          :ok | {:error, Service.gateway_error()}
+          :ok | {:error, Contracts.gateway_error()}
   def run_websocket_response(auth, payload, opts, push_frame)
       when is_binary(payload) and is_function(push_frame, 1) do
     Admission.run(RouteClass.proxy_websocket(), websocket_metadata(opts), fn ->
-      Service.execute_websocket_response(auth, payload, opts, push_frame)
+      CodexPooler.Gateway.execute_websocket_response(auth, payload, opts, push_frame)
     end)
   end
 

@@ -9,7 +9,9 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
 
   @entry_settlement "settlement"
   @amount_recorded "recorded"
+  @usage_known "usage_known"
   @type write_result :: :ok
+
   @spec record_request_created!(Request.t()) :: write_result()
   def record_request_created!(%Request{id: request_id}) do
     timestamp = now()
@@ -100,11 +102,11 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
       latest_settlement_entry_id: entry.id,
       latest_settlement_usage_status: entry.usage_status,
       latest_settlement_pricing_status: pricing_status(entry),
-      latest_input_tokens: entry.input_tokens,
-      latest_cached_input_tokens: entry.cached_input_tokens,
-      latest_output_tokens: entry.output_tokens,
-      latest_reasoning_tokens: entry.reasoning_tokens,
-      latest_total_tokens: entry.total_tokens,
+      latest_input_tokens: known_usage_value(entry, :input_tokens),
+      latest_cached_input_tokens: known_usage_value(entry, :cached_input_tokens),
+      latest_output_tokens: known_usage_value(entry, :output_tokens),
+      latest_reasoning_tokens: known_usage_value(entry, :reasoning_tokens),
+      latest_total_tokens: known_usage_value(entry, :total_tokens),
       latest_settled_cost_micros: settled_cost_micros(entry),
       latest_cached_input_cost_micros: cached_input_cost_micros(entry),
       latest_cached_input_token_micros: cached_input_token_micros(entry),
@@ -152,9 +154,20 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
   defp pricing_status(%{pricing_status: pricing_status}), do: pricing_status
   defp pricing_status(_entry), do: nil
 
-  defp cached_input_token_micros(%{pricing_snapshot_id: nil}), do: nil
+  defp known_usage_value(entry, field) do
+    if usage_known?(entry), do: Map.get(entry, field), else: nil
+  end
 
-  defp cached_input_token_micros(%{pricing_snapshot_id: pricing_snapshot_id}) do
+  defp usage_known?(%{usage_status: @usage_known}), do: true
+  defp usage_known?(_entry), do: false
+
+  defp cached_input_token_micros(entry) do
+    if usage_known?(entry), do: cached_input_token_micros_for_known_usage(entry), else: nil
+  end
+
+  defp cached_input_token_micros_for_known_usage(%{pricing_snapshot_id: nil}), do: nil
+
+  defp cached_input_token_micros_for_known_usage(%{pricing_snapshot_id: pricing_snapshot_id}) do
     PricingSnapshot
     |> where([snapshot], snapshot.id == ^pricing_snapshot_id)
     |> select([snapshot], snapshot.cached_input_token_micros)
@@ -162,7 +175,11 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
     |> integer_micros()
   end
 
-  defp settled_cost_micros(%LedgerEntry{
+  defp settled_cost_micros(entry) do
+    if usage_known?(entry), do: settled_cost_micros_for_known_usage(entry), else: nil
+  end
+
+  defp settled_cost_micros_for_known_usage(%LedgerEntry{
          details: details,
          settled_cost_micros: settled_cost_micros
        })
@@ -174,13 +191,21 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
     end
   end
 
-  defp settled_cost_micros(%{settled_cost_micros: value}), do: integer_micros(value)
+  defp settled_cost_micros_for_known_usage(%{settled_cost_micros: value}),
+    do: integer_micros(value)
 
-  defp cached_input_cost_micros(%LedgerEntry{details: details}) when is_map(details),
-    do: Map.get(details, "cached_input_cost_micros") |> integer_micros()
+  defp cached_input_cost_micros(entry) do
+    if usage_known?(entry), do: cached_input_cost_micros_for_known_usage(entry), else: nil
+  end
 
-  defp cached_input_cost_micros(%{cached_input_cost_micros: value}), do: integer_micros(value)
-  defp cached_input_cost_micros(_entry), do: nil
+  defp cached_input_cost_micros_for_known_usage(%LedgerEntry{details: details})
+       when is_map(details),
+       do: Map.get(details, "cached_input_cost_micros") |> integer_micros()
+
+  defp cached_input_cost_micros_for_known_usage(%{cached_input_cost_micros: value}),
+    do: integer_micros(value)
+
+  defp cached_input_cost_micros_for_known_usage(_entry), do: nil
 
   defp integer_micros(nil), do: nil
   defp integer_micros(value) when is_integer(value), do: value

@@ -3,8 +3,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
 
   use CodexPoolerWeb, :html
 
-  alias CodexPoolerWeb.Admin.UpstreamAuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.{Charts, Dialogs, Sections, Summary}
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
 
   attr :cockpit, :map, required: true
   attr :auth_json_form, :any, required: true
@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
     <section id="upstream-cockpit" class="grid gap-6">
       <Summary.cockpit_navigation />
 
-      <UpstreamAuthJsonDialog.auth_json_import_dialog
+      <AuthJsonDialog.auth_json_import_dialog
         auth_json_form={@auth_json_form}
         importing_auth_json={@importing_auth_json}
         pool_options={@dialog_pool_options}
@@ -64,6 +64,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
         cockpit={@cockpit}
         saved_reset_policy_form={@saved_reset_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
+        datetime_preferences={@datetime_preferences}
       />
       <Sections.related_links_section cockpit={@cockpit} />
       <Sections.refresh_section cockpit={@cockpit} refresh_data_message={@refresh_data_message} />

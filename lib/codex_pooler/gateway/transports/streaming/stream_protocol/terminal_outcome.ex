@@ -10,9 +10,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   @type terminal_failure :: %{
           required(:code) => String.t(),
-          optional(:upstream_code) => String.t() | nil,
-          optional(:event_type) => String.t() | nil,
-          optional(:data_type) => String.t() | nil
+          required(:upstream_code) => String.t() | nil,
+          required(:event_type) => String.t() | nil,
+          required(:data_type) => String.t() | nil
         }
   @type terminal_outcome :: %{
           required(:kind) => atom(),

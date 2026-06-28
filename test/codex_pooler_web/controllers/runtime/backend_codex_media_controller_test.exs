@@ -9,7 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Service
+  alias CodexPooler.Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
@@ -72,7 +72,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           upstream_model_id: "provider-backend-transcribe",
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
@@ -94,7 +94,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/transcribe"
       refute captured.body =~ setup.model.upstream_model_id
-      refute captured.body =~ Service.backend_transcription_model()
+      refute captured.body =~ Gateway.backend_transcription_model()
       refute captured.body =~ requested_model
       assert captured.body =~ prompt
       refute captured.body =~ filename
@@ -107,8 +107,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
       assert request.endpoint == "/backend-api/transcribe"
       assert request.transport == "http_multipart"
       assert request.status == "succeeded"
-      assert request.request_metadata["requested_model"] == Service.backend_transcription_model()
-      assert request.request_metadata["effective_model"] == Service.backend_transcription_model()
+      assert request.request_metadata["requested_model"] == Gateway.backend_transcription_model()
+      assert request.request_metadata["effective_model"] == Gateway.backend_transcription_model()
       assert request.request_metadata["upload_bytes"] == byte_size("fake backend audio")
       refute inspect(request.request_metadata) =~ filename
       refute inspect(request.request_metadata) =~ prompt
@@ -122,7 +122,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
 
@@ -136,7 +136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
       assert %{"text" => "backend ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
       refute captured.body =~ setup.model.upstream_model_id
-      refute captured.body =~ Service.backend_transcription_model()
+      refute captured.body =~ Gateway.backend_transcription_model()
     end
 
     test "POST /backend-api/transcribe succeeds for transcription-only models", %{conn: conn} do
@@ -144,7 +144,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           supports_responses: false,
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
@@ -172,7 +172,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
 
@@ -190,7 +190,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
 
@@ -211,7 +211,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(failing_upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
 
@@ -260,7 +260,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       setup =
         gateway_setup(upstream,
-          exposed_model_id: Service.backend_transcription_model(),
+          exposed_model_id: Gateway.backend_transcription_model(),
           model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]}
         )
 

@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.JobDetailDrawer do
+defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
   @moduledoc false
 
   use CodexPoolerWeb, :html

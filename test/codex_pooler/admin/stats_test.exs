@@ -852,6 +852,75 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.sum(Enum.map(seven_day_metrics[pool.id].request_histogram, & &1.requests)) == 2
   end
 
+  test "pool_usage_metrics_by_pool_ids/2 excludes unknown usage estimates from consumption totals" do
+    pool = pool_fixture(%{slug: "stats-known-only", name: "Stats Known Only"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+
+    insert_timed_usage!(pool, api_key, assignment, identity, occurred_at, 100, %{
+      input_tokens: 60,
+      cached_input_tokens: 20,
+      output_tokens: 30,
+      reasoning_tokens: 10,
+      estimated_cost_micros: 1_500_000,
+      settled_cost_micros: 700_000
+    })
+
+    insert_timed_usage!(pool, api_key, assignment, identity, occurred_at, 20_000, %{
+      usage_status: "usage_unknown",
+      input_tokens: 12_000,
+      cached_input_tokens: 4_000,
+      output_tokens: 6_000,
+      reasoning_tokens: 2_000,
+      estimated_cost_micros: 200_000_000,
+      settled_cost_micros: 90_000_000
+    })
+
+    metrics = Stats.pool_usage_metrics_by_pool_ids([pool.id], as_of: as_of)
+
+    assert metrics[pool.id].request_count == 2
+    assert metrics[pool.id].total_tokens == 100
+    assert metrics[pool.id].tokens_per_second == 500.0
+
+    assert metrics[pool.id].token_usage == %{
+             cached_input_tokens: 20,
+             input_tokens: 60,
+             output_tokens: 30,
+             reasoning_tokens: 10,
+             total_tokens: 100
+           }
+
+    assert metrics[pool.id].token_usage_weekly.total_tokens == 100
+    assert metrics[pool.id].settled_cost_micros == 700_000
+    assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 100
+    assert Enum.sum(Enum.map(metrics[pool.id].request_histogram, & &1.requests)) == 2
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(owner_scope(), %{pool_id: pool.id, window: "24h", as_of: as_of})
+
+    assert dashboard.kpis.requests.value == 2
+
+    assert dashboard.kpis.tokens == %{
+             cached_input_tokens: 20,
+             input_tokens: 60,
+             output_tokens: 30,
+             reasoning_tokens: 10,
+             total_tokens: 100
+           }
+
+    assert dashboard.kpis.tokens_per_second == %{value: 500.0, unit: "tokens/second"}
+    assert dashboard.kpis.settled_cost.micros == 700_000
+    assert Enum.sum(Enum.map(dashboard.charts.tokens, & &1.total_tokens)) == 100
+    assert Enum.sum(Enum.map(dashboard.charts.settled_cost, & &1.settled_cost_micros)) == 700_000
+
+    assert [top_api_key] = dashboard.tables.top_api_keys
+    assert top_api_key.requests == 2
+    assert top_api_key.total_tokens == 100
+    assert top_api_key.settled_cost_micros == 700_000
+  end
+
   test "UTC window boundaries include exact start and end and exclude adjacent rows" do
     scope = owner_scope()
     pool = pool_fixture(%{slug: "stats-boundary", name: "Stats Boundary"})
@@ -1094,7 +1163,7 @@ defmodule CodexPooler.Admin.StatsTest do
     Repo.get!(Oban.Job, job.id)
   end
 
-  defp insert_timed_usage!(pool, api_key, assignment, identity, timestamp, tokens) do
+  defp insert_timed_usage!(pool, api_key, assignment, identity, timestamp, tokens, attrs \\ %{}) do
     request =
       request_fixture(%{pool: pool, api_key: api_key}, %{
         correlation_id: "stats-boundary-#{System.unique_integer([:positive])}"
@@ -1106,16 +1175,22 @@ defmodule CodexPooler.Admin.StatsTest do
       |> attempt_fixture(assignment)
       |> set_attempt_time!(timestamp, %{latency_ms: 100})
 
-    ledger_entry_fixture(request, %{
-      attempt_id: attempt.id,
-      pool_upstream_assignment_id: assignment.id,
-      upstream_identity_id: identity.id,
-      total_tokens: tokens,
-      input_tokens: tokens,
-      output_tokens: 0,
-      estimated_cost_micros: tokens,
-      settled_cost_micros: tokens
-    })
+    ledger_attrs =
+      Map.merge(
+        %{
+          attempt_id: attempt.id,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          total_tokens: tokens,
+          input_tokens: tokens,
+          output_tokens: 0,
+          estimated_cost_micros: tokens,
+          settled_cost_micros: tokens
+        },
+        attrs
+      )
+
+    ledger_entry_fixture(request, ledger_attrs)
     |> set_ledger_time!(timestamp)
 
     request

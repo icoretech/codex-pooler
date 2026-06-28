@@ -5,10 +5,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolFilterComponents
-  alias CodexPoolerWeb.Admin.UpstreamAccountCard
-  alias CodexPoolerWeb.Admin.UpstreamAuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
-  alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
 
   @oauth_docs_url "https://docs.codex-pooler.com/operators/upstreams/#openai-oauth-upstream-linking"
   @saved_reset_docs_url "https://docs.codex-pooler.com/operators/upstreams/#saved-resets"
@@ -62,7 +62,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </:actions>
       </AdminComponents.page_header>
 
-      <UpstreamAuthJsonDialog.auth_json_import_dialog
+      <AuthJsonDialog.auth_json_import_dialog
         auth_json_form={@auth_json_form}
         importing_auth_json={@importing_auth_json}
         pool_options={@dialog_pool_options}
@@ -576,16 +576,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         </div>
 
         <div
-          :if={@account.saved_resets.expires_reported?}
+          :if={@account.saved_resets.available?}
           id="saved-reset-expiration-summary"
-          class="border-b border-base-300 bg-base-200/30 px-6 py-4"
+          class="grid gap-3 border-b border-base-300 bg-base-200/30 px-6 py-4"
         >
-          <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-            Reset expiration
-          </p>
-          <p id="saved-reset-next-expiration" class="mt-1 text-sm text-base-content">
-            {saved_reset_expiration_summary(@account.saved_resets, @datetime_preferences)}
-          </p>
+          <div class="grid gap-1">
+            <h3 class="text-sm font-semibold text-base-content">Banked reset expirations</h3>
+            <p class="text-xs leading-5 text-base-content/60">
+              {@account.saved_resets.label} currently available. Expiration dates are shown when the upstream source reports them.
+            </p>
+          </div>
+          <SavedResetComponents.saved_reset_expiration_table
+            id="saved-reset-expiration"
+            saved_resets={@account.saved_resets}
+            datetime_preferences={@datetime_preferences}
+            empty_label="No expiration dates reported for the available saved resets yet."
+          />
         </div>
 
         <div class="grid gap-5 p-6">
@@ -761,30 +767,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     """
   end
 
-  defp saved_reset_expiration_summary(saved_resets, datetime_preferences) do
-    count = length(saved_resets.available_expires_at)
-    next_expires_at = saved_resets.next_expires_at
-
-    suffix =
-      case count do
-        0 -> ""
-        1 -> ""
-        value -> " · #{value} expiration dates reported"
-      end
-
-    "Next saved reset expires at " <>
-      format_saved_reset_expiration(next_expires_at, datetime_preferences) <> suffix
-  end
-
-  defp format_saved_reset_expiration(value, datetime_preferences) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, datetime, _offset} -> DateTimeDisplay.format_datetime(datetime, datetime_preferences)
-      _invalid -> "unknown time"
-    end
-  end
-
-  defp format_saved_reset_expiration(_value, _datetime_preferences), do: "unknown time"
-
   attr :accounts, :list, required: true
   attr :datetime_preferences, :map, required: true
 
@@ -795,10 +777,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       id="upstream-account-grid"
       class="grid min-w-0 items-start gap-3 lg:grid-cols-2 2xl:grid-cols-3 [@media(width>=112rem)]:grid-cols-4"
     >
-      <UpstreamAccountCard.account_card
+      <AccountCard.account_card
         :for={{account, account_index} <- Enum.with_index(@accounts)}
         account={account}
         account_index={account_index}
+        datetime_preferences={@datetime_preferences}
       />
     </div>
     """

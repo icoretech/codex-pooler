@@ -17,12 +17,64 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
 
+  @owner_lease_active BridgeOwnerLease.active_status()
+
+  @type request_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()}
+  @type attempt_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()} | nil
+
   @spec cleanup_expired_runtime_state(DateTime.t()) :: {:ok, map()} | {:error, term()}
   def cleanup_expired_runtime_state(now \\ now()) do
     with {:ok, recovered_summary} <- recover_expired_owner_runtime_state(now),
          {:ok, cleanup_summary} <- cleanup_expired(now) do
       {:ok, Map.merge(cleanup_summary, recovered_summary)}
     end
+  end
+
+  @spec active_runtime_request?(request_ref(), DateTime.t()) :: boolean()
+  def active_runtime_request?(%{id: request_id}, %DateTime{} = now) do
+    active_runtime_request?(request_id, now)
+  end
+
+  def active_runtime_request?(request_id, %DateTime{} = now) when is_binary(request_id) do
+    Repo.exists?(
+      from turn in CodexTurn,
+        join: session in CodexSession,
+        on: session.id == turn.codex_session_id,
+        left_join: lease in BridgeOwnerLease,
+        on:
+          lease.codex_session_id == session.id and
+            lease.status == ^@owner_lease_active and lease.expires_at > ^now,
+        where:
+          turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status() and
+            (session.owner_lease_expires_at > ^now or not is_nil(lease.id))
+    )
+  end
+
+  def active_runtime_request?(_request_ref, %DateTime{}), do: false
+
+  @spec recover_stale_request_turn(request_ref(), attempt_ref(), keyword()) :: :ok
+  def recover_stale_request_turn(request_ref, attempt_ref, opts) when is_list(opts) do
+    request_id = ref_id(request_ref)
+    final_attempt_id = ref_id(attempt_ref)
+    now = opts |> Keyword.fetch!(:now) |> DateTime.truncate(:microsecond)
+    error_code = Keyword.fetch!(opts, :error_code)
+
+    CodexTurn
+    |> where(
+      [turn],
+      turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status()
+    )
+    |> Repo.update_all(
+      set: [
+        status: CodexTurn.interrupted_status(),
+        error_code: error_code,
+        final_attempt_id: final_attempt_id,
+        completed_at: now,
+        updated_at: now
+      ]
+    )
+
+    :ok
   end
 
   @spec cleanup_expired(DateTime.t()) :: {:ok, map()} | {:error, term()}
@@ -87,6 +139,10 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end
+
+  defp ref_id(nil), do: nil
+  defp ref_id(%{id: id}), do: id
+  defp ref_id(id) when is_binary(id), do: id
 
   defp expired_owner_sessions_with_active_turns(%DateTime{} = now) do
     Repo.all(

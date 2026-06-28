@@ -3,13 +3,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   use GenServer
 
-  require Logger
-
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
-  alias CodexPooler.Gateway.Runtime.Finalization.{Interruption, Metadata}
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.{
+    DownstreamState,
+    Logger,
+    Persistence
+  }
+
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
 
   @registry __MODULE__.Registry
@@ -63,7 +67,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp start_owner(opts, attempts) when attempts > 0 do
     case start(opts) do
       {:ok, pid} ->
-        log_owner_started(pid, opts)
+        Logger.owner_started(pid, opts)
         {:ok, pid}
 
       {:error, {:already_started, pid}} ->
@@ -73,7 +77,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         existing_owner_result(pid, opts, attempts)
 
       {:error, reason} ->
-        log_owner_start_failed(reason, opts)
+        Logger.owner_start_failed(reason, opts)
         {:error, reason}
     end
   end
@@ -83,16 +87,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp existing_owner_result(pid, opts, attempts) when is_pid(pid) do
     cond do
       not Process.alive?(pid) ->
-        log_owner_lookup_missed(Keyword.fetch!(opts, :codex_session_id), :dead_pid, pid, opts)
+        Logger.owner_lookup_missed(Keyword.fetch!(opts, :codex_session_id), :dead_pid, pid, opts)
         :erlang.yield()
         start_owner(opts, attempts - 1)
 
       not uuid?(Keyword.fetch!(opts, :codex_session_id)) or owner_reusable?(pid, opts) ->
-        log_owner_reused(pid, opts)
+        Logger.owner_reused(pid, opts)
         {:ok, pid, :existing}
 
       true ->
-        log_owner_stale_replaced(pid, opts)
+        Logger.owner_stale_replaced(pid, opts)
         _result = GenServer.stop(pid, {:shutdown, :stale_owner}, owner_call_timeout())
         :erlang.yield()
         start_owner(opts, attempts - 1)
@@ -109,12 +113,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         if Process.alive?(pid) do
           {:ok, pid}
         else
-          log_owner_lookup_missed(codex_session_id, :dead_pid, pid, metadata)
+          Logger.owner_lookup_missed(codex_session_id, :dead_pid, pid, metadata)
           {:error, :owner_unavailable}
         end
 
       [] ->
-        log_owner_lookup_missed(codex_session_id, :not_registered, nil, metadata)
+        Logger.owner_lookup_missed(codex_session_id, :not_registered, nil, metadata)
         {:error, :owner_unavailable}
     end
   end
@@ -217,7 +221,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call(:drain, _from, state) do
-    _result = send_owner_error(state.downstream, :owner_drained)
+    state =
+      if DownstreamState.active_turn?(state) do
+        finish_active_turn(state, {:error, :owner_drained})
+      else
+        _result = send_owner_error(state.downstream, :owner_drained)
+        state
+      end
+
     {:stop, :normal, :ok, %{state | draining?: true}}
   end
 
@@ -228,26 +239,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_call({:attach_downstream, pid, correlation_id}, _from, state) do
     state =
       state
-      |> demonitor_downstream()
-      |> cancel_idle_shutdown()
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.cancel_idle_shutdown()
 
-    epoch = next_downstream_epoch(state.downstream)
+    epoch = DownstreamState.next_downstream_epoch(state.downstream)
     monitor = Process.monitor(pid)
 
     downstream = %{
       pid: pid,
       epoch: epoch,
       correlation_id: correlation_id,
-      active_turn_reconnect?: active_turn?(state)
+      active_turn_reconnect?: DownstreamState.active_turn?(state)
     }
 
-    state = put_active_turn_downstream(state, downstream)
+    state = DownstreamState.put_active_turn_downstream(state, downstream)
 
     {:reply, {:ok, downstream}, %{state | downstream: downstream, downstream_monitor: monitor}}
   end
 
   def handle_call({:detach_downstream, pid, epoch, correlation_id}, _from, state) do
-    case downstream_status(state.downstream, %{
+    case DownstreamState.downstream_status(state.downstream, %{
            pid: pid,
            epoch: epoch,
            correlation_id: correlation_id
@@ -255,9 +266,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       :active ->
         state =
           state
-          |> demonitor_downstream()
-          |> schedule_idle_shutdown()
-          |> cancel_active_turn_downstream(%{
+          |> DownstreamState.demonitor_downstream()
+          |> DownstreamState.schedule_idle_shutdown()
+          |> DownstreamState.cancel_active_turn_downstream(%{
             pid: pid,
             epoch: epoch,
             correlation_id: correlation_id
@@ -280,11 +291,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         %{active_turn: active_turn} = state
       )
       when not is_nil(active_turn) do
-    {:reply, stale_or_busy(state.downstream, downstream), state}
+    {:reply, DownstreamState.stale_or_busy(state.downstream, downstream), state}
   end
 
   def handle_call({:submit_upstream, downstream, upstream_payload}, from, state) do
-    case downstream_status(state.downstream, downstream) do
+    case DownstreamState.downstream_status(state.downstream, downstream) do
       :active ->
         ref = make_ref()
         task = start_upstream_task(state, ref, upstream_payload)
@@ -318,21 +329,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:websocket_owner_upstream_frame, ref, payload},
         %{active_turn: %{ref: ref}} = state
       ) do
-    _result = send_downstream(active_turn_downstream(state), {:data, payload})
+    _result = send_downstream(DownstreamState.active_turn_downstream(state), {:data, payload})
     {:noreply, state}
   end
 
   def handle_info({:websocket_owner_upstream_frame, _ref, _payload}, state), do: {:noreply, state}
 
   def handle_info({ref, result}, %{active_turn: %{task_ref: ref}} = state) do
-    result = effective_active_turn_result(state.active_turn, result)
+    result = DownstreamState.effective_active_turn_result(state.active_turn, result)
     reply_active_turn(state, result)
 
     {:noreply, finish_active_turn(state, result)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{active_turn: %{task_ref: ref}} = state) do
-    result = state.active_turn |> effective_active_turn_result({:error, owner_error(reason)})
+    result =
+      DownstreamState.effective_active_turn_result(
+        state.active_turn,
+        {:error, owner_error(reason)}
+      )
+
     reply_active_turn(state, result)
 
     {:noreply, finish_active_turn(state, result)}
@@ -342,7 +358,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:DOWN, ref, :process, _pid, _reason},
         %{active_turn: %{submitter_monitor: ref} = active_turn} = state
       ) do
-    cancel_active_turn_task(active_turn)
+    DownstreamState.cancel_active_turn_task(active_turn)
 
     {:noreply, finish_active_turn(state, {:error, :client_disconnected})}
   end
@@ -352,7 +368,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       state
       |> Map.put(:downstream, nil)
       |> Map.put(:downstream_monitor, nil)
-      |> maybe_schedule_idle_shutdown()
+      |> DownstreamState.maybe_schedule_idle_shutdown()
 
     {:noreply, state}
   end
@@ -368,16 +384,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_info(:renew_owner_lease, state) do
     state = %{state | owner_renewal_ref: nil}
 
-    case renew_owner_lease(state) do
+    case Persistence.renew_owner_lease(state) do
       {:ok, state} ->
         {:noreply, schedule_owner_renewal(state)}
 
       {:error, reason} when reason in [:stale_owner, :owner_unavailable] ->
-        log_owner_renewal_stale(reason, state)
+        Logger.owner_renewal_stale(reason, state)
         {:stop, {:shutdown, :stale_owner}, %{state | draining?: true}}
 
       {:error, reason} ->
-        log_owner_renewal_failed(reason, state)
+        Logger.owner_renewal_failed(reason, state)
         {:noreply, schedule_owner_renewal(state)}
     end
   end
@@ -388,9 +404,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def terminate(reason, state) do
     state = cancel_owner_renewal(state)
     owner_exit_reason = owner_exit_reason(reason, state)
-    log_owner_terminated(reason, owner_exit_reason, state)
-    _result = release_owner_lease(state, owner_exit_reason)
-    _result = interrupt_codex_session(state, owner_exit_reason)
+    Logger.owner_terminated(reason, owner_exit_reason, state)
+    _result = Persistence.release_owner_lease(state, owner_exit_reason)
+    _result = Persistence.interrupt_codex_session(state, owner_exit_reason)
     close_upstream(state.upstream_closer, state.upstream_pid)
     :ok
   end
@@ -456,37 +472,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  defp downstream_status(nil, _downstream), do: {:error, :stale_downstream}
-
-  defp downstream_status(
-         %{pid: pid, epoch: epoch, correlation_id: correlation_id},
-         %{pid: pid, epoch: epoch, correlation_id: correlation_id}
-       ),
-       do: :active
-
-  defp downstream_status(%{epoch: current_epoch}, %{epoch: epoch})
-       when is_integer(epoch) and epoch < current_epoch,
-       do: {:error, :duplicate_downstream}
-
-  defp downstream_status(_current, _downstream), do: {:error, :stale_downstream}
-
-  defp active_turn_downstream(%{active_turn: %{downstream: downstream}}) when is_map(downstream),
-    do: downstream
-
-  defp active_turn_downstream(state), do: state.downstream
-
-  defp effective_active_turn_result(%{canceled_result: canceled_result}, _result),
-    do: canceled_result
-
-  defp effective_active_turn_result(_active_turn, result), do: result
-
   defp reply_active_turn(%{active_turn: %{reply_to: reply_to}}, result) do
     GenServer.reply(reply_to, result)
   end
 
   defp finish_active_turn(state, result) do
-    downstream = active_turn_downstream(state)
-    clear_active_turn_monitors(state.active_turn)
+    downstream = DownstreamState.active_turn_downstream(state)
+    DownstreamState.clear_active_turn_monitors(state.active_turn)
 
     case result do
       :ok -> _result = send_downstream(downstream, :complete)
@@ -498,93 +490,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     state
     |> Map.put(:active_turn, nil)
-    |> maybe_schedule_idle_shutdown()
+    |> DownstreamState.maybe_schedule_idle_shutdown()
   end
-
-  defp clear_active_turn_monitors(active_turn) when is_map(active_turn) do
-    active_turn
-    |> Map.take([:task_ref, :submitter_monitor])
-    |> Map.values()
-    |> Enum.each(fn
-      ref when is_reference(ref) -> Process.demonitor(ref, [:flush])
-      _value -> :ok
-    end)
-  end
-
-  defp put_active_turn_downstream(%{active_turn: active_turn} = state, downstream)
-       when is_map(active_turn) and is_map(downstream) do
-    if Map.has_key?(active_turn, :canceled_result) do
-      state
-    else
-      %{state | active_turn: %{active_turn | downstream: downstream}}
-    end
-  end
-
-  defp put_active_turn_downstream(state, _downstream), do: state
-
-  defp cancel_active_turn_downstream(%{active_turn: active_turn} = state, downstream)
-       when is_map(active_turn) and is_map(downstream) do
-    case downstream_status(Map.get(active_turn, :downstream), downstream) do
-      :active ->
-        cancel_active_turn_task(active_turn)
-
-        %{
-          state
-          | active_turn:
-              active_turn
-              |> Map.put(:canceled_result, {:error, :client_disconnected})
-              |> Map.put(:downstream, nil)
-        }
-
-      {:error, _reason} ->
-        state
-    end
-  end
-
-  defp cancel_active_turn_downstream(state, _downstream), do: state
-
-  defp cancel_active_turn_task(%{task_pid: task_pid}) when is_pid(task_pid) do
-    if Process.alive?(task_pid) do
-      Process.exit(task_pid, :shutdown)
-    end
-
-    :ok
-  end
-
-  defp cancel_active_turn_task(_active_turn), do: :ok
-
-  defp stale_or_busy(current_downstream, downstream) do
-    case downstream_status(current_downstream, downstream) do
-      :active -> {:error, :owner_busy}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp active_turn?(%{active_turn: active_turn}), do: is_map(active_turn)
-
-  defp next_downstream_epoch(nil), do: 1
-  defp next_downstream_epoch(%{epoch: epoch}), do: epoch + 1
-
-  defp demonitor_downstream(%{downstream_monitor: ref} = state) when is_reference(ref) do
-    Process.demonitor(ref, [:flush])
-    %{state | downstream_monitor: nil}
-  end
-
-  defp demonitor_downstream(state), do: state
-
-  defp maybe_schedule_idle_shutdown(%{downstream: nil, active_turn: nil} = state),
-    do: schedule_idle_shutdown(state)
-
-  defp maybe_schedule_idle_shutdown(state), do: state
-
-  defp schedule_idle_shutdown(%{idle_shutdown_ref: ref} = state) when is_reference(ref), do: state
-
-  defp schedule_idle_shutdown(%{idle_shutdown_ms: timeout} = state)
-       when is_integer(timeout) and timeout >= 0 do
-    %{state | idle_shutdown_ref: Process.send_after(self(), :idle_shutdown, timeout)}
-  end
-
-  defp schedule_idle_shutdown(state), do: state
 
   defp schedule_owner_renewal(%{owner_renewal_ms: timeout, codex_session_id: session_id} = state)
        when is_integer(timeout) and timeout > 0 do
@@ -603,56 +510,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp cancel_owner_renewal(state), do: state
-
-  defp cancel_idle_shutdown(%{idle_shutdown_ref: ref} = state) when is_reference(ref) do
-    Process.cancel_timer(ref)
-    %{state | idle_shutdown_ref: nil}
-  end
-
-  defp cancel_idle_shutdown(state), do: state
-
-  defp upstream_boundary(opts) do
-    Keyword.get_lazy(opts, :upstream, fn ->
-      %{
-        start: fn -> UpstreamWebsocketSession.start_link([]) end,
-        send: fn upstream_pid, upstream_payload, writer ->
-          send_owner_upstream(upstream_pid, upstream_payload, writer)
-        end,
-        close: &UpstreamWebsocketSession.close/1
-      }
-    end)
-  end
-
-  defp persistence_boundary(opts) do
-    Keyword.get_lazy(opts, :persistence, fn ->
-      %{
-        release_owner_lease: &SessionContinuity.release_owner_lease/3,
-        renew_owner_token: &SessionContinuity.renew_owner_token/3,
-        interrupt_codex_session: &Interruption.interrupt_codex_session/2
-      }
-    end)
-  end
-
-  defp renew_owner_lease(state) do
-    opts = RequestOptions.for_websocket(%{})
-
-    case state.persistence.renew_owner_token.(
-           state.codex_session_id,
-           state.owner_lease_token,
-           opts
-         ) do
-      {:ok, %{owner_lease_token: owner_lease_token, owner_instance_id: owner_instance_id}} ->
-        {:ok,
-         %{state | owner_lease_token: owner_lease_token, owner_instance_id: owner_instance_id}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  rescue
-    exception -> {:error, exception}
-  catch
-    _kind, reason -> {:error, reason}
-  end
 
   defp send_owner_upstream(upstream_pid, payload, _writer) when is_binary(payload) do
     case UpstreamWebsocketSession.send_request_frame(upstream_pid, payload) do
@@ -688,203 +545,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp close_upstream(_close, _upstream_pid), do: :ok
 
-  defp release_owner_lease(state, reason) do
-    safe_persist_owner_exit(:release_owner_lease, state, reason, fn ->
-      if reason == :stale_owner or not uuid?(state.codex_session_id) do
-        :ok
-      else
-        state.persistence.release_owner_lease.(
-          state.codex_session_id,
-          state.owner_lease_token,
-          Atom.to_string(reason)
-        )
-      end
-    end)
-  end
-
-  defp interrupt_codex_session(state, reason) do
-    safe_persist_owner_exit(:interrupt_codex_session, state, reason, fn ->
-      if reason == :stale_owner or not uuid?(state.codex_session_id) do
-        :ok
-      else
-        opts =
-          %{
-            interrupt_reason: Atom.to_string(reason),
-            reconnect_window_seconds: 300
-          }
-          |> RequestOptions.for_websocket()
-
-        state.persistence.interrupt_codex_session.(state.codex_session_id, opts)
-      end
-    end)
-  end
-
   defp owner_renewal_ms do
     OperationalSettings.current().bridge_owner_lease_renewal_seconds * 1_000
   end
 
-  defp safe_persist_owner_exit(operation, state, owner_exit_reason, fun) do
-    case fun.() do
-      {:error, reason} ->
-        log_owner_exit_persistence_failure(operation, state, owner_exit_reason, reason)
-        recover_owner_lifecycle_leftovers(state, owner_exit_reason)
-        :ok
-
-      _result ->
-        :ok
-    end
-  rescue
-    exception ->
-      log_owner_exit_persistence_failure(operation, state, owner_exit_reason, exception)
-      recover_owner_lifecycle_leftovers(state, owner_exit_reason)
-      :ok
-  catch
-    _kind, reason ->
-      log_owner_exit_persistence_failure(operation, state, owner_exit_reason, reason)
-      recover_owner_lifecycle_leftovers(state, owner_exit_reason)
-      :ok
+  defp upstream_boundary(opts) do
+    Keyword.get_lazy(opts, :upstream, fn ->
+      %{
+        start: fn -> UpstreamWebsocketSession.start_link([]) end,
+        send: fn upstream_pid, upstream_payload, writer ->
+          send_owner_upstream(upstream_pid, upstream_payload, writer)
+        end,
+        close: &UpstreamWebsocketSession.close/1
+      }
+    end)
   end
 
-  defp recover_owner_lifecycle_leftovers(state, owner_exit_reason) do
-    if uuid?(state.codex_session_id) do
-      opts =
-        %{
-          interrupt_reason: Atom.to_string(owner_exit_reason),
-          reconnect_window_seconds: 300
-        }
-        |> RequestOptions.for_websocket()
-
-      _result =
-        Interruption.recover_owner_lifecycle_leftovers(
-          state.codex_session_id,
-          owner_exit_reason,
-          opts
-        )
-
-      :ok
-    else
-      :ok
-    end
+  defp persistence_boundary(opts) do
+    Keyword.get_lazy(opts, :persistence, fn ->
+      %{
+        release_owner_lease: &SessionContinuity.release_owner_lease/3,
+        renew_owner_token: &SessionContinuity.renew_owner_token/3,
+        interrupt_codex_session: &Interruption.interrupt_codex_session/2
+      }
+    end)
   end
-
-  defp log_owner_exit_persistence_failure(operation, state, owner_exit_reason, reason) do
-    Logger.warning(
-      "websocket owner exit persistence failed " <>
-        "codex_session_id=#{safe_log_value(state.codex_session_id)} " <>
-        "operation=#{operation} " <>
-        "reason_class=#{safe_log_value(Metadata.safe_reason(reason))} " <>
-        "owner_exit_reason=#{owner_exit_reason} " <>
-        "recovery_hint=task_7_owner_exit_recovery"
-    )
-
-    :ok
-  end
-
-  defp log_owner_started(pid, opts) do
-    log_owner_event(:info, "websocket owner started",
-      codex_session_id: Keyword.get(opts, :codex_session_id),
-      owner_instance_id: Keyword.get(opts, :owner_instance_id),
-      owner_pid: pid,
-      request_id: Keyword.get(opts, :request_id)
-    )
-  end
-
-  defp log_owner_reused(pid, opts) do
-    log_owner_event(:info, "websocket owner reused",
-      codex_session_id: Keyword.get(opts, :codex_session_id),
-      owner_instance_id: Keyword.get(opts, :owner_instance_id),
-      owner_pid: pid,
-      request_id: Keyword.get(opts, :request_id)
-    )
-  end
-
-  defp log_owner_stale_replaced(pid, opts) do
-    log_owner_event(:info, "websocket owner stale replaced",
-      codex_session_id: Keyword.get(opts, :codex_session_id),
-      owner_instance_id: Keyword.get(opts, :owner_instance_id),
-      owner_pid: pid,
-      request_id: Keyword.get(opts, :request_id)
-    )
-  end
-
-  defp log_owner_start_failed(reason, opts) do
-    log_owner_event(:warning, "websocket owner start failed",
-      codex_session_id: Keyword.get(opts, :codex_session_id),
-      owner_instance_id: Keyword.get(opts, :owner_instance_id),
-      reason: Metadata.safe_reason(reason),
-      request_id: Keyword.get(opts, :request_id)
-    )
-  end
-
-  defp log_owner_lookup_missed(codex_session_id, reason, pid, metadata) do
-    log_owner_event(:info, "websocket owner lookup missed",
-      codex_session_id: codex_session_id,
-      owner_instance_id: Keyword.get(metadata, :owner_instance_id),
-      owner_pid: pid,
-      reason: reason,
-      request_id: Keyword.get(metadata, :request_id)
-    )
-  end
-
-  defp log_owner_renewal_stale(reason, state) do
-    log_owner_event(:warning, "websocket owner renewal stale",
-      codex_session_id: state.codex_session_id,
-      owner_instance_id: state.owner_instance_id,
-      owner_pid: self(),
-      reason: Metadata.safe_reason(reason),
-      request_id: state.request_id
-    )
-  end
-
-  defp log_owner_renewal_failed(reason, state) do
-    log_owner_event(:warning, "websocket owner renewal failed",
-      codex_session_id: state.codex_session_id,
-      owner_instance_id: state.owner_instance_id,
-      owner_pid: self(),
-      reason: Metadata.safe_reason(reason),
-      request_id: state.request_id
-    )
-  end
-
-  defp log_owner_terminated(reason, owner_exit_reason, state) do
-    log_owner_event(:info, "websocket owner terminated",
-      codex_session_id: state.codex_session_id,
-      owner_instance_id: state.owner_instance_id,
-      owner_pid: self(),
-      reason: Metadata.safe_reason(reason),
-      owner_exit_reason: owner_exit_reason,
-      request_id: state.request_id,
-      downstream_epoch: downstream_epoch(state.downstream)
-    )
-  end
-
-  defp log_owner_event(level, message, metadata) do
-    log_line =
-      metadata
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{safe_log_value(value)}" end)
-
-    Logger.log(level, message <> " " <> log_line)
-  end
-
-  defp downstream_epoch(%{epoch: epoch}) when is_integer(epoch), do: epoch
-  defp downstream_epoch(_downstream), do: nil
-
-  defp safe_log_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp safe_log_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp safe_log_value(value) when is_pid(value), do: inspect(value)
-
-  defp safe_log_value(value) when is_binary(value) do
-    value
-    |> String.replace(~r/[^a-zA-Z0-9_.:-]+/, "_")
-    |> String.slice(0, 120)
-    |> case do
-      "" -> "unknown"
-      sanitized -> sanitized
-    end
-  end
-
-  defp safe_log_value(_value), do: "unknown"
 
   defp uuid?(value) when is_binary(value) do
     String.match?(

@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.JobFilters do
+defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
   @moduledoc false
 
   use CodexPoolerWeb, :html

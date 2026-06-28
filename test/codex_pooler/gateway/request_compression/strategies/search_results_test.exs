@@ -190,6 +190,66 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResultsTest do
       assert_safe_metadata(metadata, :search_results, sentinel)
     end
 
+    test "skips grep outputs with engine evidence that cannot be safely summarized" do
+      unsafe_outputs = [
+        """
+        $ rg --engine auto needle lib
+        lib/searchable.ex:12: matching line kept
+        lib/searchable.ex:48: another matching line kept
+        rg: regex parse error:
+            (
+            ^
+        error: unclosed group
+        exit code: 2
+        """,
+        """
+        + /usr/bin/rg needle lib
+        lib/searchable.ex:12: matching line kept
+        lib/searchable.ex:48: another matching line kept
+        """,
+        """
+        ++ ./vendor/bin/grep needle lib
+        lib/searchable.ex:12: matching line kept
+        /usr/bin/rg: regex parse error:
+        exit status 2
+        """,
+        """
+        lib/text_result.ex:1: matching text kept
+        Binary file priv/static/example.bin matches
+        lib/text_result.ex:2: another matching text kept
+        """,
+        """
+        lib/text_result.ex:1: matching text kept
+        priv/static/example.bin: binary file matches (found "\\0" byte around offset 128)
+        priv/static/second.bin: WARNING: stopped searching binary file after match (found "\\0" byte around offset 256)
+        lib/text_result.ex:2: another matching text kept
+        """,
+        """
+        1: stdin match without filename kept
+        2: second stdin match without filename kept
+        3: third stdin match without filename kept
+        """,
+        """
+        lib/error_result.ex:5: matching text kept
+        grep: sample input: No such file or directory
+        exit status 2
+        lib/error_result.ex:8: another matching text kept
+        """
+      ]
+
+      for content <- unsafe_outputs do
+        assert :skip =
+                 SearchResults.compress(content,
+                   model: @model,
+                   min_bytes: 0,
+                   min_matches: 1,
+                   max_files: 1,
+                   max_matches_per_file: 1,
+                   max_matches: 1
+                 )
+      end
+    end
+
     test "rejects byte-shrinking rewrites that do not shrink tokens" do
       padding = String.duplicate(" ", 20)
 

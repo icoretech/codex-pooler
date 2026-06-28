@@ -36,22 +36,18 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
     end
   end
 
-  @spec filter_candidates(CandidateEligibility.FilterInput.t(), RouteState.t(), keyword()) ::
-          {:ok, [candidate()], RequestOptions.t(), RouteState.t()} | {:error, gateway_error()}
-  @spec filter_candidates(CandidateEligibility.FilterInput.t(), RouteState.t()) ::
+  @spec filter_candidates_with_route_state(
+          CandidateEligibility.FilterInput.t(),
+          RouteState.t(),
+          keyword()
+        ) :: {:ok, [candidate()], RequestOptions.t(), RouteState.t()} | {:error, gateway_error()}
+  @spec filter_candidates_with_route_state(CandidateEligibility.FilterInput.t(), RouteState.t()) ::
           {:ok, [candidate()], RequestOptions.t(), RouteState.t()} | {:error, gateway_error()}
 
-  def filter_candidates(
-        %CandidateEligibility.FilterInput{} = filter_input,
-        %RouteState{} = route_state
-      ) do
-    filter_candidates(filter_input, route_state, [])
-  end
-
-  def filter_candidates(
+  def filter_candidates_with_route_state(
         %CandidateEligibility.FilterInput{} = filter_input,
         %RouteState{} = route_state,
-        opts
+        opts \\ []
       )
       when is_list(opts) do
     request_options = filter_input.request_options

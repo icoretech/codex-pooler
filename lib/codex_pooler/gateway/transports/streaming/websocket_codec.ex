@@ -4,13 +4,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   """
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolResultShape
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.RouteClass
 
   @type decode_error :: :invalid_json | :not_object
   @type gateway_error :: Contracts.gateway_error()
   @type deliver_result :: :ok | {:error, gateway_error()}
+  @type coerced_request :: %{
+          required(:endpoint) => String.t(),
+          required(:payload) => map(),
+          required(:request_options) => RequestOptions.t()
+        }
 
   @spec decode_payload(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_payload(payload) when is_binary(payload) do
@@ -80,6 +90,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   @spec ack_result() :: map()
   def ack_result, do: %{websocket_messages: []}
+
+  @spec coerce_request(map(), RequestOptions.t(), (binary() -> any())) ::
+          {:ok, coerced_request()} | {:error, gateway_error()}
+  def coerce_request(payload, %RequestOptions{} = opts, push_frame)
+      when is_map(payload) and is_function(push_frame, 1) do
+    with {:ok, coerced} <- coerce_response_payload(payload, opts) do
+      request_options =
+        coerced.request_options
+        |> RequestOptions.for_payload(coerced.endpoint, coerced.payload)
+        |> RequestOptions.put_transport(
+          transport: "websocket",
+          upstream_endpoint: coerced.endpoint,
+          route_class: RouteClass.proxy_websocket(),
+          websocket_writer: push_frame
+        )
+        |> maybe_put_backend_turn_state(coerced.endpoint, coerced.payload)
+        |> RequestOptions.put_continuity(
+          codex_turn_id: SessionContinuity.websocket_turn_id(coerced.payload)
+        )
+
+      {:ok, %{coerced | request_options: request_options}}
+    end
+  end
 
   @spec response_processed_payload?(map()) :: boolean()
   def response_processed_payload?(%{"type" => "response.processed"}), do: true
@@ -163,6 +196,49 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
     if StreamProtocol.valid_json?(data), do: [data], else: []
   end
+
+  defp coerce_response_payload(
+         %{"type" => "response.create"} = payload,
+         %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}} = opts
+       ) do
+    payload
+    |> Map.drop(["type", "generate"])
+    |> Responses.coerce(opts)
+    |> case do
+      {:ok, coerced} -> {:ok, %{coerced | payload: Map.put(coerced.payload, "generate", true)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp coerce_response_payload(payload, opts) do
+    {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
+  end
+
+  defp maybe_put_backend_turn_state(
+         %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}} =
+           request_options,
+         _endpoint,
+         _payload
+       ) do
+    request_options
+  end
+
+  defp maybe_put_backend_turn_state(
+         %RequestOptions{} = request_options,
+         "/backend-api/codex/responses",
+         payload
+       ) do
+    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+      nil ->
+        request_options
+
+      turn_state ->
+        RequestOptions.put_continuity(request_options, accepted_turn_state: turn_state)
+    end
+  end
+
+  defp maybe_put_backend_turn_state(%RequestOptions{} = request_options, _endpoint, _payload),
+    do: request_options
 
   defp request_row_producing_response_payload(%{"type" => "response.processed"}), do: true
   defp request_row_producing_response_payload(%{"generate" => false}), do: false

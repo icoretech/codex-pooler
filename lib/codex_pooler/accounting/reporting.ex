@@ -11,6 +11,7 @@ defmodule CodexPooler.Accounting.Reporting do
 
   @settlement "settlement"
   @recorded "recorded"
+  @usage_known "usage_known"
   @model_dimension "model"
   @unknown_model_code "Unknown model"
 
@@ -48,13 +49,55 @@ defmodule CodexPooler.Accounting.Reporting do
           api_key_id: entry.api_key_id,
           upstream_identity_id: entry.upstream_identity_id,
           request_count: entry.request_count,
-          input_tokens: entry.input_tokens,
-          cached_input_tokens: entry.cached_input_tokens,
-          output_tokens: entry.output_tokens,
-          reasoning_tokens: entry.reasoning_tokens,
-          total_tokens: entry.total_tokens,
-          estimated_cost_micros: entry.estimated_cost_micros,
-          settled_cost_micros: entry.settled_cost_micros,
+          input_tokens:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.input_tokens
+            ),
+          cached_input_tokens:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.cached_input_tokens
+            ),
+          output_tokens:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.output_tokens
+            ),
+          reasoning_tokens:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.reasoning_tokens
+            ),
+          total_tokens:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.total_tokens
+            ),
+          estimated_cost_micros:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.estimated_cost_micros
+            ),
+          settled_cost_micros:
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.settled_cost_micros
+            ),
           occurred_at: entry.occurred_at
         }
     )
@@ -73,7 +116,16 @@ defmodule CodexPooler.Accounting.Reporting do
             entry.amount_status == ^@recorded and entry.occurred_at >= ^started_at and
             entry.occurred_at <= ^ended_at,
         group_by: entry.pool_id,
-        select: {entry.pool_id, sum(entry.total_tokens)}
+        select:
+          {entry.pool_id,
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN ? ELSE 0 END",
+               entry.usage_status,
+               ^@usage_known,
+               entry.total_tokens
+             )
+           )}
     )
     |> Map.new(fn {pool_id, total} -> {pool_id, non_negative_integer(total)} end)
   end
@@ -91,7 +143,16 @@ defmodule CodexPooler.Accounting.Reporting do
             entry.entry_kind == ^@settlement and entry.amount_status == ^@recorded and
             entry.occurred_at >= ^started_at and entry.occurred_at <= ^ended_at,
         group_by: entry.upstream_identity_id,
-        select: {entry.upstream_identity_id, sum(entry.total_tokens)}
+        select:
+          {entry.upstream_identity_id,
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN ? ELSE 0 END",
+               entry.usage_status,
+               ^@usage_known,
+               entry.total_tokens
+             )
+           )}
     )
     |> Map.new(fn {upstream_identity_id, total} ->
       {upstream_identity_id, non_negative_integer(total)}
@@ -114,11 +175,51 @@ defmodule CodexPooler.Accounting.Reporting do
         select:
           {entry.pool_id,
            %{
-             cached_input_tokens: sum(entry.cached_input_tokens),
-             input_tokens: sum(entry.input_tokens),
-             output_tokens: sum(entry.output_tokens),
-             reasoning_tokens: sum(entry.reasoning_tokens),
-             total_tokens: sum(entry.total_tokens)
+             cached_input_tokens:
+               sum(
+                 fragment(
+                   "CASE WHEN ? = ? THEN ? ELSE 0 END",
+                   entry.usage_status,
+                   ^@usage_known,
+                   entry.cached_input_tokens
+                 )
+               ),
+             input_tokens:
+               sum(
+                 fragment(
+                   "CASE WHEN ? = ? THEN ? ELSE 0 END",
+                   entry.usage_status,
+                   ^@usage_known,
+                   entry.input_tokens
+                 )
+               ),
+             output_tokens:
+               sum(
+                 fragment(
+                   "CASE WHEN ? = ? THEN ? ELSE 0 END",
+                   entry.usage_status,
+                   ^@usage_known,
+                   entry.output_tokens
+                 )
+               ),
+             reasoning_tokens:
+               sum(
+                 fragment(
+                   "CASE WHEN ? = ? THEN ? ELSE 0 END",
+                   entry.usage_status,
+                   ^@usage_known,
+                   entry.reasoning_tokens
+                 )
+               ),
+             total_tokens:
+               sum(
+                 fragment(
+                   "CASE WHEN ? = ? THEN ? ELSE 0 END",
+                   entry.usage_status,
+                   ^@usage_known,
+                   entry.total_tokens
+                 )
+               )
            }}
     )
     |> Map.new(fn {pool_id, usage} -> {pool_id, normalize_token_usage(usage)} end)

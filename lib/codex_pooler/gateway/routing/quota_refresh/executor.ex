@@ -45,7 +45,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Executor do
 
   defp do_refresh_assignment_once(%PoolUpstreamAssignment{} = assignment) do
     lock_key =
-      :erlang.phash2({CodexPooler.Gateway.Service, :quota_refresh, assignment.id}, 2_147_483_647)
+      :erlang.phash2({__MODULE__, :quota_refresh, assignment.id}, 2_147_483_647)
 
     Repo.checkout(fn ->
       case Repo.query("select pg_try_advisory_lock($1)", [lock_key]) do
@@ -86,7 +86,9 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.Executor do
     log_refresh_failure(:error, reason, assignment)
   end
 
-  defp log_refresh_result(_other, _assignment), do: :ok
+  defp log_refresh_result(other, %PoolUpstreamAssignment{} = assignment) do
+    log_refresh_failure(:unexpected_result, other, assignment)
+  end
 
   defp log_refresh_failure(kind, reason, %PoolUpstreamAssignment{} = assignment) do
     Logger.warning(

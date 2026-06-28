@@ -40,4 +40,8 @@ defmodule CodexPooler.Gateway do
   @spec execute_multipart(auth(), String.t(), payload(), RequestOptions.t()) ::
           gateway_call_result()
   defdelegate execute_multipart(auth, endpoint, payload, opts), to: Service
+
+  @spec execute_websocket_response(auth(), binary(), RequestOptions.t(), (binary() -> any())) ::
+          :ok | {:error, Contracts.gateway_error()}
+  defdelegate execute_websocket_response(auth, raw_payload, opts, push_frame), to: Service
 end

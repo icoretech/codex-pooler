@@ -3,6 +3,8 @@ defmodule CodexPooler.Application do
 
   use Application
 
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+
   @impl true
   def start(_type, _args) do
     children = [
@@ -15,6 +17,7 @@ defmodule CodexPooler.Application do
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
       {Task.Supervisor,
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
+      CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
       {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor, max_children: 4},
       {Phoenix.PubSub, name: CodexPooler.PubSub},
       {Postgrex.Notifications, postgres_notifications_config()},
@@ -29,6 +32,12 @@ defmodule CodexPooler.Application do
 
     opts = [strategy: :one_for_one, name: CodexPooler.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  @impl true
+  def prep_stop(state) do
+    _summary = RolloutDrain.drain_for_shutdown()
+    state
   end
 
   @impl true

@@ -447,6 +447,42 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert failure.event_type == "response.failed"
     end
 
+    test "copies top-level public Responses terminal error into response failure" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      failed =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_public_failed_top_level_error",
+            "status" => "failed"
+          },
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "context_length_exceeded"
+          }
+        })
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(failed, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
+      assert data["error"]["code"] == "context_length_exceeded"
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.event_type == "response.failed"
+
+      assert {data["response"]["error"]["code"], failure.code} ==
+               {"context_length_exceeded", "context_length_exceeded"}
+    end
+
     test "synthesizes a sanitized terminal failure with the observed public response id" do
       opts =
         RequestOptions.build(
@@ -482,6 +518,143 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       refute Jason.encode!(data) =~ "raw-upstream-reason"
 
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
+    end
+
+    test "tags terminal-missing interruptions only after visible public Responses data" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      created =
+        sse_event("response.created", %{
+          "type" => "response.created",
+          "response" => %{"id" => "resp_public_tagged", "status" => "in_progress"}
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(created, "/v1/responses", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) ==
+               {:upstream_stream_interrupted, reason}
+    end
+
+    test "preserves idle timeout reasons after visible public Responses data" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      transport_error = %Finch.TransportError{reason: :timeout}
+      reason = {:upstream_idle_timeout, transport_error}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      created =
+        sse_event("response.created", %{
+          "type" => "response.created",
+          "response" => %{"id" => "resp_public_timeout", "status" => "in_progress"}
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(created, "/v1/responses", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+    end
+
+    test "does not tag terminal-missing interruptions before visible public Responses data" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      incomplete =
+        [
+          "event: response.created\n",
+          "data: ",
+          Jason.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_public_incomplete", "status" => "in_progress"}
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {"", state} =
+               DownstreamStream.normalize_data(incomplete, "/v1/responses", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+
+      keepalive_only_state = DownstreamStream.initial_state(:relay, opts)
+
+      assert {"", keepalive_only_state} =
+               DownstreamStream.normalize_data(
+                 ": keepalive\n\n",
+                 "/v1/responses",
+                 opts,
+                 keepalive_only_state
+               )
+
+      assert DownstreamStream.terminal_missing_interruption_reason(keepalive_only_state, reason) ==
+               reason
+    end
+
+    test "does not tag terminal-missing interruptions for terminal or non-public states" do
+      reason = %Finch.TransportError{reason: :closed}
+
+      responses_opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      terminal_state = DownstreamStream.initial_state(:relay, responses_opts)
+
+      completed =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_public_completed", "status" => "completed"}
+        })
+
+      assert {_chunk, terminal_state} =
+               DownstreamStream.normalize_data(
+                 completed,
+                 "/v1/responses",
+                 responses_opts,
+                 terminal_state
+               )
+
+      assert DownstreamStream.terminal_missing_interruption_reason(terminal_state, reason) ==
+               reason
+
+      chat_opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      chat_state = DownstreamStream.initial_state(:relay, chat_opts)
+      assert DownstreamStream.terminal_missing_interruption_reason(chat_state, reason) == reason
+
+      backend_opts =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+
+      backend_state = DownstreamStream.initial_state(:relay, backend_opts)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(backend_state, reason) ==
+               reason
     end
 
     test "reuses a response id observed on a response-bearing nonterminal event" do

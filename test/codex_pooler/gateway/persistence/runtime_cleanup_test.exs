@@ -7,9 +7,80 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
+    CodexTurn,
     IdempotencyKey,
     RuntimeCleanup
   }
+
+  test "active_runtime_request?/2 detects in-progress turns with a live owner lease" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    stale_started_at = DateTime.add(now, -7, :hour)
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    _attempt = attempt_fixture(request, assignment, %{status: "in_progress", completed_at: nil})
+
+    active_session =
+      session_fixture(pool, api_key, assignment, stale_started_at,
+        owner_instance_id: "runtime-cleanup-test",
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 5, :minute),
+        last_heartbeat_at: now
+      )
+
+    _turn =
+      turn_fixture(active_session, request, stale_started_at,
+        status: CodexTurn.in_progress_status()
+      )
+
+    expired_request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "in_progress"})
+    _expired_attempt = attempt_fixture(expired_request, assignment, %{status: "in_progress"})
+    expired_session = session_fixture(pool, api_key, assignment, stale_started_at)
+
+    _expired_turn =
+      turn_fixture(expired_session, expired_request, stale_started_at,
+        status: CodexTurn.in_progress_status()
+      )
+
+    assert RuntimeCleanup.active_runtime_request?(request, now)
+    refute RuntimeCleanup.active_runtime_request?(expired_request.id, now)
+  end
+
+  test "recover_stale_request_turn/3 interrupts only matching in-progress turns" do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    stale_started_at = DateTime.add(now, -7, :hour)
+    request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "failed"})
+    attempt = attempt_fixture(request, assignment, %{status: "failed"})
+    session = session_fixture(pool, api_key, assignment, stale_started_at)
+
+    turn =
+      turn_fixture(session, request, stale_started_at, status: CodexTurn.in_progress_status())
+
+    done_request = request_fixture(%{pool: pool, api_key: api_key}, %{status: "succeeded"})
+
+    done_turn =
+      turn_fixture(session, done_request, stale_started_at, status: CodexTurn.succeeded_status())
+
+    assert :ok =
+             RuntimeCleanup.recover_stale_request_turn(request, attempt,
+               now: now,
+               error_code: "stale_reservation_recovered"
+             )
+
+    assert %CodexTurn{
+             status: "interrupted",
+             error_code: "stale_reservation_recovered",
+             final_attempt_id: final_attempt_id,
+             completed_at: ^now
+           } = Repo.reload!(turn)
+
+    assert final_attempt_id == attempt.id
+    assert Repo.reload!(done_turn).status == CodexTurn.succeeded_status()
+  end
 
   test "expires only cleanup-eligible runtime records past their ttl" do
     pool = pool_fixture()
@@ -77,13 +148,31 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanupTest do
     assert Repo.reload!(failed_key).status == IdempotencyKey.failed_status()
   end
 
-  defp session_fixture(pool, api_key, assignment, now) do
+  defp session_fixture(pool, api_key, assignment, now, attrs \\ []) do
     %CodexSession{
       pool_id: pool.id,
       api_key_id: api_key.id,
       session_key: "session-#{System.unique_integer([:positive])}",
       pool_upstream_assignment_id: assignment.id,
       status: "active",
+      owner_instance_id: Keyword.get(attrs, :owner_instance_id),
+      owner_lease_token: Keyword.get(attrs, :owner_lease_token),
+      owner_lease_expires_at: Keyword.get(attrs, :owner_lease_expires_at),
+      last_heartbeat_at: Keyword.get(attrs, :last_heartbeat_at),
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp turn_fixture(session, request, now, attrs) do
+    %CodexTurn{
+      codex_session_id: session.id,
+      request_id: request.id,
+      turn_sequence: System.unique_integer([:positive]),
+      transport_kind: "http_sse",
+      status: Keyword.fetch!(attrs, :status),
+      started_at: now,
       created_at: now,
       updated_at: now
     }

@@ -64,16 +64,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         _callbacks
       )
       when status == 429 or status >= 500 do
-    %{
-      identity: identity
-    } = context
+    %{identity: identity} = context
 
-    body = Metadata.response_body(response)
     RateLimitObserver.record_headers(identity, response)
-    RateLimitObserver.record_error(identity, body)
 
-    with :ok <- record_status_route_failure(context, status) do
-      finalize_retryable_status_or_failure(response, context, body)
+    if Metadata.response_body_limit_exceeded?(response) do
+      finalize_response_body_limit_exceeded(response, context)
+    else
+      body = Metadata.response_body(response)
+      RateLimitObserver.record_error(identity, body)
+
+      with :ok <- record_status_route_failure(context, status) do
+        finalize_retryable_status_or_failure(response, context, body)
+      end
     end
   end
 
@@ -83,21 +86,28 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         callbacks
       )
       when status >= 200 and status < 300 do
-    %{reserved: reserved, assignment: assignment, identity: identity, payload: payload} = context
+    %{identity: identity} = context
 
-    body = Metadata.response_body(response)
     RateLimitObserver.record_headers(identity, response)
-    SideEffects.maybe_enqueue_gateway_reconciliation(reserved.request.pool_id, assignment)
 
-    cond do
-      RouteClass.streaming?(payload) ->
-        normalize_stream_result(callbacks.stream_result.(response, context))
+    if Metadata.response_body_limit_exceeded?(response) do
+      finalize_response_body_limit_exceeded(response, context)
+    else
+      %{reserved: reserved, assignment: assignment, payload: payload} = context
 
-      Metadata.json_content?(response) and not StreamProtocol.valid_json?(body) ->
-        finalize_invalid_json_response(response, context)
+      body = Metadata.response_body(response)
+      SideEffects.maybe_enqueue_gateway_reconciliation(reserved.request.pool_id, assignment)
 
-      true ->
-        finalize_successful_json_response(response, context, body, callbacks)
+      cond do
+        RouteClass.streaming?(payload) ->
+          normalize_stream_result(callbacks.stream_result.(response, context))
+
+        Metadata.json_content?(response) and not StreamProtocol.valid_json?(body) ->
+          finalize_invalid_json_response(response, context)
+
+        true ->
+          finalize_successful_json_response(response, context, body, callbacks)
+      end
     end
   end
 
@@ -108,12 +118,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       ) do
     %{identity: identity} = context
 
-    body = Metadata.response_body(response)
     RateLimitObserver.record_headers(identity, response)
-    RateLimitObserver.record_error(identity, body)
 
-    with :ok <- maybe_record_unauthorized_route_failure(status, context) do
-      finalize_upstream_status_failure(response, context, body)
+    if Metadata.response_body_limit_exceeded?(response) do
+      finalize_response_body_limit_exceeded(response, context)
+    else
+      body = Metadata.response_body(response)
+      RateLimitObserver.record_error(identity, body)
+
+      with :ok <- maybe_record_unauthorized_route_failure(status, context) do
+        finalize_upstream_status_failure(response, context, body)
+      end
     end
   end
 
@@ -355,6 +370,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
       {:error, gateway_error} ->
         {:error, gateway_error}
+    end
+  end
+
+  defp finalize_response_body_limit_exceeded(response, %SelectedCandidateContext{} = context) do
+    %{reserved: reserved, attempt: attempt, request_options: request_options} = context
+
+    code = "upstream_response_too_large"
+    message = "upstream response body exceeded maximum allowed size"
+    latency = elapsed_ms(context.started)
+
+    with :ok <- record_dispatch_route_failure(code, context),
+         {:ok, _finalized} <-
+           AttemptSettlement.finalize_failure(
+             reserved.request,
+             attempt,
+             SettlementAttrs.failure(
+               context,
+               502,
+               code,
+               message,
+               Metadata.response_metadata(response, code, request_options),
+               latency_ms: latency
+             )
+           ) do
+      {:error, error(502, code, message)}
+    else
+      {:error, gateway_error} -> {:error, gateway_error}
     end
   end
 

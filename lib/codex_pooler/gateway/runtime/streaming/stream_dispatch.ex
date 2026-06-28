@@ -232,8 +232,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
           {:failure, state, "", reason}
 
         {_missing_terminal, _reason} ->
-          write_public_openai_responses_terminal_failure(state, reason)
+          http_stream_missing_terminal_failure_result(state, reason)
       end
+    end
+  end
+
+  defp http_stream_missing_terminal_failure_result(state, reason) do
+    tagged_reason = DownstreamStream.terminal_missing_interruption_reason(state, reason)
+
+    case write_public_openai_responses_terminal_failure(state, reason) do
+      {:ok, state, ""} -> {:ok, state, ""}
+      {:ok, state, data} -> {:failure, state, data, tagged_reason}
+      {:error, _reason} = error -> error
     end
   end
 

@@ -3,14 +3,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @behaviour WebSock
 
-  alias CodexPooler.Gateway.Contracts
-  alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
-  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
-  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
-  alias CodexPooler.Gateway.Websocket.DownstreamSession
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   require Logger
@@ -34,7 +28,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          state
          |> put_socket_lifecycle_state()
          |> put_response_task_state()
-         |> DownstreamSession.put_runtime(runtime)}
+         |> Adapter.put_runtime(runtime)}
 
       {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} ->
         {:ok,
@@ -60,16 +54,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def handle_info({:codex_response_chunk, data}, state) when is_binary(data) do
-    {:push, {:text, downstream_response_chunk(data)}, state}
+    {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
   end
 
   def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
-    case DownstreamSession.accept_downstream_message(message, state) do
+    case Adapter.accept_downstream_message(message, state) do
       {:ok, {:data, data}} ->
-        {:push, {:text, downstream_response_chunk(data)}, state}
+        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+
+      {:ok, {:error, :owner_drained, payload}} ->
+        state =
+          state
+          |> Map.put(:websocket_owner_drain_observed?, true)
+          |> cancel_tracked_response_tasks(:owner_drained)
+
+        {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
 
       {:ok, {:error, _reason, payload}} ->
-        {:push, {:text, Jason.encode!(websocket_error(payload))}, state}
+        {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
 
       {:ok, :complete} ->
         {:ok, Map.put(state, :websocket_owner_active_turn_reconnect?, false)}
@@ -91,17 +93,29 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:ok, state}
   end
 
+  def handle_info(
+        {:codex_response_done, pid, {:error, _reason}},
+        %{websocket_owner_drain_observed?: true} = state
+      ) do
+    state =
+      state
+      |> remove_tracked_response_task(pid)
+      |> maybe_start_queued_response_task()
+
+    {:ok, state}
+  end
+
   def handle_info({:codex_response_done, pid, {:error, reason}}, state) do
     state =
       state
       |> remove_tracked_response_task(pid)
       |> maybe_start_queued_response_task()
 
-    {:push, {:text, Jason.encode!(websocket_error(reason))}, state}
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
-    case DownstreamSession.handle_monitor_down(state, pid, reason) do
+    case Adapter.handle_monitor_down(state, pid, reason) do
       {:ok, state} ->
         {:ok, state}
 
@@ -130,7 +144,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.get(:tasks, MapSet.new())
       |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
 
-    cleanup_websocket_session(state)
+    cleanup_websocket_session(reason, state)
 
     close_upstream_websocket_session(state)
 
@@ -138,9 +152,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     :ok
   end
-
-  defp downstream_response_chunk(data) when is_binary(data),
-    do: StreamProtocol.canonicalize_codex_responses_json_message(data)
 
   defp remaining_response_tasks_after_cleanup(state, remaining_tasks) do
     if owner_forwarded_socket?(state) do
@@ -156,7 +167,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        ) do
     unless clean_pre_request_close_reason?(reason) do
       state
-      |> terminate_close_metadata()
+      |> Adapter.terminate_close_metadata()
       |> WebsocketConnectionLogger.log_closed_before_request_reservation(reason)
     end
 
@@ -205,8 +216,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp init_error(reason, state, started_at) do
     log_init_failed_before_request_reservation(reason, state, started_at)
 
-    if WebsocketOwnerContract.owner_error?(reason) do
-      {:stop, :normal, DownstreamSession.close_detail(reason), state}
+    if Adapter.owner_error?(reason) do
+      {:stop, :normal, Adapter.close_detail(reason), state}
     else
       {:stop, reason, state}
     end
@@ -214,42 +225,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp log_init_failed_before_request_reservation(reason, state, started_at) do
     state
-    |> init_failure_metadata(started_at)
+    |> Adapter.init_failure_metadata(started_at)
     |> WebsocketConnectionLogger.log_init_failed_before_request_reservation(reason)
-  end
-
-  defp init_failure_metadata(state, started_at) do
-    opts = Map.get(state, :opts)
-
-    %{
-      request_id: request_id(opts),
-      endpoint: metadata_endpoint(opts),
-      transport: metadata_transport(opts),
-      route_class: metadata_route_class(opts),
-      phase: "init",
-      elapsed_ms: socket_elapsed_ms(started_at),
-      codex_session_id: metadata_codex_session_id(state, opts),
-      owner_instance_id: metadata_owner_instance_id(state, opts),
-      proxy_instance_id: metadata_proxy_instance_id(opts),
-      downstream_epoch: metadata_downstream_epoch(state, opts)
-    }
-  end
-
-  defp terminate_close_metadata(state) do
-    opts = Map.get(state, :opts)
-
-    %{
-      request_id: request_id(opts),
-      endpoint: metadata_endpoint(opts),
-      transport: metadata_transport(opts),
-      route_class: metadata_route_class(opts),
-      phase: "terminate",
-      elapsed_ms: socket_elapsed_ms(Map.get(state, :connection_started_at_monotonic_ms)),
-      codex_session_id: metadata_codex_session_id(state, opts),
-      owner_instance_id: metadata_owner_instance_id(state, opts),
-      proxy_instance_id: metadata_proxy_instance_id(opts),
-      downstream_epoch: metadata_downstream_epoch(state, opts)
-    }
   end
 
   defp start_response_task(parent, payload, state) do
@@ -264,7 +241,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       owner_forwarded_socket?(state) and active_response_task?(state) ->
         queue_response_payload(state, payload)
 
-      active_response_task?(state) and continuity_ordered_payload?(payload) ->
+      active_response_task?(state) and Adapter.continuity_ordered_payload?(payload) ->
         queue_response_payload(state, payload)
 
       suppress_owner_reconnect_replay?(payload, state) ->
@@ -291,7 +268,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_tracked_response_task(payload, state) do
-    case DownstreamSession.maybe_retarget_before_start(payload, state) do
+    case Adapter.maybe_retarget_before_start(payload, state) do
       {:ok, state} ->
         state = maybe_mark_request_response_work_started(state, payload)
         parent = self()
@@ -324,30 +301,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @spec maybe_mark_request_response_work_started(map(), term()) :: map()
   defp maybe_mark_request_response_work_started(state, payload) do
-    if request_row_producing_response_payload?(payload) do
+    if Adapter.request_row_producing_response_payload?(payload) do
       Map.put(state, :request_response_work_started?, true)
     else
       state
     end
   end
 
-  @spec request_row_producing_response_payload?(term()) :: boolean()
-  defp request_row_producing_response_payload?(payload) when is_binary(payload) do
-    WebsocketCodec.request_row_producing_response_payload?(payload)
-  end
-
-  defp continuity_ordered_payload?(payload) when is_binary(payload) do
-    WebsocketCodec.continuity_ordered_payload?(payload)
-  end
-
-  defp owner_forwarded_socket?(state), do: DownstreamSession.owner?(state)
+  defp owner_forwarded_socket?(state), do: Adapter.owner?(state)
 
   defp active_response_task?(state), do: MapSet.size(Map.get(state, :tasks, MapSet.new())) > 0
 
   defp suppress_owner_reconnect_replay?(payload, state) do
     owner_forwarded_socket?(state) and
       Map.get(state, :websocket_owner_active_turn_reconnect?) == true and
-      request_row_producing_response_payload?(payload)
+      Adapter.request_row_producing_response_payload?(payload)
   end
 
   defp track_response_task(state, pid, monitor) when is_pid(pid) and is_reference(monitor) do
@@ -374,6 +342,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  defp cancel_tracked_response_tasks(state, reason) do
+    state
+    |> Map.get(:tasks, MapSet.new())
+    |> Enum.each(fn
+      pid when is_pid(pid) -> Process.exit(pid, {:shutdown, reason})
+      _value -> :ok
+    end)
+
+    state
+  end
+
   defp pop_task_monitor(state, pid) do
     {monitor, task_monitors} =
       state
@@ -384,7 +363,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp safe_run_response(_parent, {:owner_retarget_error, reason}, _state) do
-    DownstreamSession.retarget_error_payload(reason)
+    Adapter.retarget_error_payload(reason)
   end
 
   defp safe_run_response(parent, payload, state) do
@@ -398,34 +377,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         response_task_failure()
     catch
       kind, reason ->
-        log_response_task_failure(kind, reason, __STACKTRACE__, payload, state, opts)
-        response_task_failure()
+        if owner_drained_response_task_exit?(kind, reason, state) do
+          Adapter.retarget_error_payload(:owner_drained)
+        else
+          log_response_task_failure(kind, reason, __STACKTRACE__, payload, state, opts)
+          response_task_failure()
+        end
     end
   end
+
+  defp owner_drained_response_task_exit?(:exit, :normal, state),
+    do: owner_forwarded_socket?(state)
+
+  defp owner_drained_response_task_exit?(:exit, {:normal, _details}, state),
+    do: owner_forwarded_socket?(state)
+
+  defp owner_drained_response_task_exit?(_kind, _reason, _state), do: false
 
   defp response_task_opts(state) do
-    if DownstreamSession.owner?(state) do
-      DownstreamSession.response_options(state)
-    else
-      local_response_task_opts(state)
-    end
-  end
-
-  defp local_response_task_opts(state) do
-    Websocket.websocket_response_options(
-      Map.get(state, :opts, %{}),
-      Map.get(state, :codex_session),
-      Map.get(state, :upstream_websocket_session),
+    Adapter.response_options(
+      state,
       MapSet.size(Map.get(state, :tasks, MapSet.new())) == 0
     )
   end
 
-  defp cleanup_websocket_session(%{websocket_owner_downstream: downstream} = state)
+  defp cleanup_websocket_session(reason, %{websocket_owner_downstream: downstream} = state)
        when is_map(downstream) do
-    DownstreamSession.cleanup(state)
+    Adapter.cleanup_owner_session(state, reason)
   end
 
-  defp cleanup_websocket_session(state) do
+  defp cleanup_websocket_session(_reason, state) do
     state
     |> Map.get(:codex_session)
     |> Websocket.interrupt_codex_session(state.opts)
@@ -448,149 +429,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
      }}
   end
 
-  defp error_payload(%{code: code, message: message} = reason) do
-    Map.merge(
-      %{
-        "message" => message,
-        "type" => "invalid_request_error",
-        "code" => to_string(code),
-        "param" => Map.get(reason, :param)
-      },
-      Contracts.recovery_error_fields(reason)
-    )
-  end
-
-  defp error_payload(reason) do
-    %{
-      "message" => "websocket request failed: #{FinalizationMetadata.safe_reason(reason)}",
-      "type" => "invalid_request_error",
-      "code" => "websocket_request_failed",
-      "param" => nil
-    }
-  end
-
-  defp websocket_error(%{status: status} = reason) do
-    %{
-      "type" => "error",
-      "status" => status,
-      "error" => error_payload(reason)
-    }
-  end
-
-  defp websocket_error(reason) do
-    %{
-      "type" => "error",
-      "status" => 500,
-      "error" => error_payload(reason)
-    }
-  end
-
-  defp request_id(%RequestOptions{} = opts), do: opts.request_metadata.request_id
-  defp request_id(%{request_id: request_id}) when is_binary(request_id), do: request_id
-  defp request_id(_opts), do: "none"
-
-  defp downstream_epoch(%{epoch: epoch}) when is_integer(epoch), do: Integer.to_string(epoch)
-  defp downstream_epoch(_downstream), do: "none"
-
-  defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})
-       when is_binary(endpoint),
-       do: endpoint
-
-  defp metadata_endpoint(%{endpoint: endpoint}) when is_binary(endpoint), do: endpoint
-  defp metadata_endpoint(%{upstream_endpoint: endpoint}) when is_binary(endpoint), do: endpoint
-  defp metadata_endpoint(_opts), do: nil
-
-  defp metadata_transport(%RequestOptions{transport: %{transport: transport}})
-       when is_binary(transport),
-       do: transport
-
-  defp metadata_transport(%{transport: transport}) when is_binary(transport), do: transport
-  defp metadata_transport(_opts), do: nil
-
-  defp metadata_route_class(%RequestOptions{} = opts), do: RequestOptions.route_class(opts)
-
-  defp metadata_route_class(%{route_class: route_class}) when is_binary(route_class),
-    do: route_class
-
-  defp metadata_route_class(_opts), do: nil
-
-  defp metadata_codex_session_id(%{codex_session: %{id: id}}, _opts) when is_binary(id), do: id
-
-  defp metadata_codex_session_id(_state, %RequestOptions{continuity: %{codex_session: %{id: id}}})
-       when is_binary(id),
-       do: id
-
-  defp metadata_codex_session_id(_state, _opts), do: nil
-
-  defp metadata_owner_instance_id(
-         %{codex_session: %{owner_instance_id: owner_instance_id}},
-         _opts
-       )
-       when is_binary(owner_instance_id),
-       do: owner_instance_id
-
-  defp metadata_owner_instance_id(
-         _state,
-         %RequestOptions{transport: %{websocket_owner_instance_id: owner_instance_id}}
-       )
-       when is_binary(owner_instance_id),
-       do: owner_instance_id
-
-  defp metadata_owner_instance_id(
-         _state,
-         %RequestOptions{continuity: %{owner_instance_id: owner_instance_id}}
-       )
-       when is_binary(owner_instance_id),
-       do: owner_instance_id
-
-  defp metadata_owner_instance_id(_state, %{owner_instance_id: owner_instance_id})
-       when is_binary(owner_instance_id),
-       do: owner_instance_id
-
-  defp metadata_owner_instance_id(_state, _opts), do: nil
-
-  defp metadata_proxy_instance_id(%RequestOptions{
-         transport: %{websocket_owner_proxy_instance_id: proxy_instance_id}
-       })
-       when is_binary(proxy_instance_id),
-       do: proxy_instance_id
-
-  defp metadata_proxy_instance_id(%{websocket_owner_proxy_instance_id: proxy_instance_id})
-       when is_binary(proxy_instance_id),
-       do: proxy_instance_id
-
-  defp metadata_proxy_instance_id(_opts), do: nil
-
-  defp metadata_downstream_epoch(%{websocket_owner_downstream: downstream}, _opts)
-       when is_map(downstream),
-       do: downstream_epoch(downstream)
-
-  defp metadata_downstream_epoch(
-         _state,
-         %RequestOptions{transport: %{websocket_owner_downstream_epoch: epoch}}
-       )
-       when is_integer(epoch),
-       do: Integer.to_string(epoch)
-
-  defp metadata_downstream_epoch(_state, %{websocket_owner_downstream_epoch: epoch})
-       when is_integer(epoch),
-       do: Integer.to_string(epoch)
-
-  defp metadata_downstream_epoch(_state, _opts), do: nil
-
-  defp socket_elapsed_ms(started_at) when is_integer(started_at) do
-    max(System.monotonic_time(:millisecond) - started_at, 0)
-  end
-
-  defp socket_elapsed_ms(_started_at), do: nil
-
   defp log_response_task_failure(kind, reason, stacktrace, payload, state, opts) do
     metadata =
       [
         failure_kind: failure_kind(kind),
         failure_reason: failure_reason(kind, reason),
         stacktrace_top: stacktrace_top(stacktrace),
-        request_id: request_id(opts),
+        request_id: Adapter.request_id(opts),
         codex_session_id: session_id(Map.get(state, :codex_session)),
         active_task_count: MapSet.size(Map.get(state, :tasks, MapSet.new()))
       ] ++ safe_payload_metadata(payload)

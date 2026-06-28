@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
@@ -25,7 +26,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   }
 
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
-  alias CodexPooler.Gateway.Service
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
@@ -1655,7 +1655,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     }
 
     assert {:ok, %{websocket_stream: stream}} =
-             Service.execute(
+             RuntimeGateway.execute(
                auth,
                "/backend-api/codex/responses",
                payload,
@@ -2136,7 +2136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     }
 
     assert {:ok, %{websocket_stream: stream}} =
-             Service.execute(
+             RuntimeGateway.execute(
                auth,
                "/backend-api/codex/responses",
                payload,
@@ -7537,6 +7537,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp execute_websocket_response(auth, raw_payload, opts, push_frame) do
     request_options = RequestOptions.for_websocket(opts)
-    Service.execute_websocket_response(auth, raw_payload, request_options, push_frame)
+    RuntimeGateway.execute_websocket_response(auth, raw_payload, request_options, push_frame)
   end
 end

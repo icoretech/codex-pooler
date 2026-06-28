@@ -3,8 +3,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Repo
@@ -78,6 +80,68 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                 code: "quota_evidence_unavailable",
                 quota_refresh_attempted: false
               }} = RouteFiltering.filter_candidates(filter_input)
+    end
+
+    test "routes to preserved catalog source when another same-pool source has exhausted quota" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      source_a = active_upstream_assignment_fixture(pool, %{account_label: "Synthetic source A"})
+      source_b = active_upstream_assignment_fixture(pool, %{account_label: "Synthetic source B"})
+      model_id = "gpt-preserved-runtime-#{System.unique_integer([:positive])}"
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 source_a.assignment.id => [
+                   runtime_sync_model(model_id, %{"source_marker" => "a"})
+                 ],
+                 source_b.assignment.id => [
+                   runtime_sync_model(model_id, %{"source_marker" => "b"})
+                 ]
+               })
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 source_a.assignment.id => [],
+                 source_b.assignment.id => [
+                   runtime_sync_model(model_id, %{"source_marker" => "b-current"})
+                 ]
+               })
+
+      context = CandidateEligibility.visible_model_context(pool, model_id)
+      assert context.visible_model.exposed_model_id == model_id
+
+      assert candidate_ids(context.candidate_snapshots) == [
+               source_a.assignment.id,
+               source_b.assignment.id
+             ]
+
+      assert get_in(context.visible_model.metadata, [
+               "source_assignment_models",
+               source_a.assignment.id,
+               "source_marker"
+             ]) == "a"
+
+      assert get_in(context.visible_model.metadata, [
+               "source_assignment_models",
+               source_b.assignment.id,
+               "source_marker"
+             ]) == "b-current"
+
+      upsert_primary_quota!(source_a.identity, Decimal.new("100"))
+      upsert_primary_quota!(source_b.identity, Decimal.new("15"))
+
+      filter_input =
+        filter_input(pool, api_key, context.visible_model, context.candidate_snapshots)
+
+      assert {:ok, filtered_candidates, filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert candidate_ids(filtered_candidates) == [source_b.assignment.id]
+      assert filtered_options.routing.quota_decision["routing_state"] == "precise"
+
+      upsert_primary_quota!(source_b.identity, Decimal.new("100"))
+
+      assert {:error, %{code: "quota_exhausted"}} =
+               RouteFiltering.filter_candidates(filter_input)
     end
 
     test "does not redeem saved reset when auto policy is disabled by default" do
@@ -406,6 +470,23 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     filter_input(pool, api_key, [{assignment, identity}], suffix)
   end
 
+  defp candidate_ids(candidates),
+    do: Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+
+  defp filter_input(pool, api_key, model, candidates) when is_list(candidates) do
+    payload = %{"model" => model.exposed_model_id, "input" => "route filtering"}
+    request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+    FilterInput.new(%{
+      auth: %{pool: pool, api_key: api_key},
+      model: model,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      request_options: request_options,
+      candidates: candidates
+    })
+  end
+
   defp filter_input(pool, api_key, candidates, suffix) when is_list(candidates) do
     model =
       model_fixture(pool, %{
@@ -427,6 +508,26 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       request_options: request_options,
       candidates: candidates
     })
+  end
+
+  defp sync_catalog_step(pool, assignment_models) when is_map(assignment_models) do
+    Catalog.sync_pool_catalog(pool,
+      fetcher: fn %{assignment: assignment} ->
+        {:ok, Map.fetch!(assignment_models, assignment.id)}
+      end
+    )
+  end
+
+  defp runtime_sync_model(model_id, attrs) when is_binary(model_id) and is_map(attrs) do
+    Map.merge(
+      %{
+        "id" => model_id,
+        "display_name" => "Synthetic Preserved Runtime",
+        "owned_by" => "synthetic",
+        "capabilities" => %{"responses" => true, "streaming" => true}
+      },
+      attrs
+    )
   end
 
   defp saved_reset_metadata(upstream, available_count, saved_reset_attrs \\ %{}) do
@@ -487,13 +588,12 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   end
 
   defp upsert_primary_exhausted_quota!(identity) do
+    upsert_primary_quota!(identity, Decimal.new("100"))
+  end
+
+  defp upsert_primary_quota!(identity, used_percent) do
     assert {:ok, [_window]} =
-             QuotaWindows.upsert_quota_windows(identity, [
-               Map.merge(weekly_exhausted_quota_attrs(), %{
-                 window_kind: "primary",
-                 window_minutes: 300
-               })
-             ])
+             QuotaWindows.upsert_quota_windows(identity, [primary_quota_attrs(used_percent)])
   end
 
   defp upsert_weekly_pressure_quota!(identity, used_percent, attrs \\ []) do
@@ -520,6 +620,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       quota_family: "account",
       freshness_state: "fresh"
     }
+  end
+
+  defp primary_quota_attrs(used_percent) do
+    weekly_exhausted_quota_attrs()
+    |> Map.merge(%{
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: used_percent
+    })
   end
 
   defp weekly_pressure_quota_attrs(used_percent, attrs) do

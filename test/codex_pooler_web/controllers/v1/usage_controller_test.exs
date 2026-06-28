@@ -51,7 +51,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     insert_daily_rollup!(pool.id, setup.api_key.id, %{
-      request_count: 2,
+      request_count: 3,
       total_tokens: 77,
       cached_input_tokens: 11
     })
@@ -80,6 +80,25 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     ledger_entry_fixture(request, %{
       settled_cost_micros: 3_450_000,
       details: %{"settled_cost_micros" => "3450000"}
+    })
+
+    unknown_request =
+      request_fixture(setup, %{
+        status: "failed",
+        usage_status: "usage_unknown",
+        response_status_code: 502,
+        correlation_id: "v1-usage-unknown-reserve"
+      })
+
+    ledger_entry_fixture(unknown_request, %{
+      usage_status: "usage_unknown",
+      input_tokens: 8_000,
+      cached_input_tokens: 250,
+      output_tokens: 1_900,
+      reasoning_tokens: 99,
+      total_tokens: 9_999,
+      settled_cost_micros: 9_999_999,
+      details: %{"estimated_from_reserve" => true}
     })
 
     upsert_default_policy_binding!(setup.api_key.id, now, %{
@@ -155,7 +174,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     conn = conn |> auth(setup) |> get("/v1/usage")
 
     assert %{
-             "request_count" => 2,
+             "request_count" => 3,
              "total_tokens" => 77,
              "cached_input_tokens" => 11,
              "total_cost_usd" => 3.45,
@@ -198,8 +217,8 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "limit_type" => "request_count",
                "limit_window" => "minute",
                "max_value" => 60,
-               "current_value" => 1,
-               "remaining_value" => 59,
+               "current_value" => 2,
+               "remaining_value" => 58,
                "model_filter" => nil,
                "source" => "api_key_limit"
              }

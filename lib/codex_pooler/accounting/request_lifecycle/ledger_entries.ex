@@ -143,10 +143,29 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           effective_total_tokens:
             type(
               fragment(
-                "COALESCE(SUM(CASE WHEN ? = ? THEN -COALESCE(?, 0) ELSE COALESCE(?, 0) END), 0)::bigint",
+                """
+                COALESCE(
+                  SUM(
+                    CASE
+                      WHEN ? = ? THEN -COALESCE(?, 0)
+                      WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
+                      WHEN ? = ? THEN 0
+                      ELSE COALESCE(?, 0)
+                    END
+                  ),
+                  0
+                )::bigint
+                """,
                 e.entry_kind,
                 ^@entry_release,
                 e.total_tokens,
+                e.entry_kind,
+                ^@entry_settlement,
+                e.usage_status,
+                ^@usage_known,
+                e.total_tokens,
+                e.entry_kind,
+                ^@entry_settlement,
                 e.total_tokens
               ),
               :integer
@@ -156,22 +175,26 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
               """
               COALESCE(
                 SUM(
-                  CASE WHEN ? = ? THEN -1 ELSE 1 END *
-                  COALESCE(
-                    CASE WHEN ? = ? AND ? = ? THEN ? ELSE ? END,
-                    0
-                  )
+                  CASE
+                    WHEN ? = ? THEN -COALESCE(?, 0)
+                    WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
+                    WHEN ? = ? THEN 0
+                    ELSE COALESCE(?, 0)
+                  END
                 ),
                 0
               )
               """,
               e.entry_kind,
               ^@entry_release,
+              e.estimated_cost_micros,
               e.entry_kind,
               ^@entry_settlement,
               e.usage_status,
               ^@usage_known,
               e.settled_cost_micros,
+              e.entry_kind,
+              ^@entry_settlement,
               e.estimated_cost_micros
             )
         }

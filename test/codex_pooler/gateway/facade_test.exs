@@ -1,8 +1,8 @@
-defmodule CodexPooler.Gateway.ServiceTest do
+defmodule CodexPooler.GatewayTest do
   use CodexPooler.DataCase, async: true
 
+  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Service
   alias CodexPooler.Gateway.Usage
 
   test "execute rejects whitespace-only model values as missing model" do
@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.ServiceTest do
               message: "model is required",
               param: "model"
             }} =
-             Service.execute(%{}, "/backend-api/codex/responses", payload, request_options)
+             Gateway.execute(%{}, "/backend-api/codex/responses", payload, request_options)
   end
 
   test "usage auth fallback accepts typed request options at the public boundary" do

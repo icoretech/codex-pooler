@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
   @moduledoc """
   Final accounting boundary for routed gateway attempts.
 
-  Gateway.Service decides transport flow and route health side effects; this
+  Runtime gateway dispatch decides transport flow and route health side effects; this
   module owns the terminal attempt/reservation accounting calls and their
   sanitized failure logging.
   """

@@ -8,7 +8,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    CodexSession,
+    CodexTurn,
+    SessionContinuity
+  }
+
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
@@ -528,6 +535,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     assert after_lease.lease_token == before_lease.lease_token
     assert after_lease.expires_at == before_lease.expires_at
     assert after_lease.renewed_at == before_lease.renewed_at
+  end
+
+  test "complete_codex_turn finalizes successful lifecycle results without an attempt key" do
+    %{auth: auth, session: session} = owner_session_fixture()
+    request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+
+    assert {:ok, %CodexTurn{} = turn} =
+             SessionContinuity.start_codex_turn(
+               session,
+               request,
+               RequestOptions.for_websocket(%{})
+             )
+
+    result = {:ok, %{request: request}}
+
+    assert ^result =
+             SessionContinuity.complete_codex_turn(result, CodexTurn.succeeded_status(), nil)
+
+    assert %CodexTurn{status: "succeeded", final_attempt_id: nil, completed_at: completed_at} =
+             Repo.get!(CodexTurn, turn.id)
+
+    assert %DateTime{} = completed_at
   end
 
   test "active owner renewal keeps a websocket-style turn fenced-valid beyond initial ttl" do

@@ -6,6 +6,7 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
   import Ecto.Query
 
   alias CodexPooler.Catalog.{Model, SyncRun}
+  alias CodexPooler.Catalog.Sync.PreservedSources
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias Ecto.Multi
@@ -28,7 +29,7 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
         # Reason: per-model Multi step preserves aggregate-specific rollback context.
         # credo:disable-for-next-line Credo.Check.Refactor.Nesting
         Multi.run(multi, {:model, aggregate.exposed_model_id}, fn repo, _changes ->
-          upsert_model(repo, run, aggregate, timestamp)
+          upsert_model(repo, run, aggregate, assignments, timestamp)
         end)
       end)
     end)
@@ -92,8 +93,9 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
     end
   end
 
-  defp upsert_model(repo, run, aggregate, timestamp) do
+  defp upsert_model(repo, run, aggregate, assignments, timestamp) do
     existing = get_model_by_exposed_id(run.pool_id, aggregate.exposed_model_id)
+    source_assignments = PreservedSources.assignment_attrs(existing, aggregate, assignments, run)
 
     attrs = %{
       pool_id: run.pool_id,
@@ -106,7 +108,7 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
       supports_tools: aggregate.supports_tools,
       supports_reasoning: aggregate.supports_reasoning,
       pricing_ref: aggregate.pricing_ref,
-      source_assignment_count: length(aggregate.source_assignment_ids),
+      source_assignment_count: length(source_assignments.source_assignment_ids),
       first_seen_at: if(existing, do: existing.first_seen_at, else: timestamp),
       last_seen_at: timestamp,
       stale_at:
@@ -118,8 +120,10 @@ defmodule CodexPooler.Catalog.Sync.Persistence do
       last_sync_run_id: run.id,
       metadata: %{
         "owned_by" => aggregate.owned_by,
-        "source_assignment_ids" => aggregate.source_assignment_ids,
-        "source_assignment_models" => aggregate.source_assignment_models,
+        "source_assignment_ids" => source_assignments.source_assignment_ids,
+        "source_assignment_models" => source_assignments.source_assignment_models,
+        PreservedSources.missing_sync_metadata_key() =>
+          source_assignments.missing_source_assignment_syncs,
         "capabilities" => aggregate.capabilities,
         "upstream_model" => aggregate.upstream_model
       }

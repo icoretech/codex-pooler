@@ -4,7 +4,13 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   require Logger
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+
+  alias CodexPooler.Gateway.Transports.Websocket.{
+    RolloutDrain,
+    WebsocketOwnerContract,
+    WebsocketOwnerSession
+  }
+
   alias CodexPooler.Gateway.Websocket
 
   @type socket_state :: map()
@@ -45,7 +51,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   def handle_monitor_down(state, owner_pid, reason) when is_pid(owner_pid) do
     state = clear_monitor(state, owner_pid)
 
-    case monitor_down_reason(reason) do
+    case effective_monitor_down_reason(state, reason) do
       :stale_owner ->
         {:ok, state}
 
@@ -140,8 +146,16 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     )
   end
 
-  @spec cleanup(socket_state()) :: :ok
-  def cleanup(state) do
+  @spec cleanup(socket_state(), term()) :: :ok
+  def cleanup(state, reason \\ :closed) do
+    if rollout_drain_cleanup?(state, reason) do
+      record_owner_drained_cleanup(state)
+    else
+      detach_downstream(state)
+    end
+  end
+
+  defp detach_downstream(state) do
     state
     |> Map.get(:codex_session)
     |> Websocket.detach_websocket_owner_downstream(
@@ -151,6 +165,35 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     )
     |> after_detach(state)
   end
+
+  defp rollout_drain_cleanup?(state, reason) do
+    owner?(state) and (RolloutDrain.draining?() or shutdown_reason?(reason))
+  end
+
+  defp shutdown_reason?(:shutdown), do: true
+  defp shutdown_reason?({:shutdown, _details}), do: true
+  defp shutdown_reason?(_reason), do: false
+
+  defp record_owner_drained_cleanup(state) do
+    _owner_drain_result = drain_owner_session(state)
+    _recovery_result = recover_leftovers({:error, :owner_drained}, state)
+
+    "owner_drained"
+    |> release_lease(state)
+    |> log_monitor_lease_release(state, :owner_drained)
+  end
+
+  defp drain_owner_session(%{websocket_owner_pid: owner_pid}) when is_pid(owner_pid) do
+    if Process.alive?(owner_pid) do
+      WebsocketOwnerSession.drain_owner(owner_pid)
+    else
+      {:error, :owner_unavailable}
+    end
+  catch
+    :exit, _reason -> {:error, :owner_unavailable}
+  end
+
+  defp drain_owner_session(_state), do: {:error, :owner_unavailable}
 
   defp put_monitor(state, session) do
     case Websocket.monitor_websocket_owner(session) do
@@ -170,6 +213,15 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp monitor_down_reason(:shutdown), do: :owner_drained
   defp monitor_down_reason({:shutdown, _details}), do: :owner_drained
   defp monitor_down_reason(_reason), do: :owner_crashed
+
+  defp effective_monitor_down_reason(%{websocket_owner_drain_observed?: true}, reason) do
+    case monitor_down_reason(reason) do
+      :owner_crashed -> :owner_drained
+      owner_reason -> owner_reason
+    end
+  end
+
+  defp effective_monitor_down_reason(_state, reason), do: monitor_down_reason(reason)
 
   defp handle_owner_exit(owner_reason, state, raw_reason) do
     {:error, owner_reason}

@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.JobWorkerCards do
+defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
   @moduledoc false
 
   use CodexPoolerWeb, :html

@@ -1,4 +1,4 @@
-defmodule CodexPoolerWeb.Admin.JobExplorer do
+defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
   @moduledoc false
 
   use CodexPoolerWeb, :html

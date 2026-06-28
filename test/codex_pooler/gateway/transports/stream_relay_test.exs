@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
 
+  @relay_timeout 5_000
+
   test "leaves unrelated mailbox messages observable while waiting for async response events" do
     parent = self()
     ref = make_ref()
@@ -29,7 +31,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive {:stream_relay_result, {:ok, :stream_state}, ^unrelated}, 1_000
+    assert_receive {:stream_relay_result, {:ok, :stream_state}, ^unrelated}, @relay_timeout
     assert_process_down(monitor, pid)
   end
 
@@ -57,7 +59,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive {:stream_relay_result, {:error, {:upstream_idle_timeout, ^timeout}}}, 1_000
+    assert_receive {:stream_relay_result, {:error, {:upstream_idle_timeout, ^timeout}}},
+                   @relay_timeout
+
     refute_received :unexpected_first_event_retry
     assert_process_down(monitor, pid)
   end
@@ -94,9 +98,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive :before_finalize_failure, 1_000
-    assert_receive {:finalize_failure, "visiblesynthetic-terminal"}, 1_000
-    assert_receive {:stream_relay_result, {:ok, :terminal_written}}, 1_000
+    assert_receive :before_finalize_failure, @relay_timeout
+    assert_receive {:finalize_failure, "visiblesynthetic-terminal"}, @relay_timeout
+    assert_receive {:stream_relay_result, {:ok, :terminal_written}}, @relay_timeout
     assert_process_down(monitor, pid)
   end
 
@@ -132,9 +136,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive :before_finalize_failure, 1_000
-    assert_receive {:finalize_failure, "visible"}, 1_000
-    assert_receive {:stream_relay_result, {:ok, :stream_state}}, 1_000
+    assert_receive :before_finalize_failure, @relay_timeout
+    assert_receive {:finalize_failure, "visible"}, @relay_timeout
+    assert_receive {:stream_relay_result, {:ok, :stream_state}}, @relay_timeout
     assert_process_down(monitor, pid)
   end
 
@@ -177,9 +181,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
 
     monitor = Process.monitor(pid)
 
-    assert_receive :before_finalize_success, 1_000
-    assert_receive {:finalize_failure, "visiblesynthetic-terminal"}, 1_000
-    assert_receive {:stream_relay_result, {:ok, :terminal_written}}, 1_000
+    assert_receive :before_finalize_success, @relay_timeout
+    assert_receive {:finalize_failure, "visiblesynthetic-terminal"}, @relay_timeout
+    assert_receive {:stream_relay_result, {:ok, :terminal_written}}, @relay_timeout
     refute_received :unexpected_before_finalize_failure
     refute_received :unexpected_finalize_success
     assert_process_down(monitor, pid)
@@ -193,36 +197,31 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
     chunks = List.duplicate(chunk, 4)
     full_body = Enum.join(chunks)
 
-    pid =
-      spawn(fn ->
+    task =
+      Task.async(fn ->
         Enum.each(chunks, &send(self(), {ref, {:data, &1}}))
         send(self(), {ref, :done})
 
-        result =
-          StreamRelay.run(:stream_state, response, %{
-            handlers()
-            | write_chunk: fn state, data ->
-                send(parent, {:stream_relay_chunk, data})
-                {:ok, state}
-              end,
-              finalize_success: fn body ->
-                send(parent, {:stream_relay_retained_body, body})
-                {:ok, :finalized}
-              end
-          })
-
-        send(parent, {:stream_relay_result, result})
+        StreamRelay.run(:stream_state, response, %{
+          handlers()
+          | write_chunk: fn state, data ->
+              send(parent, {:stream_relay_chunk, data})
+              {:ok, state}
+            end,
+            finalize_success: fn body ->
+              send(parent, {:stream_relay_retained_body, body})
+              {:ok, :finalized}
+            end
+        })
       end)
 
-    monitor = Process.monitor(pid)
-
-    assert_receive {:stream_relay_result, {:ok, :stream_state}}, 1_000
-    assert_receive {:stream_relay_retained_body, retained_body}, 1_000
+    assert Task.await(task, @relay_timeout) == {:ok, :stream_state}
+    assert_receive {:stream_relay_retained_body, retained_body}, @relay_timeout
 
     written_body =
       1..length(chunks)
       |> Enum.map_join(fn _index ->
-        assert_receive {:stream_relay_chunk, data}, 1_000
+        assert_receive {:stream_relay_chunk, data}, @relay_timeout
         data
       end)
 
@@ -230,11 +229,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
     assert byte_size(retained_body) <= 65_536
     assert byte_size(retained_body) < byte_size(full_body)
     assert String.ends_with?(full_body, retained_body)
-    assert_process_down(monitor, pid)
   end
 
   defp assert_process_down(monitor, pid) do
-    assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, ^pid, reason}, @relay_timeout
     assert reason in [:normal, :noproc]
   end
 

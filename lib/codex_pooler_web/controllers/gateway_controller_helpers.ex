@@ -9,7 +9,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
-  alias CodexPooler.Gateway.Runtime.Finalization.Metadata, as: FinalizationMetadata
+  alias CodexPooler.Gateway.ErrorSanitizer
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -138,7 +138,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
           "late gateway stream failed",
           " path=#{conn.request_path}",
           " request_id=#{request_id(conn) || "unknown"}",
-          " reason=#{FinalizationMetadata.safe_reason(reason)}"
+          " reason=#{ErrorSanitizer.safe_reason(reason)}"
         ])
 
         conn

@@ -132,6 +132,20 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Update Codex Pooler Helm chart versions in deployment docs",
+      "managerFilePatterns": [
+        "/(^|/)docs-site/src/content/docs/deployment/helm\\.mdx$/"
+      ],
+      "matchStrings": [
+        "(?<prefix>--version\\s+)(?<currentValue>\\d+\\.\\d+\\.\\d+)(?<suffix>\\s+\\\\)"
+      ],
+      "depNameTemplate": "codex-pooler",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://icoretech.github.io/helm",
+      "autoReplaceStringTemplate": "{{{prefix}}}{{{newValue}}}{{{suffix}}}"
+    },
+    {
+      "customType": "regex",
       "description": "Update Helm CLI version used by Drone",
       "managerFilePatterns": [
         "/(^|/)\\.drone\\.jsonnet$/"

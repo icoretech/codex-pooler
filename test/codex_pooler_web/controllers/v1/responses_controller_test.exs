@@ -34,7 +34,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
-  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
+    CodexSession,
+    CodexTurn,
+    RoutingCircuitState,
+    SessionContinuity
+  }
 
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
@@ -553,6 +559,107 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       refute persistence_text =~ "synthetic tool text"
       refute persistence_text =~ "resp_v1_ws_opencode_previous"
       refute persistence_text =~ "fc_v1_ws_opencode_call"
+      refute persistence_text =~ setup.authorization
+      refute persistence_text =~ setup.raw_key
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :custom_tool_replay
+  @tag :v1_websocket
+  test "GET /v1/responses websocket forwards namespaced custom tool replay before dispatch" do
+    upstream =
+      start_upstream(public_websocket_completed_response("resp_v1_websocket_custom_tool_replay"))
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "v1-custom-tool-ws-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_custom_tool_previous",
+          "store" => false,
+          "generate" => true,
+          "input" => [
+            %{
+              "type" => "custom_tool_call",
+              "id" => "ctc_v1_ws_call",
+              "call_id" => "call_v1_custom_namespaced",
+              "namespace" => "browser.search",
+              "name" => "lookup",
+              "input" => "{}",
+              "status" => "completed",
+              "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
+              "internal_chat_message_metadata_passthrough" => %{
+                "turn_id" => "turn_v1_custom_call"
+              }
+            },
+            %{
+              "type" => "custom_tool_call_output",
+              "id" => "ctco_v1_ws_call",
+              "call_id" => "call_v1_custom_namespaced",
+              "name" => "lookup",
+              "output" => "synthetic custom output",
+              "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
+              "internal_chat_message_metadata_passthrough" => %{
+                "turn_id" => "turn_v1_custom_output"
+              }
+            }
+          ]
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_v1_websocket_custom_tool_replay"}
+             } = Jason.decode!(frame)
+
+      assert_receive_finalized_request!()
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["type"] == "response.create"
+      assert captured.json["generate"] == true
+      assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
+
+      assert [custom_call, custom_output] = captured.json["input"]
+      assert custom_call["type"] == "custom_tool_call"
+      assert custom_call["namespace"] == "browser.search"
+      assert custom_call["name"] == "lookup"
+      assert custom_call["input"] == "{}"
+      refute Map.has_key?(custom_call, "status")
+
+      assert custom_output["type"] == "custom_tool_call_output"
+      assert custom_output["call_id"] == "call_v1_custom_namespaced"
+      assert custom_output["name"] == "lookup"
+      assert custom_output["output"] == "synthetic custom output"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+      refute persistence_text =~ "synthetic custom output"
+      refute persistence_text =~ "resp_v1_custom_tool_previous"
+      refute persistence_text =~ "call_v1_custom_namespaced"
+      refute persistence_text =~ "turn_v1_custom_call"
+      refute persistence_text =~ "turn_v1_custom_output"
       refute persistence_text =~ setup.authorization
       refute persistence_text =~ setup.raw_key
 
@@ -1490,6 +1597,129 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert %{"id" => "resp_v1_non_stream_visible_once"} = json_response(conn, 200)
     assert visible_codex_turn_update_count(queries) == 1
+  end
+
+  @tag :custom_tool_replay
+  @tag :tool_result_previous_response
+  test "POST /v1/responses forwards namespaced custom tool replay without metadata leakage", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_custom_tool_replay",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_custom_tool_previous",
+        "store" => false,
+        "input" => [
+          %{
+            "type" => "custom_tool_call",
+            "id" => "ctc_v1_http_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "namespace" => "browser.search",
+            "name" => "lookup",
+            "input" => "{}",
+            "status" => "completed",
+            "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_v1_custom_call"}
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "id" => "ctco_v1_http_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "name" => "lookup",
+            "output" => "synthetic custom output",
+            "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_v1_custom_output"
+            }
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_custom_tool_replay", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert [custom_call, custom_output] = captured.json["input"]
+    assert custom_call["type"] == "custom_tool_call"
+    assert custom_call["namespace"] == "browser.search"
+    assert custom_call["name"] == "lookup"
+    assert custom_call["input"] == "{}"
+    refute Map.has_key?(custom_call, "status")
+
+    assert custom_output["type"] == "custom_tool_call_output"
+    assert custom_output["call_id"] == "call_v1_custom_namespaced"
+    assert custom_output["name"] == "lookup"
+    assert custom_output["output"] == "synthetic custom output"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute persistence_text =~ "synthetic custom output"
+    refute persistence_text =~ "resp_v1_custom_tool_previous"
+    refute persistence_text =~ "call_v1_custom_namespaced"
+    refute persistence_text =~ "turn_v1_custom_call"
+    refute persistence_text =~ "turn_v1_custom_output"
+    refute persistence_text =~ setup.authorization
+    refute persistence_text =~ setup.raw_key
+    refute persistence_text =~ "raw_request"
+  end
+
+  @tag :custom_tool_replay
+  test "POST /v1/responses rejects invalid custom tool replay before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_custom_tool_previous",
+        "input" => [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "namespace" => " ",
+            "name" => "lookup",
+            "input" => "{}"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_v1_custom_namespaced",
+            "output" => "synthetic custom output"
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   @tag :tool_result_previous_response
@@ -2742,6 +2972,62 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
+  @tag :provider_invalid_request_redaction
+  test "POST /v1/responses collected SSE preserves safe terminal error codes", %{conn: conn} do
+    provider_message =
+      "provider 400 leaked https://provider.internal.example/context?key=sk-secret and prompt SENTINEL_COLLECT"
+
+    upstream_error =
+      provider_invalid_request_error("context_length_exceeded", provider_message, "input")
+
+    cases = [
+      {"top-level only",
+       %{
+         "type" => "response.failed",
+         "error" => upstream_error,
+         "response" => %{
+           "id" => "resp_v1_collect_top_level_error",
+           "status" => "failed"
+         }
+       }},
+      {"nested",
+       %{
+         "type" => "response.failed",
+         "response" => %{
+           "id" => "resp_v1_collect_nested_error",
+           "status" => "failed",
+           "error" => upstream_error
+         }
+       }}
+    ]
+
+    Enum.each(cases, fn {_label, terminal_event} ->
+      upstream = start_upstream(FakeUpstream.sse_stream([{"response.failed", terminal_event}]))
+      setup = gateway_setup(upstream)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic collected provider invalid request"
+        })
+
+      assert %{"error" => error} = json_response(response, 502)
+      assert error["message"] == "upstream request failed"
+      assert error["type"] == "server_error"
+      assert error["code"] == "context_length_exceeded"
+      refute Map.has_key?(error, "param")
+      refute response.resp_body =~ provider_message
+      refute response.resp_body =~ "provider.internal.example"
+      refute response.resp_body =~ "sk-secret"
+      refute response.resp_body =~ "SENTINEL_COLLECT"
+      refute response.resp_body =~ "input"
+      assert FakeUpstream.count(upstream) == 1
+    end)
+  end
+
   @tag :server_error_redaction
   test "POST /v1/responses SSE collection redacts safe-looking terminal 502 errors" do
     provider_message =
@@ -2772,6 +3058,38 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(error) =~ "upstream.internal.example"
     refute inspect(error) =~ "/internal/rate"
     refute inspect(error) =~ "provider_stack"
+  end
+
+  @tag :server_error_redaction
+  test "POST /v1/responses SSE collection redacts top-level-only terminal errors" do
+    provider_message =
+      "provider failed at https://upstream.internal.example/internal/context?token=secret"
+
+    upstream_error =
+      provider_invalid_request_error("context_length_exceeded", provider_message, "input")
+
+    body =
+      "event: response.failed\n" <>
+        "data: " <>
+        Jason.encode!(%{
+          "type" => "response.failed",
+          "error" => upstream_error,
+          "response" => %{
+            "id" => "resp_v1_collect_top_level_only_failed",
+            "status" => "failed"
+          }
+        }) <>
+        "\n\n"
+
+    assert {:error, error} = Responses.response_from_sse(body)
+    assert error.status == 502
+    assert error.message == "upstream request failed"
+    assert error.code == "context_length_exceeded"
+    assert error.param == nil
+    refute inspect(error) =~ "provider failed"
+    refute inspect(error) =~ "upstream.internal.example"
+    refute inspect(error) =~ "/internal/context"
+    refute inspect(error) =~ "input"
   end
 
   @tag :server_error_redaction
@@ -3253,6 +3571,68 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     persistence_text = inspect({request.request_metadata, attempt.response_metadata})
     refute persistence_text =~ "synthetic interrupted stream request"
     refute persistence_text =~ "visible-before-upstream-close"
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses streaming keeps non-timeout terminal-missing interruptions health-neutral after visible data",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.abrupt_close_mid_stream([
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "delta" => "visible-before-abrupt-close",
+             "response" => %{"id" => "resp_visible_before_abrupt_close"}
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic abrupt stream interruption request",
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "visible-before-abrupt-close"
+    assert conn.resp_body =~ "event: response.failed\n"
+    assert conn.resp_body =~ ~s("code":"upstream_stream_error")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+
+    assert %{
+             "reason_class" => "upstream_stream_interrupted",
+             "reason" => "closed_before_terminal",
+             "phase" => "upstream_close",
+             "terminal_seen" => false,
+             "pre_visible_output" => false,
+             "text_frame_count" => text_frame_count,
+             "exception" => "Finch.TransportError"
+           } = attempt.response_metadata["transport_failure"]
+
+    assert text_frame_count >= 1
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+
+    persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute persistence_text =~ "synthetic abrupt stream interruption request"
+    refute persistence_text =~ "visible-before-abrupt-close"
   end
 
   @tag :streaming_sequence
@@ -4215,6 +4595,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert attempt.status == "failed"
       assert attempt.network_error_code == "stream_idle_timeout"
+      refute Map.has_key?(attempt.response_metadata, "transport_failure")
     after
       Process.send_after(upstream_pid, {:fake_upstream_release_timeout, release_ref}, 250)
       Mint.HTTP.close(http_conn)

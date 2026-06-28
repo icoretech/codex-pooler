@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -144,6 +145,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         form_multipart: fields,
         decode_body: false,
         retry: false,
+        into: BoundedResponseBody.collector(BoundedResponseBody.default_max_bytes()),
         headers:
           upstream_headers(identity, token, [
             {"accept", "application/json"}
@@ -192,9 +194,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
 
     request_options =
-      if RouteClass.streaming?(payload),
-        do: Keyword.put(request_options, :into, :self),
-        else: request_options
+      if RouteClass.streaming?(payload) do
+        Keyword.put(request_options, :into, :self)
+      else
+        Keyword.put(
+          request_options,
+          :into,
+          BoundedResponseBody.collector(BoundedResponseBody.default_max_bytes())
+        )
+      end
 
     url
     |> Req.post(request_options)
@@ -551,6 +559,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     log_upstream_transport_exception(exception, identity, opts)
     {:error, upstream_transport_error(exception)}
   end
+
+  defp normalize_upstream_transport_result({:ok, %Req.Response{} = response}, _identity, _opts),
+    do: {:ok, BoundedResponseBody.finalize(response)}
 
   defp normalize_upstream_transport_result(result, _identity, _opts), do: result
 

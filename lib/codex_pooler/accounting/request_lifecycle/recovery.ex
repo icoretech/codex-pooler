@@ -5,7 +5,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.RequestLifecycle
-  alias CodexPooler.Gateway.Persistence.{CodexTurn, SessionReadModel}
+  alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Repo
 
   @stale_after_seconds 6 * 60 * 60
@@ -48,7 +48,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
         limit: ^limit,
         select: request
     )
-    |> Enum.reject(&SessionReadModel.active_runtime_request?(&1, now))
+    |> Enum.reject(&RuntimeCleanup.active_runtime_request?(&1, now))
   end
 
   defp recover_request(request, {:ok, summary}, now) do
@@ -106,26 +106,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
     end
   end
 
-  defp recover_stale_turn(%Request{id: request_id}, attempt, now) do
-    final_attempt_id = attempt && attempt.id
-
-    CodexTurn
-    |> where(
-      [turn],
-      turn.request_id == ^request_id and turn.status == ^CodexTurn.in_progress_status()
+  defp recover_stale_turn(%Request{id: request_id}, attempt, now) when is_binary(request_id) do
+    RuntimeCleanup.recover_stale_request_turn(request_id, attempt_id(attempt),
+      now: now,
+      error_code: @recovery_code
     )
-    |> Repo.update_all(
-      set: [
-        status: CodexTurn.interrupted_status(),
-        error_code: @recovery_code,
-        final_attempt_id: final_attempt_id,
-        completed_at: now,
-        updated_at: now
-      ]
-    )
-
-    :ok
   end
+
+  defp recover_stale_turn(%Request{}, _attempt, _now), do: :ok
+
+  defp attempt_id(%Attempt{id: attempt_id}) when is_binary(attempt_id), do: attempt_id
+  defp attempt_id(_attempt), do: nil
 
   defp initial_summary do
     %{stale_reservations_released: 0, stale_reservations_settled: 0}

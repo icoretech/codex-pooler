@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Service
+  alias CodexPooler.Gateway
   alias CodexPooler.Repo
 
   @tag :transcription_success
@@ -25,7 +25,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
       conn
       |> auth(setup)
       |> post("/v1/audio/transcriptions", %{
-        "model" => Service.backend_transcription_model(),
+        "model" => Gateway.backend_transcription_model(),
         "file" => upload_fixture("audio-secret.wav", "audio/wav", audio_bytes),
         "prompt" => prompt,
         "response_format" => "json"
@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert captured.path == "/backend-api/transcribe"
     assert captured.body =~ prompt
     refute captured.body =~ setup.model.upstream_model_id
-    refute captured.body =~ Service.backend_transcription_model()
+    refute captured.body =~ Gateway.backend_transcription_model()
     refute captured.body =~ "audio-secret.wav"
     assert captured.body =~ ~s(filename="audio.wav")
 
@@ -67,13 +67,13 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     setup =
       upstream
       |> gateway_setup()
-      |> allow_models!([Service.backend_transcription_model()])
+      |> allow_models!([Gateway.backend_transcription_model()])
 
     conn =
       conn
       |> auth(setup)
       |> post("/v1/audio/transcriptions", %{
-        "model" => Service.backend_transcription_model(),
+        "model" => Gateway.backend_transcription_model(),
         "file" => upload_fixture("hidden-audio.wav", "audio/wav", audio_bytes)
       })
 
@@ -81,7 +81,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/transcribe"
-    refute captured.body =~ Service.backend_transcription_model()
+    refute captured.body =~ Gateway.backend_transcription_model()
     refute captured.body =~ setup.model.upstream_model_id
     refute captured.body =~ "language"
     refute captured.body =~ "response_format"
@@ -90,8 +90,8 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/transcribe"
     assert request.status == "succeeded"
-    assert request.request_metadata["requested_model"] == Service.backend_transcription_model()
-    assert request.request_metadata["effective_model"] == Service.backend_transcription_model()
+    assert request.request_metadata["requested_model"] == Gateway.backend_transcription_model()
+    assert request.request_metadata["effective_model"] == Gateway.backend_transcription_model()
     assert request.request_metadata["upload_bytes"] == byte_size(audio_bytes)
     refute inspect(request.request_metadata) =~ audio_bytes
   end
@@ -119,7 +119,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     model =
       setup.model
       |> Ecto.Changeset.change(%{
-        exposed_model_id: Service.backend_transcription_model(),
+        exposed_model_id: Gateway.backend_transcription_model(),
         upstream_model_id: "provider-gpt-4o-transcribe",
         supports_responses: false,
         supports_streaming: false,

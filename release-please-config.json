@@ -16,10 +16,6 @@
         {
           "type": "generic",
           "path": "docs-site/src/content/docs/deployment/docker-compose.mdx"
-        },
-        {
-          "type": "generic",
-          "path": "docs-site/src/content/docs/deployment/helm.mdx"
         }
       ]
     }

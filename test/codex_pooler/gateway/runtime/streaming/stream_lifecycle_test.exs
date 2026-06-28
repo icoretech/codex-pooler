@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
@@ -18,10 +19,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
-  alias CodexPooler.Gateway.Service
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
+  @public_responses_endpoint "/v1/responses"
 
   test "OpenAI stream collection propagates first-event finalization failures" do
     {setup, _first_upstream, _second_upstream} =
@@ -300,6 +301,143 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "tagged terminal-missing public Responses Finch close records metadata without poisoning route health" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id:
+                 "tagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               public_response_created_sse(),
+               {:upstream_stream_interrupted, %Finch.TransportError{reason: :closed}},
+               response_context
+             )
+
+    assert [request] = Repo.all(from(r in Request, where: r.id == ^reserved.request.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+
+    expected_transport_failure = %{
+      "exception" => "Finch.TransportError",
+      "reason_class" => "upstream_stream_interrupted",
+      "reason" => "closed_before_terminal",
+      "phase" => "upstream_close",
+      "pre_visible_output" => false,
+      "terminal_seen" => false
+    }
+
+    transport_failure = attempt.response_metadata["transport_failure"] || %{}
+    demotion_count = Repo.aggregate(from(d in BridgeDemotion), :count)
+    circuit_count = Repo.aggregate(from(c in RoutingCircuitState), :count)
+    transport_failure_subset = Map.take(transport_failure, Map.keys(expected_transport_failure))
+    text_frame_count = transport_failure["text_frame_count"]
+
+    if transport_failure_subset != expected_transport_failure or
+         not (is_integer(text_frame_count) and text_frame_count >= 1) or
+         {demotion_count, circuit_count} != {0, 0} do
+      flunk(
+        "expected tagged interruption metadata=#{inspect(expected_transport_failure)} text_frame_count>=1 demotions=0 circuits=0; " <>
+          "got metadata=#{inspect(transport_failure_subset)} text_frame_count=#{inspect(text_frame_count)} demotions=#{demotion_count} circuits=#{circuit_count}"
+      )
+    end
+
+    metadata_text = inspect(transport_failure)
+    refute metadata_text =~ "socket closed"
+    refute metadata_text =~ "response.created"
+    refute metadata_text =~ "data:"
+  end
+
+  test "untagged Finch close records generic route health without transport metadata" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id:
+                 "untagged-upstream-stream-interrupted-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               public_response_created_sse(),
+               %Finch.TransportError{reason: :closed},
+               response_context
+             )
+
+    assert [request] = Repo.all(from(r in Request, where: r.id == ^reserved.request.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+    refute Map.has_key?(attempt.response_metadata, "transport_failure")
+
+    assert Repo.aggregate(from(d in BridgeDemotion), :count) == 1
+    assert Repo.aggregate(from(c in RoutingCircuitState), :count) == 1
+  end
+
   test "terminal-missing upstream SSE close releases half-open route probe" do
     {setup, _first_upstream, _second_upstream} =
       stream_retry_setup(
@@ -461,6 +599,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   end
 
   defp retry_context(setup, auth, request_options, request, opts \\ []) do
+    endpoint = Keyword.get(opts, :endpoint, @endpoint_path)
+
     candidates =
       Keyword.get(opts, :candidates, [
         {setup.assignment, setup.identity},
@@ -469,7 +609,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     %SelectedCandidateContext{
       auth: auth,
-      endpoint: @endpoint_path,
+      endpoint: endpoint,
       payload: payload(setup),
       model: setup.model,
       reserved: %{request: request},
@@ -516,11 +656,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     ])
   end
 
+  defp public_response_created_sse do
+    ~s(event: response.created\ndata: {"type":"response.created","response":{"id":"resp_public_stream_interrupted"}}\n\n)
+  end
+
   defp execute_backend_stream(setup, release_ref, _request_suffix, opts \\ []) do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     assert {:ok, %{stream: stream}} =
-             Service.execute(
+             Gateway.execute(
                auth,
                @endpoint_path,
                payload(setup),
@@ -581,17 +725,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
   defp request_options(auth, payload, setup, opts \\ []) do
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
+    endpoint = Keyword.get(opts, :endpoint, @endpoint_path)
 
-    options = %{
-      request_id: "stream-lifecycle-#{System.unique_integer([:positive])}",
-      upstream_endpoint: @endpoint_path
-    }
+    option_attrs =
+      opts
+      |> Keyword.drop([:endpoint, :websocket?])
+      |> Map.new()
+
+    options =
+      %{
+        request_id: "stream-lifecycle-#{System.unique_integer([:positive])}",
+        upstream_endpoint: endpoint
+      }
+      |> Map.merge(option_attrs)
 
     options =
       if Keyword.get(opts, :websocket?, false) do
         RequestOptions.for_websocket(options, payload)
       else
-        RequestOptions.build(options, @endpoint_path, payload)
+        RequestOptions.build(options, endpoint, payload)
       end
 
     options

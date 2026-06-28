@@ -100,11 +100,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
           term()
         ) :: term()
   def complete_codex_turn(
-        {:ok, %{request: request, attempt: attempt}} = result,
+        {:ok, %{request: request} = lifecycle_result} = result,
         status,
         error_code
       ) do
     now = now()
+    attempt = Map.get(lifecycle_result, :attempt)
 
     CodexTurn
     |> Repo.get_by(request_id: request.id)

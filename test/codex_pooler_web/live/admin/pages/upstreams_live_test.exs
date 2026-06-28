@@ -32,8 +32,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   }
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
-  alias CodexPoolerWeb.Admin.UpstreamAccountCard
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.DateTimeDisplay
 
   setup :register_and_log_in_user
@@ -740,6 +740,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "saved-reset-card", name: "Saved Reset Card"})
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    first_expires_at = DateTime.add(observed_at, 30, :day)
+    second_expires_at = DateTime.add(first_expires_at, 2, :day)
+    first_expires_at_iso = DateTime.to_iso8601(first_expires_at)
+    second_expires_at_iso = DateTime.to_iso8601(second_expires_at)
+    datetime_preferences = DateTimeDisplay.preferences_for_user(scope.user)
+
+    first_expiration_label =
+      DateTimeDisplay.format_datetime(first_expires_at, datetime_preferences)
+
+    second_expiration_label =
+      DateTimeDisplay.format_datetime(second_expires_at, datetime_preferences)
 
     %{identity: active_identity} =
       upstream_assignment_fixture(pool, %{
@@ -753,10 +764,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             "usage_path" => "/api/codex/usage",
             "observed_at" => DateTime.to_iso8601(observed_at),
             "available_expires_at" => [
-              "2026-07-18T00:40:11.968726Z",
-              "2026-07-20T00:40:11.968726Z"
+              first_expires_at_iso,
+              second_expires_at_iso
             ],
-            "next_expires_at" => "2026-07-18T00:40:11.968726Z"
+            "next_expires_at" => first_expires_at_iso
           }
         }
       })
@@ -807,6 +818,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert active_account.saved_resets.available? == true
     assert active_account.saved_reset_policy.enabled? == true
     assert active_account.saved_reset_policy.keep_credits == 1
+
+    assert active_account.saved_resets.available_expires_at == [
+             first_expires_at_iso,
+             second_expires_at_iso
+           ]
+
     assert inactive_account.saved_resets.label == "1 saved reset"
     assert inactive_account.saved_reset_policy.enabled? == false
 
@@ -829,10 +846,48 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     assert has_element?(view, active_popover_selector, "Saved reset bank")
-    assert has_element?(view, active_popover_selector, "2 saved resets")
     assert has_element?(view, active_popover_selector, "Auto redeem active")
-    assert has_element?(view, active_popover_selector, "Next expires 2026-07-18 00:40:11 UTC")
-    assert has_element?(view, active_popover_selector, "Click to manage redemption policy")
+
+    refute has_element?(
+             view,
+             "#{active_popover_selector} [data-role='upstream-saved-reset-available-count']"
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-labels",
+             "Expiration"
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-labels",
+             "Left"
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-date-0",
+             first_expiration_label
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-date-1",
+             second_expiration_label
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-time-left-0",
+             "in "
+           )
+
+    assert has_element?(
+             view,
+             "#{active_popover_selector} #upstream-account-#{active_identity.id}-saved-reset-expiration-time-left-0 .hero-clock"
+           )
+
     active_card = view |> element("#upstream-account-#{active_identity.id}") |> render()
     active_badge_class = html_element_class(active_card, active_badge_id)
 
@@ -864,9 +919,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "#{inactive_badge_selector} .hero-battery-100.size-3.text-violet-600"
            )
 
-    assert has_element?(view, inactive_popover_selector, "1 saved reset")
     assert has_element?(view, inactive_popover_selector, "Auto redeem inactive")
-    assert has_element?(view, inactive_popover_selector, "Expiration dates not reported")
+
+    assert has_element?(
+             view,
+             "#{inactive_popover_selector} #upstream-account-#{inactive_identity.id}-saved-reset-expiration-empty",
+             "Expiration dates not reported"
+           )
 
     inactive_card = view |> element("#upstream-account-#{inactive_identity.id}") |> render()
     inactive_badge_class = html_element_class(inactive_card, inactive_badge_id)
@@ -891,13 +950,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(view, "#saved-reset-policy-dialog", "Manage saved reset bank")
 
-    assert has_element?(
-             view,
-             "#saved-reset-next-expiration",
-             "Next saved reset expires at 2026-07-18 00:40:11 UTC · 2 expiration dates reported"
-           )
-
-    refute has_element?(view, "#saved-reset-manual-redemption-expiration")
+    assert has_element?(view, "#saved-reset-expiration-summary", "Banked reset expirations")
+    assert has_element?(view, "#saved-reset-expiration-table", "Expiration Date")
+    assert has_element?(view, "#saved-reset-expiration-table", "Time Left")
+    assert has_element?(view, "#saved-reset-expiration-date-0", first_expiration_label)
+    assert has_element?(view, "#saved-reset-expiration-date-1", second_expiration_label)
+    assert has_element?(view, "#saved-reset-expiration-time-left-0", "in ")
   end
 
   test "edits saved reset policy from the upstream account dropdown without redeeming resets", %{
@@ -2292,7 +2350,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       })
 
     blocked_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: blocked_account,
         account_index: 0
       )
@@ -3642,7 +3700,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     no_assignment_id = Ecto.UUID.generate()
 
     no_assignment_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: recovery_component_account(no_assignment_id, "paused", []),
         account_index: 0
       )
@@ -3662,7 +3720,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     deleted_id = Ecto.UUID.generate()
 
     deleted_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account: recovery_component_account(deleted_id, "deleted", []),
         account_index: 0
       )
@@ -3674,7 +3732,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     usable_id = Ecto.UUID.generate()
 
     usable_html =
-      render_component(&UpstreamAccountCard.account_card/1,
+      render_component(&AccountCard.account_card/1,
         account:
           recovery_component_account(
             usable_id,

@@ -3721,6 +3721,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  @tag :owner_drained_terminal_state
+  test "planned rollout drain during active owner request records owner drained instead of owner crashed" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-rollout-drain-active-request", "rollout-drain-active-request",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    payload = websocket_payload(setup, "rollout drain while owner request is active")
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+
+    try do
+      logs =
+        capture_websocket_lifecycle_log(fn ->
+          assert :ok = CodexResponsesSocket.terminate({:shutdown, :rollout}, state)
+        end)
+
+      refute logs =~ "owner_crashed"
+      assert_no_websocket_lifecycle_leaks!(logs)
+
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
+      assert_response_task_stopped!(state)
+
+      session =
+        Repo.get_by!(CodexSession,
+          session_key: turn_state_session_key("rollout-drain-active-request")
+        )
+
+      assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+      request = Repo.get!(Request, turn.request_id)
+      attempt = Repo.one!(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert request.status == "failed"
+      assert request.response_status_code == 499
+      assert request.last_error_code == "owner_drained"
+      refute request.last_error_code == "owner_crashed"
+      assert attempt.status == "failed"
+      assert attempt.network_error_code == "owner_drained"
+      refute attempt.network_error_code == "owner_crashed"
+      assert turn.status == "interrupted"
+      assert turn.error_code == "owner_drained"
+      refute turn.error_code == "owner_crashed"
+
+      assert released_owner_lease(
+               session.id,
+               state.websocket_owner_lease_token
+             ).metadata["release_reason"] == "owner_drained"
+    after
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
+    end
+  end
+
   test "owner rollout timeline preserves interrupted and recovered websocket rows" do
     release_ref = make_ref()
 

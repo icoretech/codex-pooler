@@ -928,6 +928,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       Pools.create_pool(scope, %{slug: "saved-reset-cockpit", name: "Saved Reset Cockpit"})
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    first_expires_at = DateTime.add(now, 30, :day)
+    first_expires_at_iso = DateTime.to_iso8601(first_expires_at)
+
+    first_expiration_label =
+      DateTimeDisplay.format_datetime(
+        first_expires_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      )
 
     %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
@@ -945,8 +953,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
             "path_style" => "codex",
             "usage_path" => "/api/codex/usage",
             "observed_at" => DateTime.to_iso8601(now),
-            "available_expires_at" => ["2026-07-18T00:40:11.968726Z"],
-            "next_expires_at" => "2026-07-18T00:40:11.968726Z"
+            "available_expires_at" => [first_expires_at_iso],
+            "next_expires_at" => first_expires_at_iso
           }
         }
       })
@@ -955,7 +963,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert cockpit.saved_resets.label == "1 saved reset"
     assert cockpit.saved_resets.available? == true
     assert cockpit.saved_reset_policy.enabled? == false
-    assert cockpit.saved_resets.next_expires_label == "Next expires 2026-07-18 00:40:11 UTC"
+    assert cockpit.saved_resets.next_expires_label == "Next expires #{first_expiration_label}"
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     metric_selector = "#upstream-status-summary-saved-resets"
@@ -967,7 +975,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     assert has_element?(view, metric_selector, "Auto redeem off")
-    assert has_element?(view, metric_selector, "Next expires 2026-07-18 00:40:11 UTC")
+    assert has_element?(view, metric_selector, "Next expires #{first_expiration_label}")
 
     assert has_element?(view, "#saved-reset-policy-auto-redeem-enabled")
     assert has_element?(view, "#saved-reset-policy-min-blocked-minutes")
@@ -975,6 +983,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#saved-reset-policy-trigger-mode")
     assert has_element?(view, "#saved-reset-policy-quota-threshold-percent")
     assert has_element?(view, "#saved-reset-policy-submit", "Save policy")
+
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-expiration-summary",
+             "Banked reset expirations"
+           )
+
+    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Expiration Date")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Time Left")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-date-0", first_expiration_label)
+    assert has_element?(view, "#cockpit-saved-reset-expiration-time-left-0", "in ")
 
     view
     |> element("#saved-reset-policy-form")

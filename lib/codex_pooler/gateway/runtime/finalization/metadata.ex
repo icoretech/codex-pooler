@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @backend_turn_state_relay_endpoints [
@@ -24,6 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       |> compact_metadata()
 
     metadata = if error_kind, do: Map.put(metadata, "error_kind", error_kind), else: metadata
+    metadata = Map.merge(metadata, response_body_limit_metadata(response))
 
     opts
     |> route_attempt_metadata()
@@ -31,6 +33,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(payload_compression_attempt_metadata(opts))
     |> Map.merge(metadata)
   end
+
+  @spec response_body_limit_exceeded?(Req.Response.t()) :: boolean()
+  def response_body_limit_exceeded?(%Req.Response{} = response),
+    do: BoundedResponseBody.exceeded?(response)
+
+  @spec response_body_limit_metadata(Req.Response.t()) :: map()
+  def response_body_limit_metadata(%Req.Response{} = response),
+    do: BoundedResponseBody.metadata(response)
 
   @spec websocket_response_metadata(list(), String.t() | nil, RequestOptions.t() | map(), map()) ::
           map()

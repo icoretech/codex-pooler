@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @type callbacks :: %{
@@ -140,6 +141,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
     with :ok <-
            record_stream_failure_health(reason, code, terminal_failure, response.headers, context) do
+      attempt_metadata =
+        response
+        |> Metadata.response_metadata("stream_interrupted", context.request_options)
+        |> Metadata.maybe_put_masked_error_metadata(
+          terminal_failure && terminal_failure.upstream_code,
+          code
+        )
+        |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
+
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
@@ -149,12 +159,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           response.status,
           code,
           Metadata.safe_reason(reason),
-          response
-          |> Metadata.response_metadata("stream_interrupted", context.request_options)
-          |> Metadata.maybe_put_masked_error_metadata(
-            terminal_failure && terminal_failure.upstream_code,
-            code
-          )
+          attempt_metadata
         )
       )
     end
@@ -164,6 +169,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def error_code({:chunk, :closed}), do: "client_disconnected"
   def error_code({:chunk, _reason}), do: "downstream_stream_error"
   def error_code({:upstream_idle_timeout, _reason}), do: "stream_idle_timeout"
+  def error_code({:upstream_stream_interrupted, _reason}), do: "upstream_stream_error"
   def error_code(:upstream_websocket_receive_timeout), do: "stream_idle_timeout"
   def error_code({:terminal_stream_failure, %{code: code}}) when is_binary(code), do: code
   def error_code(:upstream_unauthorized), do: "upstream_unauthorized"
@@ -202,6 +208,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp record_stream_failure_health(
          :upstream_stream_interrupted,
+         "upstream_stream_error",
+         nil,
+         _headers,
+         context
+       ),
+       do: DispatchLifecycle.neutral_completion(context)
+
+  defp record_stream_failure_health(
+         {:upstream_stream_interrupted, _reason},
          "upstream_stream_error",
          nil,
          _headers,
