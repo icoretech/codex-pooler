@@ -17,12 +17,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   attr :account, :map, required: true
   attr :account_index, :integer, required: true
+  attr :panel_view, :atom, default: :usage, values: [:usage, :saved_resets]
 
   attr :datetime_preferences, :map, default: nil
 
   def account_card(assigns) do
     datetime_preferences =
       Map.get(assigns, :datetime_preferences) || DateTimeDisplay.preferences_for_user(nil)
+
+    saved_resets = saved_resets(assigns.account)
+    saved_reset_policy = saved_reset_policy(assigns.account)
 
     assigns =
       assigns
@@ -31,8 +35,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> assign(:workspace_context_label, workspace_context_label(assigns.account))
       |> assign(:workspace_context_title, workspace_context_title(assigns.account))
       |> assign(:routing_readiness, routing_readiness(assigns.account))
-      |> assign(:saved_resets, saved_resets(assigns.account))
-      |> assign(:saved_reset_policy, saved_reset_policy(assigns.account))
+      |> assign(:saved_resets, saved_resets)
+      |> assign(:saved_reset_policy, saved_reset_policy)
+      |> assign(:panel_view, normalize_panel_view(assigns.panel_view, saved_resets))
+      |> assign(
+        :saved_reset_policy_state_label,
+        saved_reset_policy_state_label(saved_reset_policy)
+      )
 
     ~H"""
     <article
@@ -79,6 +88,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             disabled={@account.identity.status == "deleted"}
             saved_resets={@saved_resets}
             saved_reset_policy={@saved_reset_policy}
+            panel_view={@panel_view}
             datetime_preferences={@datetime_preferences}
           />
           <.upstream_plan_indicator account={@account} account_index={@account_index} />
@@ -87,46 +97,124 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       </header>
 
       <div class="grid gap-4 p-4">
-        <section class="grid gap-3">
-          <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-            <div class="min-w-0">
-              <p class="text-xs font-semibold uppercase text-primary">Status</p>
-              <p
-                id={"upstream-account-#{@account.identity.id}-limits-summary"}
-                class="truncate text-xs text-base-content/60"
+        <div
+          id={"upstream-account-#{@account.identity.id}-panel-switcher"}
+          data-role="upstream-account-panel-switcher"
+          data-panel-view={@panel_view}
+          class="grid min-w-0 overflow-hidden"
+        >
+          <section
+            id={"upstream-account-#{@account.identity.id}-usage-panel"}
+            data-role="upstream-account-usage-panel"
+            aria-hidden={aria_bool(@panel_view != :usage)}
+            inert={@panel_view != :usage}
+            class={account_panel_class(@panel_view == :usage)}
+          >
+            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold uppercase text-primary">Status</p>
+                <p
+                  id={"upstream-account-#{@account.identity.id}-limits-summary"}
+                  class="truncate text-xs text-base-content/60"
+                >
+                  {account_status_label(@account)}
+                </p>
+              </div>
+              <div
+                id={"upstream-account-#{@account.identity.id}-token-burn"}
+                data-role="upstream-token-burn-summary"
+                class="text-right"
               >
-                {account_status_label(@account)}
-              </p>
+                <p
+                  id={"upstream-account-#{@account.identity.id}-token-burn-label"}
+                  class="text-xs font-semibold uppercase text-primary"
+                >
+                  TOKEN BURN
+                </p>
+                <.token_burn_popover
+                  id={"upstream-account-#{@account.identity.id}-token-burn-value"}
+                  content_id={"upstream-account-#{@account.identity.id}-token-burn-content"}
+                  token_burn={token_burn(@account)}
+                />
+              </div>
             </div>
             <div
-              id={"upstream-account-#{@account.identity.id}-token-burn"}
-              data-role="upstream-token-burn-summary"
-              class="text-right"
+              id={"upstream-account-#{@account.identity.id}-limits"}
+              class={quota_limits_grid_class(@reported_quota_limits)}
             >
-              <p
-                id={"upstream-account-#{@account.identity.id}-token-burn-label"}
-                class="text-xs font-semibold uppercase text-primary"
-              >
-                TOKEN BURN
-              </p>
-              <.token_burn_popover
-                id={"upstream-account-#{@account.identity.id}-token-burn-value"}
-                content_id={"upstream-account-#{@account.identity.id}-token-burn-content"}
-                token_burn={token_burn(@account)}
+              <.quota_limit_row
+                :for={limit <- @reported_quota_limits}
+                id={"upstream-account-#{@account.identity.id}-limit-#{limit.key}"}
+                limit={limit}
               />
             </div>
-          </div>
-          <div
-            id={"upstream-account-#{@account.identity.id}-limits"}
-            class={quota_limits_grid_class(@reported_quota_limits)}
+          </section>
+
+          <section
+            :if={saved_reset_panel_available?(@saved_resets)}
+            id={"upstream-account-#{@account.identity.id}-saved-reset-panel"}
+            data-role="upstream-saved-reset-bank-panel"
+            aria-hidden={aria_bool(@panel_view != :saved_resets)}
+            inert={@panel_view != :saved_resets}
+            class={account_panel_class(@panel_view == :saved_resets)}
           >
-            <.quota_limit_row
-              :for={limit <- @reported_quota_limits}
-              id={"upstream-account-#{@account.identity.id}-limit-#{limit.key}"}
-              limit={limit}
+            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold uppercase text-primary">Saved reset bank</p>
+                <p class="truncate text-xs text-base-content/60">
+                  {@saved_resets.label} available for this account
+                </p>
+              </div>
+              <div class="min-w-0 text-right">
+                <p class="text-xs font-semibold uppercase text-primary">Policy</p>
+                <div class="flex min-w-0 items-center justify-end gap-1.5">
+                  <button
+                    id={"upstream-account-#{@account.identity.id}-saved-reset-policy-state"}
+                    type="button"
+                    data-role="upstream-saved-reset-policy-state"
+                    class="inline-flex max-w-full cursor-pointer items-center justify-end gap-1 rounded px-1 text-xs text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-default disabled:opacity-60"
+                    phx-click="open_saved_reset_policy"
+                    phx-value-id={@account.identity.id}
+                    disabled={@account.identity.status == "deleted"}
+                  >
+                    <.icon name="hero-cog-6-tooth" class="size-3.5 shrink-0" />
+                    <span class="truncate">{@saved_reset_policy_state_label}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <.saved_reset_meter
+              id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
+              saved_resets={@saved_resets}
+              saved_reset_policy={@saved_reset_policy}
             />
-          </div>
-        </section>
+
+            <div
+              id={"upstream-account-#{@account.identity.id}-saved-reset-expiration-panel"}
+              data-role="upstream-saved-reset-expiration"
+              class="grid gap-1"
+            >
+              <div class="flex min-w-0 items-center justify-between gap-3">
+                <p class="truncate text-xs font-medium text-base-content">Expiration queue</p>
+                <p
+                  :if={@saved_resets.next_expires_label}
+                  class="shrink-0 truncate text-[11px] leading-4 text-base-content/55"
+                  title={@saved_resets.next_expires_title}
+                >
+                  {@saved_resets.next_expires_label}
+                </p>
+              </div>
+              <SavedResetComponents.saved_reset_expiration_table
+                id={"upstream-account-#{@account.identity.id}-saved-reset-expiration"}
+                saved_resets={@saved_resets}
+                datetime_preferences={@datetime_preferences}
+                compact={true}
+                empty_label="Expiration dates not reported"
+              />
+            </div>
+          </section>
+        </div>
 
         <.upstream_lifecycle_blocker_warning
           account={@account}
@@ -179,6 +267,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp saved_reset_policy(%{saved_reset_policy: saved_reset_policy}), do: saved_reset_policy
   defp saved_reset_policy(%{identity: identity}), do: SavedResets.auto_policy(identity)
+
+  defp normalize_panel_view(:saved_resets, saved_resets) do
+    if saved_reset_panel_available?(saved_resets), do: :saved_resets, else: :usage
+  end
+
+  defp normalize_panel_view(_panel_view, _saved_resets), do: :usage
+
+  defp saved_reset_panel_available?(%{reported?: true, available_count: count})
+       when is_integer(count) and count > 0,
+       do: true
+
+  defp saved_reset_panel_available?(_saved_resets), do: false
+
+  defp account_panel_class(true) do
+    "grid min-w-0 max-h-[28rem] gap-3 overflow-hidden opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none"
+  end
+
+  defp account_panel_class(false) do
+    "pointer-events-none grid min-w-0 max-h-0 gap-3 overflow-hidden opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none"
+  end
+
+  defp aria_bool(true), do: "true"
+  defp aria_bool(false), do: "false"
 
   attr :account, :map, required: true
 
@@ -343,6 +454,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   attr :identity_id, :string, required: true
   attr :saved_resets, :map, required: true
   attr :saved_reset_policy, :map, required: true
+  attr :panel_view, :atom, required: true
   attr :disabled, :boolean, default: false
   attr :datetime_preferences, :map, required: true
 
@@ -352,62 +464,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
        when is_integer(count) and count > 0 do
     assigns =
       assigns
-      |> assign(:badge_class, saved_reset_count_badge_class(assigns.saved_reset_policy))
+      |> assign(:active?, assigns.panel_view == :saved_resets)
+      |> assign(
+        :badge_class,
+        saved_reset_count_badge_class(assigns.saved_reset_policy, assigns.panel_view)
+      )
       |> assign(:badge_icon_class, saved_reset_count_badge_icon_class(assigns.saved_reset_policy))
-      |> assign(:content_id, "upstream-account-#{assigns.identity_id}-saved-reset-bank-popover")
-      |> assign(:policy_state_label, saved_reset_policy_state_label(assigns.saved_reset_policy))
+      |> assign(:panel_id, "upstream-account-#{assigns.identity_id}-saved-reset-panel")
+      |> assign(
+        :aria_label,
+        saved_reset_count_badge_aria_label(assigns.panel_view, assigns.saved_resets)
+      )
 
     ~H"""
-    <span
-      id={"upstream-saved-reset-count-popover-#{@identity_id}"}
-      data-role="upstream-saved-reset-count-popover"
-      class="dropdown dropdown-hover dropdown-end dropdown-bottom inline-flex self-center"
+    <button
+      id={@id}
+      type="button"
+      data-role="upstream-saved-reset-count-badge"
+      class={@badge_class}
+      aria-label={@aria_label}
+      aria-controls={@panel_id}
+      aria-pressed={aria_bool(@active?)}
+      phx-click="toggle_saved_reset_panel"
+      phx-value-id={@identity_id}
+      disabled={@disabled}
     >
-      <button
-        id={@id}
-        type="button"
-        data-role="upstream-saved-reset-count-badge"
-        class={@badge_class}
-        aria-label={"Saved reset bank: #{@saved_resets.label}"}
-        aria-describedby={@content_id}
-        phx-click="open_saved_reset_policy"
-        phx-value-id={@identity_id}
-        disabled={@disabled}
-      >
-        <.icon
-          name="hero-battery-100"
-          class={@badge_icon_class}
-        />
-        <span>{@saved_resets.available_count}</span>
-      </button>
-      <span
-        id={@content_id}
-        role="tooltip"
-        tabindex="0"
-        data-role="upstream-saved-reset-bank-popover"
-        class="dropdown-content z-50 mt-1.5 grid w-64 max-w-[calc(100vw-1rem)] gap-1.5 rounded-box border border-base-300 bg-base-100 p-2.5 text-left text-xs font-normal leading-4 text-base-content/70 shadow-xl"
-      >
-        <span class="text-xs font-semibold uppercase text-primary">Saved reset bank</span>
-        <span class="grid grid-cols-[3.75rem_minmax(0,1fr)] gap-x-2 gap-y-0.5">
-          <span class="font-medium text-base-content/55">Policy</span>
-          <span class="text-base-content" data-role="upstream-saved-reset-policy-state">
-            {@policy_state_label}
-          </span>
-          <span
-            class="col-span-2 grid gap-1 text-base-content"
-            data-role="upstream-saved-reset-expiration"
-          >
-            <SavedResetComponents.saved_reset_expiration_table
-              id={"upstream-account-#{@identity_id}-saved-reset-expiration"}
-              saved_resets={@saved_resets}
-              datetime_preferences={@datetime_preferences}
-              compact={true}
-              empty_label="Expiration dates not reported"
-            />
-          </span>
-        </span>
-      </span>
-    </span>
+      <.icon name="hero-battery-100" class={@badge_icon_class} />
+      <span>{@saved_resets.available_count}</span>
+    </button>
     """
   end
 
@@ -416,14 +500,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     """
   end
 
-  defp saved_reset_count_badge_class(%{enabled?: true}) do
+  defp saved_reset_count_badge_class(policy, panel_view) do
+    [
+      saved_reset_count_badge_tone_class(policy),
+      panel_view == :saved_resets && "ring-2 ring-primary/35 ring-offset-1 ring-offset-base-100"
+    ]
+  end
+
+  defp saved_reset_count_badge_tone_class(%{enabled?: true}) do
     [
       saved_reset_count_badge_base_class(),
       "border-success/40 bg-success/15 text-success hover:bg-success/20 dark:border-success/60 dark:bg-success/20 dark:text-success"
     ]
   end
 
-  defp saved_reset_count_badge_class(_policy) do
+  defp saved_reset_count_badge_tone_class(_policy) do
     [
       saved_reset_count_badge_base_class(),
       "border-violet-500/50 bg-violet-500/10 text-violet-700 hover:bg-violet-500/15 dark:border-violet-300/50 dark:bg-violet-400/10 dark:text-violet-200"
@@ -444,6 +535,97 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp saved_reset_policy_state_label(%{enabled?: true}), do: "Auto redeem active"
   defp saved_reset_policy_state_label(_policy), do: "Auto redeem inactive"
+
+  defp saved_reset_count_badge_aria_label(:saved_resets, _saved_resets), do: "Show quota status"
+
+  defp saved_reset_count_badge_aria_label(_panel_view, saved_resets) do
+    "Show saved reset bank: #{saved_resets.label}"
+  end
+
+  attr :id, :string, required: true
+  attr :saved_resets, :map, required: true
+  attr :saved_reset_policy, :map, required: true
+
+  defp saved_reset_meter(assigns) do
+    assigns =
+      assigns
+      |> assign(:segments, saved_reset_meter_segments(assigns.saved_resets))
+      |> assign(:meter_max, saved_reset_meter_max(assigns.saved_resets))
+      |> assign(:meter_value, saved_reset_meter_value(assigns.saved_resets))
+      |> assign(:meter_label, saved_reset_meter_label(assigns.saved_resets))
+
+    ~H"""
+    <div id={@id} data-role="upstream-saved-reset-meter" class="grid gap-1.5">
+      <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
+        <span
+          data-role="upstream-saved-reset-meter-title"
+          class="min-w-0 truncate font-medium text-base-content"
+        >
+          Banked resets
+        </span>
+        <span
+          data-role="upstream-saved-reset-meter-count"
+          class={saved_reset_meter_count_class(@saved_reset_policy)}
+        >
+          {@meter_label}
+        </span>
+      </div>
+      <div
+        id={"#{@id}-bar"}
+        role="meter"
+        aria-valuemin="0"
+        aria-valuemax={@meter_max}
+        aria-valuenow={@meter_value}
+        aria-label={@meter_label}
+        class="grid grid-cols-5 gap-1"
+      >
+        <span
+          :for={segment <- @segments}
+          id={"#{@id}-segment-#{segment.index}"}
+          data-role="upstream-saved-reset-meter-segment"
+          aria-hidden="true"
+          class={saved_reset_meter_segment_class(segment, @saved_reset_policy)}
+        ></span>
+      </div>
+    </div>
+    """
+  end
+
+  defp saved_reset_meter_segments(saved_resets) do
+    filled_count = min(saved_reset_meter_value(saved_resets), 5)
+
+    Enum.map(1..5, fn index ->
+      %{index: index, filled?: index <= filled_count}
+    end)
+  end
+
+  defp saved_reset_meter_value(%{available_count: count}) when is_integer(count) and count >= 0,
+    do: count
+
+  defp saved_reset_meter_value(_saved_resets), do: 0
+
+  defp saved_reset_meter_max(saved_resets), do: max(saved_reset_meter_value(saved_resets), 5)
+
+  defp saved_reset_meter_label(%{label: label}) when is_binary(label) and label != "",
+    do: label
+
+  defp saved_reset_meter_label(saved_resets),
+    do: "#{saved_reset_meter_value(saved_resets)} saved resets"
+
+  defp saved_reset_meter_count_class(%{enabled?: true}),
+    do: "shrink-0 tabular-nums font-medium text-success"
+
+  defp saved_reset_meter_count_class(_policy),
+    do: "shrink-0 tabular-nums font-medium text-violet-700 dark:text-violet-200"
+
+  defp saved_reset_meter_segment_class(%{filled?: true}, %{enabled?: true}),
+    do: "h-1.5 rounded-full bg-success"
+
+  defp saved_reset_meter_segment_class(%{filled?: true}, _policy),
+    do: "h-1.5 rounded-full bg-violet-500/80 dark:bg-violet-300/80"
+
+  defp saved_reset_meter_segment_class(_segment, _policy),
+    do: "h-1.5 rounded-full bg-base-300/70"
 
   attr :account, :map, required: true
   attr :routing_readiness, :map, required: true
@@ -576,14 +758,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     <span
       id={"#{@id}-popover"}
       data-role="upstream-token-burn-popover"
-      class="dropdown dropdown-hover dropdown-end dropdown-bottom inline-flex justify-end"
+      class="dropdown dropdown-end dropdown-bottom inline-flex justify-end"
     >
       <button
         id={@id}
         type="button"
-        class="inline-flex items-center justify-end gap-1 rounded px-1 text-xs font-medium text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        class="inline-flex cursor-pointer items-center justify-end gap-1 rounded px-1 text-xs font-medium text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         tabindex="0"
         aria-label="Token burn calculation"
+        aria-haspopup="true"
         aria-describedby={@content_id}
       >
         <.icon name="hero-fire" class={token_burn_icon_class(@token_burn)} />

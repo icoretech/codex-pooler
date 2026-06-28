@@ -55,6 +55,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         editing_saved_reset_policy: nil,
         saved_reset_policy_form: saved_reset_policy_form(%{}),
         confirming_saved_reset_redemption: nil,
+        account_panel_views: %{},
         subscribed_pool_ids: MapSet.new(),
         upstreams_reload_timer: nil
       )
@@ -240,6 +241,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     SavedResetWorkflow.maybe_confirm_redemption(socket, identity_id)
   end
 
+  def handle_event("toggle_saved_reset_panel", %{"id" => identity_id}, socket) do
+    {:noreply, update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id))}
+  end
+
   def handle_event("cancel_saved_reset_redemption", _params, socket) do
     {:noreply, assign(socket, :confirming_saved_reset_redemption, nil)}
   end
@@ -365,6 +370,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         editing_saved_reset_policy={@editing_saved_reset_policy}
         saved_reset_policy_form={@saved_reset_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
+        account_panel_views={@account_panel_views}
         upstream_accounts={@upstream_accounts}
         uploads={@uploads}
         datetime_preferences={@datetime_preferences}
@@ -401,7 +407,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       filter_values: filter_values,
       filter_form: UpstreamFilterForm.filter_form(filter_values),
       status_options: UpstreamFilterForm.status_options(),
-      upstream_accounts: upstream_accounts
+      upstream_accounts: upstream_accounts,
+      account_panel_views:
+        prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
     )
   end
 
@@ -452,6 +460,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   defp find_account(accounts, identity_id) do
     Enum.find(accounts, &(&1.identity.id == identity_id))
+  end
+
+  @spec toggle_account_panel_view(map(), String.t()) :: map()
+  defp toggle_account_panel_view(panel_views, identity_id)
+       when is_map(panel_views) and is_binary(identity_id) do
+    case Map.get(panel_views, identity_id, :usage) do
+      :saved_resets -> Map.delete(panel_views, identity_id)
+      _view -> Map.put(panel_views, identity_id, :saved_resets)
+    end
+  end
+
+  @spec prune_account_panel_views(map(), [UpstreamAccountsReadModel.account_snapshot()]) :: map()
+  defp prune_account_panel_views(panel_views, accounts)
+       when is_map(panel_views) and is_list(accounts) do
+    visible_account_ids = MapSet.new(accounts, & &1.identity.id)
+
+    Map.filter(panel_views, fn {identity_id, _view} ->
+      MapSet.member?(visible_account_ids, identity_id)
+    end)
   end
 
   defp pool_options(pools) do

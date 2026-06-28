@@ -36,6 +36,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :editing_saved_reset_policy, :map, default: nil
   attr :saved_reset_policy_form, :any, required: true
   attr :confirming_saved_reset_redemption, :map, default: nil
+  attr :account_panel_views, :map, required: true
   attr :upstream_accounts, :list, required: true
   attr :uploads, :map, required: true
   attr :datetime_preferences, :map, required: true
@@ -122,6 +123,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
         <.upstream_account_grid
           accounts={@upstream_accounts}
+          account_panel_views={@account_panel_views}
           datetime_preferences={@datetime_preferences}
         />
       </section>
@@ -768,6 +770,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   end
 
   attr :accounts, :list, required: true
+  attr :account_panel_views, :map, required: true
   attr :datetime_preferences, :map, required: true
 
   defp upstream_account_grid(assigns) do
@@ -781,11 +784,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         :for={{account, account_index} <- Enum.with_index(@accounts)}
         account={account}
         account_index={account_index}
+        panel_view={account_panel_view(@account_panel_views, account)}
         datetime_preferences={@datetime_preferences}
       />
     </div>
     """
   end
+
+  defp account_panel_view(panel_views, %{identity: %{id: identity_id}})
+       when is_map(panel_views) do
+    Map.get(panel_views, identity_id, :usage)
+  end
+
+  defp account_panel_view(_panel_views, _account), do: :usage
 
   defp oauth_start_form_visible?(nil), do: true
   defp oauth_start_form_visible?(%{status: "pending"}), do: false
