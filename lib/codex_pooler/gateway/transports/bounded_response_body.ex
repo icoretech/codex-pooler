@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.BoundedResponseBody do
   @moduledoc false
 
-  @default_max_bytes 8 * 1024 * 1024
+  @default_max_bytes 64 * 1024 * 1024
   @state_key :codex_pooler_bounded_response_body_state
   @exceeded_key :codex_pooler_response_body_limit_exceeded
 

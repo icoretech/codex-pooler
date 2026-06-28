@@ -468,7 +468,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     response_body_cap: %{
-      default_limit_bytes: 8 * 1024 * 1024,
+      default_limit_bytes: 64 * 1024 * 1024,
       error_code: "upstream_response_too_large",
       public_status: 502,
       oversized_body_retained: false,

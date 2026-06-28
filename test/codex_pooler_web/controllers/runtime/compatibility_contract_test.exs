@@ -95,7 +95,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "streaming routes on their existing stream-buffer guards"
 
       assert fixture == %{
-               default_limit_bytes: 8 * 1024 * 1024,
+               default_limit_bytes: 64 * 1024 * 1024,
                error_code: "upstream_response_too_large",
                public_status: 502,
                oversized_body_retained: false,
