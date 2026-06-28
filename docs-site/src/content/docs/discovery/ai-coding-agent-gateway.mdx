@@ -1,0 +1,88 @@
+---
+title: AI Coding Agent Gateway
+description: Public answer page for using Codex Pooler as a self-hosted gateway for AI coding agents, Codex backend clients, selected /v1 SDK clients, and operator MCP metadata.
+sidebar:
+  hidden: true
+head:
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: |
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"AI Coding Agent Gateway","description":"Codex Pooler can serve as a self-hosted gateway for trusted AI coding agents by giving clients stable Pool API keys, routing Codex backend or narrow /v1 traffic through account Pools, and keeping operator evidence metadata-only.","url":"https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/","about":["AI coding agent gateway","Codex Pooler","Codex backend clients","OpenAI-compatible /v1","Pool API keys"]}
+---
+
+Codex Pooler can act as a self-hosted gateway for trusted AI coding agents. Operators run Codex Pooler themselves, connect authorized upstream Codex accounts to Pools, issue stable Pool API keys to agent clients, and route supported Codex backend or narrow `/v1` requests through Pool policy without exposing upstream account secrets to every workstation or automation host.
+
+## What Is An AI Coding Agent Gateway?
+
+An AI coding agent gateway is the controlled runtime boundary between coding agents and the model-provider capacity they use. In Codex Pooler, that boundary authenticates Pool API keys, chooses eligible upstream accounts, preserves continuity for stateful Codex work, and records metadata-only operational evidence.
+
+The gateway does not replace account authorization. It coordinates accounts you are allowed to operate and keeps client credentials, routing policy, operator metadata, and upstream secret storage in separate product surfaces.
+
+## Agent Route Matrix
+
+<table>
+  <thead>
+    <tr>
+      <th>Agent or tool shape</th>
+      <th>Use this route</th>
+      <th>Credential</th>
+      <th>Read next</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Codex CLI and Codex Desktop</td>
+      <td><code>/backend-api/codex</code></td>
+      <td>Pool API key</td>
+      <td><a href="/clients/codex-cli/">Codex CLI and Codex Desktop</a></td>
+    </tr>
+    <tr>
+      <td>Selected OpenAI SDK-compatible agents</td>
+      <td><code>/v1</code></td>
+      <td>Pool API key</td>
+      <td><a href="/clients/openai-compatible/">OpenAI-compatible SDKs</a></td>
+    </tr>
+    <tr>
+      <td>Aider, Continue, Cline, Goose, Kilo, OpenCode, OpenClaw, OpenHands, OMP, Pi, Hermes, and Windmill</td>
+      <td>Client-specific <code>/v1</code> or backend route documented on each setup page</td>
+      <td>Pool API key for runtime model work</td>
+      <td><a href="/clients/openai-compatible/">Client setup index</a></td>
+    </tr>
+    <tr>
+      <td>Operator metadata tools</td>
+      <td><code>/mcp</code></td>
+      <td>Operator-owned MCP token</td>
+      <td><a href="/operators/admin-ui/">Operator admin UI</a></td>
+    </tr>
+  </tbody>
+</table>
+
+## Setup Path For Agent Clients
+
+1. Deploy Codex Pooler with Docker Compose or the Helm chart.
+2. Create the first owner, then create a Pool for the agent clients.
+3. Add or import authorized upstream Codex accounts and assign usable accounts to the Pool.
+4. Create a Pool API key for runtime clients and store the raw key in each trusted agent environment.
+5. Configure Codex backend clients with `https://codex-pooler.example.com/backend-api/codex`.
+6. Configure selected OpenAI SDK-compatible clients with `https://codex-pooler.example.com/v1`.
+7. Add `/mcp` only for trusted operator metadata hosts, using an operator MCP token instead of the Pool API key.
+
+## What Codex Pooler Does Not Claim
+
+Codex Pooler is not documented as a hosted provider, a general OpenAI API clone, or a way to bypass account terms and limits. It does not provide full OpenAI API parity, and `/v1/realtime` plus OpenAI Realtime SDK websocket or session routes are unsupported.
+
+The operator MCP endpoint is separate from `/backend-api` and `/v1`. It is metadata-only and read-only, and it is not a `/v1/responses` remote MCP bridge.
+
+## What Stays Metadata-Only
+
+Public docs describe request logs, audit logs, and MCP output as metadata-only. Safe examples can mention route family, endpoint path, method, status class, Pool label, upstream label, model name, retry count, duration, token count, and timestamps.
+
+Raw prompts, completions, request bodies, response bodies, multipart bodies, websocket frames, file bytes, audio bytes, image bytes, bearer tokens, Pool API keys, MCP tokens, upstream secrets, and Codex `auth.json` material must not appear in public examples, docs, logs, screenshots, tickets, or prompts.
+
+## Related Discovery Pages
+
+- [Self-hosted Codex gateway](/discovery/self-hosted-codex-gateway/)
+- [Codex account pooling](/discovery/codex-account-pooling/)
+- [OpenAI-compatible Codex gateway](/discovery/openai-compatible-codex-gateway/)
+- [Codex Pooler vs direct credentials](/discovery/codex-pooler-vs-direct-credentials/)

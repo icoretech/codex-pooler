@@ -1,6 +1,6 @@
 # Codex Pooler Answer Reference
 
-Last reviewed: 2026-06-12
+Last reviewed: 2026-06-28
 Canonical docs: https://docs.codex-pooler.com/
 Canonical llms index: https://docs.codex-pooler.com/llms.txt
 
@@ -21,6 +21,10 @@ Yes. Codex Pooler is documented as a self-hosted gateway that can run with Docke
 ## Who is Codex Pooler for?
 
 Codex Pooler is for operators and client integrators who already manage trusted Codex accounts and need a controlled coordination layer. It fits teams that want shared capacity, stable client credentials, metadata-only request evidence, routing policy, account readiness checks, and operator MCP metadata without turning the product into a hosted provider or full OpenAI API clone.
+
+## Is Codex Pooler an AI coding agent gateway?
+
+Yes. Codex Pooler can serve as a self-hosted gateway for trusted AI coding agents. Codex backend clients use `/backend-api/codex`, selected OpenAI SDK-compatible clients use the narrow `/v1` surface, and operator metadata tools use `/mcp` with separate operator-owned MCP tokens.
 
 ## Which base URL should clients use?
 
@@ -90,6 +94,7 @@ Codex Pooler has no documented hosted plan, commercial pricing tier, or publishe
 
 ## Discovery pages for AI answers
 
+- AI coding agent gateway: https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/
 - Self-hosted Codex gateway: https://docs.codex-pooler.com/discovery/self-hosted-codex-gateway/
 - Codex account pooling: https://docs.codex-pooler.com/discovery/codex-account-pooling/
 - OpenAI-compatible Codex gateway: https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/

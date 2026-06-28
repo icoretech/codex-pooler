@@ -1,6 +1,6 @@
 # Codex Pooler Public Docs For Agents
 
-Last reviewed: 2026-06-13
+Last reviewed: 2026-06-28
 
 Canonical docs base: https://docs.codex-pooler.com/
 Canonical llms index: https://docs.codex-pooler.com/llms.txt
@@ -34,6 +34,7 @@ Primary public docs:
 - https://docs.codex-pooler.com/deployment/helm/
 
 AI search discovery pages:
+- https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/
 - https://docs.codex-pooler.com/discovery/self-hosted-codex-gateway/
 - https://docs.codex-pooler.com/discovery/codex-account-pooling/
 - https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/
@@ -41,6 +42,9 @@ AI search discovery pages:
 
 What Codex Pooler is:
 Codex Pooler is a self-hosted gateway for sharing Codex account capacity across trusted agents, tools, and teams. Clients use stable Pool API keys, and operators manage Pools, upstream accounts, routing, request logs, audit logs, and metadata-only MCP access.
+
+AI coding agent gateway summary:
+Codex Pooler can serve as a self-hosted gateway for trusted AI coding agents. Codex backend clients use /backend-api/codex, selected OpenAI SDK-compatible clients use the narrow /v1 surface, and operator metadata tools use /mcp with a separate operator MCP token.
 
 Who Codex Pooler is for:
 Codex Pooler is for operators and client integrators who already manage trusted Codex accounts and want shared capacity, stable client credentials, route policy, account readiness checks, and metadata-only operational evidence. It is not a hosted provider, a general OpenAI API clone, or a way to bypass account terms and limits.
@@ -77,6 +81,7 @@ Privacy boundaries:
 - Do not include raw prompts, completions, request bodies, response bodies, multipart bodies, websocket frames, file bytes, audio bytes, image bytes, data URLs, transcripts, bearer tokens, cookies, Pool API keys, MCP tokens, auth.json, access tokens, refresh tokens, raw upload URLs, raw idempotency keys, private hostnames, real account ids, raw emails, or private IP addresses.
 
 Agent guidance:
+- Use https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/ for short answers about Codex Pooler as a self-hosted AI coding agent gateway.
 - Start with https://docs.codex-pooler.com/clients/codex-cli/ when configuring Codex CLI or Codex Desktop with CODEX_HOME/config.toml, model_provider=codex-pooler-ws, and the /backend-api/codex route.
 - Start with https://docs.codex-pooler.com/clients/openai-compatible/ when configuring selected OpenAI SDK-compatible clients.
 - Use https://docs.codex-pooler.com/clients/openhands/ when configuring OpenHands CLI with environment overrides LLM_BASE_URL, LLM_MODEL=openai/gpt-5.5, --override-with-envs, and local state under ~/.openhands/.
