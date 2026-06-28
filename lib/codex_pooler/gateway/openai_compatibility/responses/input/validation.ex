@@ -36,6 +36,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_input_item(%{"type" => "function_call"} = item, _payload),
     do: validate_function_call_replay_item(item)
 
+  defp validate_input_item(%{"type" => "custom_tool_call"} = item, _payload),
+    do: validate_custom_tool_call_replay_item(item)
+
   defp validate_input_item(%{"type" => "message"} = item, _payload),
     do: validate_message_item(item)
 
@@ -59,6 +62,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
        when is_binary(call_id) and call_id != "" do
     validate_function_call_output_item(item)
   end
+
+  defp validate_input_item(%{"type" => "custom_tool_call_output"} = item, _payload),
+    do: validate_custom_tool_call_output_item(item)
 
   defp validate_input_item(%{"type" => "item_reference"} = item, payload),
     do: validate_item_reference(item, payload)
@@ -307,6 +313,60 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_function_call_replay_item(_item),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
+  defp validate_custom_tool_call_replay_item(
+         %{"call_id" => call_id, "name" => name, "input" => input} = item
+       ) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "call_id",
+             "name",
+             "input",
+             "id",
+             "status",
+             "namespace",
+             "metadata",
+             @metadata_passthrough_key
+           ]),
+         :ok <- validate_nonblank(call_id),
+         :ok <- validate_nonblank(name),
+         :ok <- validate_nonblank(input),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_namespace(item),
+         :ok <- validate_optional_item_metadata(item) do
+      validate_optional_custom_tool_call_status(item)
+    end
+  end
+
+  defp validate_custom_tool_call_replay_item(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_custom_tool_call_output_item(%{"call_id" => call_id} = item) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "call_id",
+             "output",
+             "id",
+             "name",
+             "metadata",
+             @metadata_passthrough_key
+           ]),
+         true <- Map.has_key?(item, "output"),
+         :ok <- validate_nonblank(call_id),
+         :ok <- validate_function_call_output(Map.get(item, "output")),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_name(item) do
+      validate_optional_item_metadata(item)
+    else
+      false -> {:error, Error.invalid_request("input item shape is not translatable", "input")}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_custom_tool_call_output_item(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
   defp validate_function_call_output_item(item) do
     cond do
       Map.has_key?(item, "output") ->
@@ -407,6 +467,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_namespace(_item), do: :ok
+
+  defp validate_optional_name(%{"name" => name}) when is_binary(name), do: validate_nonblank(name)
+
+  defp validate_optional_name(%{"name" => _name}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_name(_item), do: :ok
+
+  defp validate_optional_custom_tool_call_status(%{"status" => status})
+       when status in ["completed", "incomplete"],
+       do: :ok
+
+  defp validate_optional_custom_tool_call_status(%{"status" => nil}), do: :ok
+
+  defp validate_optional_custom_tool_call_status(%{"status" => _status}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_custom_tool_call_status(_item), do: :ok
 
   defp validate_nonblank(value) when is_binary(value) do
     if String.trim(value) == "" do

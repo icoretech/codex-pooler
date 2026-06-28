@@ -568,6 +568,107 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end
   end
 
+  @tag :custom_tool_replay
+  @tag :v1_websocket
+  test "GET /v1/responses websocket forwards namespaced custom tool replay before dispatch" do
+    upstream =
+      start_upstream(public_websocket_completed_response("resp_v1_websocket_custom_tool_replay"))
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "v1-custom-tool-ws-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_custom_tool_previous",
+          "store" => false,
+          "generate" => true,
+          "input" => [
+            %{
+              "type" => "custom_tool_call",
+              "id" => "ctc_v1_ws_call",
+              "call_id" => "call_v1_custom_namespaced",
+              "namespace" => "browser.search",
+              "name" => "lookup",
+              "input" => "{}",
+              "status" => "completed",
+              "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
+              "internal_chat_message_metadata_passthrough" => %{
+                "turn_id" => "turn_v1_custom_call"
+              }
+            },
+            %{
+              "type" => "custom_tool_call_output",
+              "id" => "ctco_v1_ws_call",
+              "call_id" => "call_v1_custom_namespaced",
+              "name" => "lookup",
+              "output" => "synthetic custom output",
+              "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
+              "internal_chat_message_metadata_passthrough" => %{
+                "turn_id" => "turn_v1_custom_output"
+              }
+            }
+          ]
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_v1_websocket_custom_tool_replay"}
+             } = Jason.decode!(frame)
+
+      assert_receive_finalized_request!()
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["type"] == "response.create"
+      assert captured.json["generate"] == true
+      assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
+
+      assert [custom_call, custom_output] = captured.json["input"]
+      assert custom_call["type"] == "custom_tool_call"
+      assert custom_call["namespace"] == "browser.search"
+      assert custom_call["name"] == "lookup"
+      assert custom_call["input"] == "{}"
+      refute Map.has_key?(custom_call, "status")
+
+      assert custom_output["type"] == "custom_tool_call_output"
+      assert custom_output["call_id"] == "call_v1_custom_namespaced"
+      assert custom_output["name"] == "lookup"
+      assert custom_output["output"] == "synthetic custom output"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+      refute persistence_text =~ "synthetic custom output"
+      refute persistence_text =~ "resp_v1_custom_tool_previous"
+      refute persistence_text =~ "call_v1_custom_namespaced"
+      refute persistence_text =~ "turn_v1_custom_call"
+      refute persistence_text =~ "turn_v1_custom_output"
+      refute persistence_text =~ setup.authorization
+      refute persistence_text =~ setup.raw_key
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   @tag :v1_websocket
   test "GET /v1/responses websocket rejects realtime item frames before dispatch" do
     upstream = start_upstream(public_websocket_completed_response("should_not_dispatch_realtime"))
@@ -1496,6 +1597,129 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert %{"id" => "resp_v1_non_stream_visible_once"} = json_response(conn, 200)
     assert visible_codex_turn_update_count(queries) == 1
+  end
+
+  @tag :custom_tool_replay
+  @tag :tool_result_previous_response
+  test "POST /v1/responses forwards namespaced custom tool replay without metadata leakage", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_custom_tool_replay",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_custom_tool_previous",
+        "store" => false,
+        "input" => [
+          %{
+            "type" => "custom_tool_call",
+            "id" => "ctc_v1_http_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "namespace" => "browser.search",
+            "name" => "lookup",
+            "input" => "{}",
+            "status" => "completed",
+            "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_v1_custom_call"}
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "id" => "ctco_v1_http_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "name" => "lookup",
+            "output" => "synthetic custom output",
+            "metadata" => %{"turn_id" => "turn_v1_custom_output_legacy"},
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_v1_custom_output"
+            }
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_custom_tool_replay", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert [custom_call, custom_output] = captured.json["input"]
+    assert custom_call["type"] == "custom_tool_call"
+    assert custom_call["namespace"] == "browser.search"
+    assert custom_call["name"] == "lookup"
+    assert custom_call["input"] == "{}"
+    refute Map.has_key?(custom_call, "status")
+
+    assert custom_output["type"] == "custom_tool_call_output"
+    assert custom_output["call_id"] == "call_v1_custom_namespaced"
+    assert custom_output["name"] == "lookup"
+    assert custom_output["output"] == "synthetic custom output"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+    refute persistence_text =~ "synthetic custom output"
+    refute persistence_text =~ "resp_v1_custom_tool_previous"
+    refute persistence_text =~ "call_v1_custom_namespaced"
+    refute persistence_text =~ "turn_v1_custom_call"
+    refute persistence_text =~ "turn_v1_custom_output"
+    refute persistence_text =~ setup.authorization
+    refute persistence_text =~ setup.raw_key
+    refute persistence_text =~ "raw_request"
+  end
+
+  @tag :custom_tool_replay
+  test "POST /v1/responses rejects invalid custom tool replay before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_v1_custom_tool_previous",
+        "input" => [
+          %{
+            "type" => "custom_tool_call",
+            "call_id" => "call_v1_custom_namespaced",
+            "namespace" => " ",
+            "name" => "lookup",
+            "input" => "{}"
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_v1_custom_namespaced",
+            "output" => "synthetic custom output"
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(conn, 400)
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   @tag :tool_result_previous_response

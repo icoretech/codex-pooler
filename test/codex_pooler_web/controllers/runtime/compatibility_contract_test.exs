@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     backend_transcription
     backend_image_proxy_surface
     responses_chat
+    response_body_cap
     backend_v1_alias_surface
     websocket_continuity
     reasoning_minimal
@@ -80,6 +81,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "has no pending compatibility gaps" do
       assert CompatibilityMatrix.pending_gaps() == []
+    end
+
+    test "documents bounded non-streaming upstream response body behavior" do
+      feature = CompatibilityMatrix.by_slug!(:response_body_cap)
+      fixture = CompatibilityMatrix.fixture!(:response_body_cap)
+
+      assert feature.current == :bounded_non_streaming_upstream_body
+      assert :degraded in feature.categories
+      assert feature.contract =~ "bounded reader"
+      assert feature.contract =~ "upstream_response_too_large"
+      assert feature.contract =~ "do not retain oversized body bytes"
+      assert feature.contract =~ "streaming routes on their existing stream-buffer guards"
+
+      assert fixture == %{
+               default_limit_bytes: 8 * 1024 * 1024,
+               error_code: "upstream_response_too_large",
+               public_status: 502,
+               oversized_body_retained: false,
+               metadata_keys: [
+                 "response_body_limit_exceeded",
+                 "response_body_limit_bytes",
+                 "response_body_seen_bytes",
+                 "response_body_content_length"
+               ],
+               streaming_uses_existing_buffer_guards: true
+             }
     end
 
     test "documents reject versus strip behavior for unsupported OpenAI controls" do

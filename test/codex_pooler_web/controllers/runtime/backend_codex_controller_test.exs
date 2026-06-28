@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Transports.BoundedResponseBody
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -1228,6 +1229,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert_turn_state_not_persisted!(setup, request_turn_state)
     assert_turn_state_not_persisted!(setup, response_turn_state)
+  end
+
+  test "POST /backend-api/codex/responses rejects oversized upstream response bodies metadata-only",
+       %{conn: conn} do
+    sentinel = "raw-oversized-upstream-response-sentinel"
+
+    oversized_body =
+      ~s({"sentinel":"#{sentinel}","padding":") <>
+        String.duplicate("x", BoundedResponseBody.default_max_bytes()) <> ~s("})
+
+    upstream =
+      start_upstream(
+        FakeUpstream.raw_response(oversized_body,
+          headers: [
+            {"content-type", "application/json"},
+            {"content-length", to_string(byte_size(oversized_body))}
+          ]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic oversized upstream response request"
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "upstream_response_too_large",
+               "message" => "upstream response body exceeded maximum allowed size"
+             }
+           } = response = json_response(conn, 502)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "failed"
+    assert request.response_status_code == 502
+    assert request.last_error_code == "upstream_response_too_large"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 502
+    assert attempt.network_error_code == "upstream_response_too_large"
+    assert attempt.error_message == "upstream response body exceeded maximum allowed size"
+    assert attempt.response_metadata["error_kind"] == "upstream_response_too_large"
+    assert attempt.response_metadata["status_code"] == 200
+    assert attempt.response_metadata["response_body_limit_exceeded"] == true
+
+    assert attempt.response_metadata["response_body_limit_bytes"] ==
+             BoundedResponseBody.default_max_bytes()
+
+    assert attempt.response_metadata["response_body_content_length"] == byte_size(oversized_body)
+    assert is_integer(attempt.response_metadata["response_body_seen_bytes"])
+
+    assert [demotion] = Repo.all(from(d in BridgeDemotion))
+    assert demotion.reason_code == "upstream_response_too_large"
+
+    refute inspect(response) =~ sentinel
+    refute inspect(request.request_metadata) =~ sentinel
+    refute inspect(attempt.response_metadata) =~ sentinel
+    refute inspect(RequestLogs.list(setup.pool.id, limit: 10).items) =~ sentinel
   end
 
   @tag :client_metadata

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Transports.BoundedResponseBody
 
   test "first-event metadata preserves local usage-limit classification and sanitized limit type" do
     response = %Req.Response{
@@ -76,6 +77,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
              "status_code" => 429,
              "upstream_request_id" => "req_123"
            }
+  end
+
+  test "response metadata records response body limit evidence without retaining body bytes" do
+    collect = BoundedResponseBody.collector(8)
+
+    response =
+      Req.Response.new(status: 200)
+      |> Req.Response.put_header("content-type", "application/json")
+      |> Req.Response.put_header("content-length", "9")
+
+    assert {:halt, {_request, response}} = collect.({:data, "raw-body"}, {Req.new(), response})
+
+    assert Metadata.response_metadata(response, "upstream_response_too_large", %{}) == %{
+             "content_type" => "application/json",
+             "error_kind" => "upstream_response_too_large",
+             "response_body_content_length" => 9,
+             "response_body_limit_exceeded" => true,
+             "response_body_limit_bytes" => 8,
+             "response_body_seen_bytes" => 8,
+             "status_code" => 200
+           }
+
+    refute Metadata.response_body(response) =~ "raw-body"
   end
 
   test "websocket metadata ignores unknown Codex rate limit reached type headers" do

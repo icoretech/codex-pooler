@@ -15,6 +15,7 @@ defmodule CodexPooler.FakeUpstream do
   @type mode ::
           {:json, non_neg_integer(), map()}
           | {:json_headers, non_neg_integer(), map(), [{String.t(), String.t()}]}
+          | {:raw_body, non_neg_integer(), binary(), [{String.t(), String.t()}]}
           | {:barrier_json, non_neg_integer(), map(), pid(), reference()}
           | {:path_json, map()}
           | {:file_protocol, map()}
@@ -109,6 +110,10 @@ defmodule CodexPooler.FakeUpstream do
 
   def json_response_with_headers(payload, headers, status \\ 200),
     do: {:json_headers, status, payload, headers}
+
+  def raw_response(body, opts \\ []) when is_binary(body) and is_list(opts) do
+    {:raw_body, Keyword.get(opts, :status, 200), body, Keyword.get(opts, :headers, [])}
+  end
 
   def barrier_json_response(payload, opts) when is_map(payload) and is_list(opts) do
     {:barrier_json, Keyword.get(opts, :status, 200), payload, Keyword.fetch!(opts, :notify),
@@ -346,6 +351,15 @@ defmodule CodexPooler.FakeUpstream do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, Jason.encode!(payload))
+  end
+
+  defp respond(_pid, conn, {:raw_body, status, body, headers}, _request) do
+    conn =
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        Plug.Conn.put_resp_header(conn, key, value)
+      end)
+
+    Plug.Conn.send_resp(conn, status, body)
   end
 
   defp respond(_pid, conn, {:barrier_json, status, payload, notify, release_ref}, _request) do
