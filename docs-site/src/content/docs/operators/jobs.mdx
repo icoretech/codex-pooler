@@ -63,8 +63,8 @@ The current worker groups are:
   <tbody>
     <tr>
       <td>Catalog sync</td>
-      <td>Refreshes model catalog metadata for active Pools.</td>
-      <td>Every 30 minutes, plus manual enqueue.</td>
+      <td>Refreshes model catalog metadata for active Pools. Successful upstream assignment edits on an active Pool enqueue an immediate asynchronous sync for that Pool so model source metadata can refresh before the next 30-minute run. Routing eligibility and in-flight work are unchanged.</td>
+      <td>Every 30 minutes, plus manual enqueue and successful active-Pool assignment edits.</td>
     </tr>
     <tr>
       <td>Pricing import</td>

@@ -3,7 +3,10 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.PoolWorkflow
+  alias CodexPooler.Catalog
   alias CodexPooler.Events
+  alias CodexPooler.FakeUpstream
+  alias CodexPooler.Jobs.CatalogSyncWorker
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -13,6 +16,11 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+
+  setup do
+    Repo.delete_all(Oban.Job)
+    :ok
+  end
 
   describe "pool workflow broadcasts" do
     test "broadcasts one pool event after coordinated creation commits" do
@@ -98,7 +106,166 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
       assert_receive {Events, event}
       assert event.pool_id == target_pool.id
       assert event.reason == "pool_updated"
+      assert_receive {Events, job_event}
+      assert job_event.pool_id == target_pool.id
+      assert job_event.reason == "job_status_updated"
+      assert job_event.payload["worker"] == "catalog_sync"
+      assert job_event.payload["status"] == "scheduled"
       refute_receive {Events, _event}
+    end
+  end
+
+  describe "pool assignment catalog sync enqueue" do
+    test "creation with upstream identity selection enqueues an immediate catalog sync" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-create-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      identity = active_upstream_identity_fixture(%{chatgpt_account_id: "acct_catalog_create"})
+
+      assert {:ok, pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Catalog Create Sync",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [identity.id],
+                 "api_key_ids" => []
+               })
+
+      assert [job] = all_enqueued(worker: CatalogSyncWorker)
+      assert job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+    end
+
+    test "active assignment edit enqueues one immediate catalog sync" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-edit-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "catalog-edit-sync", name: "Catalog Edit Sync"})
+      %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+      assert {:ok, updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Catalog Edit Sync Updated",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_assignment_ids" => [assignment.id],
+                 "api_key_ids" => []
+               })
+
+      assert updated_pool.id == pool.id
+      assert [job] = all_enqueued(worker: CatalogSyncWorker)
+      assert job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+    end
+
+    test "rolled back assignment edit enqueues no catalog sync" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-rollback-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      missing_api_key_id = Ecto.UUID.generate()
+      identity = active_upstream_identity_fixture(%{chatgpt_account_id: "acct_catalog_rollback"})
+
+      assert {:error, %{message: "selected API keys are not available"}} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Catalog Rollback Sync",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [identity.id],
+                 "api_key_ids" => [missing_api_key_id]
+               })
+
+      refute Repo.get_by(Pool, slug: "catalog-rollback-sync")
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+    end
+
+    test "edit without assignment selection enqueues no catalog sync" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-noop-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "catalog-noop-sync", name: "Catalog Noop Sync"})
+
+      assert {:ok, updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Catalog Noop Sync Updated",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "api_key_ids" => []
+               })
+
+      assert updated_pool.id == pool.id
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+    end
+
+    test "final inactive pool assignment edit enqueues no catalog sync" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "catalog-inactive-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "catalog-inactive-sync", name: "Catalog Inactive Sync"})
+      %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+      assert {:ok, updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Catalog Inactive Sync Updated",
+                 "status" => "disabled",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_assignment_ids" => [assignment.id],
+                 "api_key_ids" => []
+               })
+
+      assert updated_pool.status == "disabled"
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+    end
+
+    test "drained assignment edit sync refreshes model source metadata for new upstream" do
+      %{user: owner} =
+        bootstrap_owner_fixture(%{"email" => "catalog-freshness-owner@example.com"})
+
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "catalog-freshness-sync", name: "Catalog Freshness Sync"})
+
+      first_upstream =
+        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-immediate-sync"}]}))
+
+      second_upstream =
+        start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-immediate-sync"}]}))
+
+      first =
+        active_upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct_immediate_first",
+          metadata: %{"base_url" => FakeUpstream.url(first_upstream)}
+        })
+
+      assert {:ok, %{models: [initial_model]}} = Catalog.sync_pool_catalog(pool)
+      assert initial_model.metadata["source_assignment_ids"] == [first.assignment.id]
+
+      second_identity =
+        active_upstream_identity_fixture(%{
+          chatgpt_account_id: "acct_immediate_second",
+          metadata: %{"base_url" => FakeUpstream.url(second_upstream)}
+        })
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(second_identity, %{
+                 secret_kind: "access_token",
+                 plaintext: "catalog-test-token-second"
+               })
+
+      assert {:ok, _updated_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Catalog Freshness Sync Updated",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_identity_ids" => [first.identity.id, second_identity.id],
+                 "api_key_ids" => []
+               })
+
+      assignments_by_identity =
+        pool
+        |> Upstreams.list_pool_assignments()
+        |> Map.new(&{&1.upstream_identity_id, &1})
+
+      second_assignment = Map.fetch!(assignments_by_identity, second_identity.id)
+      assert second_assignment.status == "active"
+      assert [job] = all_enqueued(worker: CatalogSyncWorker)
+      assert job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+      assert %{success: 1, failure: 0} = Oban.drain_queue(queue: :jobs)
+
+      refreshed_model = Catalog.get_model_by_exposed_id(pool, "gpt-immediate-sync")
+      expected_assignment_ids = Enum.sort([first.assignment.id, second_assignment.id])
+
+      assert refreshed_model.source_assignment_count == 2
+      assert refreshed_model.metadata["source_assignment_ids"] == expected_assignment_ids
     end
   end
 
@@ -156,5 +323,11 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
     fun
     |> Task.async()
     |> Task.await(5_000)
+  end
+
+  defp start_upstream(mode) do
+    {:ok, upstream} = FakeUpstream.start_link(mode)
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    upstream
   end
 end

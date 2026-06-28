@@ -3,13 +3,20 @@ defmodule CodexPooler.Admin.PoolWorkflow do
   Admin pool workflows that coordinate pool settings, upstream assignments, and API keys.
   """
 
+  require Logger
+
   alias CodexPooler.Access
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Events
+  alias CodexPooler.Jobs
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+
+  @assignment_selection_keys ~w(upstream_identity_ids upstream_assignment_ids)
+  @catalog_sync_trigger_kind "manual"
+  @pool_active "active"
 
   @type access_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type pool_result :: {:ok, Pool.t()} | {:error, Ecto.Changeset.t() | access_error()}
@@ -36,6 +43,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end)
     |> normalize_transaction_result()
     |> maybe_broadcast_pool_workflow("pool_created")
+    |> maybe_enqueue_assignment_catalog_sync(attrs)
   end
 
   def create_pool_with_related_settings(_scope, _attrs),
@@ -53,6 +61,7 @@ defmodule CodexPooler.Admin.PoolWorkflow do
     end)
     |> normalize_transaction_result()
     |> maybe_broadcast_pool_workflow("pool_updated")
+    |> maybe_enqueue_assignment_catalog_sync(attrs)
   end
 
   def update_pool_with_related_settings(_scope, _pool_or_id, _attrs),
@@ -198,6 +207,46 @@ defmodule CodexPooler.Admin.PoolWorkflow do
 
   defp normalize_transaction_result({:ok, result}), do: {:ok, result}
   defp normalize_transaction_result({:error, reason}), do: {:error, reason}
+
+  @spec maybe_enqueue_assignment_catalog_sync(pool_result(), map()) :: pool_result()
+  defp maybe_enqueue_assignment_catalog_sync(
+         {:ok, %Pool{status: @pool_active} = pool} = result,
+         attrs
+       ) do
+    if assignment_selection_attrs?(attrs) do
+      case Jobs.enqueue_catalog_sync(pool, trigger_kind: @catalog_sync_trigger_kind) do
+        {:ok, _job} ->
+          result
+
+        {:error, reason} ->
+          log_catalog_sync_enqueue_failure(pool, reason)
+          result
+      end
+    else
+      result
+    end
+  end
+
+  defp maybe_enqueue_assignment_catalog_sync(result, _attrs), do: result
+
+  @spec assignment_selection_attrs?(map()) :: boolean()
+  defp assignment_selection_attrs?(attrs) when is_map(attrs) do
+    Enum.any?(@assignment_selection_keys, &Map.has_key?(attrs, &1))
+  end
+
+  @spec log_catalog_sync_enqueue_failure(Pool.t(), term()) :: :ok
+  defp log_catalog_sync_enqueue_failure(%Pool{} = pool, reason) do
+    reason = catalog_sync_enqueue_failure_code(reason)
+
+    Logger.warning(fn ->
+      "pool assignment catalog sync enqueue failed pool_id=#{pool.id} " <>
+        "trigger_kind=#{@catalog_sync_trigger_kind} reason=#{reason}"
+    end)
+  end
+
+  @spec catalog_sync_enqueue_failure_code(term()) :: String.t()
+  defp catalog_sync_enqueue_failure_code(%Ecto.Changeset{}), do: "invalid_job"
+  defp catalog_sync_enqueue_failure_code(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp maybe_broadcast_pool_workflow({:ok, %Pool{} = pool} = result, reason) do
     Events.broadcast_pools(pool.id, reason, %{

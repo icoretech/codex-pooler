@@ -239,6 +239,8 @@ The Upstreams step selects which active upstream accounts are available to the P
 
 Assign more than one upstream when you want load distribution, fallback, quota flexibility, or account maintenance without moving clients to a different API key. Keep an upstream unassigned when it should not receive work for that Pool.
 
+When a saved edit changes upstream assignments for an active Pool, Codex Pooler enqueues an immediate asynchronous catalog sync for that Pool so model source metadata can refresh without waiting for the 30-minute scheduler. The sync does not bypass runtime eligibility checks or change the routing state held by in-flight requests or already-open streams.
+
 ## API Keys Step
 
 The API keys step selects existing Pool API keys assigned to the Pool. Assigning a key lets that client credential use this Pool. Creating or rotating the raw key happens on the API keys page, where the raw secret is shown only once.
