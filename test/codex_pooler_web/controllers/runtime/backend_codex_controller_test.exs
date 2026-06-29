@@ -66,6 +66,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert model["visibility"] == "list"
     assert model["base_instructions"] == ""
     assert model["truncation_policy"] == %{"mode" => "bytes", "limit" => 10_000}
+    assert model["include_skills_usage_instructions"] == false
     assert model["supports_parallel_tool_calls"] == setup.model.supports_tools
     assert model["input_modalities"] == ["text"]
     assert model["upstream_model_id"] == setup.model.upstream_model_id
@@ -488,6 +489,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                 "personality_pragmatic" => "pragmatic voice"
               }
             },
+            "include_skills_usage_instructions" => true,
             "prefer_websockets" => true,
             "reasoning_summary_format" => "json",
             "supported_reasoning_levels" => ["max", "low", "focused"],
@@ -536,6 +538,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert model["comp_hash"] == "comp-fixture-hash"
     assert model["tool_mode"] == "code_mode_only"
     assert model["use_responses_lite"] == true
+    assert model["include_skills_usage_instructions"] == true
     refute Map.has_key?(model, "upstream_model")
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
@@ -563,6 +566,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "minimal_client_version" => nil,
             "model_messages" => ["unexpected"],
             "prefer_websockets" => "true",
+            "include_skills_usage_instructions" => "true",
             "reasoning_summary_format" => %{"format" => "json"},
             "comp_hash" => ["unexpected"],
             "tool_mode" => "future_mode"
@@ -578,6 +582,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert is_nil(model["minimal_client_version"])
     assert is_nil(model["model_messages"])
     assert model["prefer_websockets"] == false
+    assert model["include_skills_usage_instructions"] == false
     assert is_nil(model["reasoning_summary_format"])
     refute Map.has_key?(model, "comp_hash")
     assert is_nil(model["tool_mode"])

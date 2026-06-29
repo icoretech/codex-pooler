@@ -75,6 +75,8 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
         "supports_parallel_tool_calls" => model.supports_tools,
         "supports_image_detail_original" => supports_image_detail_original?(metadata),
         "model_messages" => map_metadata(metadata, "model_messages"),
+        "include_skills_usage_instructions" =>
+          bool_metadata(metadata, "include_skills_usage_instructions"),
         "prefer_websockets" => bool_metadata(metadata, "prefer_websockets"),
         "reasoning_summary_format" => string_metadata(metadata, "reasoning_summary_format"),
         "context_window" => metadata["context_window"],
