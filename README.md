@@ -1512,6 +1512,9 @@ web, worker, scheduler, and migration roles. For a real install, pin the chart
 👉 [codex-action](https://github.com/icoretech/codex-action) runs OpenAI Codex
 CLI non-interactively in GitHub Actions workflows
 
+👉 [codex-docker](https://github.com/icoretech/codex-docker) provides a
+multi-arch OpenAI Codex CLI Docker image built from official upstream releases
+
 ## Local Development
 
 Local development runs Phoenix on the host and Postgres through the dev compose
