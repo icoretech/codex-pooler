@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.5...codex-pooler-v0.4.6) (2026-06-29)
+
+
+### Features
+
+* **admin:** add saved reset bank panel to upstream cards ([d8c3474](https://github.com/icoretech/codex-pooler/commit/d8c347414ec288d74339bd8d548f42bf98eb1ba0))
+* **admin:** add upstream pool lanes ([243fcc0](https://github.com/icoretech/codex-pooler/commit/243fcc0e8a612e4fc229d6c2451e3de8c30ee87d))
+* **admin:** move banked reset meter into quota panel ([445e0fa](https://github.com/icoretech/codex-pooler/commit/445e0fa040ca9d4d929bf1a5e2474ab5c3d22799))
+* **admin:** refine saved reset dialogs and docs links ([a15aac3](https://github.com/icoretech/codex-pooler/commit/a15aac33a900bb61d3acd1b5534408ffa287d87c))
+* **upstreams:** track saved reset first-seen metadata ([6f59228](https://github.com/icoretech/codex-pooler/commit/6f5922863b9fb2997ac808bd93e74fc4ca415c8c))
+
+
+### Bug Fixes
+
+* **admin:** show pointer cursor on pools footer trigger ([6fffaa5](https://github.com/icoretech/codex-pooler/commit/6fffaa53bd0c097d3fb7687f98a6cdca36ed022b))
+* **admin:** show upstream card issue borders without shadows ([f070320](https://github.com/icoretech/codex-pooler/commit/f0703204236860ef387c5928a3769550287df959))
+* **upstreams:** fall back past HTML usage auth pages ([082bdda](https://github.com/icoretech/codex-pooler/commit/082bdda97db6f8eccfb53fbcdd0d95469ef29a3a))
+
 ## [0.4.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.4...codex-pooler-v0.4.5) (2026-06-28)
 
 
