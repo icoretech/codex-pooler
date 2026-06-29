@@ -62,6 +62,50 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonDocumentLossless
       assert Enum.count(values, fn {key, _value} -> key == "repeat" end) == 2
     end
 
+    test "preserves synthetic high-entropy values while keeping JSON parseable" do
+      synthetic_high_entropy_value =
+        "synthetic-high-entropy-placeholder-Zx9Kq3Wm7Pv2Lr8Nt4Bc6Df1Gh5Jy"
+
+      original = """
+      {
+        "metadata": {
+          "kind": "sanitized-fixture",
+          "nested": {
+            "synthetic_value": "#{synthetic_high_entropy_value}",
+            "description": "This verbose synthetic fixture exists to keep token reduction observable."
+          }
+        },
+        "records": [
+          {
+            "name": "alpha",
+            "status": "ok",
+            "notes": "Pretty printed whitespace and repeated plain fields should disappear during minification."
+          },
+          {
+            "name": "beta",
+            "status": "ok",
+            "notes": "The JSON document strategy must preserve values exactly instead of masking content."
+          }
+        ],
+        "summary": {
+          "line_count": 2,
+          "safe_fixture": true
+        }
+      }
+      """
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               JsonDocumentLossless.compress(original, model: @model)
+
+      assert Jason.decode!(compressed) == Jason.decode!(original)
+      assert compressed =~ synthetic_high_entropy_value
+      assert String.contains?(compressed, "\n...[compressed]...\n") == false
+      assert String.contains?(compressed, " ...[compressed]... ") == false
+      assert metadata.strategy == :json_document_lossless
+      assert metadata.original_tokens > metadata.compressed_tokens
+      refute inspect(metadata) =~ synthetic_high_entropy_value
+    end
+
     test "skips arrays, invalid JSON, tiny token-neutral objects, and missing tokenizers" do
       assert :skip = JsonDocumentLossless.compress(~S([{"status":"ok"}]), model: @model)
       assert :skip = JsonDocumentLossless.compress(~S({"status": "open",}), model: @model)

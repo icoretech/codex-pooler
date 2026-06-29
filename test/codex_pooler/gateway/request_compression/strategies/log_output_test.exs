@@ -203,6 +203,36 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutputTest do
       assert_safe_metadata(metadata, :log_output, sentinel)
     end
 
+    test "keeps synthetic high-entropy values out of lossy search-like log metadata" do
+      synthetic_high_entropy_value =
+        "synthetic-high-entropy-placeholder-Zx9Kq3Wm7Pv2Lr8Nt4Bc6Df1Gh5Jy"
+
+      content =
+        grep_failure_log_fixture(3,
+          summary: "search completed with 3 errors",
+          sentinel: synthetic_high_entropy_value
+        )
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               LogOutput.compress(content,
+                 model: @model,
+                 min_bytes: 0,
+                 min_lines: 1,
+                 head_lines: 0,
+                 tail_lines: 0,
+                 context_lines: 0,
+                 max_important_lines: 1
+               )
+
+      assert compressed =~ "[compressed log output: omitted"
+      assert compressed =~ "rg: error: fixture_1.ex: No such file or directory"
+      assert compressed =~ "grep: error: fixture_2.ex: Permission denied"
+      assert compressed =~ "error: search backend fixture 3 exited with status 2"
+      assert compressed =~ "search completed with 3 errors"
+      refute compressed =~ synthetic_high_entropy_value
+      assert_safe_metadata(metadata, :log_output, synthetic_high_entropy_value)
+    end
+
     test "skips grep-shaped summaries when a referenced detail would be omitted" do
       content =
         grep_failure_log_fixture(2,
