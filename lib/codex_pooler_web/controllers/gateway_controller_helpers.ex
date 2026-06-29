@@ -12,8 +12,6 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.OperationalSettings
 
-  @websocket_upgrade_timeout_ms :timer.minutes(5)
-
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
@@ -119,9 +117,12 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
   @spec websocket_upgrade_opts() :: keyword()
   def websocket_upgrade_opts do
+    settings = OperationalSettings.current()
+
     [
-      timeout: @websocket_upgrade_timeout_ms,
-      max_frame_size: OperationalSettings.current().max_decompressed_body_bytes,
+      timeout: settings.websocket_idle_timeout_ms,
+      max_frame_size: settings.max_decompressed_body_bytes,
+      max_fragmented_message_size: settings.max_decompressed_body_bytes,
       compress: false
     ]
   end

@@ -72,6 +72,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     init-prompt-sentinel
   )
 
+  defmodule TinyTimeoutPlug do
+    @moduledoc false
+
+    import Plug.Conn
+
+    def init(opts), do: opts
+
+    def call(conn, opts) do
+      conn
+      |> WebSockAdapter.upgrade(
+        CodexPoolerWeb.Runtime.BackendCodexWebsocketTest.TinyTimeoutSocket,
+        %{test_pid: Keyword.fetch!(opts, :test_pid)},
+        timeout: Keyword.fetch!(opts, :timeout_ms),
+        compress: false
+      )
+      |> halt()
+    end
+  end
+
+  defmodule TinyTimeoutSocket do
+    @moduledoc false
+
+    @behaviour WebSock
+
+    @impl WebSock
+    def init(state), do: {:ok, state}
+
+    @impl WebSock
+    def handle_in({text, [opcode: :text]}, state), do: {:push, {:text, text}, state}
+
+    @impl WebSock
+    def handle_info(_message, state), do: {:ok, state}
+
+    @impl WebSock
+    def terminate(reason, %{test_pid: test_pid}) do
+      send(test_pid, {:tiny_timeout_terminated, reason})
+      :ok
+    end
+  end
+
   test "GET /backend-api/codex/responses requires websocket upgrade", %{conn: conn} do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
 
@@ -145,6 +185,170 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert captured.method == "WEBSOCKET"
       assert captured.path == "/backend-api/codex/responses"
       refute inspect({request.request_metadata, captured.json}) =~ setup.authorization
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /backend-api/codex/responses keeps production-min idle open before delayed response" do
+    setup_runtime_ingress_override(%OperationalSettings{
+      max_decompressed_body_bytes: 12_000,
+      upstream_receive_timeout_ms: 1_000,
+      websocket_idle_timeout_ms: 60_000
+    })
+
+    upstream =
+      start_upstream(
+        FakeUpstream.delayed_sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_ws_min_idle_delayed",
+                 "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+               }
+             }}
+          ],
+          interval_ms: 120
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "public-ws-min-idle-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    started = System.monotonic_time(:millisecond)
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => String.duplicate("x", 7_000),
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      elapsed_ms = System.monotonic_time(:millisecond) - started
+
+      assert elapsed_ms >= 100
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_ws_min_idle_delayed"}
+             } =
+               Jason.decode!(frame)
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /backend-api/codex/responses rejects frames above the configured body cap" do
+    setup_runtime_ingress_override(%OperationalSettings{
+      max_decompressed_body_bytes: 700,
+      websocket_idle_timeout_ms: 60_000
+    })
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_oversized_frame"}))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "public-ws-oversized-frame-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    try do
+      {{conn, _websocket, code, reason}, _logs} =
+        with_log(fn ->
+          {conn, websocket} =
+            public_websocket_send_text!(conn, websocket, ref, String.duplicate("x", 1_000))
+
+          public_websocket_receive_close!(conn, websocket, ref)
+        end)
+
+      assert code == 1009
+      assert reason == ""
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.aggregate(Request, :count) == 0
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /backend-api/codex/responses rejects fragmented messages above the configured body cap" do
+    setup_runtime_ingress_override(%OperationalSettings{
+      max_decompressed_body_bytes: 700,
+      websocket_idle_timeout_ms: 60_000
+    })
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_fragmented_frame"}))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "public-ws-fragmented-frame-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    try do
+      {{conn, _websocket, code, reason}, _logs} =
+        with_log(fn ->
+          {conn, websocket} =
+            public_websocket_send_fragmented_text!(
+              conn,
+              websocket,
+              ref,
+              String.duplicate("x", 400),
+              String.duplicate("x", 400)
+            )
+
+          public_websocket_receive_close!(conn, websocket, ref)
+        end)
+
+      assert code == 1009
+      assert reason == ""
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.aggregate(Request, :count) == 0
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "direct tiny websocket timeout harness closes with sanitized reason" do
+    port = start_tiny_timeout_endpoint!(25)
+    {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/tiny-timeout", [])
+    {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
+    {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
+
+    try do
+      assert_receive {:tiny_timeout_terminated, :timeout}, 1_000
+      {conn, _websocket, code, reason} = public_websocket_receive_close!(conn, websocket, ref)
+
+      assert code == 1002
+      assert reason == ""
 
       conn
     after
@@ -7205,6 +7409,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     for forbidden_term <- @websocket_lifecycle_forbidden_terms do
       refute downcased_logs =~ forbidden_term
     end
+  end
+
+  defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do
+    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+
+    Application.put_env(
+      :codex_pooler,
+      OperationalSettings,
+      previous
+      |> Keyword.put(:settings, settings)
+      |> Keyword.put(:use_instance_settings?, false)
+    )
+
+    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp start_tiny_timeout_endpoint!(timeout_ms) do
+    {:ok, server} =
+      Bandit.start_link(
+        plug: {__MODULE__.TinyTimeoutPlug, test_pid: self(), timeout_ms: timeout_ms},
+        port: 0,
+        ip: {127, 0, 0, 1},
+        startup_log: false
+      )
+
+    on_exit(fn ->
+      try do
+        ThousandIsland.stop(server)
+      catch
+        :exit, _reason -> :ok
+      end
+    end)
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    port
   end
 
   defp websocket_auth_refresh_payload(setup, marker) do

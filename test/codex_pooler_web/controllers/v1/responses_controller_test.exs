@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       pricing_config: 1,
       pricing_snapshot!: 2,
       prime_routing_quota!: 1,
+      public_websocket_receive_close!: 3,
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
       put_model_source_assignments!: 2,
@@ -4822,6 +4823,43 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert request.endpoint == "/v1/responses"
       assert request.transport == "websocket"
       assert request.status == "succeeded"
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :v1_websocket
+  test "GET /v1/responses websocket rejects frames above the shared configured body cap" do
+    setup_runtime_ingress_override(%OperationalSettings{
+      max_decompressed_body_bytes: 700,
+      websocket_idle_timeout_ms: 60_000
+    })
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_v1_oversized_frame"}))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "v1-ws-oversized-frame-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      {{conn, _websocket, code, reason}, _logs} =
+        with_log(fn ->
+          {conn, websocket} =
+            public_websocket_send_text!(conn, websocket, ref, String.duplicate("x", 1_000))
+
+          public_websocket_receive_close!(conn, websocket, ref)
+        end)
+
+      assert code == 1009
+      assert reason == ""
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.aggregate(Request, :count) == 0
 
       conn
     after

@@ -88,11 +88,14 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
              GatewayControllerHelpers.request_opts(conn)
   end
 
-  test "websocket upgrade frame size follows the configured ingress body limit" do
+  test "websocket upgrade options follow live hardened operational settings" do
     previous_config = Application.get_env(:codex_pooler, OperationalSettings)
 
     Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{max_decompressed_body_bytes: 12_345}
+      settings: %OperationalSettings{
+        max_decompressed_body_bytes: 12_345,
+        websocket_idle_timeout_ms: 90_000
+      }
     )
 
     on_exit(fn ->
@@ -104,9 +107,23 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
 
     opts = GatewayControllerHelpers.websocket_upgrade_opts()
 
-    assert Keyword.fetch!(opts, :timeout) == :timer.minutes(5)
+    assert Keyword.fetch!(opts, :timeout) == 90_000
     assert Keyword.fetch!(opts, :max_frame_size) == 12_345
+    assert Keyword.fetch!(opts, :max_fragmented_message_size) == 12_345
     assert Keyword.fetch!(opts, :compress) == false
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{
+        max_decompressed_body_bytes: 54_321,
+        websocket_idle_timeout_ms: 120_000
+      }
+    )
+
+    opts = GatewayControllerHelpers.websocket_upgrade_opts()
+
+    assert Keyword.fetch!(opts, :timeout) == 120_000
+    assert Keyword.fetch!(opts, :max_frame_size) == 54_321
+    assert Keyword.fetch!(opts, :max_fragmented_message_size) == 54_321
   end
 
   test "send_error renders pinned continuation recovery header and body fields" do

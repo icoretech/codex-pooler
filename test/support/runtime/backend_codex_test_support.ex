@@ -881,6 +881,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     {conn, websocket}
   end
 
+  def public_websocket_send_fragmented_text!(conn, websocket, ref, first_fragment, final_fragment) do
+    first_data = client_websocket_frame(false, :text, first_fragment)
+    {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, first_data)
+    final_data = client_websocket_frame(true, :continuation, final_fragment)
+    {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, final_data)
+    {conn, websocket}
+  end
+
+  def public_websocket_receive_close!(
+        conn,
+        websocket,
+        ref,
+        timeout_ms \\ @websocket_frame_timeout
+      ) do
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            case decode_public_websocket_close(websocket, ref, responses) do
+              {:ok, websocket, code, reason} ->
+                {conn, websocket, code, reason}
+
+              {:cont, websocket} ->
+                public_websocket_receive_close!(conn, websocket, ref, timeout_ms)
+            end
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("websocket close receive failed: #{inspect(reason)}")
+
+          :unknown ->
+            public_websocket_receive_close!(conn, websocket, ref, timeout_ms)
+        end
+    after
+      timeout_ms -> flunk("timed out waiting for websocket close")
+    end
+  end
+
   def public_websocket_receive_text!(conn, websocket, ref) do
     receive do
       message ->
@@ -935,6 +973,73 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       {:close, code, reason}, _acc -> flunk("websocket closed: #{inspect({code, reason})}")
       _frame, acc -> {:cont, acc}
     end)
+  end
+
+  def decode_public_websocket_close(websocket, ref, responses) do
+    Enum.reduce_while(responses, {:cont, websocket}, fn
+      {:data, ^ref, data}, {:cont, websocket} ->
+        decode_public_websocket_close_data(websocket, data)
+
+      _part, acc ->
+        {:cont, acc}
+    end)
+  end
+
+  defp decode_public_websocket_close_data(websocket, data) do
+    case Mint.WebSocket.decode(websocket, data) do
+      {:ok, websocket, frames} ->
+        continue_decoded_public_websocket_close(websocket, frames)
+
+      {:error, _websocket, reason} ->
+        flunk("websocket close decode failed: #{inspect(reason)}")
+    end
+  end
+
+  defp continue_decoded_public_websocket_close(websocket, frames) do
+    case decoded_public_websocket_close(websocket, frames) do
+      {:ok, websocket, code, reason} -> {:halt, {:ok, websocket, code, reason}}
+      {:cont, websocket} -> {:cont, {:cont, websocket}}
+    end
+  end
+
+  def decoded_public_websocket_close(websocket, frames) do
+    Enum.reduce_while(frames, {:cont, websocket}, fn
+      {:close, code, reason}, _acc -> {:halt, {:ok, websocket, code, reason}}
+      _frame, acc -> {:cont, acc}
+    end)
+  end
+
+  defp client_websocket_frame(fin?, opcode, payload) do
+    mask = :crypto.strong_rand_bytes(4)
+    first_byte = Bitwise.bor(if(fin?, do: 0x80, else: 0x00), websocket_opcode(opcode))
+    payload_size = byte_size(payload)
+
+    header =
+      cond do
+        payload_size <= 125 ->
+          <<first_byte, Bitwise.bor(0x80, payload_size)>>
+
+        payload_size <= 65_535 ->
+          <<first_byte, Bitwise.bor(0x80, 126), payload_size::16>>
+
+        true ->
+          <<first_byte, Bitwise.bor(0x80, 127), payload_size::64>>
+      end
+
+    [header, mask, mask_websocket_payload(payload, mask)]
+  end
+
+  defp websocket_opcode(:continuation), do: 0x0
+  defp websocket_opcode(:text), do: 0x1
+
+  defp mask_websocket_payload(payload, mask) do
+    payload
+    |> :binary.bin_to_list()
+    |> Enum.with_index()
+    |> Enum.map(fn {byte, index} ->
+      Bitwise.bxor(byte, :binary.at(mask, rem(index, 4)))
+    end)
+    |> :binary.list_to_bin()
   end
 
   def receive_websocket_frames_by_type(required_types, timeout_ms) do
