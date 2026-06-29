@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.PoolInviteForm
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -147,6 +148,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 id={"upstream-account-#{@account.identity.id}-limit-#{limit.key}"}
                 limit={limit}
               />
+              <.saved_reset_meter
+                :if={saved_reset_panel_available?(@saved_resets)}
+                id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
+                saved_resets={@saved_resets}
+                saved_reset_policy={@saved_reset_policy}
+                class={saved_reset_meter_grid_class(@reported_quota_limits)}
+              />
             </div>
           </section>
 
@@ -183,12 +191,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 </div>
               </div>
             </div>
-
-            <.saved_reset_meter
-              id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
-              saved_resets={@saved_resets}
-              saved_reset_policy={@saved_reset_policy}
-            />
 
             <div
               id={"upstream-account-#{@account.identity.id}-saved-reset-expiration-panel"}
@@ -545,6 +547,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   attr :id, :string, required: true
   attr :saved_resets, :map, required: true
   attr :saved_reset_policy, :map, required: true
+  attr :class, :any, default: nil
 
   defp saved_reset_meter(assigns) do
     assigns =
@@ -553,21 +556,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> assign(:meter_max, saved_reset_meter_max(assigns.saved_resets))
       |> assign(:meter_value, saved_reset_meter_value(assigns.saved_resets))
       |> assign(:meter_label, saved_reset_meter_label(assigns.saved_resets))
+      |> assign(:meter_count_label, saved_reset_meter_count_label(assigns.saved_resets))
+      |> assign(:meter_reset_label, saved_reset_meter_reset_label(assigns.saved_resets))
+      |> assign(:meter_policy_active, saved_reset_policy_active?(assigns.saved_reset_policy))
 
     ~H"""
-    <div id={@id} data-role="upstream-saved-reset-meter" class="grid gap-1.5">
+    <div id={@id} data-role="upstream-saved-reset-meter" class={["grid gap-1.5", @class]}>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span
           data-role="upstream-saved-reset-meter-title"
           class="min-w-0 truncate font-medium text-base-content"
         >
-          Banked resets
+          Banked Resets
         </span>
         <span
           data-role="upstream-saved-reset-meter-count"
           class={saved_reset_meter_count_class(@saved_reset_policy)}
         >
-          {@meter_label}
+          {@meter_count_label}
         </span>
       </div>
       <div
@@ -586,6 +592,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           aria-hidden="true"
           class={saved_reset_meter_segment_class(segment, @saved_reset_policy)}
         ></span>
+      </div>
+      <div class="flex items-center justify-between gap-3 text-[11px] text-base-content/60">
+        <span
+          id={"#{@id}-policy"}
+          data-role="upstream-saved-reset-meter-policy"
+          class="min-w-0 truncate"
+        >
+          Auto redeem
+          <span :if={@meter_policy_active} class="font-medium text-violet-700 dark:text-violet-200">
+            active
+          </span>
+          <span :if={!@meter_policy_active}>inactive</span>
+        </span>
+        <span
+          :if={@meter_reset_label}
+          id={"#{@id}-reset"}
+          class="inline-flex shrink-0 items-center gap-1"
+          title={@saved_resets.next_expires_title}
+        >
+          <.icon name="hero-clock" class="size-3 shrink-0" />
+          <span class="truncate">{@meter_reset_label}</span>
+        </span>
       </div>
     </div>
     """
@@ -612,14 +640,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp saved_reset_meter_label(saved_resets),
     do: "#{saved_reset_meter_value(saved_resets)} saved resets"
 
-  defp saved_reset_meter_count_class(%{enabled?: true}),
-    do: "shrink-0 tabular-nums font-medium text-success"
+  defp saved_reset_meter_count_label(%{available_count: count})
+       when is_integer(count) and count >= 0,
+       do: "x#{count}"
+
+  defp saved_reset_meter_count_label(saved_resets),
+    do: "x#{saved_reset_meter_value(saved_resets)}"
+
+  defp saved_reset_meter_reset_label(%{next_expires_at: expires_at}) do
+    case ResetFormatting.parse_datetime(expires_at) do
+      %DateTime{} = expires_at -> reset_time_left_label(expires_at)
+      nil -> nil
+    end
+  end
+
+  defp saved_reset_meter_reset_label(_saved_resets), do: nil
+
+  defp reset_time_left_label(%DateTime{} = expires_at) do
+    seconds_until_expiration = DateTime.diff(expires_at, DateTime.utc_now(), :second)
+
+    if seconds_until_expiration > 0 do
+      "in #{ResetFormatting.format_reset_duration(seconds_until_expiration)}"
+    else
+      "expired"
+    end
+  end
+
+  defp saved_reset_policy_active?(%{enabled?: true}), do: true
+  defp saved_reset_policy_active?(_policy), do: false
 
   defp saved_reset_meter_count_class(_policy),
     do: "shrink-0 tabular-nums font-medium text-violet-700 dark:text-violet-200"
-
-  defp saved_reset_meter_segment_class(%{filled?: true}, %{enabled?: true}),
-    do: "h-1.5 rounded-full bg-success"
 
   defp saved_reset_meter_segment_class(%{filled?: true}, _policy),
     do: "h-1.5 rounded-full bg-violet-500/80 dark:bg-violet-300/80"
@@ -981,6 +1032,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp quota_limits_grid_class([_single_limit]), do: "grid gap-3"
   defp quota_limits_grid_class(_limits), do: "grid gap-3 md:grid-cols-2"
+
+  defp saved_reset_meter_grid_class([_single_limit]), do: nil
+  defp saved_reset_meter_grid_class(_limits), do: "md:col-span-2"
 
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"

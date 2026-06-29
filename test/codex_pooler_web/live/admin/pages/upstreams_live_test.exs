@@ -919,18 +919,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-saved-reset-meter[data-role='upstream-saved-reset-meter']"
+             "#upstream-account-#{active_identity.id}-usage-panel #upstream-account-#{active_identity.id}-saved-reset-meter[data-role='upstream-saved-reset-meter']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter [data-role='upstream-saved-reset-meter-title']",
+             "Banked Resets"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-meter"
            )
 
     assert has_element?(
              view,
              "#upstream-account-#{active_identity.id}-saved-reset-meter [data-role='upstream-saved-reset-meter-count']",
-             "2 saved resets"
+             "x2"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-policy[data-role='upstream-saved-reset-meter-policy']",
+             "Auto redeem active"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-policy .text-violet-700",
+             "active"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-policy .hero-cog-6-tooth"
            )
 
     assert has_element?(
              view,
              "#upstream-account-#{active_identity.id}-saved-reset-meter-bar[role='meter'][aria-valuenow='2'][aria-valuemax='5']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-reset .hero-clock"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-reset",
+             "in "
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-reset",
+             "Next expires"
            )
 
     assert has_element?(
@@ -989,6 +1034,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     active_card = view |> element("#upstream-account-#{active_identity.id}") |> render()
     active_badge_class = html_element_class(active_card, active_badge_id)
 
+    assert Regex.match?(
+             ~r/data-role="upstream-saved-reset-meter-count"[^>]*>\s*x2\s*<\/span>/,
+             active_card
+           )
+
     active_usage_panel_class =
       html_element_class(active_card, "upstream-account-#{active_identity.id}-usage-panel")
 
@@ -1000,6 +1050,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         active_card,
         "upstream-account-#{active_identity.id}-saved-reset-meter-segment-1"
       )
+
+    active_saved_meter_class =
+      html_element_class(active_card, "upstream-account-#{active_identity.id}-saved-reset-meter")
 
     active_saved_meter_segment_2_class =
       html_element_class(
@@ -1030,9 +1083,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute active_saved_panel_class =~ "rounded-box"
     refute active_saved_panel_class =~ "border-base-300"
     refute active_saved_panel_class =~ "bg-base-200/30"
-    assert active_saved_meter_segment_1_class =~ "bg-success"
-    assert active_saved_meter_segment_2_class =~ "bg-success"
+    assert active_saved_meter_class =~ "md:col-span-2"
+    assert active_saved_meter_segment_1_class =~ "bg-violet-500/80"
+    assert active_saved_meter_segment_2_class =~ "bg-violet-500/80"
     assert active_saved_meter_segment_3_class =~ "bg-base-300/70"
+    refute active_saved_meter_segment_1_class =~ "bg-success"
+    refute active_saved_meter_segment_2_class =~ "bg-success"
 
     assert upstream_header_badge_order(active_card) == [
              active_badge_id,
@@ -1045,6 +1101,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       "##{inactive_badge_id}[data-role='upstream-saved-reset-count-badge'][aria-label='Show saved reset bank: 1 saved reset'][aria-controls='upstream-account-#{inactive_identity.id}-saved-reset-panel'][aria-pressed='false']"
 
     assert has_element?(view, inactive_badge_selector, "1")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{inactive_identity.id}-saved-reset-meter-policy[data-role='upstream-saved-reset-meter-policy']",
+             "Auto redeem inactive"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{inactive_identity.id}-saved-reset-meter-policy .text-violet-700",
+             "inactive"
+           )
+
+    refute has_element?(view, "#upstream-account-#{inactive_identity.id}-saved-reset-meter-reset")
 
     assert has_element?(
              view,
@@ -1102,6 +1172,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     refute has_element?(view, "#upstream-account-#{empty_identity.id}-saved-reset-count")
     refute has_element?(view, "#upstream-account-#{empty_identity.id}-saved-reset-panel")
+    refute has_element?(view, "#upstream-account-#{empty_identity.id}-saved-reset-meter")
 
     view |> element(active_badge_selector) |> render_click()
 
