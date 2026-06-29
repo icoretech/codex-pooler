@@ -189,6 +189,84 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelayTest do
     assert_process_down(monitor, pid)
   end
 
+  test "success finalization receives final relay state when callback accepts state" do
+    parent = self()
+    ref = make_ref()
+    response = async_response(ref)
+
+    task =
+      Task.async(fn ->
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {ref, :done})
+
+        StreamRelay.run(%{chunks: []}, response, %{
+          handlers()
+          | write_chunk: fn state, data ->
+              {:ok, %{state | chunks: [data | state.chunks]}}
+            end,
+            finalize_success: fn body, state ->
+              send(parent, {:finalize_success, body, state})
+              {:ok, :finalized}
+            end
+        })
+      end)
+
+    assert Task.await(task, @relay_timeout) == {:ok, %{chunks: ["visible"]}}
+    assert_receive {:finalize_success, "visible", %{chunks: ["visible"]}}, @relay_timeout
+  end
+
+  test "failure finalization receives final relay state when callback accepts state" do
+    parent = self()
+    ref = make_ref()
+    response = async_response(ref)
+    reason = :upstream_closed
+
+    task =
+      Task.async(fn ->
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {ref, {:error, reason}})
+
+        StreamRelay.run(%{chunks: []}, response, %{
+          handlers()
+          | write_chunk: fn state, data ->
+              {:ok, %{state | chunks: [data | state.chunks]}}
+            end,
+            finalize_failure: fn body, ^reason, state ->
+              send(parent, {:finalize_failure, body, reason, state})
+              {:ok, :finalized}
+            end
+        })
+      end)
+
+    assert Task.await(task, @relay_timeout) == {:ok, %{chunks: ["visible"]}}
+
+    assert_receive {:finalize_failure, "visible", ^reason, %{chunks: ["visible"]}},
+                   @relay_timeout
+  end
+
+  test "falls back to legacy finalizers when callbacks do not accept state" do
+    parent = self()
+    ref = make_ref()
+    response = async_response(ref)
+
+    task =
+      Task.async(fn ->
+        send(self(), {ref, {:data, "visible"}})
+        send(self(), {ref, :done})
+
+        StreamRelay.run(:legacy_state, response, %{
+          handlers()
+          | finalize_success: fn body ->
+              send(parent, {:legacy_finalize_success, body})
+              {:ok, :finalized}
+            end
+        })
+      end)
+
+    assert Task.await(task, @relay_timeout) == {:ok, :legacy_state}
+    assert_receive {:legacy_finalize_success, "visible"}, @relay_timeout
+  end
+
   test "success finalization keeps only a bounded retained body while writing all chunks" do
     parent = self()
     ref = make_ref()

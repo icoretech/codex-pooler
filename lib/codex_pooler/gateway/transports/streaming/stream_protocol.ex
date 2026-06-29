@@ -22,16 +22,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           optional(:failure) => terminal_failure(),
           optional(:incomplete_reason) => String.t() | nil
         }
-  @type public_openai_responses_stream_state :: %{
-          required(:buffer) => binary(),
-          required(:created?) => boolean(),
-          required(:text_delta?) => boolean(),
-          required(:passthrough?) => boolean(),
-          required(:passthrough_terminal) => PublicResponses.passthrough_terminal_state() | nil,
-          required(:passthrough_terminal_kind) => atom() | nil,
-          required(:passthrough_terminal_failure) => terminal_failure() | nil,
-          required(:passthrough_terminal_seen?) => boolean()
-        }
+  @type public_openai_responses_stream_state :: PublicResponses.state()
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
 
   @spec public_openai_responses_stream_state() :: public_openai_responses_stream_state()

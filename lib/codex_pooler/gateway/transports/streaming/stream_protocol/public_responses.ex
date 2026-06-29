@@ -17,10 +17,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:incomplete_reason) => String.t() | nil,
           required(:failure_code) => String.t() | nil
         }
+  @type summary_state :: %{
+          required(:schema_version) => pos_integer(),
+          required(:mode) => String.t(),
+          required(:created_seen) => boolean(),
+          required(:visible_seen) => boolean(),
+          required(:delta_count) => non_neg_integer(),
+          required(:delta_bytes) => non_neg_integer(),
+          required(:text_done_count) => non_neg_integer(),
+          required(:text_done_bytes) => non_neg_integer(),
+          required(:item_done_count) => non_neg_integer(),
+          required(:terminal_seen) => boolean(),
+          required(:terminal_kind) => String.t() | nil,
+          required(:terminal_status) => String.t() | nil,
+          required(:finish_class) => String.t() | nil,
+          required(:synthetic_terminal_sent) => boolean(),
+          required(:source_chunk_count) => non_neg_integer(),
+          required(:stream_bytes) => non_neg_integer(),
+          required(:relay_bytes) => non_neg_integer(),
+          required(:passthrough_seen) => boolean()
+        }
   @type state :: %{
           required(:buffer) => binary(),
           required(:created?) => boolean(),
           required(:text_delta?) => boolean(),
+          required(:response_id) => String.t() | nil,
+          required(:terminal_kind) => atom() | nil,
+          required(:terminal_failure) => StreamProtocol.terminal_failure() | nil,
+          required(:summary) => summary_state(),
           required(:passthrough?) => boolean(),
           required(:passthrough_terminal) => passthrough_terminal_state() | nil,
           required(:passthrough_terminal_kind) => atom() | nil,
@@ -34,6 +58,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       buffer: "",
       created?: false,
       text_delta?: false,
+      response_id: nil,
+      terminal_kind: nil,
+      terminal_failure: nil,
+      summary: new_summary(),
       passthrough?: false,
       passthrough_terminal: nil,
       passthrough_terminal_kind: nil,
@@ -58,11 +86,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @explicit_error_pattern ~r/"(?:error|status_details)"\s*:\s*\{/
 
   @spec normalize_data(binary(), state()) :: {binary(), state()}
-  def normalize_data(data, %{passthrough?: true} = state) when is_binary(data) do
+  def normalize_data(data, state) when is_binary(data) do
+    state = record_source_chunk(state, data)
+    {data, state} = normalize_data_chunk(data, state)
+    {data, record_relay_chunk(state, data)}
+  end
+
+  def normalize_data(data, state), do: {data, state}
+
+  defp normalize_data_chunk(data, %{passthrough?: true} = state) do
     normalize_passthrough_data(data, state)
   end
 
-  def normalize_data(data, state) when is_binary(data) do
+  defp normalize_data_chunk(data, state) do
     buffered_data = state.buffer <> data
     {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
 
@@ -84,8 +120,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
-  def normalize_data(data, state), do: {data, state}
-
   defp normalize_passthrough_data(data, state) do
     case sse_block_separator(data) do
       {index, separator_size} ->
@@ -98,7 +132,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           |> track_passthrough_terminal_data(passthrough)
           |> then(&%{&1 | passthrough?: false, buffer: "", passthrough_terminal: nil})
 
-        {normalized_rest, state} = normalize_data(rest, state)
+        {normalized_rest, state} = normalize_data_chunk(rest, state)
 
         {[passthrough, normalized_rest] |> IO.iodata_to_binary(), state}
 
@@ -115,6 +149,56 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   def passthrough_terminal_failure(%{passthrough_terminal_failure: %{} = failure}), do: failure
   def passthrough_terminal_failure(_state), do: nil
 
+  @spec terminal_kind(state()) :: atom() | nil
+  def terminal_kind(%{terminal_kind: kind}) when is_atom(kind), do: kind
+  def terminal_kind(_state), do: nil
+
+  @spec terminal_failure(state()) :: StreamProtocol.terminal_failure() | nil
+  def terminal_failure(%{terminal_failure: %{} = failure}), do: failure
+  def terminal_failure(_state), do: nil
+
+  @spec response_id(state()) :: String.t() | nil
+  def response_id(%{response_id: response_id}) when is_binary(response_id), do: response_id
+  def response_id(_state), do: nil
+
+  @spec visible_seen?(state()) :: boolean()
+  def visible_seen?(%{summary: %{visible_seen: visible_seen?}}), do: visible_seen?
+  def visible_seen?(_state), do: false
+
+  @spec summary_metadata(state()) :: map()
+  def summary_metadata(%{summary: %{} = summary}) do
+    %{
+      "schema_version" => summary.schema_version,
+      "mode" => summary.mode,
+      "created_seen" => summary.created_seen,
+      "visible_seen" => summary.visible_seen,
+      "delta_count" => summary.delta_count,
+      "delta_bytes" => summary.delta_bytes,
+      "text_done_count" => summary.text_done_count,
+      "text_done_bytes" => summary.text_done_bytes,
+      "item_done_count" => summary.item_done_count,
+      "terminal_seen" => summary.terminal_seen,
+      "terminal_kind" => summary.terminal_kind,
+      "terminal_status" => summary.terminal_status,
+      "finish_class" => summary.finish_class,
+      "synthetic_terminal_sent" => summary.synthetic_terminal_sent,
+      "source_chunk_count" => summary.source_chunk_count,
+      "stream_bytes" => summary.stream_bytes,
+      "relay_bytes" => summary.relay_bytes,
+      "passthrough_seen" => summary.passthrough_seen
+    }
+  end
+
+  def summary_metadata(_state), do: %{}
+
+  @spec mark_synthetic_terminal_failure(state()) :: state()
+  def mark_synthetic_terminal_failure(state) do
+    state
+    |> Map.put(:terminal_kind, :failed)
+    |> put_summary(:synthetic_terminal_sent, true)
+    |> put_summary_terminal(:failed, "failed")
+  end
+
   defp enter_passthrough(data, state) do
     data
     |> passthrough_terminal_event_type()
@@ -128,6 +212,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         %{state | passthrough_terminal: nil}
     end
     |> then(&%{&1 | buffer: "", passthrough?: true})
+    |> mark_passthrough_seen()
   end
 
   defp new_passthrough_terminal(event_type) do
@@ -192,7 +277,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       {:ok, %{kind: kind} = outcome} ->
         state
         |> Map.put(:passthrough_terminal_kind, kind)
+        |> Map.put(:terminal_kind, kind)
         |> maybe_put_passthrough_terminal_failure(outcome)
+        |> maybe_put_terminal_failure(outcome)
+        |> put_summary_terminal(kind, terminal_status_for_kind(kind))
 
       _outcome ->
         state
@@ -209,6 +297,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp maybe_put_passthrough_terminal_failure(state, _outcome), do: state
+
+  defp maybe_put_terminal_failure(state, %{kind: :failed, failure: %{} = failure}) do
+    Map.put(state, :terminal_failure, failure)
+  end
+
+  defp maybe_put_terminal_failure(state, _outcome), do: state
 
   defp passthrough_terminal_outcome(%{event_type: event_type} = terminal) do
     failure_code = terminal.failure_code
@@ -344,40 +438,60 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp normalize_blocks(blocks, buffer, state) do
     {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: buffer})
 
-    state = if stream_terminal?(blocks), do: new_state(), else: state
+    state = if stream_terminal?(blocks), do: reset_parser_after_terminal(state), else: state
 
     {IO.iodata_to_binary(iodata), state}
   end
 
-  defp normalize_block("data: [DONE]", state), do: {[], state}
+  defp normalize_block("data: [DONE]", state) do
+    state =
+      state
+      |> Map.put(:terminal_kind, :completed)
+      |> Map.put(:terminal_failure, nil)
+      |> put_summary_terminal(:completed, "completed")
+
+    {[], state}
+  end
 
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
     type = event_type || decoded_string(decoded, "type")
     {type, decoded} = StreamProtocol.normalize_terminal_event(type, decoded)
     decoded = normalize_public_event(type, decoded)
+    state = maybe_put_response_id(state, decoded)
 
-    cond do
-      codex_public_event?(type) ->
-        {[], state}
+    normalize_public_block(type, decoded, state)
+  end
 
-      type == "response.created" ->
-        {[public_sse_block("response.created", decoded)], %{state | created?: true}}
+  defp normalize_public_block("response.created", decoded, state),
+    do: {[public_sse_block("response.created", decoded)], record_created(state)}
 
-      type == "response.output_text.delta" ->
-        {[public_sse_block("response.output_text.delta", decoded)], %{state | text_delta?: true}}
+  defp normalize_public_block("response.output_text.delta", decoded, state),
+    do: {[public_sse_block("response.output_text.delta", decoded)], record_delta(state, decoded)}
 
-      terminal_event?(type) ->
-        {prefix, state} = terminal_prefix(type, decoded, state)
-        {[prefix, public_sse_block(type, decoded)], state}
+  defp normalize_public_block("response.output_text.done", decoded, state),
+    do:
+      {[public_sse_block("response.output_text.done", decoded)], record_text_done(state, decoded)}
 
-      is_binary(type) ->
-        {[public_sse_block(type, decoded)], state}
+  defp normalize_public_block("response.output_item.done", decoded, state),
+    do: {[public_sse_block("response.output_item.done", decoded)], record_item_done(state)}
 
-      true ->
-        {[], state}
+  defp normalize_public_block(type, decoded, state)
+       when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
+    {prefix, state} = terminal_prefix(type, decoded, state)
+    state = record_terminal(state, type, decoded)
+    {[prefix, public_sse_block(type, decoded)], state}
+  end
+
+  defp normalize_public_block(type, decoded, state) when is_binary(type) do
+    if codex_public_event?(type) do
+      {[], state}
+    else
+      {[public_sse_block(type, decoded)], record_visible(state, type, decoded)}
     end
   end
+
+  defp normalize_public_block(_type, _decoded, state), do: {[], state}
 
   defp terminal_prefix(type, _decoded, %{created?: false, text_delta?: false} = state)
        when type in ["response.failed", "response.incomplete", "error"],
@@ -396,7 +510,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           "response" => %{"id" => response_id, "object" => "response", "status" => "in_progress"}
         }
 
-        {[public_sse_block("response.created", created)], %{state | created?: true}}
+        {[public_sse_block("response.created", created)], record_created(state)}
       end
 
     {delta_prefix, state} =
@@ -410,8 +524,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           text ->
             delta = %{"type" => "response.output_text.delta", "delta" => text}
 
-            {[public_sse_block("response.output_text.delta", delta)],
-             %{state | text_delta?: true}}
+            {[public_sse_block("response.output_text.delta", delta)], record_delta(state, delta)}
         end
       end
 
@@ -542,6 +655,147 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp clean_string(_value), do: nil
 
+  defp new_summary do
+    %{
+      schema_version: 1,
+      mode: "normalized",
+      created_seen: false,
+      visible_seen: false,
+      delta_count: 0,
+      delta_bytes: 0,
+      text_done_count: 0,
+      text_done_bytes: 0,
+      item_done_count: 0,
+      terminal_seen: false,
+      terminal_kind: nil,
+      terminal_status: nil,
+      finish_class: nil,
+      synthetic_terminal_sent: false,
+      source_chunk_count: 0,
+      stream_bytes: 0,
+      relay_bytes: 0,
+      passthrough_seen: false
+    }
+  end
+
+  defp record_source_chunk(state, data) when is_binary(data) do
+    state
+    |> update_summary(:source_chunk_count, &(&1 + 1))
+    |> update_summary(:stream_bytes, &(&1 + byte_size(data)))
+  end
+
+  defp record_relay_chunk(state, data) when is_binary(data) do
+    update_summary(state, :relay_bytes, &(&1 + byte_size(data)))
+  end
+
+  defp mark_passthrough_seen(state) do
+    state
+    |> put_summary(:mode, "passthrough")
+    |> put_summary(:passthrough_seen, true)
+  end
+
+  defp reset_parser_after_terminal(state) do
+    %{
+      state
+      | buffer: "",
+        created?: false,
+        text_delta?: false,
+        passthrough?: false,
+        passthrough_terminal: nil
+    }
+  end
+
+  defp maybe_put_response_id(state, decoded) do
+    case nested_string(decoded, ["response", "id"]) || decoded_string(decoded, "id") do
+      response_id when is_binary(response_id) and response_id != "" ->
+        %{state | response_id: response_id}
+
+      _response_id ->
+        state
+    end
+  end
+
+  defp record_created(state) do
+    state
+    |> Map.put(:created?, true)
+    |> put_summary(:created_seen, true)
+    |> put_summary(:visible_seen, true)
+  end
+
+  defp record_delta(state, decoded) do
+    case decoded_string(decoded, "delta") do
+      delta when is_binary(delta) ->
+        state
+        |> Map.put(:text_delta?, true)
+        |> put_summary(:visible_seen, true)
+        |> update_summary(:delta_count, &(&1 + 1))
+        |> update_summary(:delta_bytes, &(&1 + byte_size(delta)))
+
+      nil ->
+        state
+    end
+  end
+
+  defp record_text_done(state, decoded) do
+    text_bytes = decoded |> decoded_string("text") |> safe_byte_size()
+
+    state
+    |> put_summary(:visible_seen, true)
+    |> update_summary(:text_done_count, &(&1 + 1))
+    |> update_summary(:text_done_bytes, &(&1 + text_bytes))
+  end
+
+  defp record_item_done(state) do
+    state
+    |> put_summary(:visible_seen, true)
+    |> update_summary(:item_done_count, &(&1 + 1))
+  end
+
+  defp record_visible(state, type, _decoded) when is_binary(type) do
+    if visible_type?(type), do: put_summary(state, :visible_seen, true), else: state
+  end
+
+  defp record_terminal(state, type, decoded) do
+    case StreamProtocol.terminal_outcome(type, decoded) do
+      {:ok, %{kind: kind} = outcome} ->
+        state
+        |> Map.put(:terminal_kind, kind)
+        |> maybe_put_terminal_failure(outcome)
+        |> put_summary_terminal(kind, terminal_status_for_kind(kind))
+
+      _outcome ->
+        state
+    end
+  end
+
+  defp put_summary_terminal(state, kind, status) when is_atom(kind) do
+    state
+    |> put_summary(:terminal_seen, true)
+    |> put_summary(:terminal_kind, Atom.to_string(kind))
+    |> put_summary(:terminal_status, status)
+    |> put_summary(:finish_class, Atom.to_string(kind))
+  end
+
+  defp terminal_status_for_kind(:completed), do: "completed"
+  defp terminal_status_for_kind(:incomplete), do: "incomplete"
+  defp terminal_status_for_kind(:failed), do: "failed"
+
+  defp visible_type?(type) do
+    String.contains?(type, ".delta") or String.contains?(type, "output") or
+      String.contains?(type, "message") or String.contains?(type, "tool")
+  end
+
+  defp safe_byte_size(value) when is_binary(value), do: byte_size(value)
+  defp safe_byte_size(_value), do: 0
+
+  defp put_summary(%{summary: summary} = state, key, value) do
+    %{state | summary: Map.put(summary, key, value)}
+  end
+
+  defp update_summary(%{summary: summary} = state, key, fun) when is_function(fun, 1) do
+    %{state | summary: Map.update!(summary, key, fun)}
+  end
+
   @spec terminal_buffer?(binary()) :: boolean()
   defp terminal_buffer?(""), do: false
 
@@ -583,7 +837,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp terminal_event?(_type), do: false
 
   defp codex_public_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
-  defp codex_public_event?(_type), do: false
 
   defp sse_block_separator(data) do
     ["\n\n", "\r\n\r\n"]

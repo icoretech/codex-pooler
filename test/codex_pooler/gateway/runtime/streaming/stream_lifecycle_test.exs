@@ -17,12 +17,183 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.{ResponseContext, SelectedCandidateContext}
   alias CodexPooler.Gateway.Runtime.Finalization.Streaming
+  alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
   @public_responses_endpoint "/v1/responses"
+
+  test "lifecycle handlers expose state-aware stream finalizers" do
+    response_context = %ResponseContext{
+      context: %SelectedCandidateContext{},
+      response: %Req.Response{status: 200}
+    }
+
+    handlers =
+      StreamLifecycle.lifecycle_handlers(response_context, %{
+        finalization_callbacks: %{
+          register_continuity: fn _, _, _ -> :ok end,
+          stream_result: fn _, _ -> :ok end
+        }
+      })
+
+    assert {:arity, 2} = :erlang.fun_info(handlers.finalize_success, :arity)
+    assert {:arity, 3} = :erlang.fun_info(handlers.finalize_failure, :arity)
+  end
+
+  test "stream success persists public Responses summary metadata" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id: "public-responses-success-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    body = public_response_success_sse()
+    state = public_responses_stream_state(request_options, body)
+    response_context = %ResponseContext{context: context, response: sse_response()}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_success(body, response_context, finalization_callbacks(), state)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
+    assert attempt.status == "succeeded"
+    assert %{"public_openai_responses_stream" => summary} = attempt.response_metadata
+    assert summary["schema_version"] == 1
+    assert summary["mode"] == "normalized"
+    assert summary["created_seen"] == true
+    assert summary["visible_seen"] == true
+    assert summary["delta_count"] == 1
+    assert summary["terminal_seen"] == true
+    assert summary["terminal_kind"] == "completed"
+    assert summary["finish_class"] == "completed"
+  end
+
+  test "stream partial failure persists public Responses summary metadata" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id: "public-responses-failure-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    body = public_response_visible_sse()
+    state = public_responses_stream_state(request_options, body)
+
+    assert {synthetic_terminal, state} =
+             DownstreamStream.synthetic_terminal_failure(state, :closed)
+
+    response_context = %ResponseContext{context: context, response: sse_response()}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               body <> synthetic_terminal,
+               {:upstream_stream_interrupted, %Finch.TransportError{reason: :closed}},
+               response_context,
+               state
+             )
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+    assert %{"public_openai_responses_stream" => summary} = attempt.response_metadata
+    assert summary["created_seen"] == true
+    assert summary["visible_seen"] == true
+    assert summary["terminal_seen"] == true
+    assert summary["terminal_kind"] == "failed"
+    assert summary["finish_class"] == "failed"
+    assert summary["synthetic_terminal_sent"] == true
+  end
+
+  test "stream success omits public Responses summary metadata for unrelated streams" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id: "backend-stream-no-summary-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    body = backend_response_success_sse("resp_backend_no_public_summary")
+    state = DownstreamStream.initial_state(:relay, request_options)
+    response_context = %ResponseContext{context: context, response: sse_response()}
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_success(body, response_context, finalization_callbacks(), state)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
+    refute Map.has_key?(attempt.response_metadata, "public_openai_responses_stream")
+  end
 
   test "OpenAI stream collection propagates first-event finalization failures" do
     {setup, _first_upstream, _second_upstream} =
@@ -656,8 +827,44 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     ])
   end
 
+  defp backend_response_success_sse(response_id) do
+    ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"#{response_id}","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}\n\n) <>
+      "data: [DONE]\n\n"
+  end
+
   defp public_response_created_sse do
     ~s(event: response.created\ndata: {"type":"response.created","response":{"id":"resp_public_stream_interrupted"}}\n\n)
+  end
+
+  defp public_response_visible_sse do
+    ~s(event: response.created\ndata: {"type":"response.created","response":{"id":"resp_public_summary"}}\n\n) <>
+      ~s(event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"visible"}\n\n)
+  end
+
+  defp public_response_success_sse do
+    public_response_visible_sse() <>
+      ~s(event: response.output_text.done\ndata: {"type":"response.output_text.done","text":"visible"}\n\n) <>
+      ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_public_summary","status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}\n\n)
+  end
+
+  defp public_responses_stream_state(request_options, body) do
+    state = DownstreamStream.initial_state(:relay, request_options)
+
+    {_data, state} =
+      DownstreamStream.normalize_data(body, @public_responses_endpoint, request_options, state)
+
+    state
+  end
+
+  defp sse_response do
+    %Req.Response{status: 200, headers: [{"content-type", ["text/event-stream"]}]}
+  end
+
+  defp finalization_callbacks do
+    %{
+      register_continuity: fn _request_options, _payload, _body -> :ok end,
+      stream_result: fn _response, _context -> :ok end
+    }
   end
 
   defp execute_backend_stream(setup, release_ref, _request_suffix, opts \\ []) do

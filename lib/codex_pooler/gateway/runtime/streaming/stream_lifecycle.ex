@@ -32,15 +32,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
     finalization_callbacks = Map.fetch!(callbacks, :finalization_callbacks)
 
     %{
-      finalize_success: fn body ->
+      finalize_success: fn body, state ->
         Finalization.finalize_stream_success(
           body,
           response_context,
-          finalization_callbacks
+          finalization_callbacks,
+          state
         )
       end,
-      finalize_failure: fn body, reason ->
-        Finalization.finalize_stream_failure(body, reason, response_context)
+      finalize_failure: fn body, reason, state ->
+        Finalization.finalize_stream_failure(body, reason, response_context, state)
       end,
       first_event_retry:
         Keyword.get_lazy(opts, :first_event_retry, fn ->

@@ -28,7 +28,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   @spec finalize_success(binary(), ResponseContext.t(), callbacks()) ::
           finalization_result()
-  def finalize_success(body, %ResponseContext{context: context, response: response}, callbacks) do
+  @spec finalize_success(binary(), ResponseContext.t(), callbacks(), term()) ::
+          finalization_result()
+  def finalize_success(
+        body,
+        %ResponseContext{context: context, response: response},
+        callbacks,
+        stream_state \\ nil
+      ) do
     %{
       reserved: reserved,
       attempt: attempt,
@@ -44,7 +51,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
            SettlementAttrs.success(
              context,
              response.status,
-             Metadata.response_metadata(response, nil, request_options),
+             response
+             |> Metadata.response_metadata(nil, request_options)
+             |> Metadata.merge_stream_state_metadata(stream_state),
              started: started
            )
          ) do
@@ -135,7 +144,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   end
 
   @spec finalize_failure(binary(), term(), ResponseContext.t()) :: finalization_result()
-  def finalize_failure(body, reason, %ResponseContext{context: context, response: response}) do
+  @spec finalize_failure(binary(), term(), ResponseContext.t(), term()) :: finalization_result()
+  def finalize_failure(
+        body,
+        reason,
+        %ResponseContext{context: context, response: response},
+        stream_state \\ nil
+      ) do
     code = error_code(reason)
     terminal_failure = terminal_failure_reason(reason)
 
@@ -144,6 +159,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       attempt_metadata =
         response
         |> Metadata.response_metadata("stream_interrupted", context.request_options)
+        |> Metadata.merge_stream_state_metadata(stream_state)
         |> Metadata.maybe_put_masked_error_metadata(
           terminal_failure && terminal_failure.upstream_code,
           code

@@ -194,6 +194,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     to: Streaming,
     as: :finalize_success
 
+  @spec finalize_stream_success(binary(), ResponseContext.t(), callbacks(), term()) ::
+          stream_finalization_result()
+  defdelegate finalize_stream_success(body, response_context, callbacks, stream_state),
+    to: Streaming,
+    as: :finalize_success
+
   @spec record_retryable_first_event_stream_failure(
           binary(),
           stream_failure(),
@@ -218,6 +224,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   @spec finalize_stream_failure(binary(), term(), ResponseContext.t()) ::
           stream_finalization_result()
   defdelegate finalize_stream_failure(body, reason, response_context),
+    to: Streaming,
+    as: :finalize_failure
+
+  @spec finalize_stream_failure(binary(), term(), ResponseContext.t(), term()) ::
+          stream_finalization_result()
+  defdelegate finalize_stream_failure(body, reason, response_context, stream_state),
     to: Streaming,
     as: :finalize_failure
 

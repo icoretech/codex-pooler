@@ -201,12 +201,42 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert {chunk, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
 
-      assert state == StreamProtocol.public_openai_responses_stream_state()
+      assert state.terminal_kind == :completed
+      assert state.response_id == "resp_explicit_state"
+      assert state.summary.created_seen == true
+      assert state.summary.visible_seen == true
+      assert state.summary.terminal_seen == true
+      assert state.summary.terminal_kind == "completed"
+      assert state.summary.finish_class == "completed"
       assert chunk =~ "event: response.created\n"
       assert chunk =~ "event: response.output_text.delta\n"
       assert chunk =~ "event: response.completed\n"
       assert chunk =~ "split terminal text"
       refute Process.get({:openai_responses_stream_state, "resp_explicit_state"})
+    end
+
+    test "coerces raw-looking terminal status text out of the stream summary" do
+      raw_status = "raw completion content-like marker"
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      terminal =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => "resp_raw_status_summary",
+            "status" => raw_status,
+            "output" => [
+              %{"content" => [%{"type" => "output_text", "text" => "visible output"}]}
+            ]
+          }
+        })
+
+      assert {_chunk, state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
+
+      assert state.summary.terminal_kind == "completed"
+      assert state.summary.terminal_status == "completed"
+      refute Jason.encode!(state.summary) =~ raw_status
     end
 
     test "tracks oversized terminal passthrough without trailing SSE separator" do
@@ -275,7 +305,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert {chunk, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
 
-      assert state == StreamProtocol.public_openai_responses_stream_state()
+      assert state.terminal_kind == :completed
+      assert state.response_id == "resp_no_space_sse_fields"
+      assert state.summary.created_seen == true
+      assert state.summary.visible_seen == true
+      assert state.summary.terminal_seen == true
+      assert state.summary.terminal_kind == "completed"
+      assert state.summary.finish_class == "completed"
       assert chunk =~ "event: response.completed\n"
       assert chunk =~ "no-space terminal text"
     end

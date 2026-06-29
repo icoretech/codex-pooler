@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
   @type state :: map()
 
@@ -26,11 +27,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           :public_openai_responses,
           StreamProtocol.public_openai_responses_stream_state()
         )
-        |> Map.put(:public_openai_responses_data_seen?, false)
-        |> Map.put(:public_openai_responses_terminal_seen?, false)
-        |> Map.put(:public_openai_responses_response_id, nil)
-        |> Map.put(:public_openai_responses_terminal_kind, nil)
-        |> Map.put(:public_openai_responses_terminal_failure, nil)
 
       true ->
         state
@@ -83,34 +79,42 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   @spec terminal_outcome(state()) ::
           :completed | :incomplete | {:failed, StreamProtocol.terminal_failure() | nil} | nil
-  def terminal_outcome(%{
-        public_openai_responses_terminal_kind: :failed,
-        public_openai_responses_terminal_failure: failure
-      }) do
-    {:failed, failure}
-  end
+  def terminal_outcome(%{public_openai_responses: stream_state}) do
+    case PublicResponses.terminal_kind(stream_state) do
+      :failed ->
+        failure = PublicResponses.terminal_failure(stream_state)
 
-  def terminal_outcome(%{public_openai_responses_terminal_kind: kind})
-      when kind in [:completed, :incomplete],
-      do: kind
+        {:failed, failure}
+
+      kind when kind in [:completed, :incomplete] ->
+        kind
+
+      _kind ->
+        nil
+    end
+  end
 
   def terminal_outcome(_state), do: nil
 
   @spec synthetic_terminal_failure(state(), term()) :: {binary() | nil, state()}
   def synthetic_terminal_failure(
-        %{
-          public_openai_responses_data_seen?: true,
-          public_openai_responses_terminal_seen?: false
-        } = state,
+        %{public_openai_responses: stream_state} = state,
         reason
       ) do
-    data =
-      StreamProtocol.synthetic_public_openai_responses_failure_sse(
-        Map.get(state, :public_openai_responses_response_id),
-        reason
-      )
+    if PublicResponses.visible_seen?(stream_state) and
+         is_nil(PublicResponses.terminal_kind(stream_state)) do
+      data =
+        StreamProtocol.synthetic_public_openai_responses_failure_sse(
+          PublicResponses.response_id(stream_state),
+          reason
+        )
 
-    {data, %{state | public_openai_responses_terminal_seen?: true}}
+      stream_state = PublicResponses.mark_synthetic_terminal_failure(stream_state)
+
+      {data, %{state | public_openai_responses: stream_state}}
+    else
+      {nil, state}
+    end
   end
 
   def synthetic_terminal_failure(state, _reason), do: {nil, state}
@@ -120,16 +124,27 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     do: reason
 
   def terminal_missing_interruption_reason(
-        %{
-          public_openai_responses_data_seen?: true,
-          public_openai_responses_terminal_seen?: false
-        },
+        %{public_openai_responses: stream_state},
         original_reason
       ) do
-    {:upstream_stream_interrupted, original_reason}
+    if PublicResponses.visible_seen?(stream_state) and
+         is_nil(PublicResponses.terminal_kind(stream_state)) do
+      {:upstream_stream_interrupted, original_reason}
+    else
+      original_reason
+    end
   end
 
   def terminal_missing_interruption_reason(_state, original_reason), do: original_reason
+
+  @spec public_openai_responses_stream_metadata(state()) :: map()
+  def public_openai_responses_stream_metadata(%{public_openai_responses: stream_state}) do
+    %{
+      "public_openai_responses_stream" => PublicResponses.summary_metadata(stream_state)
+    }
+  end
+
+  def public_openai_responses_stream_metadata(_state), do: %{}
 
   defp normalize_public_openai_chat_stream_data(
          data,
@@ -151,56 +166,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     state =
       state
       |> Map.put(:public_openai_responses, stream_state)
-      |> maybe_mark_passthrough_terminal(stream_state)
-      |> track_public_openai_responses_output(data)
 
     {data, state}
   end
 
   defp normalize_public_openai_responses_stream_data(data, state), do: {data, state}
-
-  defp maybe_mark_passthrough_terminal(state, stream_state) do
-    case StreamProtocol.public_openai_responses_passthrough_terminal_kind(stream_state) do
-      kind when kind in [:completed, :incomplete, :failed] ->
-        state
-        |> Map.put(:public_openai_responses_terminal_seen?, true)
-        |> Map.put(:public_openai_responses_terminal_kind, kind)
-        |> Map.put(
-          :public_openai_responses_terminal_failure,
-          StreamProtocol.public_openai_responses_passthrough_terminal_failure(stream_state)
-        )
-
-      _kind ->
-        state
-    end
-  end
-
-  defp track_public_openai_responses_output(state, data) when is_binary(data) do
-    {blocks, _buffer} = StreamProtocol.complete_sse_blocks(data, bounded?: false)
-
-    Enum.reduce(blocks, state, fn block, acc ->
-      track_public_openai_responses_block(acc, block)
-    end)
-  end
-
-  defp track_public_openai_responses_block(state, "data: [DONE]") do
-    state
-    |> Map.put(:public_openai_responses_terminal_seen?, true)
-    |> Map.put(:public_openai_responses_terminal_kind, :completed)
-  end
-
-  defp track_public_openai_responses_block(state, block) do
-    data = StreamProtocol.sse_field(block, "data")
-    decoded = StreamProtocol.decode_sse_data(data)
-    data_type = decoded_string(decoded, "type")
-    event_type = StreamProtocol.sse_field(block, "event") || data_type
-    event = %{event_type: event_type, data_type: data_type}
-
-    state
-    |> maybe_put_public_openai_responses_response_id(decoded)
-    |> maybe_mark_public_openai_responses_data_seen(event)
-    |> maybe_mark_public_openai_responses_terminal_seen(event_type, decoded)
-  end
 
   defp normalize_codex_responses_stream_data(data, endpoint, opts, state) when is_binary(data) do
     buffer = Map.get(state, :codex_responses_sse_buffer, "")
@@ -280,65 +250,4 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
        do: payload
 
   defp openai_chat_payload(_opts), do: %{}
-
-  defp maybe_put_public_openai_responses_response_id(state, decoded) do
-    case response_id(decoded) do
-      response_id when is_binary(response_id) ->
-        %{state | public_openai_responses_response_id: response_id}
-
-      nil ->
-        state
-    end
-  end
-
-  defp maybe_mark_public_openai_responses_data_seen(state, event) do
-    if StreamProtocol.downstream_visible_event?(event) and
-         is_nil(StreamProtocol.terminal_outcome_event(event)) do
-      %{state | public_openai_responses_data_seen?: true}
-    else
-      state
-    end
-  end
-
-  defp maybe_mark_public_openai_responses_terminal_seen(state, event_type, decoded) do
-    case StreamProtocol.terminal_outcome(event_type, decoded) do
-      {:ok, %{kind: :failed, failure: failure}} ->
-        state
-        |> Map.put(:public_openai_responses_terminal_seen?, true)
-        |> Map.put(:public_openai_responses_terminal_kind, :failed)
-        |> Map.put(:public_openai_responses_terminal_failure, failure)
-
-      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
-        state
-        |> Map.put(:public_openai_responses_terminal_seen?, true)
-        |> Map.put(:public_openai_responses_terminal_kind, kind)
-
-      _outcome ->
-        state
-    end
-  end
-
-  defp response_id(decoded) when is_map(decoded) do
-    nested_string(decoded, ["response", "id"]) || decoded_string(decoded, "id")
-  end
-
-  defp decoded_string(decoded, key) when is_map(decoded) do
-    case Map.get(decoded, key) do
-      value when is_binary(value) and value != "" -> value
-      _value -> nil
-    end
-  end
-
-  defp nested_string(map, keys) do
-    Enum.reduce_while(keys, map, fn key, acc ->
-      case acc do
-        %{^key => value} -> {:cont, value}
-        _other -> {:halt, nil}
-      end
-    end)
-    |> case do
-      value when is_binary(value) and value != "" -> value
-      _value -> nil
-    end
-  end
 end

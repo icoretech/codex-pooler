@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
@@ -10,6 +11,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
   ]
+
+  @public_openai_responses_stream_keys ~w(
+    schema_version
+    mode
+    created_seen
+    visible_seen
+    delta_count
+    delta_bytes
+    text_done_count
+    text_done_bytes
+    item_done_count
+    terminal_seen
+    terminal_kind
+    terminal_status
+    finish_class
+    synthetic_terminal_sent
+    source_chunk_count
+    stream_bytes
+    relay_bytes
+    passthrough_seen
+  )
 
   @spec response_metadata(Req.Response.t(), String.t() | nil, RequestOptions.t() | map()) ::
           map()
@@ -79,6 +101,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.put("stream_terminal_type", failure.event_type)
     |> Map.put("stream_error_code", failure.code)
   end
+
+  @spec merge_stream_state_metadata(map(), term()) :: map()
+  def merge_stream_state_metadata(metadata, state) when is_map(metadata) do
+    Map.merge(metadata, public_openai_responses_stream_metadata(state))
+  end
+
+  def merge_stream_state_metadata(metadata, _state), do: metadata
 
   @spec maybe_put_masked_error_metadata(map(), String.t() | nil, String.t()) :: map()
   def maybe_put_masked_error_metadata(metadata, upstream_code, code)
@@ -176,6 +205,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp maybe_put_websocket_frame_headers(metadata, _headers), do: metadata
+
+  defp public_openai_responses_stream_metadata(state) do
+    case DownstreamStream.public_openai_responses_stream_metadata(state) do
+      %{"public_openai_responses_stream" => summary} when is_map(summary) ->
+        %{
+          "public_openai_responses_stream" =>
+            Map.take(summary, @public_openai_responses_stream_keys)
+        }
+
+      _metadata ->
+        %{}
+    end
+  end
 
   @spec maybe_put_backend_turn_state_response_header(
           [{String.t(), String.t()}],

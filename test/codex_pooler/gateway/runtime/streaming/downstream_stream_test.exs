@@ -328,6 +328,58 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
     end
 
+    test "characterizes terminal-only public OpenAI Responses completion" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      completed =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_terminal_only", "status" => "completed"}
+        })
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(completed, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.created"}, %{"event" => "response.completed"}] =
+               public_sse_events(chunk)
+
+      assert DownstreamStream.terminal_outcome(state) == :completed
+      assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
+    end
+
+    test "treats done marker after visible public Responses data as completed" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      stream =
+        [
+          sse_event("response.output_text.delta", %{
+            "type" => "response.output_text.delta",
+            "delta" => "visible answer"
+          }),
+          "data: [DONE]\n\n"
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(stream, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.output_text.delta"}] = public_sse_events(chunk)
+      assert DownstreamStream.terminal_outcome(state) == :completed
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, :interrupted) ==
+               :interrupted
+
+      assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
+    end
+
     test "tracks failure-coded oversized public OpenAI Responses incomplete passthrough" do
       opts =
         RequestOptions.build(
@@ -739,6 +791,259 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
     end
   end
 
+  describe "public_openai_responses_stream_metadata/1" do
+    test "summarizes normal public Responses stream completion without raw text" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      stream =
+        [
+          sse_event("response.created", %{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_summary_normal", "status" => "in_progress"}
+          }),
+          sse_event("response.output_text.delta", %{
+            "type" => "response.output_text.delta",
+            "delta" => "visible answer"
+          }),
+          sse_event("response.output_text.done", %{
+            "type" => "response.output_text.done",
+            "text" => "visible answer"
+          }),
+          sse_event("response.output_item.done", %{
+            "type" => "response.output_item.done",
+            "item" => %{"type" => "message", "id" => "msg_1"}
+          }),
+          sse_event("response.completed", %{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_summary_normal", "status" => "completed"}
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(stream, "/v1/responses", opts, state)
+
+      assert summary = public_responses_stream_summary(state)
+
+      assert %{
+               "schema_version" => 1,
+               "mode" => "normalized",
+               "created_seen" => true,
+               "visible_seen" => true,
+               "delta_count" => 1,
+               "delta_bytes" => 14,
+               "text_done_count" => 1,
+               "text_done_bytes" => 14,
+               "item_done_count" => 1,
+               "terminal_seen" => true,
+               "terminal_kind" => "completed",
+               "terminal_status" => "completed",
+               "finish_class" => "completed",
+               "synthetic_terminal_sent" => false,
+               "source_chunk_count" => 1,
+               "stream_bytes" => stream_bytes,
+               "relay_bytes" => relay_bytes,
+               "passthrough_seen" => false
+             } = summary
+
+      assert stream_bytes == byte_size(stream)
+      assert relay_bytes > 0
+      refute Jason.encode!(summary) =~ "visible answer"
+    end
+
+    test "summarizes terminal-only public Responses completion" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      completed =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_summary_terminal_only", "status" => "completed"}
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(completed, "/v1/responses", opts, state)
+
+      assert %{
+               "created_seen" => true,
+               "delta_count" => 0,
+               "text_done_count" => 0,
+               "terminal_seen" => true,
+               "terminal_kind" => "completed",
+               "finish_class" => "completed"
+             } = public_responses_stream_summary(state)
+    end
+
+    test "summarizes empty-output terminal public Responses completion" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      stream =
+        [
+          sse_event("response.created", %{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_summary_empty", "status" => "in_progress"}
+          }),
+          sse_event("response.completed", %{
+            "type" => "response.completed",
+            "response" => %{
+              "id" => "resp_summary_empty",
+              "status" => "completed",
+              "output" => []
+            }
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(stream, "/v1/responses", opts, state)
+
+      assert %{
+               "created_seen" => true,
+               "visible_seen" => true,
+               "delta_count" => 0,
+               "text_done_count" => 0,
+               "terminal_kind" => "completed",
+               "terminal_status" => "completed"
+             } = public_responses_stream_summary(state)
+    end
+
+    test "summarizes failed and incomplete public Responses terminal events" do
+      failed_summary =
+        normalize_public_responses_summary(
+          sse_event("response.failed", %{
+            "type" => "response.failed",
+            "response" => %{"id" => "resp_summary_failed", "status" => "failed"},
+            "error" => %{"code" => "server_error"}
+          })
+        )
+
+      assert %{
+               "terminal_seen" => true,
+               "terminal_kind" => "failed",
+               "terminal_status" => "failed",
+               "finish_class" => "failed"
+             } = failed_summary
+
+      incomplete_summary =
+        normalize_public_responses_summary(
+          sse_event("response.incomplete", %{
+            "type" => "response.incomplete",
+            "response" => %{
+              "id" => "resp_summary_incomplete",
+              "status" => "incomplete",
+              "incomplete_details" => %{"reason" => "max_output_tokens"}
+            }
+          })
+        )
+
+      assert %{
+               "terminal_seen" => true,
+               "terminal_kind" => "incomplete",
+               "terminal_status" => "incomplete",
+               "finish_class" => "incomplete"
+             } = incomplete_summary
+    end
+
+    test "summarizes synthetic terminal failure metadata" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      created =
+        sse_event("response.created", %{
+          "type" => "response.created",
+          "response" => %{"id" => "resp_summary_synthetic", "status" => "in_progress"}
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(created, "/v1/responses", opts, state)
+
+      assert {_failure, state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
+
+      assert %{
+               "created_seen" => true,
+               "terminal_seen" => true,
+               "terminal_kind" => "failed",
+               "terminal_status" => "failed",
+               "finish_class" => "failed",
+               "synthetic_terminal_sent" => true
+             } = public_responses_stream_summary(state)
+    end
+
+    test "keeps large multi-delta stream summary bounded without joined text" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+      delta = String.duplicate("bounded-delta-", 200)
+
+      stream =
+        1..20
+        |> Enum.map(fn _index ->
+          sse_event("response.output_text.delta", %{
+            "type" => "response.output_text.delta",
+            "delta" => delta
+          })
+        end)
+        |> Kernel.++([
+          sse_event("response.completed", %{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_summary_large", "status" => "completed"}
+          })
+        ])
+        |> IO.iodata_to_binary()
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(stream, "/v1/responses", opts, state)
+
+      assert summary = public_responses_stream_summary(state)
+
+      assert summary["delta_count"] == 20
+      assert summary["delta_bytes"] == 20 * byte_size(delta)
+      assert summary["stream_bytes"] == byte_size(stream)
+      assert map_size(summary) == 18
+      refute Jason.encode!(summary) =~ "bounded-delta"
+    end
+
+    test "keeps malformed and incomplete stream summaries bounded and safe" do
+      opts = public_responses_stream_opts()
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      incomplete =
+        ~s(event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"raw hidden)
+
+      assert {"", state} =
+               DownstreamStream.normalize_data(incomplete, "/v1/responses", opts, state)
+
+      assert %{
+               "delta_count" => 0,
+               "source_chunk_count" => 1,
+               "stream_bytes" => stream_bytes,
+               "relay_bytes" => 0,
+               "terminal_seen" => false
+             } = summary = public_responses_stream_summary(state)
+
+      assert stream_bytes == byte_size(incomplete)
+      assert map_size(summary) == 18
+      refute Jason.encode!(summary) =~ "raw hidden"
+
+      malformed = "event: response.unknown\ndata: {not-json}\n\n"
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(malformed, "/v1/responses", opts, state)
+
+      assert %{
+               "delta_count" => 0,
+               "source_chunk_count" => 2,
+               "stream_bytes" => stream_bytes,
+               "terminal_seen" => false
+             } = summary = public_responses_stream_summary(state)
+
+      assert stream_bytes == byte_size(incomplete) + byte_size(malformed)
+      assert map_size(summary) == 18
+      refute Jason.encode!(summary) =~ "not-json"
+    end
+  end
+
   defp public_sse_events(body) do
     body
     |> String.split("\n\n", trim: true)
@@ -765,6 +1070,30 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+  end
+
+  defp public_responses_stream_opts do
+    RequestOptions.build(
+      %{public_openai_responses_stream: true},
+      "/v1/responses",
+      %{"stream" => true}
+    )
+  end
+
+  defp public_responses_stream_summary(state) do
+    assert %{"public_openai_responses_stream" => summary} =
+             DownstreamStream.public_openai_responses_stream_metadata(state)
+
+    summary
+  end
+
+  defp normalize_public_responses_summary(stream) do
+    opts = public_responses_stream_opts()
+    state = DownstreamStream.initial_state(:relay, opts)
+
+    assert {_chunk, state} = DownstreamStream.normalize_data(stream, "/v1/responses", opts, state)
+
+    public_responses_stream_summary(state)
   end
 
   defp attach_stream_buffer_telemetry do

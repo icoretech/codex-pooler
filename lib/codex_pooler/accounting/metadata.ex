@@ -14,6 +14,30 @@ defmodule CodexPooler.Accounting.Metadata do
   @usage_not_applicable "not_applicable"
   @redacted "[REDACTED]"
   @sensitive_key_fragments ~w(api_key apikey authorization bearer token access_token refresh_token upstream_token upstream_secret cookie set-cookie secret password prompt messages input output completion content raw_request raw_response body payload file filename audio image transcript transcription upload_url download_url sas_url signed_url auth_json chatgpt_account_id)
+  @public_openai_responses_stream_modes ~w(normalized passthrough)
+  @public_openai_responses_stream_terminal_values ~w(completed failed incomplete)
+  @public_openai_responses_stream_boolean_keys ~w(
+    created_seen
+    visible_seen
+    terminal_seen
+    synthetic_terminal_sent
+    passthrough_seen
+  )
+  @public_openai_responses_stream_counter_keys ~w(
+    delta_count
+    delta_bytes
+    text_done_count
+    text_done_bytes
+    item_done_count
+    source_chunk_count
+    stream_bytes
+    relay_bytes
+  )
+  @public_openai_responses_stream_terminal_keys ~w(
+    finish_class
+    terminal_kind
+    terminal_status
+  )
   @sensitive_exact_keys MapSet.new([
                           "analytics",
                           "arc",
@@ -297,6 +321,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "payload_compression" ->
         sanitize_payload_compression_map(value)
 
+      normalized == "public_openai_responses_stream" ->
+        sanitize_public_openai_responses_stream_map(value)
+
       sensitive_key?(normalized) ->
         @redacted
 
@@ -311,25 +338,66 @@ defmodule CodexPooler.Accounting.Metadata do
   end
 
   defp sanitize_value(value, key) when is_list(value) do
-    if sensitive_key?(key) do
-      @redacted
-    else
-      Enum.map(value, &sanitize_value(&1, key))
+    cond do
+      public_openai_responses_stream_key?(key) -> %{}
+      sensitive_key?(key) -> @redacted
+      true -> Enum.map(value, &sanitize_value(&1, key))
     end
   end
 
   defp sanitize_value(value, key) when is_binary(value) do
     cond do
+      public_openai_responses_stream_key?(key) -> %{}
       sensitive_key?(key) -> @redacted
       sensitive_binary?(value) -> @redacted
       true -> value
     end
   end
 
-  defp sanitize_value(value, _key), do: value
+  defp sanitize_value(value, key) do
+    if public_openai_responses_stream_key?(key), do: %{}, else: value
+  end
 
   defp sanitize_payload_compression_map(value) when is_map(value),
     do: RequestCompressionMetadata.sanitize_map(value)
+
+  defp sanitize_public_openai_responses_stream_map(value) when is_map(value) do
+    Enum.reduce(value, %{}, fn {child_key, child_value}, summary ->
+      key = normalize_key(child_key)
+
+      case sanitize_public_openai_responses_stream_field(key, child_value) do
+        :drop -> summary
+        sanitized_value -> Map.put(summary, key, sanitized_value)
+      end
+    end)
+  end
+
+  defp sanitize_public_openai_responses_stream_field("schema_version", value)
+       when is_integer(value) and value > 0,
+       do: value
+
+  defp sanitize_public_openai_responses_stream_field("mode", value)
+       when value in @public_openai_responses_stream_modes,
+       do: value
+
+  defp sanitize_public_openai_responses_stream_field(key, value)
+       when key in @public_openai_responses_stream_boolean_keys and is_boolean(value),
+       do: value
+
+  defp sanitize_public_openai_responses_stream_field(key, value)
+       when key in @public_openai_responses_stream_counter_keys and is_integer(value) and
+              value >= 0,
+       do: value
+
+  defp sanitize_public_openai_responses_stream_field(key, value)
+       when key in @public_openai_responses_stream_terminal_keys do
+    if value in @public_openai_responses_stream_terminal_values, do: value, else: nil
+  end
+
+  defp sanitize_public_openai_responses_stream_field(_key, _value), do: :drop
+
+  defp public_openai_responses_stream_key?(key),
+    do: normalize_key(key) == "public_openai_responses_stream"
 
   defp sensitive_binary?(value) do
     String.match?(value, ~r/sk-cxp-[a-f0-9]{12}-[A-Za-z0-9_-]+/) or
