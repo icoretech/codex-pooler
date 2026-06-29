@@ -109,6 +109,8 @@ After the app boots, manage operational settings from the admin UI instead of ed
 
 Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
 
+Gateway websocket upgrades use the admin-managed `websocket_idle_timeout_ms` setting for downstream idle close behavior. The default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms. This setting applies to new websocket upgrades on the backend Codex route and the narrow public `/v1/responses` websocket route; it is separate from upstream receive timeouts.
+
 ## Runtime URLs
 
 Use only the surface that matches your client.

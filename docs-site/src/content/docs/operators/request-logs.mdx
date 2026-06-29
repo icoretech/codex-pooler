@@ -132,6 +132,14 @@ Common causes to inspect are:
 
 The Errors column should stay safe to copy into operator tickets. It should not include raw prompts, responses, uploaded file contents, credentials, or provider payloads.
 
+### Websocket Close Triage
+
+Websocket request rows are created after gateway admission and reservation. If a websocket closes before a request row exists, inspect application logs for sanitized websocket close metadata instead of looking for prompt or frame content.
+
+Safe close metadata can include route family, endpoint, transport, route class, phase, `reason_class`, elapsed milliseconds, safe session id prefixes, owner or proxy instance ids, and downstream epoch. Typical `reason_class` values include `max_frame_size_exceeded` for an oversized inbound websocket frame, `timeout` for downstream websocket idle close, and `closed` for a normal client close.
+
+For downstream idle closes on backend Codex websockets and narrow public `/v1/responses` websockets, check the admin-managed `websocket_idle_timeout_ms` setting. Its default is `1_800_000` ms and the accepted range is `60_000..3_600_000` ms. This setting does not change upstream receive timeout classification.
+
 ## Usage Metadata
 
 Usage lines summarize request accounting, including request count context, token totals, cached input tokens, and estimated cost when pricing is available. Treat these as operational attribution and capacity evidence. They are not a replacement for provider billing records.

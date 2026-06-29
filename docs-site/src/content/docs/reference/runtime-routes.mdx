@@ -125,7 +125,7 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td>Persistent upstream Codex websocket response session</td>
       <td>No HTTP adapter translation</td>
       <td>Supported</td>
-      <td>Narrow backend websocket route. It preserves websocket session continuity and uses <code>x-codex-turn-state</code>.</td>
+      <td>Narrow backend websocket route. It preserves websocket session continuity, uses <code>x-codex-turn-state</code>, and applies the admin-managed <code>websocket_idle_timeout_ms</code> downstream idle window.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/responses/compact</code></td>
@@ -185,7 +185,7 @@ Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler e
       <td>Backend websocket response session</td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for the backend websocket route. Prompt-cache routing locality is excluded.</td>
+      <td>Alias for the backend websocket route. Prompt-cache routing locality is excluded, and the same <code>websocket_idle_timeout_ms</code> downstream idle window applies.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/responses/compact</code></td>
@@ -317,7 +317,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td>Backend Codex websocket response session</td>
       <td>Partial</td>
       <td>Partial</td>
-      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support.</td>
+      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. It uses the same downstream idle and frame guardrails as backend Codex websockets.</td>
     </tr>
     <tr>
       <td><code>POST /v1/chat/completions</code></td>
@@ -532,6 +532,12 @@ The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP
 ## Prompt-cache and continuity boundaries
 
 Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes.
+
+## Websocket Guardrails
+
+Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
+
+Inbound websocket frames are also bounded by the configured gateway request body limit. Operators should treat `reason_class=max_frame_size_exceeded` as an oversized client frame, `reason_class=timeout` as downstream websocket idle close, and upstream receive timeout errors as separate upstream-side failures. These classifications are metadata-only and must not include raw websocket frames or request bodies.
 
 ## Request compression boundaries
 
