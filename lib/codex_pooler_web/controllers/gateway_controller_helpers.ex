@@ -10,6 +10,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.ErrorSanitizer
+  alias CodexPooler.Gateway.OperationalSettings
+
+  @websocket_upgrade_timeout_ms :timer.minutes(5)
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -112,6 +115,15 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       forwarded_headers: forwarded_headers(conn),
       client_ip: conn.remote_ip |> :inet.ntoa() |> to_string()
     }
+  end
+
+  @spec websocket_upgrade_opts() :: keyword()
+  def websocket_upgrade_opts do
+    [
+      timeout: @websocket_upgrade_timeout_ms,
+      max_frame_size: OperationalSettings.current().max_decompressed_body_bytes,
+      compress: false
+    ]
   end
 
   @spec send_or_error(conn(), gateway_call_result()) :: conn()

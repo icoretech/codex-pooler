@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPoolerWeb.GatewayControllerHelpers
 
   test "body results do not require a headers key", %{conn: conn} do
@@ -85,6 +86,27 @@ defmodule CodexPoolerWeb.GatewayControllerHelpersTest do
 
     assert %{session_header: "window-session", session_header_source: "x-codex-window-id"} =
              GatewayControllerHelpers.request_opts(conn)
+  end
+
+  test "websocket upgrade frame size follows the configured ingress body limit" do
+    previous_config = Application.get_env(:codex_pooler, OperationalSettings)
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{max_decompressed_body_bytes: 12_345}
+    )
+
+    on_exit(fn ->
+      case previous_config do
+        nil -> Application.delete_env(:codex_pooler, OperationalSettings)
+        config -> Application.put_env(:codex_pooler, OperationalSettings, config)
+      end
+    end)
+
+    opts = GatewayControllerHelpers.websocket_upgrade_opts()
+
+    assert Keyword.fetch!(opts, :timeout) == :timer.minutes(5)
+    assert Keyword.fetch!(opts, :max_frame_size) == 12_345
+    assert Keyword.fetch!(opts, :compress) == false
   end
 
   test "send_error renders pinned continuation recovery header and body fields" do

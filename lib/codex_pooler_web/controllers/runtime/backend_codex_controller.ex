@@ -102,9 +102,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
         |> WebSockAdapter.upgrade(
           CodexPoolerWeb.CodexResponsesSocket,
           %{auth: auth, opts: request_options},
-          timeout: :timer.minutes(5),
-          max_frame_size: 10_000_000,
-          compress: false
+          GatewayHelpers.websocket_upgrade_opts()
         )
         |> halt()
 
