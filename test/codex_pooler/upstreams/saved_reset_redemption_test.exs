@@ -88,7 +88,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute Map.has_key?(body, "credit_id")
     end
 
-    test "does not consume when no ChatGPT credit is usable" do
+    test "does not consume when no ChatGPT credit is usable and preserves expiration metadata" do
       {:ok, fake} =
         FakeUpstream.start_link(
           {:path_json,
@@ -102,14 +102,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
            }}
         )
 
-      %{assignment: assignment} =
-        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          saved_resets: saved_resets_with_expirations()
+        )
 
       assert {:ok, %{status: :noop, applied?: false, code: "no_credit"}} =
                SavedResetRedemption.redeem(assignment)
 
       assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
                FakeUpstream.requests(fake)
+
+      saved_resets = Repo.reload!(identity).metadata["saved_resets"]
+
+      assert saved_resets["available_count"] == 0
+      assert saved_resets["available_expires_at"] == ["2026-07-18T00:40:11.968726Z"]
+
+      assert saved_resets["available_expirations"] == [
+               %{
+                 "expires_at" => "2026-07-18T00:40:11.968726Z",
+                 "first_seen_at" => "2026-06-21T09:00:00Z"
+               }
+             ]
+
+      assert saved_resets["next_expires_at"] == "2026-07-18T00:40:11.968726Z"
+      assert saved_resets["expires_observed_at"] == "2026-06-22T10:00:00Z"
+      assert saved_resets["expires_refresh_attempted_at"] == "2026-06-22T10:00:00Z"
+
+      metadata_json = Jason.encode!(Repo.reload!(identity).metadata)
+
+      refute metadata_json =~ "used_credit"
+      refute metadata_json =~ "redeem_request_id"
+      refute metadata_json =~ "provider-credit"
+      refute metadata_json =~ "Provider Title"
+      refute metadata_json =~ "Provider description"
+      refute metadata_json =~ "granted_at"
+      refute metadata_json =~ "raw_payload"
     end
 
     test "fresh in-progress redemption blocks another attempt" do
@@ -176,9 +204,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp assignment_with_fake(fake, usage_path, path_style, opts \\ []) do
-    metadata = %{
-      "usage_base_url" => FakeUpstream.url(fake),
-      "saved_resets" => %{
+    saved_resets =
+      Keyword.get(opts, :saved_resets, %{
         "status" => "reported",
         "available_count" => 1,
         "source" => "codex_usage_api",
@@ -187,7 +214,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
         "usage_path" => usage_path,
         "reason" => nil
-      }
+      })
+
+    metadata = %{
+      "usage_base_url" => FakeUpstream.url(fake),
+      "saved_resets" => saved_resets
     }
 
     metadata =
@@ -197,6 +228,37 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
 
     active_upstream_assignment_fixture(pool_fixture(), %{metadata: metadata})
+  end
+
+  defp saved_resets_with_expirations do
+    %{
+      "status" => "reported",
+      "available_count" => 1,
+      "source" => "codex_usage_api",
+      "path_style" => "chatgpt_api",
+      "observed_at" => "2026-06-22T10:00:00Z",
+      "usage_path" => "/backend-api/wham/usage",
+      "available_expires_at" => ["2026-07-18T00:40:11.968726Z"],
+      "available_expirations" => [
+        %{
+          "expires_at" => "2026-07-18T00:40:11.968726Z",
+          "first_seen_at" => "2026-06-21T09:00:00Z"
+        },
+        %{
+          "expires_at" => "not-a-date",
+          "first_seen_at" => "2026-06-20T09:00:00Z"
+        }
+      ],
+      "next_expires_at" => "2026-07-18T00:40:11.968726Z",
+      "expires_observed_at" => "2026-06-22T10:00:00Z",
+      "expires_refresh_attempted_at" => "2026-06-22T10:00:00Z",
+      "credit_id" => "provider-credit",
+      "title" => "Provider Title",
+      "description" => "Provider description",
+      "granted_at" => "2026-06-20T00:00:00Z",
+      "raw_payload" => %{"unsafe" => true},
+      "reason" => nil
+    }
   end
 
   defp usage_payload(available_count) do

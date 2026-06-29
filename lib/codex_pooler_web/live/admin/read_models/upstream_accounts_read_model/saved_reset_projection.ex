@@ -12,6 +12,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
           required(:available?) => boolean(),
           required(:reason) => String.t() | nil
         }
+  @type available_expiration :: %{
+          required(:expires_at) => String.t(),
+          required(:first_seen_at) => String.t() | nil
+        }
   @type snapshot :: %{
           required(:status) => String.t(),
           required(:available_count) => non_neg_integer() | nil,
@@ -23,6 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
           required(:usage_path) => String.t() | nil,
           required(:observed_at) => String.t() | nil,
           required(:available_expires_at) => [String.t()],
+          required(:available_expirations) => [available_expiration()],
           required(:next_expires_at) => String.t() | nil,
           required(:next_expires_label) => String.t() | nil,
           required(:next_expires_title) => String.t() | nil,

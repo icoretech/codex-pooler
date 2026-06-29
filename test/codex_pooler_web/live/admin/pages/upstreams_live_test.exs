@@ -742,8 +742,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     first_expires_at = DateTime.add(observed_at, 30, :day)
     second_expires_at = DateTime.add(first_expires_at, 2, :day)
+    first_seen_at = DateTime.add(observed_at, -2, :day)
+    second_seen_at = DateTime.add(observed_at, -1, :day)
+    legacy_expires_at = DateTime.add(first_expires_at, 4, :day)
     first_expires_at_iso = DateTime.to_iso8601(first_expires_at)
     second_expires_at_iso = DateTime.to_iso8601(second_expires_at)
+    first_seen_at_iso = DateTime.to_iso8601(first_seen_at)
+    second_seen_at_iso = DateTime.to_iso8601(second_seen_at)
+    legacy_expires_at_iso = DateTime.to_iso8601(legacy_expires_at)
     datetime_preferences = DateTimeDisplay.preferences_for_user(scope.user)
 
     first_expiration_label =
@@ -751,6 +757,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     second_expiration_label =
       DateTimeDisplay.format_datetime(second_expires_at, datetime_preferences)
+
+    first_seen_label = DateTimeDisplay.format_datetime(first_seen_at, datetime_preferences)
+    second_seen_label = DateTimeDisplay.format_datetime(second_seen_at, datetime_preferences)
+
+    legacy_expiration_label =
+      DateTimeDisplay.format_datetime(legacy_expires_at, datetime_preferences)
 
     %{identity: active_identity} =
       upstream_assignment_fixture(pool, %{
@@ -766,6 +778,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             "available_expires_at" => [
               first_expires_at_iso,
               second_expires_at_iso
+            ],
+            "available_expirations" => [
+              %{"expires_at" => first_expires_at_iso, "first_seen_at" => first_seen_at_iso},
+              %{"expires_at" => second_expires_at_iso, "first_seen_at" => second_seen_at_iso}
             ],
             "next_expires_at" => first_expires_at_iso
           }
@@ -791,6 +807,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             "path_style" => "codex",
             "usage_path" => "/api/codex/usage",
             "observed_at" => DateTime.to_iso8601(observed_at)
+          }
+        }
+      })
+
+    %{identity: legacy_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Legacy Saved Reset Codex",
+        identity_metadata: %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "source" => "codex_usage_api",
+            "path_style" => "codex",
+            "usage_path" => "/api/codex/usage",
+            "observed_at" => DateTime.to_iso8601(observed_at),
+            "available_expires_at" => [legacy_expires_at_iso],
+            "next_expires_at" => legacy_expires_at_iso
           }
         }
       })
@@ -822,6 +855,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert active_account.saved_resets.available_expires_at == [
              first_expires_at_iso,
              second_expires_at_iso
+           ]
+
+    assert active_account.saved_resets.available_expirations == [
+             %{expires_at: first_expires_at_iso, first_seen_at: first_seen_at_iso},
+             %{expires_at: second_expires_at_iso, first_seen_at: second_seen_at_iso}
            ]
 
     assert inactive_account.saved_resets.label == "1 saved reset"
@@ -909,6 +947,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
+             "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-expiration-labels",
+             "Seen"
+           )
+
+    assert has_element?(
+             view,
              "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-expiration-date-0",
              first_expiration_label
            )
@@ -917,6 +961,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-expiration-date-1",
              second_expiration_label
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen']",
+             first_seen_label
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-panel #upstream-account-#{active_identity.id}-saved-reset-expiration-first-seen-1[data-role='saved-reset-expiration-first-seen']",
+             second_seen_label
            )
 
     assert has_element?(
@@ -1005,6 +1061,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{inactive_identity.id}-saved-reset-panel #upstream-account-#{inactive_identity.id}-saved-reset-expiration-empty",
              "Expiration dates not reported"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{legacy_identity.id}-saved-reset-panel #upstream-account-#{legacy_identity.id}-saved-reset-expiration-date-0",
+             legacy_expiration_label
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{legacy_identity.id}-saved-reset-panel #upstream-account-#{legacy_identity.id}-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen']",
+             "not recorded"
            )
 
     assert has_element?(

@@ -929,11 +929,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     first_expires_at = DateTime.add(now, 30, :day)
+    second_expires_at = DateTime.add(first_expires_at, 1, :day)
+    first_seen_at = DateTime.add(now, -2, :day)
     first_expires_at_iso = DateTime.to_iso8601(first_expires_at)
+    second_expires_at_iso = DateTime.to_iso8601(second_expires_at)
+    first_seen_at_iso = DateTime.to_iso8601(first_seen_at)
 
     first_expiration_label =
       DateTimeDisplay.format_datetime(
         first_expires_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      )
+
+    second_expiration_label =
+      DateTimeDisplay.format_datetime(
+        second_expires_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      )
+
+    first_seen_label =
+      DateTimeDisplay.format_datetime(
+        first_seen_at,
         DateTimeDisplay.preferences_for_user(scope.user)
       )
 
@@ -948,20 +964,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           },
           "saved_resets" => %{
             "status" => "reported",
-            "available_count" => 1,
+            "available_count" => 2,
             "source" => "codex_usage_api",
             "path_style" => "codex",
             "usage_path" => "/api/codex/usage",
             "observed_at" => DateTime.to_iso8601(now),
-            "available_expires_at" => [first_expires_at_iso],
+            "available_expires_at" => [first_expires_at_iso, second_expires_at_iso],
+            "available_expirations" => [
+              %{"expires_at" => first_expires_at_iso, "first_seen_at" => first_seen_at_iso},
+              %{"expires_at" => second_expires_at_iso, "first_seen_at" => "invalid"}
+            ],
             "next_expires_at" => first_expires_at_iso
           }
         }
       })
 
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
-    assert cockpit.saved_resets.label == "1 saved reset"
+    assert cockpit.saved_resets.label == "2 saved resets"
     assert cockpit.saved_resets.available? == true
+
+    assert cockpit.saved_resets.available_expirations == [
+             %{expires_at: first_expires_at_iso, first_seen_at: first_seen_at_iso},
+             %{expires_at: second_expires_at_iso, first_seen_at: nil}
+           ]
+
     assert cockpit.saved_reset_policy.enabled? == false
     assert cockpit.saved_resets.next_expires_label == "Next expires #{first_expiration_label}"
 
@@ -971,7 +997,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#{metric_selector} [data-role='metric-card-value']",
-             "1 saved reset"
+             "2 saved resets"
            )
 
     assert has_element?(view, metric_selector, "Auto redeem off")
@@ -991,8 +1017,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Expiration Date")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "First Seen")
     assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Time Left")
     assert has_element?(view, "#cockpit-saved-reset-expiration-date-0", first_expiration_label)
+    assert has_element?(view, "#cockpit-saved-reset-expiration-date-1", second_expiration_label)
+
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen']",
+             first_seen_label
+           )
+
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-expiration-first-seen-1[data-role='saved-reset-expiration-first-seen']",
+             "not recorded"
+           )
+
     assert has_element?(view, "#cockpit-saved-reset-expiration-time-left-0", "in ")
 
     view

@@ -23,6 +23,22 @@ defmodule CodexPooler.Upstreams.SavedResets do
   @redemption_projection_stale_grace_ms 60_000
 
   @type count_parse_result :: {:reported, non_neg_integer()} | :unreported
+  @type available_expiration_row :: %{
+          required(:expires_at) => String.t(),
+          required(:first_seen_at) => String.t() | nil
+        }
+  @type stored_available_expiration_row :: %{
+          required(String.t()) => String.t()
+        }
+  @type saved_reset_metadata :: %{
+          required(String.t()) =>
+            String.t()
+            | non_neg_integer()
+            | [String.t()]
+            | [stored_available_expiration_row()]
+            | map()
+            | nil
+        }
   @type snapshot_projection :: %{
           required(:status) => String.t(),
           required(:available_count) => non_neg_integer() | nil,
@@ -34,6 +50,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
           required(:usage_path) => String.t() | nil,
           required(:observed_at) => String.t() | nil,
           required(:available_expires_at) => [String.t()],
+          required(:available_expirations) => [available_expiration_row()],
           required(:next_expires_at) => String.t() | nil,
           required(:expires_observed_at) => String.t() | nil,
           required(:expires_refresh_attempted_at) => String.t() | nil,
@@ -63,8 +80,13 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   def count_from_usage_payload(_payload), do: :unreported
 
-  @spec usage_snapshot(term(), DateTime.t(), String.t() | nil) :: map()
-  def usage_snapshot(payload, %DateTime{} = observed_at, usage_url) do
+  @spec usage_snapshot(term(), DateTime.t(), String.t() | nil) :: saved_reset_metadata()
+  def usage_snapshot(payload, %DateTime{} = observed_at, usage_url),
+    do: usage_snapshot(payload, observed_at, usage_url, nil)
+
+  @spec usage_snapshot(term(), DateTime.t(), String.t() | nil, UpstreamIdentity.t() | map() | nil) ::
+          saved_reset_metadata()
+  def usage_snapshot(payload, %DateTime{} = observed_at, usage_url, previous_metadata) do
     {usage_path, path_style} = usage_path_style(usage_url)
 
     case count_from_usage_payload(payload) do
@@ -78,7 +100,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
           "usage_path" => usage_path,
           "reason" => nil
         }
-        |> Map.merge(expiration_metadata_from_payload(payload, observed_at))
+        |> Map.merge(expiration_metadata_from_payload(payload, observed_at, previous_metadata))
 
       :unreported ->
         %{
@@ -89,6 +111,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
           "observed_at" => DateTime.to_iso8601(observed_at),
           "usage_path" => usage_path,
           "available_expires_at" => [],
+          "available_expirations" => [],
           "next_expires_at" => nil,
           "expires_observed_at" => nil,
           "expires_refresh_attempted_at" => nil,
@@ -97,8 +120,18 @@ defmodule CodexPooler.Upstreams.SavedResets do
     end
   end
 
-  @spec credit_list_snapshot(term(), DateTime.t(), String.t() | nil) :: map()
-  def credit_list_snapshot(payload, %DateTime{} = observed_at, usage_url) do
+  @spec credit_list_snapshot(term(), DateTime.t(), String.t() | nil) :: saved_reset_metadata()
+  def credit_list_snapshot(payload, %DateTime{} = observed_at, usage_url),
+    do: credit_list_snapshot(payload, observed_at, usage_url, nil)
+
+  @spec credit_list_snapshot(
+          term(),
+          DateTime.t(),
+          String.t() | nil,
+          UpstreamIdentity.t() | map() | nil
+        ) ::
+          saved_reset_metadata()
+  def credit_list_snapshot(payload, %DateTime{} = observed_at, usage_url, previous_metadata) do
     {usage_path, path_style} = usage_path_style(usage_url)
 
     %{
@@ -110,10 +143,10 @@ defmodule CodexPooler.Upstreams.SavedResets do
       "usage_path" => usage_path,
       "reason" => nil
     }
-    |> Map.merge(expiration_metadata_from_payload(payload, observed_at))
+    |> Map.merge(expiration_metadata_from_payload(payload, observed_at, previous_metadata))
   end
 
-  @spec unavailable_snapshot(DateTime.t(), String.t()) :: map()
+  @spec unavailable_snapshot(DateTime.t(), String.t()) :: saved_reset_metadata()
   def unavailable_snapshot(%DateTime{} = observed_at, code) when is_binary(code) do
     %{
       "status" => @unavailable,
@@ -123,6 +156,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
       "observed_at" => DateTime.to_iso8601(observed_at),
       "usage_path" => nil,
       "available_expires_at" => [],
+      "available_expirations" => [],
       "next_expires_at" => nil,
       "expires_observed_at" => nil,
       "expires_refresh_attempted_at" => nil,
@@ -144,6 +178,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
     status = snapshot_status(snapshot)
     available_count = snapshot_available_count(snapshot, status)
     available_expires_at = snapshot_available_expires_at(snapshot)
+    available_expirations = snapshot_available_expirations(snapshot, available_expires_at)
     next_expires_at = snapshot_next_expires_at(snapshot, available_expires_at)
     expires_observed_at = snapshot_expires_observed_at(snapshot)
     expires_refresh_attempted_at = snapshot_expires_refresh_attempted_at(snapshot)
@@ -161,6 +196,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
       usage_path: string_or_nil(snapshot["usage_path"]),
       observed_at: string_or_nil(snapshot["observed_at"]),
       available_expires_at: available_expires_at,
+      available_expirations: available_expirations,
       next_expires_at: next_expires_at,
       expires_observed_at: expires_observed_at,
       expires_refresh_attempted_at: expires_refresh_attempted_at,
@@ -357,6 +393,22 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   defp snapshot_available_expires_at(_snapshot), do: []
 
+  @spec snapshot_available_expirations(map(), [String.t()]) :: [available_expiration_row()]
+  defp snapshot_available_expirations(%{"available_expirations" => rows}, _fallback_values)
+       when is_list(rows) do
+    rows
+    |> Enum.map(&available_expiration_row_from_metadata/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1.expires_at)
+    |> Enum.sort_by(&datetime_sort_key(&1.expires_at))
+  end
+
+  defp snapshot_available_expirations(_snapshot, fallback_values) do
+    Enum.map(fallback_values, fn expires_at ->
+      %{expires_at: expires_at, first_seen_at: nil}
+    end)
+  end
+
   defp snapshot_next_expires_at(%{"next_expires_at" => value}, fallback_values) do
     safe_iso8601(value) || List.first(fallback_values)
   end
@@ -374,30 +426,57 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   defp snapshot_expires_refresh_attempted_at(_snapshot), do: nil
 
-  defp expiration_metadata_from_payload(payload, observed_at) do
+  @spec expiration_metadata_from_payload(term(), DateTime.t(), UpstreamIdentity.t() | map() | nil) ::
+          %{
+            required(String.t()) =>
+              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+          }
+  defp expiration_metadata_from_payload(payload, observed_at, previous_metadata) do
     case credit_list_payload(payload) do
-      {:ok, credits} -> expiration_metadata_from_credits(credits, observed_at)
-      :error -> expiration_metadata_from_summary(payload)
+      {:ok, credits} -> expiration_metadata_from_credits(credits, observed_at, previous_metadata)
+      :error -> expiration_metadata_from_summary(payload, observed_at, previous_metadata)
     end
   end
 
-  defp expiration_metadata_from_credits(credits, observed_at) do
+  @spec expiration_metadata_from_credits(
+          [term()],
+          DateTime.t(),
+          UpstreamIdentity.t() | map() | nil
+        ) ::
+          %{
+            required(String.t()) =>
+              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+          }
+  defp expiration_metadata_from_credits(credits, observed_at, previous_metadata) do
     expires_at = available_expiration_iso8601s(credits)
+    observed_at_iso8601 = DateTime.to_iso8601(observed_at)
+    previous_first_seen = previous_first_seen_by_expires_at(previous_metadata)
 
     %{
       "available_expires_at" => expires_at,
+      "available_expirations" =>
+        available_expiration_rows(expires_at, previous_first_seen, observed_at_iso8601),
       "next_expires_at" => List.first(expires_at),
-      "expires_observed_at" => DateTime.to_iso8601(observed_at),
-      "expires_refresh_attempted_at" => DateTime.to_iso8601(observed_at)
+      "expires_observed_at" => observed_at_iso8601,
+      "expires_refresh_attempted_at" => observed_at_iso8601
     }
   end
 
-  defp expiration_metadata_from_summary(payload) do
+  @spec expiration_metadata_from_summary(term(), DateTime.t(), UpstreamIdentity.t() | map() | nil) ::
+          %{
+            required(String.t()) =>
+              [String.t()] | [stored_available_expiration_row()] | String.t() | nil
+          }
+  defp expiration_metadata_from_summary(payload, observed_at, previous_metadata) do
     summary = reset_credit_summary(payload)
-    expires_at = snapshot_available_expires_at(summary)
+    expires_at = summary_available_expiration_iso8601s(summary)
+    observed_at_iso8601 = DateTime.to_iso8601(observed_at)
+    previous_first_seen = previous_first_seen_by_expires_at(previous_metadata)
 
     %{
       "available_expires_at" => expires_at,
+      "available_expirations" =>
+        available_expiration_rows(expires_at, previous_first_seen, observed_at_iso8601),
       "next_expires_at" => snapshot_next_expires_at(summary, expires_at),
       "expires_observed_at" => snapshot_expires_observed_at(summary),
       "expires_refresh_attempted_at" => snapshot_expires_refresh_attempted_at(summary)
@@ -416,6 +495,10 @@ defmodule CodexPooler.Upstreams.SavedResets do
   defp put_expiration_summary(reset_credits, snapshot, attempted_at) do
     reset_credits
     |> Map.put("available_expires_at", snapshot.available_expires_at)
+    |> Map.put(
+      "available_expirations",
+      stored_available_expiration_rows(snapshot.available_expirations)
+    )
     |> Map.put("next_expires_at", snapshot.next_expires_at)
     |> Map.put("expires_observed_at", snapshot.expires_observed_at)
     |> Map.put(
@@ -494,6 +577,101 @@ defmodule CodexPooler.Upstreams.SavedResets do
     |> Enum.uniq()
     |> Enum.sort_by(&datetime_sort_key/1)
   end
+
+  @spec summary_available_expiration_iso8601s(map()) :: [String.t()]
+  defp summary_available_expiration_iso8601s(summary) do
+    (snapshot_available_expires_at(summary) ++ summary_available_expiration_row_iso8601s(summary))
+    |> Enum.uniq()
+    |> Enum.sort_by(&datetime_sort_key/1)
+  end
+
+  @spec summary_available_expiration_row_iso8601s(map()) :: [String.t()]
+  defp summary_available_expiration_row_iso8601s(%{"available_expirations" => rows})
+       when is_list(rows) do
+    rows
+    |> Enum.map(&available_expiration_expires_at/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp summary_available_expiration_row_iso8601s(_summary), do: []
+
+  defp available_expiration_expires_at(%{"expires_at" => expires_at}),
+    do: safe_iso8601(expires_at)
+
+  defp available_expiration_expires_at(%{expires_at: expires_at}), do: safe_iso8601(expires_at)
+  defp available_expiration_expires_at(_row), do: nil
+
+  @spec available_expiration_rows([String.t()], map(), String.t()) :: [
+          stored_available_expiration_row()
+        ]
+  defp available_expiration_rows(expires_at_values, previous_first_seen, observed_at)
+       when is_list(expires_at_values) and is_map(previous_first_seen) and is_binary(observed_at) do
+    Enum.map(expires_at_values, fn expires_at ->
+      %{
+        "expires_at" => expires_at,
+        "first_seen_at" => Map.get(previous_first_seen, expires_at, observed_at)
+      }
+    end)
+  end
+
+  @spec previous_first_seen_by_expires_at(UpstreamIdentity.t() | map() | nil) :: map()
+  defp previous_first_seen_by_expires_at(%UpstreamIdentity{} = identity),
+    do: previous_first_seen_by_expires_at(identity.metadata)
+
+  defp previous_first_seen_by_expires_at(%{} = metadata) do
+    snapshot = Map.get(metadata, "saved_resets", metadata)
+    expires_at_values = snapshot_available_expires_at(snapshot)
+
+    snapshot
+    |> snapshot_available_expirations(expires_at_values)
+    |> Enum.reduce(%{}, fn
+      %{expires_at: expires_at, first_seen_at: first_seen_at}, acc
+      when is_binary(first_seen_at) ->
+        Map.put(acc, expires_at, first_seen_at)
+
+      _row, acc ->
+        acc
+    end)
+  end
+
+  defp previous_first_seen_by_expires_at(_previous_metadata), do: %{}
+
+  @spec stored_available_expiration_rows([available_expiration_row()]) :: [
+          stored_available_expiration_row()
+        ]
+  defp stored_available_expiration_rows(rows) when is_list(rows) do
+    rows
+    |> Enum.map(fn
+      %{expires_at: expires_at, first_seen_at: first_seen_at}
+      when is_binary(expires_at) and is_binary(first_seen_at) ->
+        %{"expires_at" => expires_at, "first_seen_at" => first_seen_at}
+
+      _row ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  @spec available_expiration_row_from_metadata(term()) :: available_expiration_row() | nil
+  defp available_expiration_row_from_metadata(%{"expires_at" => expires_at} = row) do
+    with expires_at when is_binary(expires_at) <- safe_iso8601(expires_at) do
+      %{
+        expires_at: expires_at,
+        first_seen_at: safe_iso8601(row["first_seen_at"])
+      }
+    end
+  end
+
+  defp available_expiration_row_from_metadata(%{expires_at: expires_at} = row) do
+    with expires_at when is_binary(expires_at) <- safe_iso8601(expires_at) do
+      %{
+        expires_at: expires_at,
+        first_seen_at: safe_iso8601(row[:first_seen_at])
+      }
+    end
+  end
+
+  defp available_expiration_row_from_metadata(_row), do: nil
 
   defp available_credit?(%{"status" => status}) when is_binary(status), do: status == "available"
   defp available_credit?(%{}), do: true

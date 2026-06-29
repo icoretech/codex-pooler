@@ -552,21 +552,49 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp update_saved_reset_count!(identity, snapshot, available_count, observed_at) do
     metadata = identity.metadata || %{}
 
+    saved_reset_metadata =
+      %{
+        "status" => "reported",
+        "available_count" => available_count,
+        "source" => "codex_reset_credits_api",
+        "path_style" => snapshot.path_style,
+        "observed_at" => DateTime.to_iso8601(observed_at),
+        "usage_path" => snapshot.usage_path,
+        "reason" => nil
+      }
+      |> Map.merge(expiration_metadata_from_snapshot(snapshot))
+
     identity
     |> UpstreamIdentity.changeset(%{
-      metadata:
-        Map.put(metadata, "saved_resets", %{
-          "status" => "reported",
-          "available_count" => available_count,
-          "source" => "codex_reset_credits_api",
-          "path_style" => snapshot.path_style,
-          "observed_at" => DateTime.to_iso8601(observed_at),
-          "usage_path" => snapshot.usage_path,
-          "reason" => nil
-        }),
+      metadata: Map.put(metadata, "saved_resets", saved_reset_metadata),
       updated_at: observed_at
     })
     |> Repo.update!()
+  end
+
+  @spec expiration_metadata_from_snapshot(SavedResets.snapshot_projection()) :: map()
+  defp expiration_metadata_from_snapshot(snapshot) do
+    %{
+      "available_expires_at" => snapshot.available_expires_at,
+      "available_expirations" => stored_available_expiration_rows(snapshot.available_expirations),
+      "next_expires_at" => snapshot.next_expires_at,
+      "expires_observed_at" => snapshot.expires_observed_at,
+      "expires_refresh_attempted_at" => snapshot.expires_refresh_attempted_at
+    }
+  end
+
+  @spec stored_available_expiration_rows([SavedResets.available_expiration_row()]) :: [map()]
+  defp stored_available_expiration_rows(rows) when is_list(rows) do
+    rows
+    |> Enum.map(fn
+      %{expires_at: expires_at, first_seen_at: first_seen_at}
+      when is_binary(expires_at) and is_binary(first_seen_at) ->
+        %{"expires_at" => expires_at, "first_seen_at" => first_seen_at}
+
+      _row ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
   end
 
   defp mark_stale_redemption_failed!(identity, redemption, finished_at) do

@@ -38,9 +38,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
       <div
         id={"#{@id}-labels"}
         data-role="saved-reset-expiration-list-labels"
-        class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 text-xs font-medium leading-4 text-base-content/55"
+        class="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-2 text-xs font-medium leading-4 text-base-content/55"
       >
         <span>Expiration</span>
+        <span>Seen</span>
         <span>Left</span>
       </div>
       <dl
@@ -52,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           :for={row <- @rows}
           id={"#{@id}-row-#{row.index}"}
           data-role="saved-reset-expiration-row"
-          class="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 border-t border-base-300/50 pt-1 first:border-t-0 first:pt-0"
+          class="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-2 border-t border-base-300/50 pt-1 first:border-t-0 first:pt-0"
         >
           <div class="min-w-0">
             <dt class="sr-only">Expiration Date</dt>
@@ -63,6 +64,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
               title={row.expiration_date_title}
             >
               {row.expiration_date_label}
+            </dd>
+          </div>
+          <div class="text-right">
+            <dt class="sr-only">First Seen</dt>
+            <dd
+              id={"#{@id}-first-seen-#{row.index}"}
+              data-role="saved-reset-expiration-first-seen"
+              class="whitespace-nowrap text-xs leading-4 text-base-content/70"
+              title={row.first_seen_title}
+            >
+              {row.first_seen_label}
             </dd>
           </div>
           <div class="text-right">
@@ -100,6 +112,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                 Expiration Date
               </th>
               <th class="whitespace-nowrap text-right text-xs font-semibold text-base-content/55">
+                First Seen
+              </th>
+              <th class="whitespace-nowrap text-right text-xs font-semibold text-base-content/55">
                 Time Left
               </th>
             </tr>
@@ -119,6 +134,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                 {row.expiration_date_label}
               </td>
               <td
+                id={"#{@id}-first-seen-#{row.index}"}
+                data-role="saved-reset-expiration-first-seen"
+                class="whitespace-nowrap text-right text-xs text-base-content/70"
+                title={row.first_seen_title}
+              >
+                {row.first_seen_label}
+              </td>
+              <td
                 id={"#{@id}-time-left-#{row.index}"}
                 data-role="saved-reset-expiration-time-left"
                 class="whitespace-nowrap text-right text-xs text-base-content/70"
@@ -134,6 +157,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   end
 
   defp expiration_rows(saved_resets, datetime_preferences, now) do
+    available_expiration_rows =
+      saved_resets
+      |> Map.get(:available_expirations, [])
+      |> available_expiration_rows(datetime_preferences, now)
+
+    if available_expiration_rows == [] do
+      legacy_expiration_rows(saved_resets, datetime_preferences, now)
+    else
+      available_expiration_rows
+    end
+  end
+
+  defp available_expiration_rows(rows, datetime_preferences, now) when is_list(rows) do
+    rows
+    |> Enum.with_index()
+    |> Enum.map(fn {row, index} ->
+      available_expiration_row(row, index, datetime_preferences, now)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp available_expiration_rows(_rows, _datetime_preferences, _now), do: []
+
+  defp legacy_expiration_rows(saved_resets, datetime_preferences, now) do
     case Map.get(saved_resets, :available_expires_at, []) do
       values when is_list(values) ->
         values
@@ -147,6 +194,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     end
   end
 
+  defp available_expiration_row(
+         %{expires_at: value, first_seen_at: first_seen_at},
+         index,
+         datetime_preferences,
+         now
+       ) do
+    value
+    |> expiration_row(index, datetime_preferences, now)
+    |> Map.merge(first_seen_labels(first_seen_at, datetime_preferences))
+  end
+
+  defp available_expiration_row(
+         %{"expires_at" => value, "first_seen_at" => first_seen_at},
+         index,
+         datetime_preferences,
+         now
+       ) do
+    value
+    |> expiration_row(index, datetime_preferences, now)
+    |> Map.merge(first_seen_labels(first_seen_at, datetime_preferences))
+  end
+
+  defp available_expiration_row(_row, _index, _datetime_preferences, _now), do: nil
+
   defp expiration_row(value, index, datetime_preferences, now) do
     case ResetFormatting.parse_datetime(value) do
       %DateTime{} = expires_at ->
@@ -156,6 +227,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           index: index,
           expiration_date_label: expiration_date_label,
           expiration_date_title: expiration_date_label,
+          first_seen_label: "not recorded",
+          first_seen_title: "not recorded",
           time_left_label: time_left_label(expires_at, now)
         }
 
@@ -164,8 +237,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           index: index,
           expiration_date_label: "unknown time",
           expiration_date_title: to_string(value),
+          first_seen_label: "not recorded",
+          first_seen_title: "not recorded",
           time_left_label: "unknown"
         }
+    end
+  end
+
+  defp first_seen_labels(value, datetime_preferences) do
+    case ResetFormatting.parse_datetime(value) do
+      %DateTime{} = first_seen_at ->
+        first_seen_label = DateTimeDisplay.format_datetime(first_seen_at, datetime_preferences)
+        %{first_seen_label: first_seen_label, first_seen_title: first_seen_label}
+
+      nil ->
+        %{first_seen_label: "not recorded", first_seen_title: "not recorded"}
     end
   end
 

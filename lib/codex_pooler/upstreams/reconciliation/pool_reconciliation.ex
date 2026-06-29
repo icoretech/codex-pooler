@@ -244,7 +244,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       metadata:
         identity.metadata
         |> Kernel.||(%{})
-        |> Map.put("saved_resets", SavedResets.usage_snapshot(payload, observed_at, usage_url)),
+        |> Map.put(
+          "saved_resets",
+          SavedResets.usage_snapshot(payload, observed_at, usage_url, identity)
+        ),
       updated_at: observed_at
     })
     |> Repo.update!()
