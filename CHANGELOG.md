@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.6...codex-pooler-v0.4.7) (2026-06-29)
+
+
+### Features
+
+* expose skills usage metadata on codex models ([b12f84c](https://github.com/icoretech/codex-pooler/commit/b12f84c12a5393f436a624b755f75ace607a39ad))
+* **settings:** add websocket idle timeout setting ([367c02e](https://github.com/icoretech/codex-pooler/commit/367c02ed488c3ee4b2720fb8fbe27412197cec49))
+
+
+### Bug Fixes
+
+* **gateway:** persist safe public responses stream summaries ([50d786c](https://github.com/icoretech/codex-pooler/commit/50d786c5554bc9f91b68e53ae6ba197ac2dda75c))
+* **observability:** classify websocket pre-reservation closes ([3551fd5](https://github.com/icoretech/codex-pooler/commit/3551fd50ddc257721b9e82f874a80266c7195a23))
+* **websocket:** apply bounded idle and message limits ([a728516](https://github.com/icoretech/codex-pooler/commit/a72851653557367fec714ce16d7e532e24f47338))
+* **websocket:** size inbound frames from ingress body limit ([3097f5c](https://github.com/icoretech/codex-pooler/commit/3097f5c6cf4628bdbae9e5e9d0109aef277e7f8a))
+
 ## [0.4.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.5...codex-pooler-v0.4.6) (2026-06-29)
 
 
