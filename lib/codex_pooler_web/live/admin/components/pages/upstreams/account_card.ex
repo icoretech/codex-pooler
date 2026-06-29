@@ -579,7 +579,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp pools_footer_trigger_base_class do
-    "absolute inset-x-1 inset-y-[-0.35rem] z-20 rounded border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    "absolute inset-x-1 inset-y-[-0.35rem] z-20 cursor-pointer rounded border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
   end
 
   defp saved_reset_count_badge_aria_label(saved_resets),
