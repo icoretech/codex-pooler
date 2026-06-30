@@ -716,8 +716,15 @@ serve. For deployed instances, change `baseUrl` to
 
 OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept
 `contextTokens`. Its Codex `gpt-5.5` catalog uses a 272k context window and 128k
-output budget. `compaction.reserveTokens: 128000` makes OMP compact before a
+output budget. `compaction.reserveTokens: 128000` asks OMP to compact before a
 prompt plus a long completion can exceed that 272k window.
+
+For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist
+handoff material to disk. Those settings reduce context-overflow risk, but they
+cannot repair an OMP client bug that skips its own mid-run compaction check. If
+an OMP plan appears to restart work after a very large turn, upgrade OMP when a
+newer release is available and restart or resume the session before treating it
+as a Codex Pooler routing issue.
 
 `compat.streamIdleTimeoutMs: 300000` keeps long OpenAI Responses reasoning turns
 from being aborted by OMP's semantic-progress idle watchdog while Codex Pooler
@@ -745,6 +752,8 @@ modelRoles:
   vision: codex-pooler/gpt-5.5:xhigh
 compaction:
   reserveTokens: 128000
+  midTurnEnabled: true
+  handoffSaveToDisk: true
 ```
 
 Check the non-interactive path from a repository:
