@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.7...codex-pooler-v0.4.8) (2026-06-30)
+
+
+### Bug Fixes
+
+* **upstreams:** distinguish upstream credentials by subject ([fffd246](https://github.com/icoretech/codex-pooler/commit/fffd246dbf9df1719ba9ad0fb488f4203bd13dd2))
+
 ## [0.4.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.6...codex-pooler-v0.4.7) (2026-06-29)
 
 
