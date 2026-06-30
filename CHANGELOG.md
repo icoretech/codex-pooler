@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.8...codex-pooler-v0.4.9) (2026-06-30)
+
+
+### Bug Fixes
+
+* **admin:** make manual saved-reset redemption account-level ([ca3ee9d](https://github.com/icoretech/codex-pooler/commit/ca3ee9d377bff72d71cf3dc5d5304e1c645db671))
+* **deps:** update dependency daisyui to ^5.6.5 ([#96](https://github.com/icoretech/codex-pooler/issues/96)) ([0c0cdcc](https://github.com/icoretech/codex-pooler/commit/0c0cdcc78e0c220e0299a0bee99ddc47c1715c27))
+* **gateway:** prevent saved-reset auto redemption before routeability ([27f9642](https://github.com/icoretech/codex-pooler/commit/27f96423436a2cb36afb8e3e9f7a7ae235e192b6))
+* **upstreams:** flatten saved-reset redemption claim handling ([b7a327a](https://github.com/icoretech/codex-pooler/commit/b7a327a84fa5bdf3a08b0bc56a6910fc3be0fc23))
+* **upstreams:** revalidate saved-reset auto claim assignments ([33c5ed8](https://github.com/icoretech/codex-pooler/commit/33c5ed896c0c6a6ac33c4ddc63e51486738ca8e5))
+* **upstreams:** revalidate saved-reset redemption claims ([bdd9942](https://github.com/icoretech/codex-pooler/commit/bdd9942471e2805b321b4701b69c1664280dc69a))
+
 ## [0.4.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.7...codex-pooler-v0.4.8) (2026-06-30)
 
 
