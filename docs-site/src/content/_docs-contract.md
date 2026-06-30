@@ -16,7 +16,7 @@ Use only these hosts in public examples:
 - `https://codex-pooler.example.com`, for deployed product examples
 - `https://docs.codex-pooler.com`, for the public docs site canonical URL
 
-Do not use private hostnames, cluster names, pod names, tenant names, real account identifiers, real repository evidence paths, or private service URLs in public docs.
+Do not use private hostnames, cluster names, pod names, tenant names, real account identifiers, raw OpenAI user subjects, real repository evidence paths, or private service URLs in public docs.
 
 ## Route Vocabulary
 
@@ -99,6 +99,7 @@ Allowed public claims:
 - `upstream`: A Codex account identity or assignment that Codex Pooler can route eligible work to
 - `Pool API key`: A bearer credential used by runtime clients for `/backend-api` and `/v1` requests. It represents a Pool, not one upstream account
 - `MCP token`: An operator-owned bearer credential used only for `/mcp`. It is separate from Pool API keys and browser sessions
+- `subject reference`: A sanitized fingerprint of an upstream OpenAI user subject. Public docs may describe this reference, but must never include raw subject values
 - `backend API`: The Codex backend compatibility surface rooted at `/backend-api`, especially `/backend-api/codex/*`
 - `/v1`: The narrow OpenAI-compatible SDK surface rooted at `/v1`. It is compatibility over Codex routing, not full OpenAI parity
 - `metadata-only logging`: Request, route, accounting, audit, and MCP records may keep identifiers, route names, counts, statuses, timings, model names, safe error codes, and sanitized summaries. They must not store or show raw payloads or credentials
@@ -114,7 +115,7 @@ Use placeholders that are clearly fake and generic:
 - Email-like examples: `operator@example.com`
 - Model ids: use documented sample ids only when the surrounding page explains that the Pool must expose them
 
-Never include raw tokens, raw prompts, request bodies, response bodies, file bodies, audio bodies, image bodies, cookies, `auth.json`, access tokens, refresh tokens, raw idempotency keys, raw upload URLs, internal evidence snippets, internal logs, private hostnames, real account ids, or real user identifiers.
+Never include raw tokens, raw prompts, request bodies, response bodies, file bodies, audio bodies, image bodies, cookies, `auth.json`, access tokens, refresh tokens, raw idempotency keys, raw upload URLs, internal evidence snippets, internal logs, private hostnames, callback URLs, real account ids, raw OpenAI user subjects, or real user identifiers.
 
 If a docs example needs an Authorization header, write `Authorization: Bearer <pool-api-key>` for runtime routes or `Authorization: Bearer <operator-mcp-token>` for `/mcp`.
 
@@ -142,6 +143,7 @@ Safe fields to mention:
 - HTTP method and status class
 - Pool label or placeholder
 - Upstream label or placeholder
+- Sanitized upstream subject reference or fingerprint
 - Model name
 - Request-log id only when synthetic
 - Error code, retry count, duration, token count, and timestamp examples
@@ -151,7 +153,7 @@ Forbidden fields and examples:
 - Raw prompts and completions
 - Request bodies, response bodies, multipart bodies, websocket frames, file bytes, audio bytes, image bytes, data URLs, and transcripts
 - Bearer tokens, Pool API keys, MCP tokens, cookies, access tokens, refresh tokens, `auth.json`, TOTP secrets, SMTP secrets, signing secrets, and raw idempotency keys
-- Internal incident procedures, cluster names, pod names, private hostnames, real account identifiers, raw emails, and private IP addresses
+- Internal incident procedures, cluster names, pod names, private hostnames, real account identifiers, raw OpenAI user subjects, raw emails, and private IP addresses
 
 ## Source Map For Public Route Claims
 
@@ -167,6 +169,7 @@ Use these tracked sources as the source of truth for public route claims. Do not
 | Unsupported `/v1` routes | `lib/codex_pooler_web/controllers/v1/unsupported_routes.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Explicit unsupported `/v1` routes return deterministic OpenAI-shaped unsupported endpoint errors before gateway dispatch |
 | Realtime exclusion | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs` | `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are not supported |
 | MCP endpoint | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | `/mcp` is a root metadata-only, read-only operator endpoint using operator MCP bearer tokens, not Pool API keys or browser sessions |
+| Upstream identity linking | `lib/codex_pooler/upstreams/lifecycle/identity_lifecycle.ex`, `lib/codex_pooler/upstreams/token_linking.ex`, `lib/codex_pooler/upstreams/auth/codex_auth.ex`, `lib/codex_pooler/upstreams/auth/codex_auth_json.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex`, `test/codex_pooler/upstreams/oauth_browser_linking_test.exs`, `test/codex_pooler/upstreams/oauth_device_linking_test.exs`, `test/codex_pooler/upstreams/oauth_relink_test.exs`, `test/codex_pooler/upstreams_test.exs`, `test/codex_pooler_web/live/admin/pages/upstreams_live_test.exs`, `test/codex_pooler_web/live/admin/pages/upstream_cockpit_live_test.exs` | OAuth links, relinks, and auth.json imports can use an OpenAI user subject, when returned, to separate same-account and same-workspace upstream credentials. Public docs may mention only sanitized subject references or fingerprints, never raw subjects |
 | Privacy and redaction | `README.md`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | Public docs must keep prompts, bodies, bearer tokens, cookies, `auth.json`, upstream secrets, and private identifiers out of examples and evidence |
 
 ## Author Checklist
@@ -178,5 +181,5 @@ Before publishing or editing a public page:
 3. Include narrow `/v1` compatibility language when mentioning OpenAI SDKs
 4. Keep Codex app-server helper routes outside the supported runtime surface
 5. Keep `/mcp` token language separate from Pool API key language
-6. Remove raw payloads, secrets, private hosts, and internal evidence from examples
+6. Remove raw payloads, secrets, callback URLs, raw OpenAI user subjects, private hosts, and internal evidence from examples
 7. If the route claim isn't in the tracked sources above, don't publish it yet

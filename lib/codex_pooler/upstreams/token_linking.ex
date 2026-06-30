@@ -358,6 +358,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp normalize_link_attrs(attrs, opts) do
     %{
       chatgpt_account_id: Map.get(attrs, :chatgpt_account_id),
+      chatgpt_user_id: Map.get(attrs, :chatgpt_user_id),
       account_email: Map.get(attrs, :account_email),
       account_label: Map.get(attrs, :account_label),
       workspace_id: Map.get(attrs, :workspace_id),
@@ -381,6 +382,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp incoming_identity_attrs(attrs) do
     %{
       chatgpt_account_id: attrs.chatgpt_account_id,
+      chatgpt_user_id: attrs.chatgpt_user_id,
       account_email: attrs.account_email,
       account_label: attrs.account_label,
       workspace_id: attrs.workspace_id,
@@ -425,6 +427,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
           | {:error, lifecycle_error() | IdentityLifecycle.identity_conflict()}
   defp validate_target_link_identity(%UpstreamIdentity{} = target_identity, identity_attrs) do
     with :ok <- validate_target_account(target_identity, identity_attrs),
+         :ok <- validate_target_subject(target_identity, identity_attrs),
          :ok <- validate_target_workspace(target_identity, identity_attrs) do
       {:ok, target_identity}
     end
@@ -454,6 +457,23 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     end
   end
 
+  @spec validate_target_subject(UpstreamIdentity.t(), map()) :: :ok | {:error, lifecycle_error()}
+  defp validate_target_subject(%UpstreamIdentity{} = target_identity, identity_attrs) do
+    target_subject = present_string(target_identity.chatgpt_user_id)
+    incoming_subject = identity_attrs |> Map.get(:chatgpt_user_id) |> present_string()
+
+    cond do
+      is_nil(target_subject) ->
+        :ok
+
+      incoming_subject == target_subject ->
+        :ok
+
+      true ->
+        {:error, identity_mismatch_error()}
+    end
+  end
+
   @spec validate_target_workspace(UpstreamIdentity.t(), map()) ::
           :ok | {:error, lifecycle_error() | IdentityLifecycle.identity_conflict()}
   defp validate_target_workspace(%UpstreamIdentity{} = target_identity, identity_attrs) do
@@ -468,7 +488,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       is_binary(target_workspace_id) ->
         {:error, identity_mismatch_error()}
 
-      exact_workspace_identity?(target_identity, incoming_account_id, incoming_workspace_id) ->
+      exact_workspace_identity?(target_identity, identity_attrs) ->
         {:error, identity_mismatch_error()}
 
       concrete_sibling_identity?(target_identity, incoming_account_id) ->
@@ -500,15 +520,36 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp maybe_preserve_relink_assignment_label(assignment_attrs, _assignment, _attrs),
     do: assignment_attrs
 
-  defp exact_workspace_identity?(%UpstreamIdentity{id: target_id}, account_id, workspace_id) do
-    case IdentityLifecycle.get_upstream_identity_by_chatgpt_account_and_workspace(
-           account_id,
-           workspace_id
-         ) do
-      %UpstreamIdentity{id: ^target_id} -> false
-      %UpstreamIdentity{} -> true
-      nil -> false
-    end
+  defp exact_workspace_identity?(%UpstreamIdentity{id: target_id}, identity_attrs) do
+    account_id = identity_attrs |> Map.get(:chatgpt_account_id) |> present_string()
+    workspace_id = identity_attrs |> Map.get(:workspace_id) |> present_string()
+    incoming_subject = identity_attrs |> Map.get(:chatgpt_user_id) |> present_string()
+
+    account_id
+    |> IdentityLifecycle.list_upstream_identities_by_chatgpt_account()
+    |> Enum.any?(fn
+      %UpstreamIdentity{id: ^target_id} ->
+        false
+
+      %UpstreamIdentity{} = identity ->
+        selected_workspace_sibling?(identity, workspace_id, incoming_subject)
+    end)
+  end
+
+  defp selected_workspace_sibling?(%UpstreamIdentity{} = identity, workspace_id, nil) do
+    present_string(identity.workspace_id) == workspace_id
+  end
+
+  defp selected_workspace_sibling?(
+         %UpstreamIdentity{} = identity,
+         workspace_id,
+         incoming_subject
+       ) do
+    identity_workspace_id = present_string(identity.workspace_id)
+    identity_subject = present_string(identity.chatgpt_user_id)
+
+    identity_workspace_id == workspace_id and
+      (is_nil(identity_subject) or identity_subject == incoming_subject)
   end
 
   defp concrete_sibling_identity?(target_identity, account_id) do

@@ -76,6 +76,7 @@ defmodule CodexPooler.Upstreams.Import do
       chatgpt_account_id: chatgpt_account_id,
       account_identifier: chatgpt_account_id || account_email,
       account_email: account_email,
+      chatgpt_user_id: attrs |> import_value(:chatgpt_user_id) |> present_string(),
       account_label: attrs |> import_value(:account_label) |> present_string(),
       workspace_id: attrs |> import_value(:workspace_id) |> present_string(),
       workspace_label: attrs |> import_value(:workspace_label) |> present_string(),

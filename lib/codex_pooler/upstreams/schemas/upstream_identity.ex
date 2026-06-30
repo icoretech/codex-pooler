@@ -22,6 +22,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
 
   schema "upstream_identities" do
     field :chatgpt_account_id, :string
+    field :chatgpt_user_id, :string
     field :account_email, :string
     field :account_label, :string
     field :workspace_id, :string
@@ -53,6 +54,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     identity
     |> cast(attrs, [
       :chatgpt_account_id,
+      :chatgpt_user_id,
       :account_email,
       :account_label,
       :workspace_id,
@@ -79,6 +81,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
       :metadata
     ])
     |> update_change(:chatgpt_account_id, &trim_string/1)
+    |> update_change(:chatgpt_user_id, &normalize_optional_string/1)
     |> update_change(:account_email, &normalize_optional_email/1)
     |> update_change(:account_label, &trim_string/1)
     |> update_change(:workspace_id, &normalize_optional_string/1)
@@ -114,6 +117,12 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     )
     |> unique_constraint(:workspace_id,
       name: :upstream_identities_chatgpt_workspace_slot_uq
+    )
+    |> unique_constraint(:chatgpt_user_id,
+      name: :upstream_identities_chatgpt_user_legacy_workspace_uq
+    )
+    |> unique_constraint(:chatgpt_user_id,
+      name: :upstream_identities_chatgpt_user_workspace_slot_uq
     )
   end
 

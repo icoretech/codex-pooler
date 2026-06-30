@@ -899,6 +899,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           metadata: %{}
         },
         label: "Detached status Codex",
+        subject_ref: nil,
         plan_label: nil,
         plan_reported?: false,
         refresh_status: "not run",
@@ -1282,6 +1283,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           metadata: %{}
         },
         label: "Detached Codex",
+        subject_ref: nil,
         plan_label: nil,
         plan_reported?: false,
         refresh_status: "not run",
@@ -3365,6 +3367,57 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert rendered =~ "stored account id "
   end
 
+  @tag :subject_identity_display
+  test "read model and rendered cockpit expose safe subject ref only", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "subject-cockpit",
+        name: "Subject Cockpit"
+      })
+
+    unique = System.unique_integer([:positive])
+    raw_subject = "user_subject_cockpit_#{unique}"
+
+    %{identity: initial_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Subject Cockpit Codex",
+        chatgpt_account_id: "acct_subject_cockpit_initial_#{unique}",
+        workspace_id: "workspace-subject-cockpit-initial-#{unique}",
+        workspace_label: "Subject workspace"
+      })
+
+    identity =
+      update_identity_subject_slot!(
+        initial_identity,
+        "acct_subject_cockpit_#{unique}",
+        "workspace-subject-cockpit-#{unique}",
+        raw_subject
+      )
+
+    safe_subject_ref = subject_ref(raw_subject)
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+    assert cockpit.identity.subject_ref == safe_subject_ref
+    assert cockpit.header.subject_ref == safe_subject_ref
+
+    inspected_cockpit = inspect(cockpit)
+    refute inspected_cockpit =~ raw_subject
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    rendered = render(view)
+
+    assert has_element?(
+             view,
+             "#upstream-cockpit-safe-subject-ref[data-role='upstream-subject-ref']",
+             "Subject #{safe_subject_ref}"
+           )
+
+    refute rendered =~ raw_subject
+  end
+
   defp status_fixture!(scope, slug_suffix, attrs) do
     unique = System.unique_integer([:positive])
 
@@ -3733,6 +3786,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              view,
              "##{footer_id}-docs-link [data-role='admin-dialog-docs-icon']"
            )
+  end
+
+  defp update_identity_subject_slot!(identity, account_id, workspace_id, raw_subject) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      chatgpt_account_id: account_id,
+      workspace_id: workspace_id,
+      workspace_label: "Subject workspace",
+      chatgpt_user_id: raw_subject
+    })
+    |> Repo.update!()
+  end
+
+  defp subject_ref(raw_subject) do
+    digest =
+      :crypto.hash(:sha256, raw_subject)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 12)
+
+    "subj:" <> digest
   end
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")

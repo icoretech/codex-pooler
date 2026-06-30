@@ -14,7 +14,7 @@ Use this page when you need to answer:
 5. how recent token usage compares with observed quota windows
 6. which account actions are available without exposing raw credentials
 
-The page is metadata-only after linking or import. It shows operator labels, workspace and plan badges, safe status labels, quota-window evidence, token counters, assignment counts, and links to related logs. It does not show prompts, responses, files, websocket frames, bearer tokens, refresh tokens, provider cookies, OAuth provider payloads, or stored Codex `auth.json` contents.
+The page is metadata-only after linking or import. It shows operator labels, workspace and plan badges, safe status labels, quota-window evidence, token counters, assignment counts, sanitized subject references when needed, and links to related logs. It does not show prompts, responses, files, websocket frames, bearer tokens, refresh tokens, provider cookies, OAuth provider payloads, raw OpenAI user subjects, or stored Codex `auth.json` contents.
 
 ![Upstreams page overview](/operators/upstreams/upstreams-overview.png)
 
@@ -167,6 +167,8 @@ The upload accepts small auth files only. The current UI states a 64 KB limit.
 
 After import, Codex Pooler becomes the refresh-token authority for that account lineage. Do not keep using the same `auth.json` from another Codex install, machine, or automation. Provider refresh-token rotation can invalidate one copy and move the account into `reauth_required`.
 
+Export `auth.json` from the intended signed-in account, then import each user lineage separately. When the auth file returns an OpenAI user subject, Codex Pooler uses it with the account and workspace identifiers to separate multiple credentials from the same account and workspace. The admin UI may show a sanitized subject reference so operators can distinguish those rows, but it never renders the raw subject.
+
 The dialog footer keeps docs on the left and the submit actions on the right. `Cancel` closes without importing. `Import auth.json` stores the credential material through encrypted upstream secret storage.
 
 ## OpenAI OAuth Upstream Linking
@@ -175,7 +177,14 @@ OpenAI OAuth upstream linking is an authenticated admin workflow. Use
 `OAuth` on `/admin/upstreams` to link a new OpenAI upstream account to a selected Pool. Use
 `/admin/upstreams/:id` to relink or reconnect the exact upstream identity shown
 in the cockpit. Relink checks the returned account and workspace claims against
-the target identity before replacing encrypted credential material.
+the target identity before replacing encrypted credential material. When OpenAI
+returns a user subject, Codex Pooler also uses that subject to keep same-account,
+same-workspace upstream credentials distinct.
+
+Browser account choice is controlled by the active OpenAI or Google browser
+session. Codex Pooler can start the authorization flow, but it cannot force the
+provider account chooser by itself. Sign in to the intended provider account, or
+use a separate browser profile, before completing the link or relink.
 
 The browser manual callback workflow is:
 
@@ -183,20 +192,21 @@ The browser manual callback workflow is:
 2. choose `Browser`
 3. open the generated OpenAI authorization URL
 4. complete OpenAI authorization in the browser
-5. paste the resulting local callback URL back into the admin dialog
+5. paste the resulting returned browser URL back into the admin dialog
 6. submit the callback form and wait for the success or safe error state
 7. use `Close` after the dialog reports that the account was linked or relinked
 
-The local callback URL is consumed only by the already-authenticated admin page,
-and there is no hosted OAuth callback route, no public `/auth/callback`, and no
+The returned browser URL is consumed only by the already-authenticated admin page,
+and there is no hosted OAuth callback route, no public callback endpoint, and no
 `/api/admin/*` or dashboard JSON API for this workflow.
 
 Use the device-code fallback when browser authorization is not practical. The
 dialog shows the user code and verification URL while the flow is pending, and
 the page polls only while the operator keeps the dialog open. Device-code
-authorization must be enabled for Codex on the OpenAI account or workspace. If
-device authorization is unavailable or denied, use the browser workflow or ask
-the workspace admin to enable Codex device-code login.
+authorization must be enabled for Codex on the OpenAI account or workspace. It
+may be unavailable or denied by account or workspace policy. If device
+authorization is unavailable or denied, use the browser workflow or ask the
+workspace admin to enable Codex device-code login.
 
 Immediately after a successful link, the new account is not guaranteed to route
 traffic. Codex Pooler creates the initial Pool assignment and enqueues account
@@ -206,7 +216,7 @@ before any user request is routed, and runtime routing excludes it until token
 refresh succeeds or the credentials are relinked.
 
 Operators should never paste callback URLs, authorization codes, tokens, cookies,
-raw auth.json, OpenAI provider payloads, or local credential files into docs,
+returned browser URLs, raw auth.json, OpenAI provider payloads, raw user subjects, or local credential files into docs,
 tickets, logs, or evidence. The admin UI may show the one-time authorization URL
 or device user code during a pending flow, but persisted flow summaries, audit
 metadata, request logs, tests, and docs stay metadata-only.
@@ -227,7 +237,7 @@ Safe OAuth troubleshooting codes:
     </tr>
     <tr>
       <td><code>invalid_callback_origin</code></td>
-      <td>Use only the <code>http://localhost:1455/auth/callback</code> URL produced by the OpenAI flow.</td>
+      <td>Use only the local browser URL produced by the OpenAI flow.</td>
     </tr>
     <tr>
       <td><code>missing_state</code></td>
@@ -267,7 +277,7 @@ Safe OAuth troubleshooting codes:
     </tr>
     <tr>
       <td><code>identity_mismatch</code></td>
-      <td>Relink with the same OpenAI account and workspace shown in the cockpit.</td>
+      <td>Relink with the same OpenAI account, workspace, and sanitized subject reference shown in the cockpit. If a different person in the same workspace should be added, link or import that user lineage as a separate upstream identity.</td>
     </tr>
     <tr>
       <td><code>identity_conflict</code></td>

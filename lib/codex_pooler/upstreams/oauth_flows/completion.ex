@@ -249,6 +249,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
   defp oauth_link_attrs(tokens, token_info, config) do
     %{
       chatgpt_account_id: token_info.chatgpt_account_id,
+      chatgpt_user_id: token_info.chatgpt_user_id,
       account_email: token_info.email,
       account_label: token_info.email || token_info.chatgpt_account_id || "Codex account",
       workspace_id: token_info.workspace_id,

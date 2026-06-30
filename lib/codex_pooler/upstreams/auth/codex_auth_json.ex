@@ -19,6 +19,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
   @type import_attrs :: %{
           required(:account_identifier) => String.t(),
           required(:account_email) => String.t() | nil,
+          required(:chatgpt_user_id) => String.t() | nil,
           required(:account_label) => String.t(),
           required(:workspace_id) => String.t() | nil,
           required(:workspace_label) => String.t() | nil,
@@ -47,6 +48,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthJson do
        %{
          account_identifier: account_identifier,
          account_email: account_email(id_claims),
+         chatgpt_user_id: auth_claim(id_claims, "chatgpt_user_id"),
          account_label: account_label(id_claims),
          workspace_id: workspace_id(id_claims),
          workspace_label: workspace_label(id_claims),

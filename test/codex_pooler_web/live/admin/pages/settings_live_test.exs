@@ -496,10 +496,14 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
                %{user_agent: "Other Browser", ip_address: "203.0.113.60"}
              )
 
-    [other_session] =
+    other_session_id = Accounts.session_id_for_token(other_token)
+
+    other_session =
       user
       |> Accounts.list_user_sessions(current_token)
-      |> Enum.reject(& &1.current?)
+      |> Enum.find(&(&1.id == other_session_id))
+
+    assert other_session
 
     Phoenix.PubSub.subscribe(CodexPooler.PubSub, UserAuth.user_sessions_topic(user.id))
 

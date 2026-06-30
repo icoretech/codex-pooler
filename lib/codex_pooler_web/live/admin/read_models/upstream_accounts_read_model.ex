@@ -44,6 +44,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:label) => String.t(),
           required(:workspace_ref) => String.t(),
           required(:workspace_label) => String.t() | nil,
+          required(:subject_ref) => String.t() | nil,
           required(:plan_label) => String.t(),
           required(:plan_reported?) => boolean(),
           required(:refresh_status) => String.t(),
@@ -187,6 +188,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       label: account_label(identity),
       workspace_ref: workspace_ref(identity.workspace_id),
       workspace_label: safe_workspace_label(identity.workspace_label),
+      subject_ref: subject_ref(identity.chatgpt_user_id),
       plan_label: account_plan_label(identity),
       plan_reported?: account_plan_reported?(identity),
       refresh_status: refresh_status_label(identity),
@@ -290,6 +292,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   end
 
   defp workspace_ref(_workspace_id), do: "legacy"
+
+  @spec subject_ref(term()) :: String.t() | nil
+  defp subject_ref(value) do
+    case Formatting.present_string(value) do
+      nil ->
+        nil
+
+      subject ->
+        digest =
+          :crypto.hash(:sha256, subject)
+          |> Base.encode16(case: :lower)
+          |> binary_part(0, 12)
+
+        "subj:" <> digest
+    end
+  end
 
   defp account_label(identity) do
     Formatting.present_string(identity.account_label) ||

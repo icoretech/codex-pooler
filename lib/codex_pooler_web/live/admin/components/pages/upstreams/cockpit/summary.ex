@@ -126,6 +126,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
         >
           {@cockpit.header.safe_account_id_label}
         </span>
+        <span
+          :if={@cockpit.header.subject_ref}
+          id="upstream-cockpit-safe-subject-ref"
+          data-role="upstream-subject-ref"
+          class="badge badge-outline max-w-full break-all font-mono"
+        >
+          Subject {@cockpit.header.subject_ref}
+        </span>
         <span class={Formatting.status_badge_class(@cockpit.header.status)}>
           {@cockpit.header.status_label}
         </span>

@@ -137,6 +137,140 @@ defmodule CodexPooler.UpstreamsTest do
       assert %{chatgpt_account_id: ["has already been taken"]} = errors_on(changeset)
     end
 
+    @tag :subject_identity_schema
+    test "stores identities without a subject as nullable legacy rows" do
+      account_id = "acct_subjectless_#{System.unique_integer([:positive])}"
+
+      assert {:ok, identity} =
+               IdentityLifecycle.create_upstream_identity(subject_identity_attrs(account_id))
+
+      assert identity.chatgpt_user_id == nil
+      assert Repo.get!(UpstreamIdentity, identity.id).chatgpt_user_id == nil
+    end
+
+    @tag :subject_identity_schema
+    test "normalizes blank subject ids to nil before persistence" do
+      account_id = "acct_blank_subject_#{System.unique_integer([:positive])}"
+
+      assert {:ok, identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{chatgpt_user_id: "   "})
+               )
+
+      assert identity.chatgpt_user_id == nil
+      assert Repo.get!(UpstreamIdentity, identity.id).chatgpt_user_id == nil
+    end
+
+    @tag :subject_identity_schema
+    test "rejects duplicate subjectless legacy rows for the same account" do
+      account_id = "acct_duplicate_subjectless_#{System.unique_integer([:positive])}"
+
+      assert {:ok, _identity} =
+               IdentityLifecycle.create_upstream_identity(subject_identity_attrs(account_id))
+
+      assert {:error, changeset} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   account_label: "Duplicate legacy subjectless"
+                 })
+               )
+
+      assert %{chatgpt_account_id: ["has already been taken"]} = errors_on(changeset)
+    end
+
+    @tag :subject_identity_schema
+    test "rejects duplicate subject-bearing legacy rows for the same account and subject" do
+      account_id = "acct_duplicate_user_legacy_#{System.unique_integer([:positive])}"
+
+      assert {:ok, _identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{chatgpt_user_id: "user_123"})
+               )
+
+      assert {:error, changeset} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   account_label: "Duplicate subject legacy",
+                   chatgpt_user_id: "user_123"
+                 })
+               )
+
+      assert %{chatgpt_user_id: ["has already been taken"]} = errors_on(changeset)
+    end
+
+    @tag :subject_identity_schema
+    test "rejects duplicate subject-bearing workspace rows for the same account workspace and subject" do
+      account_id = "acct_duplicate_user_workspace_#{System.unique_integer([:positive])}"
+
+      assert {:ok, _identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   chatgpt_user_id: "user_123",
+                   workspace_id: "workspace_alpha"
+                 })
+               )
+
+      assert {:error, changeset} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   account_label: "Duplicate subject workspace",
+                   chatgpt_user_id: "user_123",
+                   workspace_id: "workspace_alpha"
+                 })
+               )
+
+      assert %{chatgpt_user_id: ["has already been taken"]} = errors_on(changeset)
+    end
+
+    @tag :subject_identity_schema
+    test "allows different subjects in the same account legacy slot" do
+      account_id = "acct_distinct_user_legacy_#{System.unique_integer([:positive])}"
+
+      assert {:ok, first_identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{chatgpt_user_id: "user_123"})
+               )
+
+      assert {:ok, second_identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   account_label: "Second subject legacy",
+                   chatgpt_user_id: "user_456"
+                 })
+               )
+
+      assert first_identity.id != second_identity.id
+      assert first_identity.chatgpt_user_id == "user_123"
+      assert second_identity.chatgpt_user_id == "user_456"
+    end
+
+    @tag :subject_identity_schema
+    test "allows different subjects in the same account workspace slot" do
+      account_id = "acct_distinct_user_workspace_#{System.unique_integer([:positive])}"
+
+      assert {:ok, first_identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   chatgpt_user_id: "user_123",
+                   workspace_id: "workspace_alpha"
+                 })
+               )
+
+      assert {:ok, second_identity} =
+               IdentityLifecycle.create_upstream_identity(
+                 subject_identity_attrs(account_id, %{
+                   account_label: "Second subject workspace",
+                   chatgpt_user_id: "user_456",
+                   workspace_id: "workspace_alpha"
+                 })
+               )
+
+      assert first_identity.id != second_identity.id
+      assert first_identity.chatgpt_user_id == "user_123"
+      assert second_identity.chatgpt_user_id == "user_456"
+      assert first_identity.workspace_id == second_identity.workspace_id
+    end
+
     test "generic operator updates cannot set reported plan metadata" do
       identity = active_identity_fixture(%{chatgpt_account_id: "acct_operator_plan_denied"})
 
@@ -709,6 +843,339 @@ defmodule CodexPooler.UpstreamsTest do
       refute inspect(event) =~ auth_json
     end
 
+    @tag :subject_plumbing
+    test "imports auth.json subject claims onto upstream identities outside metadata" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "auth-json-subject", name: "auth.json Subject"})
+
+      id_token =
+        jwt_token(%{
+          "email" => "subject-import@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => "acct_subject_import",
+            "chatgpt_user_id" => "user_subject_import",
+            "chatgpt_plan_type" => "pro"
+          }
+        })
+
+      auth_json = auth_json_fixture(account_id: "acct_subject_import", id_token: id_token)
+
+      assert {:ok, attrs} = CodexAuthJson.parse(auth_json)
+      assert Map.get(attrs, :chatgpt_user_id) == "user_subject_import"
+      refute Map.has_key?(attrs.import_metadata, "chatgpt_user_id")
+
+      assert {:ok, %{identity: identity}} =
+               Upstreams.import_codex_auth_json(scope, pool, auth_json)
+
+      assert identity.chatgpt_account_id == "acct_subject_import"
+      assert identity.chatgpt_user_id == "user_subject_import"
+      refute Map.has_key?(identity.metadata, "chatgpt_user_id")
+      assert Repo.get!(UpstreamIdentity, identity.id).chatgpt_user_id == "user_subject_import"
+    end
+
+    @tag :subject_identity_upsert
+    test "auth.json imports create distinct identities for different subjects in the same workspace slot" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "subject-slot-distinct", name: "Subject Slot Distinct"})
+
+      account_id = "acct_subject_slot_#{System.unique_integer([:positive])}"
+      workspace_id = "ws_subject_slot"
+      first_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-first"})
+      second_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-second"})
+
+      first_id_token =
+        jwt_token(%{
+          "email" => "subject-slot@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_slot_first",
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subject Slot",
+            "entitlement_type" => "team-seat"
+          }
+        })
+
+      second_id_token =
+        jwt_token(%{
+          "email" => "subject-slot@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_slot_second",
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subject Slot",
+            "entitlement_type" => "team-seat"
+          }
+        })
+
+      assert {:ok, %{status: :created, identity: first_identity, assignment: first_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: first_access,
+                   id_token: first_id_token
+                 )
+               )
+
+      assert {:ok, %{status: :created, identity: second_identity, assignment: second_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: second_access,
+                   id_token: second_id_token
+                 )
+               )
+
+      assert first_identity.id != second_identity.id
+      assert first_assignment.id != second_assignment.id
+      assert first_assignment.upstream_identity_id == first_identity.id
+      assert second_assignment.upstream_identity_id == second_identity.id
+      assert first_identity.chatgpt_user_id == "user_subject_slot_first"
+      assert second_identity.chatgpt_user_id == "user_subject_slot_second"
+      assert Repo.aggregate(UpstreamIdentity, :count) == 2
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
+      assert active_secret_count("access_token", first_identity) == 1
+      assert active_secret_count("access_token", second_identity) == 1
+
+      assert {:ok, ^first_access} = Secrets.decrypt_active_secret(first_identity, "access_token")
+
+      assert {:ok, ^second_access} =
+               Secrets.decrypt_active_secret(second_identity, "access_token")
+    end
+
+    @tag :subject_identity_upsert
+    test "auth.json reimport updates the same subject identity and preserves sibling secrets" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "subject-slot-reimport", name: "Subject Slot Reimport"})
+
+      account_id = "acct_subject_reimport_#{System.unique_integer([:positive])}"
+      workspace_id = "ws_subject_reimport"
+      first_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-reimport-first"})
+      second_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-reimport-second"})
+      sibling_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-reimport-sibling"})
+
+      first_id_token =
+        jwt_token(%{
+          "email" => "subject-reimport@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_reimport",
+            "workspace_id" => workspace_id
+          }
+        })
+
+      sibling_id_token =
+        jwt_token(%{
+          "email" => "subject-reimport@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_sibling",
+            "workspace_id" => workspace_id
+          }
+        })
+
+      assert {:ok, %{status: :created, identity: first_identity, assignment: first_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: first_access,
+                   id_token: first_id_token
+                 )
+               )
+
+      assert {:ok, %{status: :created, identity: sibling_identity}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: sibling_access,
+                   id_token: sibling_id_token
+                 )
+               )
+
+      assert {:ok, %{status: :existing, identity: reimported, assignment: reimported_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: second_access,
+                   id_token: first_id_token
+                 )
+               )
+
+      assert reimported.id == first_identity.id
+      assert reimported_assignment.id == first_assignment.id
+      assert Repo.aggregate(UpstreamIdentity, :count) == 2
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 2
+      assert active_secret_count("access_token", reimported) == 1
+      assert active_secret_count("access_token", sibling_identity) == 1
+
+      assert {:ok, ^second_access} = Secrets.decrypt_active_secret(reimported, "access_token")
+
+      assert {:ok, ^sibling_access} =
+               Secrets.decrypt_active_secret(sibling_identity, "access_token")
+    end
+
+    @tag :subject_identity_upsert
+    test "auth.json subject import claims one unambiguous legacy subjectless workspace row" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "subject-legacy-claim", name: "Subject Legacy Claim"})
+
+      account_id = "acct_subject_claim_#{System.unique_integer([:positive])}"
+      workspace_id = "ws_subject_claim"
+      legacy_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-legacy"})
+      subject_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-claim"})
+
+      legacy_id_token =
+        jwt_token(%{
+          "email" => "subject-claim@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subject Claim"
+          }
+        })
+
+      subject_id_token =
+        jwt_token(%{
+          "email" => "subject-claim@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_claim",
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subject Claim"
+          }
+        })
+
+      assert {:ok, %{status: :created, identity: legacy_identity, assignment: legacy_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: legacy_access,
+                   id_token: legacy_id_token
+                 )
+               )
+
+      assert legacy_identity.chatgpt_user_id == nil
+
+      assert {:ok, %{status: :existing, identity: claimed, assignment: claimed_assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: subject_access,
+                   id_token: subject_id_token
+                 )
+               )
+
+      assert claimed.id == legacy_identity.id
+      assert claimed_assignment.id == legacy_assignment.id
+      assert claimed.chatgpt_user_id == "user_subject_claim"
+      assert claimed.workspace_id == workspace_id
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
+      assert active_secret_count("access_token", claimed) == 1
+      assert {:ok, ^subject_access} = Secrets.decrypt_active_secret(claimed, "access_token")
+    end
+
+    @tag :subject_identity_upsert
+    test "subjectless auth.json import conflicts with subject-bound workspace siblings" do
+      scope = fixture_owner_scope()
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "subjectless-conflict", name: "Subjectless Conflict"})
+
+      account_id = "acct_subjectless_conflict_#{System.unique_integer([:positive])}"
+      workspace_id = "ws_subjectless_conflict"
+      subject_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subject-bound"})
+      subjectless_access = jwt_token(%{"exp" => future_unix(), "nonce" => "subjectless"})
+
+      subject_id_token =
+        jwt_token(%{
+          "email" => "subjectless-conflict@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "chatgpt_user_id" => "user_subject_bound",
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subjectless Conflict"
+          }
+        })
+
+      subjectless_id_token =
+        jwt_token(%{
+          "email" => "subjectless-conflict@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id,
+            "workspace_id" => workspace_id,
+            "workspace_label" => "Subjectless Conflict"
+          }
+        })
+
+      assert {:ok, %{identity: subject_identity, assignment: assignment}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: subject_access,
+                   id_token: subject_id_token
+                 )
+               )
+
+      assert {:error,
+              {:identity_conflict, :workspace_identity_mismatch,
+               %{
+                 path: "upstream_identity.reconciliation",
+                 incoming_workspace_ref: incoming_workspace_ref
+               } = conflict}} =
+               Upstreams.import_codex_auth_json(
+                 scope,
+                 pool,
+                 auth_json_fixture(
+                   account_id: account_id,
+                   access_token: subjectless_access,
+                   id_token: subjectless_id_token
+                 )
+               )
+
+      assert String.starts_with?(incoming_workspace_ref, "ws:")
+      assert Repo.aggregate(UpstreamIdentity, :count) == 1
+      assert Repo.aggregate(PoolUpstreamAssignment, :count) == 1
+      assert Repo.get!(PoolUpstreamAssignment, assignment.id).status == "active"
+
+      assert Repo.get!(UpstreamIdentity, subject_identity.id).chatgpt_user_id ==
+               "user_subject_bound"
+
+      assert active_secret_count("access_token", subject_identity) == 1
+
+      assert {:ok, ^subject_access} =
+               Secrets.decrypt_active_secret(subject_identity, "access_token")
+
+      conflict_text = inspect(conflict)
+      refute conflict_text =~ account_id
+      refute conflict_text =~ workspace_id
+      refute conflict_text =~ "user_subject_bound"
+      refute conflict_text =~ subjectless_access
+    end
+
     test "shared token linking boundary preserves import semantics for normalized attrs" do
       Repo.delete_all(Oban.Job)
 
@@ -1056,14 +1523,23 @@ defmodule CodexPooler.UpstreamsTest do
 
       account_id = "acct_workspace_upgrade_#{System.unique_integer([:positive])}"
 
+      legacy_id_token =
+        jwt_token(%{
+          "email" => "legacy-upgrade@example.com",
+          "https://api.openai.com/auth" => %{
+            "chatgpt_account_id" => account_id
+          }
+        })
+
       assert {:ok, %{identity: legacy_identity, assignment: legacy_assignment}} =
                Upstreams.import_codex_auth_json(
                  scope,
                  pool,
-                 auth_json_fixture(account_id: account_id)
+                 auth_json_fixture(account_id: account_id, id_token: legacy_id_token)
                )
 
       assert legacy_identity.workspace_id == nil
+      assert legacy_identity.chatgpt_user_id == nil
 
       workspace_id_token =
         jwt_token(%{
@@ -1732,6 +2208,12 @@ defmodule CodexPooler.UpstreamsTest do
         })
       ]
 
+      baseline_import_events =
+        Repo.aggregate(
+          from(event in AuditEvent, where: event.action == "upstream_account.import"),
+          :count
+        )
+
       for payload <- payloads do
         assert {:error, %{code: :unsupported_auth_json, message: ^unsupported_message}} =
                  CodexAuthJson.parse(payload)
@@ -1749,7 +2231,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert Repo.aggregate(
                from(event in AuditEvent, where: event.action == "upstream_account.import"),
                :count
-             ) == 0
+             ) == baseline_import_events
     end
 
     test "invalid upstream secret key rolls back auth.json import without partial rows" do
@@ -6052,6 +6534,18 @@ defmodule CodexPooler.UpstreamsTest do
     identity
   end
 
+  defp subject_identity_attrs(account_id, attrs \\ %{}) do
+    Map.merge(
+      %{
+        chatgpt_account_id: account_id,
+        account_label: "Subject identity",
+        onboarding_method: "import",
+        metadata: %{}
+      },
+      attrs
+    )
+  end
+
   defp weekly_only_payload(overrides \\ %{}) do
     Map.merge(
       %{
@@ -6164,6 +6658,17 @@ defmodule CodexPooler.UpstreamsTest do
     Repo.aggregate(
       from(secret in EncryptedSecret,
         where: secret.secret_kind == ^secret_kind and secret.status == "active"
+      ),
+      :count
+    )
+  end
+
+  defp active_secret_count(secret_kind, identity) do
+    Repo.aggregate(
+      from(secret in EncryptedSecret,
+        where:
+          secret.upstream_identity_id == ^identity.id and secret.secret_kind == ^secret_kind and
+            secret.status == "active"
       ),
       :count
     )

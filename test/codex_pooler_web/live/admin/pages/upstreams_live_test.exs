@@ -711,6 +711,77 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ second_workspace_id
   end
 
+  @tag :subject_identity_display
+  test "distinguishes duplicate workspace rows by safe subject refs on upstream account cards", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "subject-workspace-slots",
+        name: "Subject Workspace Slots"
+      })
+
+    unique = System.unique_integer([:positive])
+    account_id = "acct_subject_slots_#{unique}"
+    workspace_id = "workspace-subject-slots-#{unique}"
+    first_raw_subject = "user_subject_slots_alpha_#{unique}"
+    second_raw_subject = "user_subject_slots_beta_#{unique}"
+
+    %{identity: initial_first_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared subject account",
+        chatgpt_account_id: "#{account_id}_initial_alpha",
+        workspace_id: "#{workspace_id}-initial-alpha",
+        workspace_label: "Shared workspace"
+      })
+
+    %{identity: initial_second_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Shared subject account",
+        chatgpt_account_id: "#{account_id}_initial_beta",
+        workspace_id: "#{workspace_id}-initial-beta",
+        workspace_label: "Shared workspace"
+      })
+
+    first_identity =
+      update_identity_subject_slot!(
+        initial_first_identity,
+        account_id,
+        workspace_id,
+        first_raw_subject
+      )
+
+    second_identity =
+      update_identity_subject_slot!(
+        initial_second_identity,
+        account_id,
+        workspace_id,
+        second_raw_subject
+      )
+
+    first_subject_ref = subject_ref(first_raw_subject)
+    second_subject_ref = subject_ref(second_raw_subject)
+    assert first_subject_ref != second_subject_ref
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{first_identity.id}-subject-ref[data-role='upstream-subject-ref']",
+             "Subject #{first_subject_ref}"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{second_identity.id}-subject-ref[data-role='upstream-subject-ref']",
+             "Subject #{second_subject_ref}"
+           )
+
+    refute html =~ first_raw_subject
+    refute html =~ second_raw_subject
+  end
+
   test "leaves legacy workspace context blank on upstream account cards", %{
     conn: conn,
     scope: scope
@@ -3882,6 +3953,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute render(view) =~ too_large_content
   end
 
+  @tag :recovery_actions
   @tag :recovery_actions_render
   test "blocked upstream accounts render recovery actions and safe default links", %{
     conn: conn,
@@ -4007,6 +4079,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, warning_selector, "Reinvite account")
   end
 
+  @tag :recovery_actions
   @tag :recovery_actions_edge_cases
   test "recovery actions stay safe for no-assignment, deleted, usable auth, and invalid pool cases",
        %{
@@ -4612,6 +4685,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   defp normalize_repo_query_value(value) when is_binary(value), do: value
   defp normalize_repo_query_value(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_repo_query_value(value), do: to_string(value)
+
+  defp update_identity_subject_slot!(identity, account_id, workspace_id, raw_subject) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      chatgpt_account_id: account_id,
+      workspace_id: workspace_id,
+      workspace_label: "Shared workspace",
+      chatgpt_user_id: raw_subject
+    })
+    |> Repo.update!()
+  end
+
+  defp subject_ref(raw_subject) do
+    digest =
+      :crypto.hash(:sha256, raw_subject)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 12)
+
+    "subj:" <> digest
+  end
 
   defp audit_events(action, target_id) do
     Repo.all(

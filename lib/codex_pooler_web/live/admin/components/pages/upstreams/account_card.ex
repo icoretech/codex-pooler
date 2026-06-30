@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
     saved_resets = saved_resets(assigns.account)
     saved_reset_policy = saved_reset_policy(assigns.account)
+    subject_ref = Map.get(assigns.account, :subject_ref)
 
     assigns =
       assigns
@@ -35,6 +36,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> assign(:workspace_context_label, workspace_context_label(assigns.account))
       |> assign(:workspace_context_title, workspace_context_title(assigns.account))
       |> assign(:routing_readiness, routing_readiness(assigns.account))
+      |> assign(:subject_ref, subject_ref)
       |> assign(:saved_resets, saved_resets)
       |> assign(:saved_reset_policy, saved_reset_policy)
       |> assign(
@@ -74,6 +76,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               title={@workspace_context_title}
             >
               {@workspace_context_label}
+            </span>
+            <span
+              :if={@subject_ref}
+              id={"upstream-account-#{@account.identity.id}-subject-ref"}
+              data-role="upstream-subject-ref"
+              class="badge badge-outline badge-sm shrink-0 font-mono text-[0.65rem] text-base-content/50"
+            >
+              Subject {@subject_ref}
             </span>
           </div>
         </div>

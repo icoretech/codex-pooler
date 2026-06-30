@@ -99,6 +99,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     assert DateTime.diff(slowed.poll_after_at, slowed.last_polled_at, :second) in 9..10
   end
 
+  @tag :subject_plumbing
   test "successful device poll exchanges provider authorization and links tokens atomically" do
     scope = fixture_owner_scope()
     pool = pool_fixture()
@@ -141,6 +142,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     assert completed_flow.result_upstream_identity_id == identity.id
     assert %DateTime{} = completed_flow.completed_at
     assert identity.chatgpt_account_id == "acct_device_success"
+    assert identity.chatgpt_user_id == "user_acct_device_success"
     assert identity.account_email == "device-acct_device_success@example.com"
     assert identity.onboarding_method == "device"
     assert identity.workspace_id == "workspace-device"

@@ -58,10 +58,11 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
     attrs = atomize_attrs(attrs)
     chatgpt_account_id = attrs |> Map.get(:chatgpt_account_id) |> present_string()
     workspace_id = attrs |> Map.get(:workspace_id) |> present_string()
+    chatgpt_user_id = attrs |> Map.get(:chatgpt_user_id) |> present_string()
 
     case chatgpt_account_id do
       nil -> select_email_fallback_identity(attrs, workspace_id)
-      account_id -> select_account_slot_identity(account_id, workspace_id)
+      account_id -> select_account_slot_identity(account_id, workspace_id, chatgpt_user_id, attrs)
     end
   end
 
@@ -181,24 +182,56 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
   defp concrete_workspace?(%UpstreamIdentity{} = identity),
     do: not is_nil(present_string(identity.workspace_id))
 
-  defp select_account_slot_identity(account_id, workspace_id) do
+  defp select_account_slot_identity(account_id, workspace_id, nil, attrs) do
     identities = identities_for_account(account_id)
 
-    case identity_for_workspace(identities, workspace_id) do
+    case subjectless_identity_for_workspace(identities, workspace_id) do
       %UpstreamIdentity{} = identity ->
         {:ok, identity}
 
       nil ->
-        legacy_identity = identity_for_workspace(identities, nil)
-        concrete_identities = Enum.reject(identities, &is_nil(&1.workspace_id))
+        select_subjectless_account_fallback(identities, workspace_id, attrs)
+    end
+  end
 
-        if (is_binary(workspace_id) and legacy_identity) && concrete_identities == [] do
-          {:ok, legacy_identity}
-        else
-          {:ok, nil}
+  defp select_account_slot_identity(account_id, workspace_id, subject, _attrs) do
+    identities = identities_for_account(account_id)
+
+    with nil <- identity_for_workspace_and_subject(identities, workspace_id, subject),
+         nil <- subjectless_identity_for_workspace(identities, workspace_id) do
+      {:ok, claimable_subjectless_legacy_identity(identities, workspace_id)}
+    else
+      %UpstreamIdentity{} = identity -> {:ok, identity}
+    end
+  end
+
+  defp select_subjectless_account_fallback(identities, workspace_id, attrs) do
+    case claimable_subjectless_legacy_identity(identities, workspace_id) do
+      %UpstreamIdentity{} = identity ->
+        {:ok, identity}
+
+      nil ->
+        case subject_bound_identity_for_workspace(identities, workspace_id) do
+          %UpstreamIdentity{} = conflict -> {:error, identity_conflict(attrs, conflict)}
+          nil -> {:ok, nil}
         end
     end
   end
+
+  defp claimable_subjectless_legacy_identity(identities, workspace_id)
+       when is_binary(workspace_id) do
+    case subjectless_identity_for_workspace(identities, nil) do
+      %UpstreamIdentity{} = legacy_identity ->
+        if subjectless_concrete_identities(identities) == [] do
+          legacy_identity
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp claimable_subjectless_legacy_identity(_identities, _workspace_id), do: nil
 
   defp select_email_fallback_identity(attrs, workspace_id) do
     account_email = attrs |> Map.get(:account_email) |> normalize_email()
@@ -331,8 +364,35 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
   defp where_workspace(query, workspace_id),
     do: where(query, [identity], identity.workspace_id == ^workspace_id)
 
-  defp identity_for_workspace(identities, workspace_id) do
-    Enum.find(identities, &(&1.workspace_id == workspace_id))
+  defp subjectless?(%UpstreamIdentity{} = identity) do
+    is_nil(present_string(identity.chatgpt_user_id))
+  end
+
+  defp subject_bound?(%UpstreamIdentity{} = identity), do: not subjectless?(identity)
+
+  defp identity_for_workspace_and_subject(identities, workspace_id, subject) do
+    Enum.find(identities, fn identity ->
+      identity.workspace_id == workspace_id and
+        present_string(identity.chatgpt_user_id) == subject
+    end)
+  end
+
+  defp subjectless_identity_for_workspace(identities, workspace_id) do
+    Enum.find(identities, fn identity ->
+      identity.workspace_id == workspace_id and subjectless?(identity)
+    end)
+  end
+
+  defp subjectless_concrete_identities(identities) do
+    Enum.filter(identities, fn identity ->
+      subjectless?(identity) and not is_nil(present_string(identity.workspace_id))
+    end)
+  end
+
+  defp subject_bound_identity_for_workspace(identities, workspace_id) do
+    Enum.find(identities, fn identity ->
+      identity.workspace_id == workspace_id and subject_bound?(identity)
+    end)
   end
 
   defp sibling_concrete_slot?(%UpstreamIdentity{chatgpt_account_id: nil}), do: false

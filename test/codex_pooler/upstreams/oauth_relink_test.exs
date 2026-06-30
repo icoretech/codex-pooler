@@ -190,6 +190,288 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
     assert Repo.aggregate(EncryptedSecret, :count) == 1
   end
 
+  @tag :subject_relink
+  test "browser relink rejects a missing subject for a subject-bound identity without rotating secrets" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    account_id = "acct_relink_subject_missing"
+    target_subject = "user_subject_relink_target"
+    rejected_access = "missing-subject-access"
+    rejected_refresh = "missing-subject-refresh"
+
+    identity =
+      account_id
+      |> relink_identity_attrs("ws_subject_missing")
+      |> active_upstream_identity_fixture()
+      |> subject_bound_identity_fixture(target_subject)
+
+    assert {:ok, _assignment} =
+             PoolAssignments.create_pool_assignment(pool, identity)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(
+               identity,
+               secret_attrs("access_token", "old-subject-missing-access")
+             )
+
+    assert {:ok, "old-subject-missing-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert active_secret_count(identity) == 1
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: rejected_access,
+           refresh_token: rejected_refresh,
+           id_token: relink_id_token(account_id, "ws_subject_missing", chatgpt_user_id: nil)
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool, upstream_identity: identity)
+
+    assert {:error, %{code: :identity_mismatch} = error} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "missing-subject-code")
+             )
+
+    assert_identity_mismatch_without_leak(error, [
+      target_subject,
+      rejected_access,
+      rejected_refresh
+    ])
+
+    assert Repo.get!(OAuthFlow, flow.id).error_code == "identity_mismatch"
+    assert Repo.get!(UpstreamIdentity, identity.id).chatgpt_user_id == target_subject
+
+    assert {:ok, "old-subject-missing-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert active_secret_count(identity) == 1
+    assert Repo.aggregate(EncryptedSecret, :count) == 1
+  end
+
+  @tag :subject_relink
+  test "browser relink rejects a different subject for a subject-bound identity without rotating secrets" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    account_id = "acct_relink_subject_different"
+    target_subject = "user_subject_relink_selected"
+    incoming_subject = "user_subject_relink_other"
+    rejected_access = "different-subject-access"
+    rejected_refresh = "different-subject-refresh"
+
+    identity =
+      account_id
+      |> relink_identity_attrs("ws_subject_different")
+      |> active_upstream_identity_fixture()
+      |> subject_bound_identity_fixture(target_subject)
+
+    assert {:ok, _assignment} =
+             PoolAssignments.create_pool_assignment(pool, identity)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(
+               identity,
+               secret_attrs("access_token", "old-subject-different-access")
+             )
+
+    assert {:ok, "old-subject-different-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert active_secret_count(identity) == 1
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: rejected_access,
+           refresh_token: rejected_refresh,
+           id_token:
+             relink_id_token(account_id, "ws_subject_different",
+               chatgpt_user_id: incoming_subject
+             )
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool, upstream_identity: identity)
+
+    assert {:error, %{code: :identity_mismatch} = error} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "different-subject-code")
+             )
+
+    assert_identity_mismatch_without_leak(error, [
+      target_subject,
+      incoming_subject,
+      rejected_access,
+      rejected_refresh
+    ])
+
+    assert Repo.get!(OAuthFlow, flow.id).error_code == "identity_mismatch"
+    assert Repo.get!(UpstreamIdentity, identity.id).chatgpt_user_id == target_subject
+
+    assert {:ok, "old-subject-different-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert active_secret_count(identity) == 1
+    assert Repo.aggregate(EncryptedSecret, :count) == 1
+  end
+
+  @tag :subject_relink
+  test "browser relink accepts a matching subject for a subject-bound identity and rotates secrets" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    account_id = "acct_relink_subject_matching"
+    target_subject = "user_subject_relink_matching"
+
+    identity =
+      account_id
+      |> relink_identity_attrs("ws_subject_matching")
+      |> active_upstream_identity_fixture()
+      |> subject_bound_identity_fixture(target_subject)
+
+    assert {:ok, _assignment} =
+             PoolAssignments.create_pool_assignment(pool, identity)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(
+               identity,
+               secret_attrs("access_token", "old-subject-matching-access")
+             )
+
+    assert {:ok, "old-subject-matching-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert active_secret_count(identity) == 1
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: "matching-subject-access",
+           refresh_token: "matching-subject-refresh",
+           id_token:
+             relink_id_token(account_id, "ws_subject_matching", chatgpt_user_id: target_subject)
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool, upstream_identity: identity)
+
+    assert {:ok, %{status: :completed, identity: relinked}} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "matching-subject-code")
+             )
+
+    assert relinked.id == identity.id
+    assert relinked.chatgpt_user_id == target_subject
+    assert Repo.get!(OAuthFlow, flow.id).result_upstream_identity_id == identity.id
+
+    assert {:ok, "matching-subject-access"} =
+             Secrets.decrypt_active_secret(identity, "access_token")
+
+    assert {:ok, "matching-subject-refresh"} =
+             Secrets.decrypt_active_secret(identity, "refresh_token")
+
+    assert active_secret_count(identity) == 2
+    assert Repo.aggregate(EncryptedSecret, :count) == 3
+  end
+
+  @tag :subject_relink
+  test "browser relink accepts the selected nil-workspace subject identity among siblings" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    account_id = "acct_relink_subject_siblings"
+    first_subject = "user_subject_relink_sibling_first"
+    second_subject = "user_subject_relink_sibling_second"
+
+    first_identity =
+      account_id
+      |> relink_identity_attrs(nil)
+      |> active_upstream_identity_fixture()
+      |> subject_bound_identity_fixture(first_subject)
+
+    second_identity =
+      account_id
+      |> relink_identity_attrs(nil)
+      |> active_upstream_identity_fixture()
+      |> subject_bound_identity_fixture(second_subject)
+
+    assert {:ok, _first_assignment} =
+             PoolAssignments.create_pool_assignment(pool, first_identity)
+
+    assert {:ok, _second_assignment} =
+             PoolAssignments.create_pool_assignment(pool, second_identity)
+
+    assert {:ok, _first_secret} =
+             Upstreams.store_encrypted_secret(
+               first_identity,
+               secret_attrs("access_token", "old-first-sibling-access")
+             )
+
+    assert {:ok, _second_secret} =
+             Upstreams.store_encrypted_secret(
+               second_identity,
+               secret_attrs("access_token", "old-second-sibling-access")
+             )
+
+    assert active_secret_count(first_identity) == 1
+    assert active_secret_count(second_identity) == 1
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: "new-second-sibling-access",
+           refresh_token: "new-second-sibling-refresh",
+           id_token: relink_id_token(account_id, nil, chatgpt_user_id: second_subject)
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool, upstream_identity: second_identity)
+
+    assert {:ok, %{status: :completed, identity: relinked}} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "second-sibling-code")
+             )
+
+    reloaded_first = Repo.get!(UpstreamIdentity, first_identity.id)
+    reloaded_second = Repo.get!(UpstreamIdentity, second_identity.id)
+
+    assert relinked.id == second_identity.id
+    assert reloaded_first.chatgpt_user_id == first_subject
+    assert reloaded_first.workspace_id == nil
+    assert reloaded_second.chatgpt_user_id == second_subject
+    assert reloaded_second.workspace_id == nil
+    assert Repo.get!(OAuthFlow, flow.id).result_upstream_identity_id == second_identity.id
+
+    assert {:ok, "old-first-sibling-access"} =
+             Secrets.decrypt_active_secret(first_identity, "access_token")
+
+    assert {:ok, "new-second-sibling-access"} =
+             Secrets.decrypt_active_secret(second_identity, "access_token")
+
+    assert {:ok, "new-second-sibling-refresh"} =
+             Secrets.decrypt_active_secret(second_identity, "refresh_token")
+
+    assert active_secret_count(first_identity) == 1
+    assert active_secret_count(second_identity) == 2
+    assert Repo.aggregate(EncryptedSecret, :count) == 4
+  end
+
   test "browser relink upgrades a unique legacy slot to the incoming workspace" do
     scope = fixture_owner_scope()
     pool = pool_fixture()
@@ -347,13 +629,16 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
     }
   end
 
-  defp relink_id_token(account_id, workspace_id) do
+  defp relink_id_token(account_id, workspace_id, opts \\ []) do
     auth_claims =
       %{
         "chatgpt_account_id" => account_id,
-        "chatgpt_user_id" => "user_#{account_id}",
         "chatgpt_plan_type" => "team"
       }
+      |> maybe_put_claim(
+        "chatgpt_user_id",
+        Keyword.get(opts, :chatgpt_user_id, "user_#{account_id}")
+      )
       |> maybe_put_claim("workspace_id", workspace_id)
       |> maybe_put_claim("workspace_label", workspace_id && "OAuth Workspace")
       |> maybe_put_claim("seat_type", "team-seat")
@@ -366,6 +651,31 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
 
   defp maybe_put_claim(map, _key, nil), do: map
   defp maybe_put_claim(map, key, value), do: Map.put(map, key, value)
+
+  defp subject_bound_identity_fixture(identity, subject) do
+    identity
+    |> UpstreamIdentity.changeset(%{chatgpt_user_id: subject})
+    |> Repo.update!()
+  end
+
+  defp active_secret_count(identity) do
+    Repo.aggregate(
+      from(secret in EncryptedSecret,
+        where: secret.upstream_identity_id == ^identity.id and secret.status == "active"
+      ),
+      :count
+    )
+  end
+
+  defp assert_identity_mismatch_without_leak(error, denied_values) do
+    assert error.message == "OAuth account does not match the selected upstream account"
+
+    error_dump = inspect(error)
+
+    for denied_value <- denied_values do
+      refute error_dump =~ denied_value
+    end
+  end
 
   defp secret_attrs(secret_kind, plaintext) do
     %{secret_kind: secret_kind, plaintext: plaintext}

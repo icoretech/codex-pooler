@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:plan_label) => String.t() | nil,
           required(:plan_reported?) => boolean(),
           required(:safe_account_id_label) => String.t(),
+          required(:subject_ref) => String.t() | nil,
           required(:saved_resets) => SavedResets.snapshot_projection(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection()
         }
@@ -45,7 +46,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:reauth_reason_code) => String.t() | nil,
           required(:reauth_reason_message) => String.t() | nil,
           required(:disabled?) => boolean(),
-          required(:safe_account_id_label) => String.t()
+          required(:safe_account_id_label) => String.t(),
+          required(:subject_ref) => String.t() | nil
         }
   @type assignment :: %{
           required(:id) => Ecto.UUID.t(),
@@ -319,6 +321,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       plan_label: account.plan_label,
       plan_reported?: account.plan_reported?,
       safe_account_id_label: safe_account_id_label(identity.chatgpt_account_id),
+      subject_ref: account.subject_ref,
       saved_resets: saved_resets(account),
       saved_reset_policy: saved_reset_policy(account)
     }
@@ -352,7 +355,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       reauth_reason_code: account.reauth_reason_code,
       reauth_reason_message: account.reauth_reason_message,
       disabled?: account.identity.status == "disabled",
-      safe_account_id_label: safe_identity.safe_account_id_label
+      safe_account_id_label: safe_identity.safe_account_id_label,
+      subject_ref: safe_identity.subject_ref
     }
   end
 
