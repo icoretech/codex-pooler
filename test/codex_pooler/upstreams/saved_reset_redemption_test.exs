@@ -7,7 +7,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
-  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   setup do
     on_exit(fn -> :ok end)
@@ -449,6 +450,88 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       persisted = Repo.reload!(identity)
       refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
     end
+
+    test "gateway auto returns an error without provider request when persisted assignment is inactive" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+      update_assignment!(assignment, %{status: PoolUpstreamAssignment.paused_status()})
+
+      assert {:error, %{code: :pool_assignment_not_found}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+  end
+
+  describe "AutoEligibility.validate_locked_gateway_auto/4" do
+    test "gateway auto noops when the locked identity is disabled or deleted" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      for status <- [UpstreamIdentity.disabled_status(), UpstreamIdentity.deleted_status()] do
+        locked_identity = %{identity | status: status}
+
+        assert {:noop, "gateway_auto_identity_unavailable"} =
+                 AutoEligibility.validate_locked_gateway_auto(
+                   locked_identity,
+                   assignment,
+                   context,
+                   timestamp
+                 )
+      end
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto noops when the current assignment is inactive or reassigned" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      inactive_assignment = %{assignment | status: PoolUpstreamAssignment.paused_status()}
+
+      assert {:noop, "gateway_auto_assignment_unavailable"} =
+               AutoEligibility.validate_locked_gateway_auto(
+                 identity,
+                 inactive_assignment,
+                 context,
+                 timestamp
+               )
+
+      reassigned_assignment = %{assignment | upstream_identity_id: Ecto.UUID.generate()}
+
+      assert {:noop, "gateway_auto_context_mismatch"} =
+               AutoEligibility.validate_locked_gateway_auto(
+                 identity,
+                 reassigned_assignment,
+                 context,
+                 timestamp
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
   end
 
   defp codex_reset_fake(available_count) do
@@ -580,6 +663,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     update_identity!(persisted, %{
       metadata: Map.put(metadata, "saved_reset_redemption", redemption)
     })
+  end
+
+  defp update_assignment!(%PoolUpstreamAssignment{} = assignment, attrs) do
+    assignment
+    |> Repo.reload!()
+    |> PoolUpstreamAssignment.changeset(
+      Map.put(attrs, :updated_at, DateTime.utc_now() |> DateTime.truncate(:microsecond))
+    )
+    |> Repo.update!()
   end
 
   defp redemption_metadata(trigger_kind, started_at) do

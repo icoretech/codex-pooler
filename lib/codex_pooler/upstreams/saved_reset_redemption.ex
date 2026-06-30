@@ -242,12 +242,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              gateway_auto_context,
              started_at
            ) do
-        :ok ->
+        {:ok, current_assignment} ->
           locked_identity
           |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
           |> build_redemption_claim!(
             locked_identity,
-            assignment,
+            current_assignment,
             trigger_kind,
             receive_timeout,
             started_at
@@ -262,7 +262,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp validate_locked_gateway_auto(_locked_identity, _assignment, nil, _started_at), do: :ok
+  defp validate_locked_gateway_auto(_locked_identity, assignment, nil, _started_at),
+    do: {:ok, assignment}
 
   defp validate_locked_gateway_auto(
          %UpstreamIdentity{} = locked_identity,
@@ -270,12 +271,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          gateway_auto_context,
          %DateTime{} = started_at
        ) do
-    AutoEligibility.validate_locked_gateway_auto(
-      locked_identity,
-      assignment,
-      gateway_auto_context,
-      started_at
-    )
+    with {:ok, locked_assignment} <- lock_gateway_auto_assignment(assignment),
+         :ok <-
+           AutoEligibility.validate_locked_gateway_auto(
+             locked_identity,
+             locked_assignment,
+             gateway_auto_context,
+             started_at
+           ) do
+      {:ok, locked_assignment}
+    end
+  end
+
+  defp lock_gateway_auto_assignment(%PoolUpstreamAssignment{id: assignment_id}) do
+    case Repo.one(
+           from assignment in PoolUpstreamAssignment,
+             where: assignment.id == ^assignment_id,
+             lock: "FOR UPDATE"
+         ) do
+      %PoolUpstreamAssignment{} = assignment -> {:ok, assignment}
+      nil -> {:noop, "gateway_auto_assignment_unavailable"}
+    end
   end
 
   defp redemption_in_progress_for_trigger?(redemption, started_at, receive_timeout, trigger_kind) do
