@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
+  alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -37,6 +38,21 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           optional(:reason) => String.t()
         }
 
+  @spec ensure_manual_available(PoolUpstreamAssignment.t() | Ecto.UUID.t(), keyword()) ::
+          {:ok, PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
+          | {:error, lifecycle_error() | :redemption_in_progress}
+  def ensure_manual_available(assignment_or_id, opts \\ []) do
+    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    timestamp = Keyword.get_lazy(opts, :started_at, &now/0)
+
+    with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id),
+         :ok <- ensure_identity_usable(identity),
+         :ok <- ensure_credentials_usable(identity),
+         :ok <- ensure_saved_reset_available(identity, timestamp, receive_timeout) do
+      {:ok, assignment, identity}
+    end
+  end
+
   @type claim :: %{
           required(:identity) => UpstreamIdentity.t(),
           required(:assignment) => PoolUpstreamAssignment.t(),
@@ -59,10 +75,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       |> Keyword.put(:trigger_kind, trigger_kind)
       |> Keyword.put(:receive_timeout, receive_timeout)
 
-    with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id),
-         {:ok, claim} <-
-           claim_attempt(assignment, identity, trigger_kind, receive_timeout, started_at) do
-      do_redeem(claim, opts)
+    with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id) do
+      case normalize_gateway_auto_context(trigger_kind, Keyword.get(opts, :gateway_auto_context)) do
+        {:ok, gateway_auto_context} ->
+          with {:ok, claim} <-
+                 claim_attempt(
+                   assignment,
+                   identity,
+                   trigger_kind,
+                   receive_timeout,
+                   started_at,
+                   gateway_auto_context
+                 ) do
+            case claim do
+              {:noop, result} -> {:ok, result}
+              claim -> do_redeem(claim, opts)
+            end
+          end
+
+        {:noop, code} ->
+          {:ok, noop_result(identity, assignment, code)}
+      end
     end
   end
 
@@ -87,6 +120,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp load_active_identity(%PoolUpstreamAssignment{} = assignment) do
     case Repo.get(UpstreamIdentity, assignment.upstream_identity_id) do
+      %UpstreamIdentity{status: @identity_deleted} ->
+        {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+
+      %UpstreamIdentity{status: @identity_disabled} ->
+        {:error,
+         lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
+
       %UpstreamIdentity{status: status} = identity
       when status not in [@identity_deleted, @identity_disabled] ->
         {:ok, assignment, identity}
@@ -96,11 +136,80 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp claim_attempt(assignment, identity, trigger_kind, receive_timeout, started_at) do
+  defp ensure_identity_usable(%UpstreamIdentity{status: @identity_deleted}),
+    do: {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+
+  defp ensure_identity_usable(%UpstreamIdentity{status: @identity_disabled}),
+    do:
+      {:error,
+       lifecycle_error(:upstream_identity_unavailable, "upstream identity is not available")}
+
+  defp ensure_identity_usable(%UpstreamIdentity{}), do: :ok
+
+  defp ensure_credentials_usable(%UpstreamIdentity{} = identity) do
+    case Secrets.secret_status(identity) do
+      :present ->
+        :ok
+
+      _status ->
+        {:error,
+         lifecycle_error(
+           :upstream_secret_not_routable,
+           "saved reset redemption requires usable credentials"
+         )}
+    end
+  end
+
+  defp ensure_saved_reset_available(%UpstreamIdentity{} = identity, timestamp, receive_timeout) do
+    snapshot = SavedResets.snapshot(identity, timestamp)
+    redemption = (identity.metadata || %{})["saved_reset_redemption"]
+
+    cond do
+      fresh_redemption?(redemption, timestamp, receive_timeout) ->
+        {:error, :redemption_in_progress}
+
+      snapshot.in_progress? ->
+        {:error,
+         lifecycle_error(
+           :saved_reset_redemption_in_progress,
+           "saved reset redemption is already in progress"
+         )}
+
+      snapshot.reported? != true or snapshot.available? != true ->
+        {:error, lifecycle_error(:saved_reset_unavailable, "no saved resets are available")}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp normalize_gateway_auto_context("gateway_auto", context) do
+    case AutoEligibility.normalize_context(context) do
+      {:ok, context} -> {:ok, context}
+      {:error, :invalid_gateway_auto_context} -> {:noop, "gateway_auto_context_invalid"}
+    end
+  end
+
+  defp normalize_gateway_auto_context(_trigger_kind, _context), do: {:ok, nil}
+
+  defp claim_attempt(
+         assignment,
+         identity,
+         trigger_kind,
+         receive_timeout,
+         started_at,
+         gateway_auto_context
+       ) do
     Repo.transaction(fn ->
       identity.id
       |> lock_identity!()
-      |> claim_locked_identity!(assignment, trigger_kind, receive_timeout, started_at)
+      |> claim_locked_identity!(
+        assignment,
+        trigger_kind,
+        receive_timeout,
+        started_at,
+        gateway_auto_context
+      )
     end)
     |> case do
       {:ok, claim} -> {:ok, claim}
@@ -114,7 +223,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment,
          trigger_kind,
          receive_timeout,
-         started_at
+         started_at,
+         gateway_auto_context
        ) do
     metadata = locked_identity.metadata || %{}
     redemption = metadata["saved_reset_redemption"]
@@ -122,16 +232,46 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     if redemption_in_progress_for_trigger?(redemption, started_at, receive_timeout, trigger_kind) do
       Repo.rollback(:redemption_in_progress)
     else
-      locked_identity
-      |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
-      |> build_redemption_claim!(
-        locked_identity,
-        assignment,
-        trigger_kind,
-        receive_timeout,
-        started_at
-      )
+      case validate_locked_gateway_auto(
+             locked_identity,
+             assignment,
+             gateway_auto_context,
+             started_at
+           ) do
+        :ok ->
+          locked_identity
+          |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
+          |> build_redemption_claim!(
+            locked_identity,
+            assignment,
+            trigger_kind,
+            receive_timeout,
+            started_at
+          )
+
+        {:noop, code} ->
+          {:noop, noop_result(locked_identity, assignment, code)}
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
     end
+  end
+
+  defp validate_locked_gateway_auto(_locked_identity, _assignment, nil, _started_at), do: :ok
+
+  defp validate_locked_gateway_auto(
+         %UpstreamIdentity{} = locked_identity,
+         %PoolUpstreamAssignment{} = assignment,
+         gateway_auto_context,
+         %DateTime{} = started_at
+       ) do
+    AutoEligibility.validate_locked_gateway_auto(
+      locked_identity,
+      assignment,
+      gateway_auto_context,
+      started_at
+    )
   end
 
   defp redemption_in_progress_for_trigger?(redemption, started_at, receive_timeout, trigger_kind) do
@@ -546,6 +686,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       "available_count_before" => Map.get(result, :available_count_before),
       "available_count_after" => Map.get(result, :available_count_after),
       "http_status" => Map.get(result, :http_status)
+    }
+  end
+
+  defp noop_result(identity, assignment, code) when is_binary(code) do
+    %{
+      status: :noop,
+      applied?: false,
+      code: code,
+      identity: identity,
+      assignment: assignment
     }
   end
 

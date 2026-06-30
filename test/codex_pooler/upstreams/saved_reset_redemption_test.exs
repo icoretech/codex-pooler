@@ -5,7 +5,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   setup do
     on_exit(fn -> :ok end)
@@ -201,6 +203,262 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert get_in(persisted.metadata, ["saved_reset_redemption", "generation"]) == 3
       assert get_in(persisted.metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
     end
+
+    test "gateway auto does not consume when persisted policy was disabled after candidate selection" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+
+      update_identity!(stale_identity, %{saved_reset_auto_redeem_enabled: false})
+
+      assert {:ok, %{status: :noop, applied?: false}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto does not consume when persisted count was reduced to keep credits" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity =
+        enable_saved_reset_auto_redeem!(identity, %{saved_reset_auto_redeem_keep_credits: 1})
+
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+
+      update_saved_resets!(stale_identity, %{"available_count" => 1})
+
+      assert {:ok, %{status: :noop, applied?: false}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto does not consume when persisted saved-reset count is unreported" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+
+      update_saved_resets!(stale_identity, %{"status" => "unreported", "available_count" => nil})
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_saved_reset_unavailable"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+
+      persisted = Repo.reload!(stale_identity)
+      refute get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "redeeming"
+    end
+
+    test "gateway auto does not consume when persisted weekly quota no longer matches trigger" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+
+      upsert_weekly_pressure_quota!(stale_identity, Decimal.new("20"))
+
+      assert {:ok, %{status: :noop, applied?: false}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto rejects mismatched context without marking redemption" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+
+      context =
+        assignment
+        |> gateway_auto_context(stale_identity, :blocked_weekly_exhaustion)
+        |> Map.merge(%{
+          upstream_identity_id: Ecto.UUID.generate(),
+          candidate_identity_ids: [Ecto.UUID.generate()]
+        })
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_context_mismatch"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+
+      persisted = Repo.reload!(stale_identity)
+      refute get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "redeeming"
+    end
+
+    test "gateway auto does not consume when persisted identity has fresh in-progress redemption" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+
+      update_redemption!(stale_identity, redemption_metadata("gateway_auto", DateTime.utc_now()))
+
+      assert {:error, :redemption_in_progress} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto does not consume when persisted identity has stale gateway auto metadata" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
+      started_at = DateTime.utc_now() |> DateTime.add(-5, :minute)
+
+      update_redemption!(stale_identity, redemption_metadata("gateway_auto", started_at))
+
+      assert {:error, :redemption_in_progress} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto does not consume when persisted identity lost expiring eligibility" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          saved_resets:
+            saved_resets_with_expirations()
+            |> Map.merge(expiring_saved_reset_attrs())
+            |> Map.put("path_style", "codex_api")
+            |> Map.put("usage_path", "/api/codex/usage")
+        )
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_pressure_quota!(stale_identity, Decimal.new("25"))
+      context = gateway_auto_context(assignment, stale_identity, :expiring_reset)
+
+      update_saved_resets!(stale_identity, %{
+        "available_expires_at" => [],
+        "available_expirations" => [],
+        "next_expires_at" => nil
+      })
+
+      assert {:ok, %{status: :noop, applied?: false}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto rejects malformed context without provider request" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+
+      assert {:ok, %{status: :noop, applied?: false}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: %{trigger: :blocked_weekly_exhaustion}
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto rejects non-keyword list malformed context without provider request" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_context_invalid"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: [:bad]
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+
+      persisted = Repo.reload!(identity)
+      refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
+    end
+  end
+
+  defp codex_reset_fake(available_count) do
+    FakeUpstream.start_link(
+      {:path_json,
+       %{
+         "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+         "/api/codex/usage" => {200, usage_payload(available_count)}
+       }}
+    )
   end
 
   defp assignment_with_fake(fake, usage_path, path_style, opts \\ []) do
@@ -258,6 +516,110 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       "granted_at" => "2026-06-20T00:00:00Z",
       "raw_payload" => %{"unsafe" => true},
       "reason" => nil
+    }
+  end
+
+  defp expiring_saved_reset_attrs do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    expires_at = timestamp |> DateTime.add(1, :hour) |> DateTime.to_iso8601()
+    observed_at = DateTime.to_iso8601(timestamp)
+
+    %{
+      "available_expires_at" => [expires_at],
+      "available_expirations" => [%{"expires_at" => expires_at, "first_seen_at" => observed_at}],
+      "next_expires_at" => expires_at,
+      "expires_observed_at" => observed_at,
+      "expires_refresh_attempted_at" => observed_at
+    }
+  end
+
+  defp gateway_auto_context(assignment, identity, trigger) do
+    %{
+      trigger: trigger,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: identity.id,
+      candidate_assignment_ids: [assignment.id],
+      candidate_identity_ids: [identity.id],
+      route_class: "proxy_http"
+    }
+  end
+
+  defp enable_saved_reset_auto_redeem!(%UpstreamIdentity{} = identity, attrs \\ %{}) do
+    update_identity!(
+      identity,
+      Map.merge(
+        %{
+          saved_reset_auto_redeem_enabled: true,
+          saved_reset_auto_redeem_min_blocked_minutes: 60,
+          saved_reset_auto_redeem_keep_credits: 0,
+          updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        },
+        attrs
+      )
+    )
+  end
+
+  defp update_identity!(%UpstreamIdentity{} = identity, attrs) do
+    identity
+    |> UpstreamIdentity.changeset(attrs)
+    |> Repo.update!()
+  end
+
+  defp update_saved_resets!(%UpstreamIdentity{} = identity, attrs) do
+    persisted = Repo.reload!(identity)
+    metadata = persisted.metadata || %{}
+    saved_resets = Map.merge(metadata["saved_resets"] || %{}, attrs)
+
+    update_identity!(persisted, %{metadata: Map.put(metadata, "saved_resets", saved_resets)})
+  end
+
+  defp update_redemption!(%UpstreamIdentity{} = identity, redemption) do
+    persisted = Repo.reload!(identity)
+    metadata = persisted.metadata || %{}
+
+    update_identity!(persisted, %{
+      metadata: Map.put(metadata, "saved_reset_redemption", redemption)
+    })
+  end
+
+  defp redemption_metadata(trigger_kind, started_at) do
+    %{
+      "status" => "redeeming",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => trigger_kind,
+      "started_at" => started_at |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+      "finished_at" => nil,
+      "result" => nil
+    }
+  end
+
+  defp upsert_weekly_exhausted_quota!(identity) do
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(Decimal.new("100"))])
+  end
+
+  defp upsert_weekly_pressure_quota!(identity, used_percent) do
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(used_percent)])
+  end
+
+  defp weekly_quota_attrs(used_percent) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: used_percent,
+      reset_at: DateTime.add(now, 2, :hour),
+      observed_at: now,
+      last_sync_at: now,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh"
     }
   end
 

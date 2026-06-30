@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueue do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.{AccountAudit, AccountLifecycle}
+  alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
 
@@ -29,6 +30,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueue do
   def enqueue_for_scope(%Scope{} = scope, identity_or_id, pool_id, opts) do
     with {:ok, identity} <- AccountLifecycle.authorize(scope, identity_or_id),
          {:ok, assignment} <- find_assignment(identity, pool_id),
+         {:ok, _assignment, _identity} <- ensure_available(assignment),
          {:ok, job} <-
            Jobs.enqueue_saved_reset_redemption(assignment, trigger_kind: "admin_manual") do
       status = if job.conflict?, do: :already_queued, else: :queued
@@ -64,6 +66,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueue do
 
   defp find_assignment(_identity, _pool_id),
     do: {:error, lifecycle_error(:pool_assignment_not_found, "pool assignment was not found")}
+
+  defp ensure_available(%PoolUpstreamAssignment{} = assignment) do
+    case SavedResetRedemption.ensure_manual_available(assignment) do
+      {:error, :redemption_in_progress} ->
+        {:error,
+         lifecycle_error(
+           :saved_reset_redemption_in_progress,
+           "saved reset redemption is already in progress"
+         )}
+
+      result ->
+        result
+    end
+  end
 
   defp result(%UpstreamIdentity{} = identity, status, job) do
     identity = Repo.reload!(identity)

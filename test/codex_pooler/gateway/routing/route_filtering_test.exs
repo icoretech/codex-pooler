@@ -238,6 +238,39 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       refute metadata_json =~ "credit_id"
     end
 
+    test "second stale auto attempt does not consume after current count was refreshed" do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      stale_identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(stale_identity)
+      filter_input = filter_input(pool, api_key, assignment, stale_identity, "auto-stale-repeat")
+
+      assert {:ok, [{%{id: assignment_id}, %{id: identity_id}}], _filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert assignment_id == assignment.id
+      assert identity_id == identity.id
+      assert length(FakeUpstream.requests(upstream)) == 2
+      assert get_in(Repo.reload!(identity).metadata, ["saved_resets", "available_count"]) == 0
+
+      assert {:ok, _filtered_candidates, _filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert length(FakeUpstream.requests(upstream)) == 2
+    end
+
     test "does not redeem saved reset for a circuit-open candidate" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -413,6 +446,68 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert filtered_options.routing.quota_decision["allowed"] == true
       assert filtered_options.routing.quota_decision["eligible_candidate_count"] == 1
       assert [] = FakeUpstream.requests(circuit_open_upstream)
+    end
+
+    test "threshold locked recheck is scoped to circuit-eligible candidate identities" do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 2)})
+
+      circuit_open = active_upstream_assignment_fixture(pool)
+      routable = active_upstream_assignment_fixture(pool)
+      _outside_model = active_upstream_assignment_fixture(pool)
+
+      redeeming_identity =
+        enable_saved_reset_auto_redeem!(redeeming.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
+      upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
+      upsert_weekly_pressure_quota!(routable.identity, Decimal.new("97"))
+      upsert_weekly_pressure_quota!(circuit_open.identity, Decimal.new("20"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [
+            {redeeming.assignment, redeeming_identity},
+            {circuit_open.assignment, circuit_open.identity},
+            {routable.assignment, routable.identity}
+          ],
+          "threshold-current-candidates"
+        )
+
+      open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
+      route_state = route_state(filter_input)
+
+      assert {:ok, filtered_candidates, _filtered_options, filtered_route_state} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert candidate_ids(filtered_candidates) == [
+               redeeming.assignment.id,
+               routable.assignment.id
+             ]
+
+      assert candidate_ids(filtered_route_state.candidates) == [
+               redeeming.assignment.id,
+               routable.assignment.id
+             ]
+
+      assert [consume_request, usage_request] = FakeUpstream.requests(upstream)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert usage_request.path == "/api/codex/usage"
     end
 
     test "auto redeems saved reset before exhaustion when every candidate is near weekly limit" do

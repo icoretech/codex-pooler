@@ -23,6 +23,26 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
   def perform(%Oban.Job{args: %{"pool_upstream_assignment_id" => assignment_id} = args}) do
     trigger_kind = Map.get(args, "trigger_kind", "admin_manual")
 
+    case SavedResetRedemption.ensure_manual_available(assignment_id) do
+      {:ok, _assignment, _identity} ->
+        redeem(assignment_id, trigger_kind)
+
+      {:error, :redemption_in_progress} ->
+        {:snooze, 5}
+
+      {:error, %{code: :saved_reset_unavailable}} ->
+        {:cancel, :saved_reset_unavailable}
+
+      {:error, %{code: code}}
+      when code in [:pool_assignment_not_found, :upstream_identity_not_found] ->
+        {:cancel, code}
+
+      {:error, %{code: code}} ->
+        {:error, code}
+    end
+  end
+
+  defp redeem(assignment_id, trigger_kind) do
     case SavedResetRedemption.redeem(assignment_id, trigger_kind: trigger_kind) do
       {:ok, %{status: :succeeded}} ->
         :ok

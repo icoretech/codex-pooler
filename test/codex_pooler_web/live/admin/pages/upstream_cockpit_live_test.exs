@@ -980,6 +980,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         }
       })
 
+    {:ok, _secret} =
+      Upstreams.store_encrypted_secret(identity, %{
+        secret_kind: "access_token",
+        plaintext: runtime_secret("saved-reset-cockpit-access")
+      })
+
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
     assert cockpit.saved_resets.label == "2 saved resets"
     assert cockpit.saved_resets.available? == true
