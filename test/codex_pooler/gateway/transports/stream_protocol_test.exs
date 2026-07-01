@@ -425,7 +425,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["response"]["error"]["code"] == "upstream_stream_error"
 
       serialized = Jason.encode!(data)
-      assert serialized =~ "upstream stream interrupted before terminal response event"
+
+      assert serialized =~
+               "upstream request failed: stream interrupted before terminal response event"
+
+      refute serialized =~ "upstream stream interrupted before terminal response event"
       refute serialized =~ "Bearer"
       refute serialized =~ "synthetic-token"
       refute serialized =~ "raw upstream exception"

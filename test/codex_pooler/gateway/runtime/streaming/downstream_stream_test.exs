@@ -567,6 +567,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert data["response"]["id"] == "resp_public_interrupted"
       assert data["response"]["status"] == "failed"
       assert data["error"]["code"] == "upstream_stream_error"
+
+      assert data["error"]["message"] ==
+               "upstream request failed: stream interrupted before terminal response event"
+
       refute Jason.encode!(data) =~ "raw-upstream-reason"
 
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
@@ -735,6 +739,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(failure)
       assert data["response"]["id"] == "resp_from_delta"
       assert data["error"]["code"] == "upstream_stream_error"
+      assert data["error"]["message"] =~ "upstream request failed"
     end
 
     test "does not synthesize after an upstream terminal has already been observed" do

@@ -3546,6 +3546,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert body =~ ~s("type":"response.failed")
     assert body =~ ~s("status":"failed")
     assert body =~ ~s("code":"upstream_stream_error")
+    assert body =~ "upstream request failed: stream interrupted before terminal response event"
+    refute body =~ "upstream stream interrupted before terminal response event"
 
     assert [%{"event" => "response.failed", "data" => data}] =
              public_sse_events(body)
@@ -3555,6 +3557,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert data["response"]["status"] == "failed"
     assert data["response"]["id"] == "resp_visible_before_close"
     assert data["error"]["code"] == "upstream_stream_error"
+
+    assert data["error"]["message"] ==
+             "upstream request failed: stream interrupted before terminal response event"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"

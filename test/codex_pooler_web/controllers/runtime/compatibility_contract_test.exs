@@ -482,6 +482,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                applies_to: "POST /v1/responses HTTP SSE after public Responses data",
                terminal_event: "response.failed",
                error_code: "upstream_stream_error",
+               safe_message:
+                 "upstream request failed: stream interrupted before terminal response event",
                backend_raw_streams: "unchanged",
                websocket_streams: "unchanged",
                raw_error_details: false

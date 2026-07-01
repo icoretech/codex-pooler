@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
   @synthetic_public_openai_responses_failure_code "upstream_stream_error"
-  @synthetic_public_openai_responses_failure_message "upstream stream interrupted before terminal response event"
+  @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
 
   @type event_summary :: EventSummary.t()
 
