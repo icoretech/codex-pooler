@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.9...codex-pooler-v0.4.10) (2026-07-01)
+
+
+### Features
+
+* support none reasoning effort policy ([9eea1c2](https://github.com/icoretech/codex-pooler/commit/9eea1c2ff8322fc1915e94260e619eba5b724a0b))
+
+
+### Bug Fixes
+
+* **admin:** bound jobs failure projections ([09f390a](https://github.com/icoretech/codex-pooler/commit/09f390ae5cfcff3b4927f2af6639e47b45efdb87))
+* **deps:** update dependency daisyui to ^5.6.6 ([#98](https://github.com/icoretech/codex-pooler/issues/98)) ([4482f82](https://github.com/icoretech/codex-pooler/commit/4482f825fffdcf1a2efba2db21d6eaec8bdde27b))
+* **deps:** update docs site astro stack ([bab5b75](https://github.com/icoretech/codex-pooler/commit/bab5b75c9b68cce48c232ded6ad307fb7da94edd))
+* **gateway:** make interrupted response streams retryable for omp ([27dfe52](https://github.com/icoretech/codex-pooler/commit/27dfe52792206718f7e9f8771a678cffb4689d5c))
+* preserve lossy local shell outputs during compression ([cddb976](https://github.com/icoretech/codex-pooler/commit/cddb976b92ce815a000b2c452d46ff495ccbad27))
+* support local Codex Desktop annotation ([ecae01e](https://github.com/icoretech/codex-pooler/commit/ecae01ecc84bc4f120ecbd1f01f9b6172c5ac263))
+
 ## [0.4.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.8...codex-pooler-v0.4.9) (2026-06-30)
 
 
