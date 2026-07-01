@@ -341,6 +341,18 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       assert valid_api_key_changeset.valid?
 
+      none_reasoning_api_key_changeset =
+        APIKey.changeset(%APIKey{}, %{
+          pool_id: Ecto.UUID.generate(),
+          display_name: "Typed policy key",
+          key_prefix: "sk_typed_policy_none",
+          key_hash: <<"typed-policy-none">>,
+          status: "active",
+          enforced_reasoning_effort: "none"
+        })
+
+      assert none_reasoning_api_key_changeset.valid?
+
       ultrafast_api_key_changeset =
         APIKey.changeset(%APIKey{}, %{
           pool_id: Ecto.UUID.generate(),

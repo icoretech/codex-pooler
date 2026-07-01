@@ -32,6 +32,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       detail("request-log-detail-status", "Status", status_label(log.status || "unknown")),
       detail("request-log-detail-endpoint", "Endpoint", log.endpoint, mono: true),
       detail("request-log-detail-model", "Model", log.requested_model),
+      detail(
+        "request-log-detail-requested-reasoning",
+        "Requested reasoning",
+        log.reasoning_effort, mono: true),
+      detail(
+        "request-log-detail-applied-reasoning",
+        "Applied reasoning",
+        log.applied_reasoning_effort,
+        mono: true
+      ),
+      detail(
+        "request-log-detail-upstream-reasoning",
+        "Upstream reasoning",
+        log.effective_reasoning_effort,
+        mono: true
+      ),
       detail("request-log-detail-transport", "Transport", protocol_label(log.transport)),
       detail("request-log-detail-response-status", "Response status", log.response_status_code),
       detail("request-log-detail-error-code", "Error code", log.denial_reason, mono: true),

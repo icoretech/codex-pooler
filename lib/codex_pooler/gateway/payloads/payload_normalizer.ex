@@ -65,9 +65,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
       |> normalize_reasoning_aliases()
       |> Map.put("model", model.upstream_model_id)
+
+    requested_effort = reasoning_effort(payload)
+
+    payload =
+      payload
       |> apply_enforced_payload_policy(request_options)
       |> omit_upstream_auto_default_service_tier()
-      |> normalize_client_reasoning_effort()
+
+    applied_effort = reasoning_effort(payload)
+
+    payload = normalize_client_reasoning_effort(payload)
 
     upstream_payload =
       payload
@@ -77,7 +85,18 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     debug_payload =
       maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
 
-    request_options = put_gateway_debug_payload(request_options, debug_payload)
+    reasoning_effort_snapshot =
+      reasoning_effort_snapshot(
+        requested_effort,
+        applied_effort,
+        reasoning_effort(upstream_payload),
+        request_options
+      )
+
+    request_options =
+      request_options
+      |> put_gateway_debug_payload(debug_payload)
+      |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
 
     with {:ok, encoded} <- Jason.encode(upstream_payload) do
       {:ok, encoded, request_options}
@@ -335,6 +354,63 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     end
   end
 
+  defp reasoning_effort(payload) do
+    case payload do
+      %{"reasoning" => %{"effort" => effort}} -> clean_string(effort)
+      _payload -> nil
+    end
+  end
+
+  defp reasoning_effort_snapshot(
+         requested_effort,
+         applied_effort,
+         effective_effort,
+         request_options
+       ) do
+    %{}
+    |> maybe_put_reasoning_snapshot("requested_effort", requested_effort)
+    |> maybe_put_reasoning_snapshot("applied_effort", applied_effort)
+    |> maybe_put_reasoning_snapshot("effective_effort", effective_effort)
+    |> maybe_put_reasoning_snapshot(
+      "source",
+      reasoning_effort_source(requested_effort, request_options)
+    )
+    |> maybe_put_reasoning_snapshot(
+      "rewrite",
+      reasoning_effort_rewrite(applied_effort, effective_effort)
+    )
+  end
+
+  defp reasoning_effort_source(requested_effort, %RequestOptions{} = request_options) do
+    policy = request_options.routing.api_key_policy || %{}
+
+    if is_binary(Map.get(policy, :enforced_reasoning_effort)) do
+      "api_key_policy"
+    else
+      reasoning_effort_client_source(requested_effort)
+    end
+  end
+
+  defp reasoning_effort_client_source(effort) when is_binary(effort), do: "client"
+  defp reasoning_effort_client_source(_effort), do: nil
+
+  defp reasoning_effort_rewrite(applied_effort, effective_effort) do
+    case {normalize_effort_for_compare(applied_effort),
+          normalize_effort_for_compare(effective_effort)} do
+      {"minimal", "low"} -> "minimal_to_low"
+      {"ultra", "max"} -> "ultra_to_max"
+      _efforts -> nil
+    end
+  end
+
+  defp normalize_effort_for_compare(value) when is_binary(value),
+    do: value |> String.trim() |> String.downcase()
+
+  defp normalize_effort_for_compare(_value), do: nil
+
+  defp maybe_put_reasoning_snapshot(snapshot, _key, nil), do: snapshot
+  defp maybe_put_reasoning_snapshot(snapshot, key, value), do: Map.put(snapshot, key, value)
+
   defp maybe_put_websocket_responses_lite_client_metadata(
          payload,
          %RequestOptions{routing: %{use_responses_lite?: true}}
@@ -481,6 +557,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp put_gateway_debug_payload(%RequestOptions{} = request_options, debug_payload) do
     RequestOptions.put_runtime_context(request_options, gateway_debug_payload: debug_payload)
   end
+
+  defp put_reasoning_effort_snapshot(%RequestOptions{} = request_options, snapshot)
+       when map_size(snapshot) > 0 do
+    RequestOptions.put_runtime_context(request_options, reasoning_effort_snapshot: snapshot)
+  end
+
+  defp put_reasoning_effort_snapshot(%RequestOptions{} = request_options, _snapshot),
+    do: request_options
 
   defp debug_opts(%RequestOptions{} = request_options) do
     %{

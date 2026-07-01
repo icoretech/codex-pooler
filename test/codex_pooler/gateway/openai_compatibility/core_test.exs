@@ -3099,7 +3099,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
 
     test "Responses accepts explicit reasoning effort and summary variants" do
-      for effort <- ["minimal", "low", "medium", "high", "xhigh", "max", "focused"],
+      for effort <- [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+            "focused"
+          ],
           summary <- ["auto", "concise", "detailed"] do
         payload = %{
           "model" => "gpt-fixture-text",

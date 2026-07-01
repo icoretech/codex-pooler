@@ -53,6 +53,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> route_attempt_metadata()
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(payload_compression_attempt_metadata(opts))
+    |> Map.merge(reasoning_effort_attempt_metadata(opts))
     |> Map.merge(metadata)
   end
 
@@ -84,6 +85,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> route_attempt_metadata()
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(payload_compression_attempt_metadata(opts))
+    |> Map.merge(reasoning_effort_attempt_metadata(opts))
     |> Map.merge(metadata)
     |> maybe_put_websocket_frame_headers(websocket_frame_headers)
   end
@@ -192,6 +194,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   defp payload_compression_attempt_metadata(opts) do
     RequestOptions.payload_compression_attempt_metadata(opts)
+  end
+
+  defp reasoning_effort_attempt_metadata(opts) do
+    RequestOptions.reasoning_effort_attempt_metadata(opts)
   end
 
   defp compact_metadata(metadata) do

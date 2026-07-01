@@ -272,6 +272,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraint_containing?(constraints, "btrim(quota_key)")
     assert constraints["api_keys_enforced_model_identifier_shape"] =~ "enforced_model_identifier"
     assert constraints["api_keys_enforced_model_identifier_shape"] =~ "btrim"
+    assert constraints["api_keys_enforced_reasoning_effort_check"] =~ "'none'"
     assert constraints["api_keys_enforced_reasoning_effort_check"] =~ "'minimal'"
     assert constraints["api_keys_enforced_reasoning_effort_check"] =~ "'high'"
     assert constraints["api_keys_enforced_reasoning_effort_check"] =~ "'xhigh'"

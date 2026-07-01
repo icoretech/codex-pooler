@@ -104,6 +104,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :payload_compression,
     :pool_timeout,
     :pool_timeout_ms,
+    :reasoning_effort_snapshot,
     :pool_upstream_assignment_id,
     :previous_response_id,
     :prompt_cache_key,
@@ -335,6 +336,20 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   def payload_compression_attempt_metadata(_opts), do: %{}
 
+  @spec reasoning_effort_attempt_metadata(t() | map() | term()) :: map()
+  def reasoning_effort_attempt_metadata(%__MODULE__{
+        runtime: %{reasoning_effort_snapshot: snapshot}
+      }),
+      do: reasoning_effort_metadata_envelope(snapshot)
+
+  def reasoning_effort_attempt_metadata(%{runtime: %{reasoning_effort_snapshot: snapshot}}),
+    do: reasoning_effort_metadata_envelope(snapshot)
+
+  def reasoning_effort_attempt_metadata(%{reasoning_effort_snapshot: snapshot}),
+    do: reasoning_effort_metadata_envelope(snapshot)
+
+  def reasoning_effort_attempt_metadata(_opts), do: %{}
+
   @spec payload_compression_request_metadata(t() | map() | term()) :: map()
   def payload_compression_request_metadata(opts), do: payload_compression_attempt_metadata(opts)
 
@@ -490,6 +505,20 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   defp normalized_prompt_cache_key(_value), do: nil
+
+  defp reasoning_effort_metadata_envelope(snapshot) when is_map(snapshot) do
+    snapshot =
+      snapshot
+      |> Map.take(~w(requested_effort applied_effort effective_effort source rewrite))
+      |> Enum.reject(fn {_key, value} ->
+        is_nil(value) or (is_binary(value) and String.trim(value) == "")
+      end)
+      |> Map.new()
+
+    if snapshot == %{}, do: %{}, else: %{"reasoning" => snapshot}
+  end
+
+  defp reasoning_effort_metadata_envelope(_snapshot), do: %{}
 
   defp payload_compression_metadata_envelope(metadata),
     do: RequestCompressionMetadata.request_envelope(metadata)

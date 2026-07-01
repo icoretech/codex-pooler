@@ -234,6 +234,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     [
       format_model_name(log),
       format_model_reasoning(log),
+      format_requested_reasoning_detail(log),
       format_model_service_tier(log) && "/ #{format_model_service_tier(log)}",
       format_requested_tier_detail(log)
     ]
@@ -241,10 +242,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     |> Enum.join(" ")
   end
 
-  def format_model_reasoning(%{reasoning_effort: reasoning}) when not is_nil(reasoning),
-    do: if(blank?(reasoning), do: nil, else: reasoning)
+  def format_model_reasoning(log) do
+    [
+      Map.get(log, :effective_reasoning_effort),
+      Map.get(log, :applied_reasoning_effort),
+      Map.get(log, :reasoning_effort)
+    ]
+    |> Enum.find_value(&present_string/1)
+  end
 
-  def format_model_reasoning(_log), do: nil
+  def format_requested_reasoning_detail(log) do
+    requested = present_string(Map.get(log, :reasoning_effort))
+    displayed = format_model_reasoning(log)
+
+    if is_binary(requested) and requested != displayed do
+      "requested: #{requested}"
+    else
+      nil
+    end
+  end
 
   def format_model_service_tier(log) do
     case effective_service_tier(log) do
@@ -490,6 +506,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   defp compression_count_title_part(_label, nil), do: nil
   defp compression_count_title_part(label, value), do: "#{label}: #{Format.integer(value)}"
+
+  defp present_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(_value), do: nil
 
   defp blank?(nil), do: true
   defp blank?(value), do: String.trim(to_string(value)) == ""

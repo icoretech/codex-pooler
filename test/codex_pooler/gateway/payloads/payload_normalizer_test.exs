@@ -487,6 +487,48 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
     end
 
+    test "maps minimal reasoning effort to low before backend dispatch" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => "hello",
+        "reasoning" => %{"effort" => "minimal"}
+      }
+
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "low"}
+    end
+
+    test "passes none reasoning effort through unchanged" do
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => "hello",
+        "reasoning" => %{"effort" => "none"}
+      }
+
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "none"}
+    end
+
     test "maps client-facing ultra reasoning effort to max for backend Codex HTTP, compact, and websocket JSON" do
       payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "ultra"}}
       model = %Model{upstream_model_id: "provider-model"}
@@ -529,6 +571,74 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                )
 
       assert Jason.decode!(encoded)["reasoning"] == %{"effort" => "max"}
+    end
+
+    test "captures reasoning effort snapshot variants on request options" do
+      model = %Model{upstream_model_id: "provider-model"}
+
+      cases = [
+        {%{
+           "model" => "gpt-4.1",
+           "input" => "hello",
+           "reasoning" => %{"effort" => "minimal"}
+         }, %{},
+         %{
+           "requested_effort" => "minimal",
+           "applied_effort" => "minimal",
+           "effective_effort" => "low",
+           "source" => "client",
+           "rewrite" => "minimal_to_low"
+         }},
+        {%{
+           "model" => "gpt-4.1",
+           "input" => "hello",
+           "reasoning" => %{"effort" => "ultra"}
+         }, %{},
+         %{
+           "requested_effort" => "ultra",
+           "applied_effort" => "ultra",
+           "effective_effort" => "max",
+           "source" => "client",
+           "rewrite" => "ultra_to_max"
+         }},
+        {%{
+           "model" => "gpt-4.1",
+           "input" => "hello",
+           "reasoning" => %{"effort" => "low"}
+         }, %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
+         %{
+           "requested_effort" => "low",
+           "applied_effort" => "ultra",
+           "effective_effort" => "max",
+           "source" => "api_key_policy",
+           "rewrite" => "ultra_to_max"
+         }},
+        {%{
+           "model" => "gpt-4.1",
+           "input" => "hello",
+           "reasoning" => %{"effort" => "none"}
+         }, %{},
+         %{
+           "requested_effort" => "none",
+           "applied_effort" => "none",
+           "effective_effort" => "none",
+           "source" => "client"
+         }}
+      ]
+
+      for {payload, opts, expected_snapshot} <- cases do
+        request_options = RequestOptions.build(opts, "/backend-api/codex/responses", payload)
+
+        assert {:ok, _encoded, updated_options} =
+                 PayloadNormalizer.prepare_upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert updated_options.runtime.reasoning_effort_snapshot == expected_snapshot
+      end
     end
 
     test "omits enforced auto and default service tiers from upstream JSON" do

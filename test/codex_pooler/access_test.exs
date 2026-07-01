@@ -625,6 +625,14 @@ defmodule CodexPooler.AccessTest do
     end
 
     @tag :api_key_policy_contract
+    test "normalizes none enforced reasoning effort" do
+      assert {:ok, policy} =
+               Access.normalize_api_key_policy(%{enforced_reasoning_effort: " None "})
+
+      assert policy.enforced_reasoning_effort == "none"
+    end
+
+    @tag :api_key_policy_contract
     test "normalizes max enforced reasoning effort" do
       assert {:ok, policy} =
                Access.normalize_api_key_policy(%{enforced_reasoning_effort: " Max "})

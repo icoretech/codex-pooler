@@ -72,6 +72,52 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
   end
 
   @tag :success_once
+  test "Responses adapter persists effective reasoning attempt metadata without raw input" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_reasoning_metadata",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 5, "output_tokens" => 7, "total_tokens" => 12}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, result} =
+             Responses.coerce(
+               setup
+               |> success_payload()
+               |> Map.put("reasoning", %{"effort" => "minimal"}),
+               request_id: "reasoning-metadata-success"
+             )
+
+    assert {:ok, response} =
+             Gateway.execute(auth, result.endpoint, result.payload, result.request_options)
+
+    assert response.status == 200
+
+    assert [attempt] =
+             Repo.all(
+               from a in Attempt,
+                 join: r in Request,
+                 on: r.id == a.request_id,
+                 where: r.pool_id == ^setup.pool.id
+             )
+
+    assert attempt.response_metadata["reasoning"] == %{
+             "requested_effort" => "minimal",
+             "applied_effort" => "minimal",
+             "effective_effort" => "low",
+             "source" => "client",
+             "rewrite" => "minimal_to_low"
+           }
+
+    refute inspect(attempt.response_metadata) =~ @raw_prompt_sentinel
+  end
+
+  @tag :success_once
   test "Responses adapter upstream validation failure records one failed attempt and settlement" do
     upstream =
       start_upstream(

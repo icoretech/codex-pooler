@@ -611,6 +611,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
             public_openai_chat_stream: true,
             public_openai_responses_stream: true,
             quota_decision: %{"summary" => "allowed"},
+            reasoning_effort_snapshot: %{"effective_effort" => "low"},
             reason: "legacy_reason",
             receive_timeout: 14,
             receive_timeout_ms: 15,

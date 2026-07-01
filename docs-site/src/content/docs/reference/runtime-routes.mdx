@@ -397,6 +397,8 @@ Supported work is translated into Codex-compatible requests and then routed thro
 or non-string context values fail before dispatch with
 `param: "reasoning.context"`.
 
+Reasoning effort values can come from the client request or API key policy. Policy may enforce `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; `none` is sent as no requested reasoning effort, while an unset policy leaves the client value unchanged. Backend Codex compatibility normalization may rewrite some accepted values for the upstream target, and Request logs expose safe requested, applied, and effective reasoning metadata.
+
 Non-strict function tool schemas are lowered before local validation and
 upstream dispatch for backend Responses HTTP, backend Responses websocket
 `response.create`, and public `/v1/responses` compatibility paths. Lowering is

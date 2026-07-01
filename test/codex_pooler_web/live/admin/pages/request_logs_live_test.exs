@@ -1494,6 +1494,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         correlation_id: "req-normalized",
         requested_model: "gpt-5.1",
         reasoning_effort: "high",
+        attempt_response_metadata: %{
+          "reasoning" => %{
+            "applied_effort" => "max",
+            "effective_effort" => "max",
+            "source" => "api_key_policy",
+            "rewrite" => "high_to_max"
+          }
+        },
         service_tier: "default",
         actual_service_tier: "default",
         endpoint: "/backend-api/codex/responses/compact",
@@ -1588,7 +1596,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#{row_selector} [data-role='model-details']",
-             "gpt-5.1 high / default"
+             "gpt-5.1 max requested: high / default"
            )
 
     assert has_element?(
@@ -1597,7 +1605,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "gpt-5.1"
            )
 
-    assert has_element?(view, "#{row_selector} [data-role='model-reasoning']", "high")
+    assert has_element?(view, "#{row_selector} [data-role='model-reasoning']", "max")
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='requested-reasoning']",
+             "requested: high"
+           )
+
     assert has_element?(view, "#{row_selector} [data-role='model-service-tier']", "default")
     refute has_element?(view, "#{row_selector} [data-role='model-service-tier']", "tier:")
     refute has_element?(view, "#{row_selector} [data-role='model-details']", "(")

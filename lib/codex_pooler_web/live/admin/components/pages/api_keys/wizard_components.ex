@@ -246,6 +246,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         </div>
       </div>
       <p class="text-sm leading-6 text-base-content/60">
+        Reasoning "None" is an enforced upstream value; it is different from leaving the field unset.
+        Minimal is sent upstream as low, and Ultra is sent upstream as max for backend Codex
+        compatibility; use Max or Ultra only when the target model/upstream supports them.
         Service tier is only enforced when selected. Auto lets the upstream choose, default requests
         standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the
         highest available tier.

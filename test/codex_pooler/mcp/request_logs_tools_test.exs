@@ -66,7 +66,15 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         request_metadata: unsafe_metadata(%{"safe" => "visible metadata"})
       })
 
-    attempt_with_latency(request, assignment, 345)
+    attempt_with_latency(request, assignment, 345, %{
+      "reasoning" => %{
+        "requested_effort" => "high",
+        "applied_effort" => "max",
+        "effective_effort" => "max",
+        "source" => "api_key_policy",
+        "rewrite" => "high_to_max"
+      }
+    })
 
     _other_status =
       request_fixture(%{pool: pool, api_key: api_key}, %{
@@ -121,6 +129,10 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert item["latency_ms"] == 345
     assert item["retry_count"] == 2
     assert item["response_status_code"] == 202
+    assert item["applied_reasoning_effort"] == "max"
+    assert item["effective_reasoning_effort"] == "max"
+    assert item["reasoning_effort_source"] == "api_key_policy"
+    assert item["reasoning_effort_rewrite"] == "high_to_max"
     assert item["metadata"]["safe"] == "visible metadata"
     assert item["metadata"]["nested"]["count"] == 2
     assert item["metadata"]["nested"]["safe_sentinel"] == "[REDACTED]"
@@ -2037,10 +2049,11 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     item["debug"]
   end
 
-  defp attempt_with_latency(request, assignment, latency_ms) do
+  defp attempt_with_latency(request, assignment, latency_ms, response_metadata \\ %{}) do
     attempt_fixture(request, assignment, %{
       latency_ms: latency_ms,
-      upstream_identity_id: assignment.upstream_identity_id
+      upstream_identity_id: assignment.upstream_identity_id,
+      response_metadata: response_metadata
     })
   end
 

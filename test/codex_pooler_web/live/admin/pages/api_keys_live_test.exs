@@ -163,6 +163,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert has_element?(view, "#api_key_manual_model_identifiers_text")
     assert has_element?(view, "#api_key_enforced_model_identifier")
     assert has_element?(view, "#api_key_enforced_reasoning_effort")
+
+    assert has_element?(
+             view,
+             "#api_key_enforced_reasoning_effort option",
+             "None (request no reasoning)"
+           )
+
     assert has_element?(view, "#api_key_enforced_reasoning_effort option", "Minimal")
     assert has_element?(view, "#api_key_enforced_reasoning_effort option", "Extra high")
     assert has_element?(view, "#api_key_enforced_reasoning_effort option", "Max")

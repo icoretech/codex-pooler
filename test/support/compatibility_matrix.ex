@@ -124,6 +124,16 @@ defmodule CodexPooler.CompatibilityMatrix do
       contract: "minimal reasoning is rewritten to low before upstream dispatch"
     },
     %{
+      slug: :reasoning_none,
+      status: :supported,
+      current: :passed_through,
+      categories: [:route, :auth, :ownership],
+      routes: [%{method: :post, path: "/backend-api/codex/responses"}],
+      future_routes: [],
+      fixture: :reasoning_none,
+      contract: "none reasoning is accepted and forwarded unchanged before upstream dispatch"
+    },
+    %{
       slug: :reasoning_ultra,
       status: :supported,
       current: :normalized_to_max,
@@ -519,6 +529,13 @@ defmodule CodexPooler.CompatibilityMatrix do
         "model" => "gpt-fixture-text",
         "input" => "synthetic reasoning request",
         "reasoning" => %{"effort" => "minimal"}
+      }
+    },
+    reasoning_none: %{
+      json: %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic reasoning request",
+        "reasoning" => %{"effort" => "none"}
       }
     },
     reasoning_ultra: %{

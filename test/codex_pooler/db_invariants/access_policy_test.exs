@@ -92,6 +92,20 @@ defmodule CodexPooler.DBInvariants.AccessPolicyTest do
       )
     end)
 
+    [[none_reasoning_id]] =
+      Repo.query!(
+        """
+        INSERT INTO api_keys (
+          pool_id, display_name, key_prefix, key_hash, status, created_by_user_id,
+          enforced_reasoning_effort
+        ) VALUES ($1, 'None reasoning effort', 'sk_policy_none_reasoning', $2, 'active', $3, 'none')
+        RETURNING id
+        """,
+        [pool_id, <<"policy-none-reasoning">>, user_id]
+      ).rows
+
+    assert count_rows("api_keys", none_reasoning_id) == 1
+
     [[ultra_reasoning_id]] =
       Repo.query!(
         """

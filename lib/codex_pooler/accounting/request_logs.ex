@@ -151,6 +151,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
     request_attempts = Map.get(attempts, request.id, [])
     turn = Map.get(turns_by_request, request.id)
     metadata = safe_request_log_metadata(request.request_metadata || %{}, request_attempts)
+    reasoning_metadata = latest_attempt_reasoning_metadata(request_attempts)
 
     %{
       id: request.id,
@@ -170,6 +171,11 @@ defmodule CodexPooler.Accounting.RequestLogs do
       upstream_account_plan_family: request.upstream_account_plan_family,
       requested_model: request.requested_model,
       reasoning_effort: request.reasoning_effort,
+      applied_reasoning_effort: reasoning_metadata_field(reasoning_metadata, "applied_effort"),
+      effective_reasoning_effort:
+        reasoning_metadata_field(reasoning_metadata, "effective_effort"),
+      reasoning_effort_source: reasoning_metadata_field(reasoning_metadata, "source"),
+      reasoning_effort_rewrite: reasoning_metadata_field(reasoning_metadata, "rewrite"),
       service_tier: request.service_tier,
       requested_service_tier: request.requested_service_tier,
       actual_service_tier: request.actual_service_tier,
@@ -438,6 +444,23 @@ defmodule CodexPooler.Accounting.RequestLogs do
     |> Repo.all()
     |> Enum.group_by(& &1.request_id)
   end
+
+  defp latest_attempt_reasoning_metadata(attempts) do
+    case List.last(attempts) do
+      %{response_metadata: %{"reasoning" => metadata}} when is_map(metadata) -> metadata
+      _attempt -> %{}
+    end
+  end
+
+  defp reasoning_metadata_field(metadata, key) do
+    case Map.get(metadata, key) do
+      value when is_binary(value) -> value |> String.trim() |> blank_to_nil()
+      _value -> nil
+    end
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   defp id_for(%{id: id}), do: id
   defp id_for(id) when is_binary(id), do: id

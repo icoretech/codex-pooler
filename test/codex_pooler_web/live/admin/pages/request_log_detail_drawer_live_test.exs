@@ -33,12 +33,19 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
       request_log_fixture(pool, %{
         correlation_id: "req-drawer-url",
         requested_model: "gpt-drawer-url",
+        reasoning_effort: "high",
         status: "failed",
         last_error_code: "upstream_network_error",
         retry_count: 1,
         attempt_status: "failed",
         attempt_network_error_code: "upstream_network_error",
         attempt_response_metadata: %{
+          "reasoning" => %{
+            "applied_effort" => "max",
+            "effective_effort" => "max",
+            "source" => "api_key_policy",
+            "rewrite" => "high_to_max"
+          },
           "transport_failure" => %{
             "exception" => "Mint.TransportError",
             "reason_class" => "transport",
@@ -67,6 +74,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
 
     assert has_element?(view, "#request-log-detail-request-id", request.id)
     assert has_element?(view, "#request-log-detail-correlation-id", "req-drawer-url")
+    assert has_element?(view, "#request-log-detail-requested-reasoning", "high")
+    assert has_element?(view, "#request-log-detail-applied-reasoning", "max")
+    assert has_element?(view, "#request-log-detail-upstream-reasoning", "max")
     assert has_element?(view, "#request-log-detail-attempts", "Attempt 1")
     assert has_element?(view, "#request-log-detail-transport-failure-1", "Mint.TransportError")
     assert has_element?(view, "#request-log-detail-transport-failure-1", "closed")
@@ -247,7 +257,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
         request_metadata: Map.get(attrs, :request_metadata, %{}),
         last_error_code: Map.get(attrs, :last_error_code),
         response_status_code: Map.get(attrs, :response_status_code, 200),
-        usage_status: Map.get(attrs, :usage_status, "usage_known")
+        usage_status: Map.get(attrs, :usage_status, "usage_known"),
+        reasoning_effort: Map.get(attrs, :reasoning_effort)
       })
 
     request =

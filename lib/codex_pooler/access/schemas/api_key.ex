@@ -5,7 +5,7 @@ defmodule CodexPooler.Access.APIKey do
   import Ecto.Changeset
 
   @derive {Inspect, except: [:key_hash]}
-  @reasoning_efforts ~w(minimal low medium high xhigh max ultra)
+  @reasoning_efforts ~w(none minimal low medium high xhigh max ultra)
   @service_tiers ~w(auto default flex priority scale)
 
   @type t :: %__MODULE__{}

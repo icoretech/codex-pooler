@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       format_model_service_tier: 1,
       format_record_id: 1,
       format_requested_tier_detail: 1,
+      format_requested_reasoning_detail: 1,
       format_route_latency: 1,
       format_route_metadata: 1,
       format_total: 1,
@@ -379,6 +380,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           class="ml-1 font-normal text-base-content/60"
         >
           {reasoning}
+        </span>
+        <span
+          :if={detail = format_requested_reasoning_detail(@request_log)}
+          id={"#{@prefix}-#{@request_log.id}-requested-reasoning"}
+          data-role="requested-reasoning"
+          class="ml-1 font-normal text-base-content/60"
+        >
+          {detail}
         </span>
         <span
           :if={tier = format_model_service_tier(@request_log)}

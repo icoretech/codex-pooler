@@ -55,7 +55,18 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
       })
       |> Repo.update!()
 
-    attempt = attempt_fixture(request, assignment)
+    attempt =
+      attempt_fixture(request, assignment, %{
+        response_metadata: %{
+          "reasoning" => %{
+            "requested_effort" => "high",
+            "applied_effort" => "max",
+            "effective_effort" => "max",
+            "source" => "api_key_policy",
+            "rewrite" => "high_to_max"
+          }
+        }
+      })
 
     ledger_entry_fixture(request, %{
       attempt_id: attempt.id,
@@ -83,6 +94,10 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert log.upstream_account_plan_family == "paid"
     assert log.upstream_identity_label == identity.account_label
     assert log.reasoning_effort == "high"
+    assert log.applied_reasoning_effort == "max"
+    assert log.effective_reasoning_effort == "max"
+    assert log.reasoning_effort_source == "api_key_policy"
+    assert log.reasoning_effort_rewrite == "high_to_max"
     assert log.service_tier == "priority"
     assert log.requested_service_tier == "auto"
     assert log.actual_service_tier == "priority"

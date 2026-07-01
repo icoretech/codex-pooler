@@ -152,10 +152,12 @@ Catalog models are derived from current routable model metadata. Manual model id
 Enforced request fields let the key override selected client request values:
 
 1. enforced model
-2. enforced reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`)
+2. enforced reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`)
 3. enforced service tier
 
 Leave a field unset when the client request should pass through unchanged.
+
+`none` is an enforced upstream value: Codex Pooler sends it as no requested reasoning effort. Leaving the field unset is different; unset means the client request controls reasoning effort. Some backend Codex targets normalize compatibility values before dispatch, so Request logs can show both the requested key policy value and the effective upstream value.
 
 ## Limits
 

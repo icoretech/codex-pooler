@@ -115,6 +115,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   def reasoning_effort_options do
     [
       {"Do not enforce", ""},
+      {"None (request no reasoning)", "none"},
       {"Minimal", "minimal"},
       {"Low", "low"},
       {"Medium", "medium"},
