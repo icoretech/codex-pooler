@@ -2828,7 +2828,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     card_class = html_element_class(blocked_html, "upstream-account-#{blocked_id}")
 
-    assert card_class =~ "border-l-2"
+    assert card_class =~ "border-l "
     assert card_class =~ "border-base-300"
     assert card_class =~ "border-l-warning"
     refute card_class =~ "shadow-sm"
