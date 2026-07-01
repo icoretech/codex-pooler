@@ -85,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
           description="Firewall, trusted proxy, and compressed-body controls for compatibility routes."
           hint="Evaluated for new requests; keep proxy lists metadata-only and CIDR based."
         >
-          <div class="grid gap-4 lg:grid-cols-3">
+          <div class="grid gap-4 lg:grid-cols-2">
             <FormControls.list_textarea
               id="instance-settings-firewall-allowlist"
               name="instance_settings[ingress][firewall_allowlist]"
@@ -114,18 +114,20 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
                 )
               }
             />
-            <FormControls.compressed_json_encoding_checkboxes
-              id="instance-settings-decompression-algorithms"
-              name="instance_settings[ingress][decompression_algorithms]"
-              values={
-                param_array_value(
-                  @form_params,
-                  "ingress",
-                  "decompression_algorithms",
-                  @settings.ingress.decompression_algorithms
-                )
-              }
-            />
+            <div class="lg:col-span-2">
+              <FormControls.compressed_json_encoding_checkboxes
+                id="instance-settings-decompression-algorithms"
+                name="instance_settings[ingress][decompression_algorithms]"
+                values={
+                  param_array_value(
+                    @form_params,
+                    "ingress",
+                    "decompression_algorithms",
+                    @settings.ingress.decompression_algorithms
+                  )
+                }
+              />
+            </div>
           </div>
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <FormControls.scalar_controls form={ingress_form} controls={ingress_scalar_controls()} />

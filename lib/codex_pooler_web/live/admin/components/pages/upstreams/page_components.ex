@@ -603,14 +603,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           />
         </div>
 
-        <div class="grid gap-5 p-6">
+        <div class="grid gap-4 px-6 py-5">
           <div
             id="saved-reset-redemption-control"
-            class="grid gap-3 rounded-box border border-base-300 bg-base-200/30 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+            class="grid gap-3 border-b border-base-300 pb-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
           >
             <div class="grid gap-1">
               <p class="text-sm font-semibold text-base-content">Manual redemption</p>
-              <p class="text-xs leading-5 text-base-content/60">
+              <p class="text-xs leading-5 text-base-content/65">
                 Queue one account-level quota recovery attempt for this upstream account. Current account state is checked again before a job is queued.
               </p>
               <p
@@ -619,7 +619,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                     @account.saved_reset_redemption_action.reason
                 }
                 id="saved-reset-redemption-unavailable-reason"
-                class="text-xs leading-5 text-base-content/60"
+                class="text-xs leading-5 text-base-content/65"
               >
                 {@account.saved_reset_redemption_action.reason}
               </p>
@@ -649,7 +649,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 <button
                   id="saved-reset-redemption-cancel"
                   type="button"
-                  class="btn btn-secondary btn-sm gap-2"
+                  class="btn btn-ghost btn-sm gap-2"
                   phx-click="cancel_saved_reset_redemption"
                 >
                   <.icon name="hero-x-mark" class="size-4" />
@@ -666,7 +666,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                 id="saved-reset-redemption-action"
                 data-role="saved-reset-redemption-action"
                 type="button"
-                class="btn btn-secondary btn-sm gap-2"
+                class="btn btn-ghost btn-sm gap-2"
                 phx-click="open_saved_reset_redemption_confirmation"
                 phx-value-id={@account.identity.id}
                 disabled={!@account.saved_reset_redemption_action.available?}
@@ -688,21 +688,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           >
             <div
               id="saved-reset-policy-auto-redeem-control"
-              class="grid gap-3 rounded-box border border-base-300 bg-base-200/30 p-4 md:grid-cols-[minmax(0,1fr)_17rem] md:items-start"
+              class="grid gap-3 border-b border-base-300 pb-4 md:grid-cols-[minmax(0,1fr)_17rem] md:items-start"
             >
               <div class="grid gap-1 self-start">
                 <p class="text-sm font-semibold text-base-content">Auto redeem policy</p>
-                <p class="text-xs leading-5 text-base-content/60">
+                <p class="text-xs leading-5 text-base-content/65">
                   Let Codex Pooler spend saved resets automatically when this account is blocked, near the quota limit, or carrying a soon-expiring reset.
                 </p>
               </div>
               <label
                 id="saved-reset-policy-auto-redeem-card"
                 for="saved-reset-policy-auto-redeem-enabled"
-                class="flex min-h-14 w-full cursor-pointer items-center justify-between gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/5"
+                class="flex min-h-12 w-full cursor-pointer items-center justify-between gap-3 rounded-field border border-base-300 bg-base-100 px-3 py-2 transition-colors hover:border-primary/40 hover:bg-primary/5"
               >
-                <span class="text-sm font-medium text-base-content">Auto redeem saved resets</span>
-                <input type="hidden" name="saved_reset_policy[auto_redeem_enabled]" value="false" />
+                <span class="text-sm font-medium text-base-content">
+                  Auto redeem saved resets
+                </span>
+                <input
+                  type="hidden"
+                  name="saved_reset_policy[auto_redeem_enabled]"
+                  value="false"
+                />
                 <input
                   id="saved-reset-policy-auto-redeem-enabled"
                   type="checkbox"
@@ -731,7 +737,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                   Blocked mode waits for weekly quota exhaustion, except a known reset expiring within 24 hours may be rescued early after this account has weekly usage. Near-limit mode waits until every eligible account in the Pool is also near the configured weekly quota limit.
                 </p>
               </div>
-
               <div class="grid gap-1 self-start">
                 <.input
                   field={@form[:quota_threshold_percent]}
@@ -763,7 +768,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
                   Do not spend a saved reset when the weekly quota will reset naturally within this many minutes.
                 </p>
               </div>
-
               <div class="grid gap-1">
                 <.input
                   field={@form[:keep_credits]}
