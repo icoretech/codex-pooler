@@ -67,7 +67,8 @@ defmodule CodexPoolerWeb.Endpoint do
   def multipart_parser_length, do: @multipart_parser_length
 
   def maybe_live_reloader(conn, opts) do
-    if CodexPoolerWeb.BrowserSecurity.codex_desktop_browser?(conn) do
+    if CodexPoolerWeb.BrowserSecurity.codex_desktop_browser?(conn) or
+         CodexPoolerWeb.BrowserSecurity.local_browser_annotation_client?(conn) do
       conn
     else
       Module.concat(Phoenix, LiveReloader).call(conn, opts)

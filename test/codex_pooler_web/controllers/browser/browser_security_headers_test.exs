@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
   alias CodexPooler.Repo
 
   @codex_desktop_user_agent "Mozilla/5.0 Codex/26.519.81530 Chrome/148.0.7778.97 Electron/42.1.0 Safari/537.36"
+  @codex_desktop_in_app_browser_user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
   setup do
     previous_csp_sources = Application.get_env(:codex_pooler, :browser_csp_extra_sources)
@@ -66,11 +67,38 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
     assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
   end
 
+  test "local Codex Desktop in-app browser CSP allows annotation script injection", %{conn: conn} do
+    conn =
+      conn
+      |> local_host()
+      |> put_req_header("user-agent", @codex_desktop_in_app_browser_user_agent)
+      |> get(~p"/login")
+
+    assert [csp] = get_resp_header(conn, "content-security-policy")
+    directives = csp_directives(csp)
+
+    assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+  end
+
   test "Codex Desktop browser CSP annotation allowances stay local-only", %{conn: conn} do
     conn =
       conn
       |> remote_host()
       |> put_req_header("user-agent", @codex_desktop_user_agent)
+      |> get(~p"/login")
+
+    assert [csp] = get_resp_header(conn, "content-security-policy")
+    directives = csp_directives(csp)
+
+    refute directives["script-src"] =~ "'unsafe-eval'"
+    refute directives["script-src"] =~ "blob:"
+  end
+
+  test "Codex Desktop in-app browser CSP annotation allowances stay local-only", %{conn: conn} do
+    conn =
+      conn
+      |> remote_host()
+      |> put_req_header("user-agent", @codex_desktop_in_app_browser_user_agent)
       |> get(~p"/login")
 
     assert [csp] = get_resp_header(conn, "content-security-policy")

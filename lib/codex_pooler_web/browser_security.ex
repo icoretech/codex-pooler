@@ -31,6 +31,11 @@ defmodule CodexPoolerWeb.BrowserSecurity do
     |> Enum.any?(&(String.contains?(&1, " Codex/") and String.contains?(&1, " Electron/")))
   end
 
+  @spec local_browser_annotation_client?(Plug.Conn.t()) :: boolean()
+  def local_browser_annotation_client?(%Plug.Conn{} = conn) do
+    local_browser_request?(conn) and (codex_desktop_browser?(conn) or chromium_browser?(conn))
+  end
+
   defp content_security_policy(conn) do
     extra_sources =
       :codex_pooler
@@ -40,9 +45,7 @@ defmodule CodexPoolerWeb.BrowserSecurity do
                                                                                   right ->
         List.wrap(left) ++ List.wrap(right)
       end)
-      |> Keyword.merge(codex_desktop_browser_csp_extra_sources(conn), fn _directive,
-                                                                         left,
-                                                                         right ->
+      |> Keyword.merge(browser_annotation_csp_extra_sources(conn), fn _directive, left, right ->
         List.wrap(left) ++ List.wrap(right)
       end)
       |> Keyword.take([:connect_src, :img_src, :script_src, :style_src])
@@ -62,15 +65,15 @@ defmodule CodexPoolerWeb.BrowserSecurity do
     |> String.replace("_", "-")
   end
 
-  defp codex_desktop_browser_csp_extra_sources(%Plug.Conn{} = conn) do
-    if codex_desktop_browser?(conn) and local_browser_request?(conn) do
+  defp browser_annotation_csp_extra_sources(%Plug.Conn{} = conn) do
+    if local_browser_annotation_client?(conn) do
       [script_src: @codex_desktop_browser_script_sources]
     else
       []
     end
   end
 
-  defp codex_desktop_browser_csp_extra_sources(_conn), do: []
+  defp browser_annotation_csp_extra_sources(_conn), do: []
 
   defp local_browser_request?(%Plug.Conn{} = conn) do
     local_browser_host?(conn) and local_remote_ip?(conn)
@@ -83,4 +86,12 @@ defmodule CodexPoolerWeb.BrowserSecurity do
   defp local_remote_ip?(%Plug.Conn{remote_ip: {127, 0, 0, 1}}), do: true
   defp local_remote_ip?(%Plug.Conn{remote_ip: {0, 0, 0, 0, 0, 0, 0, 1}}), do: true
   defp local_remote_ip?(%Plug.Conn{}), do: false
+
+  defp chromium_browser?(%Plug.Conn{} = conn) do
+    conn
+    |> Plug.Conn.get_req_header("user-agent")
+    |> Enum.any?(
+      &(String.contains?(&1, [" Chrome/", " Chromium/"]) and String.contains?(&1, " Safari/"))
+    )
+  end
 end
