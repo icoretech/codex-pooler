@@ -62,6 +62,14 @@ Common upstream states include:
 
 When several upstreams are affected, summarize counts by state and Pool. Don't publish account identifiers, raw emails, or provider credential details.
 
+### Saved Reset First-Seen Alerts
+
+The `upstream_saved_reset_banked_first_seen` rule is an optional alert rule that operators configure from the Alerts surface. It is not implicit or always-on. When enabled, it watches persisted saved-reset metadata and opens a once-only incident for an upstream identity plus reset expiration the first time that expiration is seen for a matching Pool assignment.
+
+Evaluation is metadata-only. It reads stored upstream identity metadata and Pool assignments; it does not call provider APIs or refresh account data during alert evaluation. Incidents can name safe labels such as `example-pool` and `example-upstream`, sanitized expiration timestamps, rule kind, severity, and first-seen timing. They must not include raw provider credit objects, request or response bodies, bearer tokens, webhook secrets, prompts, account credentials, or other private content.
+
+If the same upstream identity affects multiple Pools, incident visibility follows impacted Pool targets and the current operator authorization model. Owners can see all impacted Pools; assigned admins see only the impacted Pools they are allowed to manage plus safe visible, hidden, and total counts.
+
 ## Pool API key signals
 
 Pool API key alerts are about runtime client access. A client can fail before routing if the key is paused, revoked, expired, scoped to the wrong Pool, or blocked by policy.

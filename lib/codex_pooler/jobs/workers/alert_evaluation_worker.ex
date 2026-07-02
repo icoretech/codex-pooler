@@ -18,6 +18,8 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
   alias CodexPooler.Alerts.Evaluator
   alias CodexPooler.Alerts.Schemas.AlertIncident
 
+  @saved_reset_first_seen_rule_kind "upstream_saved_reset_banked_first_seen"
+
   @type evaluation_error ::
           :alert_rule_not_found
           | :invalid_alert_evaluation_args
@@ -63,6 +65,23 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
   end
 
   @spec record_candidate(Evaluator.candidate()) :: :ok | {:error, evaluation_error()}
+  defp record_candidate(%{
+         action: :match,
+         rule_kind: @saved_reset_first_seen_rule_kind,
+         match_attrs: attrs
+       }) do
+    case Alerts.record_incident_once(attrs) do
+      {:ok, %{incident: %AlertIncident{} = incident, delivery_due?: true} = result} ->
+        enqueue_once_deliveries(incident, result.delivery_channel_ids_due)
+
+      {:ok, %{delivery_due?: false}} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, candidate_error(:match, reason)}
+    end
+  end
+
   defp record_candidate(%{action: :match, match_attrs: attrs}) do
     case Alerts.record_incident_match(attrs) do
       {:ok, %AlertIncident{} = incident} -> enqueue_match_deliveries(incident)
@@ -94,6 +113,19 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
       {:error, reason} ->
         {:error, candidate_error(:match, reason)}
     end
+  end
+
+  defp enqueue_once_deliveries(%AlertIncident{} = incident, channel_ids)
+       when is_list(channel_ids) do
+    Enum.reduce_while(channel_ids, :ok, fn channel_id, :ok ->
+      case CodexPooler.Jobs.enqueue_alert_delivery(incident, channel_id,
+             trigger_kind: "incident_match",
+             now: incident.last_seen_at
+           ) do
+        {:ok, _job} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, candidate_error(:match, reason)}}
+      end
+    end)
   end
 
   defp parse_evaluation_window(value) when is_binary(value) do

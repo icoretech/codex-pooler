@@ -6,12 +6,17 @@ defmodule CodexPooler.Alerts.WebhookPayload do
 
   @safe_summary_keys ~w(
     assignment_count
+    available_count
     enabled_assignment_count
     impacted_pool_count
     model
+    path_style
     quota_state
     reason_code
+    reset_expires_at
+    reset_first_seen_at
     routing_usable
+    source
     status
     target_state
     threshold_used_percent

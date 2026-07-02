@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
 
   setup :register_and_log_in_user
 
@@ -58,6 +59,140 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(view, "#alert-rule-edit-#{rule.id}")
     assert has_element?(view, "#alert-rule-disable-#{rule.id}")
     assert has_element?(view, "#alert-rule-delete-#{rule.id}")
+  end
+
+  @tag :saved_reset_banked_first_seen
+  test "creates saved reset first-seen rule with info default and no irrelevant fields", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "alerts-saved-reset-default",
+        name: "Alerts Saved Reset Default"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts")
+
+    assert has_element?(
+             view,
+             "#alert-rule-kind option[value='upstream_saved_reset_banked_first_seen']",
+             "First-seen banked saved reset"
+           )
+
+    view
+    |> element("#alerts-rule-form")
+    |> render_change(%{
+      "alert_rule" => %{
+        "pool_id" => pool.id,
+        "rule_kind" => "upstream_saved_reset_banked_first_seen",
+        "display_name" => "Saved reset first seen",
+        "state" => AlertRule.active_state(),
+        "cooldown_minutes" => "30"
+      }
+    })
+
+    assert has_element?(view, "#alert-rule-no-extra-fields", "banked saved reset")
+    refute has_element?(view, "#alert-rule-target-state")
+    refute has_element?(view, "#alert-rule-window-selector")
+    refute has_element?(view, "#alert-rule-threshold-used-percent")
+    refute has_element?(view, "#alert-rule-min-usable-assignments")
+
+    view
+    |> element("#alerts-rule-form")
+    |> render_submit(%{
+      "alert_rule" => %{
+        "pool_id" => pool.id,
+        "rule_kind" => "upstream_saved_reset_banked_first_seen",
+        "display_name" => "Saved reset first seen",
+        "state" => AlertRule.active_state(),
+        "cooldown_minutes" => "30"
+      }
+    })
+
+    assert {:ok, [rule]} = Alerts.list_rules(scope, pool_id: pool.id)
+    assert rule.rule_kind == "upstream_saved_reset_banked_first_seen"
+    assert rule.scope_type == "upstream_identity"
+    assert rule.severity == "info"
+    assert is_nil(rule.target_state)
+    assert is_nil(rule.window_selector)
+    assert is_nil(rule.threshold_used_percent)
+    assert is_nil(rule.min_usable_assignments)
+
+    assert has_element?(view, "#alert-rule-row-#{rule.id}", "Saved reset first seen")
+    assert has_element?(view, "#alert-rule-row-#{rule.id}-kind", "First-seen banked saved reset")
+
+    assert has_element?(
+             view,
+             "#alert-rule-row-#{rule.id}-threshold",
+             "First banked reset observed"
+           )
+  end
+
+  @tag :saved_reset_banked_first_seen
+  test "saved reset rule severity preserves explicit create and edit values", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, explicit_pool} =
+      Pools.create_pool(scope, %{
+        slug: "alerts-saved-reset-explicit",
+        name: "Alerts Saved Reset Explicit"
+      })
+
+    {:ok, edit_pool} =
+      Pools.create_pool(scope, %{
+        slug: "alerts-saved-reset-edit",
+        name: "Alerts Saved Reset Edit"
+      })
+
+    existing_rule =
+      alert_rule_fixture(edit_pool,
+        created_by_user_id: scope.user.id,
+        rule_kind: "upstream_saved_reset_banked_first_seen",
+        scope_type: "upstream_identity",
+        severity: "warning",
+        display_name: "Saved reset edit severity",
+        cooldown_minutes: 30
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/alerts")
+
+    view
+    |> element("#alerts-rule-form")
+    |> render_submit(%{
+      "alert_rule" => %{
+        "pool_id" => explicit_pool.id,
+        "rule_kind" => "upstream_saved_reset_banked_first_seen",
+        "display_name" => "Saved reset explicit severity",
+        "severity" => "warning",
+        "state" => AlertRule.active_state(),
+        "cooldown_minutes" => "30"
+      }
+    })
+
+    assert {:ok, [explicit_rule]} = Alerts.list_rules(scope, pool_id: explicit_pool.id)
+    assert explicit_rule.severity == "warning"
+
+    view
+    |> element("#alert-rule-edit-#{existing_rule.id}")
+    |> render_click()
+
+    view
+    |> element("#alerts-rule-form")
+    |> render_submit(%{
+      "alert_rule" => %{
+        "pool_id" => edit_pool.id,
+        "rule_kind" => "upstream_saved_reset_banked_first_seen",
+        "display_name" => "Saved reset edit severity updated",
+        "state" => AlertRule.active_state(),
+        "cooldown_minutes" => "45"
+      }
+    })
+
+    edited_rule = Repo.get!(AlertRule, existing_rule.id)
+    assert edited_rule.severity == "warning"
+    assert edited_rule.cooldown_minutes == 45
   end
 
   test "edits an existing alert rule from the rules table", %{conn: conn, scope: scope} do
@@ -480,6 +615,76 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
 
     assert has_element?(filtered_view, "#alerts-incidents-empty-state")
     refute has_element?(filtered_view, "#alert-incident-#{incident.id}")
+  end
+
+  @tag :saved_reset_banked_first_seen
+  test "saved reset incidents and notifications render operator-facing safe labels", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "alerts-saved-reset-incident",
+        name: "Alerts Saved Reset Incident"
+      })
+
+    assert {:ok, rule} =
+             Alerts.create_rule(
+               scope,
+               alert_rule_attrs(pool, %{
+                 rule_kind: "upstream_saved_reset_banked_first_seen",
+                 scope_type: "upstream_identity",
+                 display_name: "Saved reset incident rule",
+                 severity: "info"
+               })
+             )
+
+    %{identity: identity} = upstream_assignment_fixture(pool)
+    raw_credit_id = "provider-credit-#{unique_suffix()}"
+    raw_provider_payload = "provider payload #{unique_suffix()}"
+
+    assert {:ok, incident} =
+             Alerts.record_incident_match(%{
+               dedupe_key: "alert:saved-reset:#{identity.id}:2026-07-03T09:00:00Z",
+               scope_type: "upstream_identity",
+               rule_kind: rule.rule_kind,
+               severity: "info",
+               upstream_identity_id: identity.id,
+               matched_at: timestamp(~U[2026-07-02 08:01:00Z]),
+               safe_evidence_snapshot: %{
+                 "reason_code" => "saved_reset_banked_first_seen",
+                 "reset_expires_at" => "2026-07-03T09:00:00Z",
+                 "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+                 "available_count" => 2,
+                 "source" => "persisted_saved_resets",
+                 "path_style" => "codex",
+                 "provider_credit_id" => raw_credit_id,
+                 "provider_payload" => raw_provider_payload
+               },
+               suppression_metadata: %{},
+               targets: [%{rule_id: rule.id, pool_id: pool.id, metadata: %{}}]
+             })
+
+    {:ok, view, html} = live(conn, ~p"/admin/alerts?tab=incidents")
+
+    assert has_element?(
+             view,
+             "#alert-incident-row-#{incident.id}-reason",
+             "First-seen banked saved reset"
+           )
+
+    assert has_element?(
+             view,
+             "#alert-incident-row-#{incident.id}-detail",
+             "Persisted saved-reset metadata"
+           )
+
+    refute html =~ raw_credit_id
+    refute html =~ raw_provider_payload
+
+    notification_state = AlertNotificationsReadModel.load(scope)
+
+    assert [%{reason_title: "First-seen banked saved reset"}] = notification_state.rows
   end
 
   test "acknowledges and resolves incidents through scoped UI actions and audit events", %{

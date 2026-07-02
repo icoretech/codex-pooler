@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
 
   @default_rule_kind "pool_no_usable_assignments"
   @default_severity "critical"
+  @saved_reset_rule_kind "upstream_saved_reset_banked_first_seen"
   @default_state AlertRule.active_state()
   @default_scope_type "pool"
 
@@ -19,7 +20,8 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     {"Low usable assignments", "pool_low_usable_assignments"},
     {"All assignments in a state", "pool_all_assignments_in_state"},
     {"Quota threshold on assigned upstreams", "upstream_quota_threshold"},
-    {"Upstream auth state", "upstream_auth_state"}
+    {"Upstream auth state", "upstream_auth_state"},
+    {"First-seen banked saved reset", @saved_reset_rule_kind}
   ]
 
   @severity_options [
@@ -58,6 +60,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   @spec create_form([Pool.t()], attrs() | map(), keyword()) :: Phoenix.HTML.Form.t()
   def create_form(pools, attrs \\ %{}, opts \\ []) do
     attrs
+    |> default_saved_reset_create_severity()
     |> default_attrs(default_pool_id(pools))
     |> normalize_attrs()
     |> to_form(as: :alert_rule, errors: Keyword.get(opts, :errors, []))
@@ -68,7 +71,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     rule
     |> attrs_from_rule()
     |> Map.merge(Map.new(attrs))
-    |> normalize_attrs()
+    |> normalize_attrs(default_severity: rule.severity)
     |> to_form(as: :alert_rule, errors: Keyword.get(opts, :errors, []))
   end
 
@@ -77,9 +80,9 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   def delete_form(%AlertRule{} = rule), do: to_form(%{"id" => rule.id}, as: :alert_rule_delete)
 
   @spec normalize_submit(attrs() | map()) :: map()
-  def normalize_submit(attrs) do
+  def normalize_submit(attrs, opts \\ []) do
     attrs
-    |> normalize_attrs()
+    |> normalize_attrs(opts)
     |> Map.take([
       "pool_id",
       "scope_type",
@@ -156,7 +159,8 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "scope_type" => @default_scope_type,
       "rule_kind" => @default_rule_kind,
       "display_name" => "",
-      "severity" => @default_severity,
+      "severity" =>
+        default_severity_for_rule_kind(string_value(attrs, "rule_kind", @default_rule_kind)),
       "cooldown_minutes" => AlertRule.default_cooldown_minutes(),
       "state" => @default_state,
       "model" => "",
@@ -186,7 +190,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     }
   end
 
-  defp normalize_attrs(attrs) do
+  defp normalize_attrs(attrs, opts \\ []) do
     attrs = Map.new(attrs)
     rule_kind = string_value(attrs, "rule_kind", @default_rule_kind)
 
@@ -196,7 +200,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "rule_kind",
       normalize_option(rule_kind, AlertRule.rule_kinds(), @default_rule_kind)
     )
-    |> normalize_rule_kind_fields()
+    |> normalize_rule_kind_fields(opts)
     |> prune_rule_kind_fields()
   end
 
@@ -204,12 +208,19 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     Map.new(attrs, fn {key, value} -> {to_string(key), normalize_value(value)} end)
   end
 
-  defp normalize_rule_kind_fields(%{"rule_kind" => rule_kind} = attrs) do
+  defp normalize_rule_kind_fields(%{"rule_kind" => rule_kind} = attrs, opts) do
+    default_severity =
+      Keyword.get(opts, :default_severity) || default_severity_for_rule_kind(rule_kind)
+
     attrs
     |> Map.put("scope_type", scope_type_for(rule_kind))
     |> Map.put(
       "severity",
-      normalize_option(attrs["severity"], AlertRule.severities(), @default_severity)
+      normalize_option(
+        attrs["severity"],
+        AlertRule.severities(),
+        default_severity
+      )
     )
     |> Map.put("state", normalize_option(attrs["state"], AlertRule.states(), @default_state))
     |> Map.put("target_state", normalize_target_state(rule_kind, attrs["target_state"]))
@@ -237,7 +248,11 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   defp normalize_option(_value, _options, default), do: default
 
   defp scope_type_for(rule_kind)
-       when rule_kind in ["upstream_quota_threshold", "upstream_auth_state"],
+       when rule_kind in [
+              "upstream_quota_threshold",
+              "upstream_auth_state",
+              @saved_reset_rule_kind
+            ],
        do: "upstream_identity"
 
   defp scope_type_for(_rule_kind), do: "pool"
@@ -269,6 +284,15 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     Map.drop(attrs, ["min_usable_assignments", "window_selector", "threshold_used_percent"])
   end
 
+  defp prune_rule_kind_fields(%{"rule_kind" => @saved_reset_rule_kind} = attrs) do
+    Map.drop(attrs, [
+      "min_usable_assignments",
+      "target_state",
+      "window_selector",
+      "threshold_used_percent"
+    ])
+  end
+
   defp prune_rule_kind_fields(attrs) do
     Map.drop(attrs, [
       "min_usable_assignments",
@@ -296,6 +320,28 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
 
   defp threshold_input(nil), do: "80"
   defp threshold_input(value), do: Decimal.to_string(value, :normal)
+
+  defp default_saved_reset_create_severity(attrs) do
+    attrs = Map.new(attrs)
+
+    if string_value(attrs, "rule_kind", @default_rule_kind) == @saved_reset_rule_kind and
+         string_value(attrs, "severity", @default_severity) == @default_severity and
+         not targeted_field?(attrs, "severity") do
+      Map.put(attrs, "severity", default_severity_for_rule_kind(@saved_reset_rule_kind))
+    else
+      attrs
+    end
+  end
+
+  defp default_severity_for_rule_kind(@saved_reset_rule_kind), do: "info"
+  defp default_severity_for_rule_kind(_rule_kind), do: @default_severity
+
+  defp targeted_field?(attrs, field) do
+    case Map.get(attrs, "_target") || Map.get(attrs, :_target) do
+      target when is_list(target) -> to_string(List.last(target)) == field
+      _target -> false
+    end
+  end
 
   defp label_for(options, value, fallback) do
     options

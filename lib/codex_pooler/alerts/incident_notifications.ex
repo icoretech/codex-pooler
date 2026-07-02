@@ -350,7 +350,7 @@ defmodule CodexPooler.Alerts.IncidentNotifications do
     do: Enum.map(incidents, &incident_projection(&1, pool_ids))
 
   defp incident_projection(%AlertIncident{} = incident, pool_ids) do
-    pool_targets = incident_pool_targets(incident.id)
+    pool_targets = incident.id |> incident_pool_targets() |> Enum.uniq_by(& &1.pool_id)
     visible_targets = Enum.filter(pool_targets, &(&1.pool_id in pool_ids))
     total_count = length(pool_targets)
     visible_count = length(visible_targets)

@@ -292,6 +292,10 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["alert_rules_scope_type_check"] =~ "'upstream_identity'"
     assert constraints["alert_rules_rule_kind_check"] =~ "'pool_no_usable_assignments'"
     assert constraints["alert_rules_rule_kind_check"] =~ "'upstream_auth_state'"
+
+    assert constraints["alert_rules_rule_kind_check"] =~
+             "'upstream_saved_reset_banked_first_seen'"
+
     assert constraints["alert_rules_severity_check"] =~ "'info'"
     assert constraints["alert_rules_severity_check"] =~ "'critical'"
     assert constraints["alert_rules_cooldown_minutes_check"] =~ "cooldown_minutes >= 5"
@@ -303,6 +307,11 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["alert_channels_channel_type_check"] =~ "'email'"
     assert constraints["alert_channels_channel_type_check"] =~ "'webhook'"
     assert constraints["alert_channels_state_check"] =~ "'active'"
+    assert constraints["alert_incidents_scope_type_check"] =~ "'upstream_identity'"
+
+    assert constraints["alert_incidents_rule_kind_check"] =~
+             "'upstream_saved_reset_banked_first_seen'"
+
     assert constraints["alert_incidents_state_check"] =~ "'open'"
     assert constraints["alert_incidents_state_check"] =~ "'acknowledged'"
     assert constraints["alert_incidents_state_check"] =~ "'resolved'"

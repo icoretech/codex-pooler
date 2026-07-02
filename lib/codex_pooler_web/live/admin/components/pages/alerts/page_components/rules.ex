@@ -275,6 +275,16 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
             >
               This rule fires when the selected Pool has no usable upstream assignments for the optional model filter.
             </p>
+            <p
+              :if={
+                AlertRuleForm.value(@rule_form[:rule_kind]) ==
+                  "upstream_saved_reset_banked_first_seen"
+              }
+              id="alert-rule-no-extra-fields"
+              class="text-sm leading-6 text-base-content/65"
+            >
+              This rule fires when persisted saved-reset metadata first shows a banked saved reset for an assigned upstream account.
+            </p>
           </div>
 
           <div class="flex flex-wrap justify-end gap-2">
@@ -327,6 +337,9 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
 
   defp threshold_summary(%AlertRule{rule_kind: "upstream_auth_state"} = rule),
     do: "Assigned upstream #{AlertRuleForm.target_state_label(rule.target_state)}"
+
+  defp threshold_summary(%AlertRule{rule_kind: "upstream_saved_reset_banked_first_seen"}),
+    do: "First banked reset observed"
 
   defp threshold_summary(_rule), do: "No usable assignments"
 end

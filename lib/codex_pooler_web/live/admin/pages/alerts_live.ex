@@ -362,7 +362,9 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   defp save_rule_event(socket, %{"alert_rule" => params}) do
     mode = socket.assigns.rule_form_mode
-    attrs = AlertRuleForm.normalize_submit(params)
+
+    attrs =
+      AlertRuleForm.normalize_submit(params, default_severity: editing_rule_severity(socket))
 
     case save_rule(mode, socket.assigns.current_scope, socket.assigns.editing_rule, attrs) do
       {:ok, _rule} ->
@@ -603,6 +605,13 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     do: Alerts.update_rule(scope, rule, attrs)
 
   defp save_rule(_mode, scope, _rule, attrs), do: Alerts.create_rule(scope, attrs)
+
+  defp editing_rule_severity(%{
+         assigns: %{rule_form_mode: :edit, editing_rule: %AlertRule{} = rule}
+       }),
+       do: rule.severity
+
+  defp editing_rule_severity(_socket), do: nil
 
   defp channel_form(socket, params), do: channel_form(socket, params, [])
 

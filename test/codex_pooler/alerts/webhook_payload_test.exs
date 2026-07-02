@@ -94,6 +94,29 @@ defmodule CodexPooler.Alerts.WebhookPayloadTest do
     refute_forbidden_values(Jason.encode!(summary))
   end
 
+  @tag :saved_reset_banked_first_seen
+  test "saved reset webhook safe evidence summary uses the reset allowlist" do
+    summary = WebhookPayload.safe_evidence_summary(saved_reset_evidence())
+
+    assert summary == %{
+             "available_count" => 2,
+             "impacted_pool_count" => 2,
+             "path_style" => "codex",
+             "reason_code" => "saved_reset_banked_first_seen",
+             "reset_expires_at" => "2026-07-03T09:00:00Z",
+             "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "source" => "persisted_saved_resets"
+           }
+
+    encoded = Jason.encode!(summary)
+    refute encoded =~ "provider-credit-hidden"
+    refute encoded =~ "provider payload sentinel"
+    refute encoded =~ "raw-auth-json-hidden"
+    refute encoded =~ "pool_upstream_assignment_id"
+    refute encoded =~ "upstream_identity_id"
+    refute encoded =~ "pool_id"
+  end
+
   defp incident_fixture do
     %AlertIncident{
       id: Ecto.UUID.generate(),
@@ -171,6 +194,26 @@ defmodule CodexPooler.Alerts.WebhookPayloadTest do
       "enabled_assignment_count" => %{"nested" => "unsupported"},
       "routing_usable" => [true],
       "target_state" => String.duplicate("a", 121)
+    }
+  end
+
+  defp saved_reset_evidence do
+    %{
+      "reason_code" => "saved_reset_banked_first_seen",
+      "reset_expires_at" => "2026-07-03T09:00:00Z",
+      "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "available_count" => 2,
+      "source" => "persisted_saved_resets",
+      "path_style" => "codex",
+      "impacted_pool_count" => 2,
+      "pool_id" => Ecto.UUID.generate(),
+      "upstream_identity_id" => Ecto.UUID.generate(),
+      "pool_upstream_assignment_id" => Ecto.UUID.generate(),
+      "provider_credit_id" => "provider-credit-hidden",
+      "provider_payload" => "provider payload sentinel",
+      "auth_json" => "raw-auth-json-hidden",
+      "token" => "Bearer saved-reset-token",
+      "request_body" => "raw request body sentinel"
     }
   end
 

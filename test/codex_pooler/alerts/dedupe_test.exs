@@ -6,7 +6,12 @@ defmodule CodexPooler.Alerts.DedupeTest do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Alerts
-  alias CodexPooler.Alerts.Schemas.{AlertIncident, AlertIncidentTarget}
+
+  alias CodexPooler.Alerts.Schemas.{
+    AlertIncident,
+    AlertIncidentTarget
+  }
+
   alias CodexPooler.Repo
 
   test "upstream-global issue affecting multiple pools dedupes to one root incident" do

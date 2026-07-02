@@ -100,6 +100,10 @@ defmodule CodexPooler.Alerts do
           IncidentLifecycle.record_result()
   defdelegate record_incident_match(attrs), to: IncidentLifecycle
 
+  @spec record_incident_once(IncidentLifecycle.match_attrs() | map()) ::
+          IncidentLifecycle.record_once_result()
+  defdelegate record_incident_once(attrs), to: IncidentLifecycle
+
   @spec safe_projected_metadata_for_admin(map()) :: map()
   defdelegate safe_projected_metadata_for_admin(metadata), to: IncidentNotifications
 

@@ -13,6 +13,9 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
           required(:state) => String.t(),
           required(:state_label) => String.t(),
           required(:impacted_pools) => [impacted_pool()],
+          required(:visible_impacted_pool_count) => non_neg_integer(),
+          required(:hidden_impacted_pool_count) => non_neg_integer(),
+          required(:total_impacted_pool_count) => non_neg_integer(),
           required(:last_seen_at) => DateTime.t(),
           required(:unread?) => boolean()
         }
@@ -68,6 +71,9 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
       state: row.state,
       state_label: state_label(row.state),
       impacted_pools: row.impacted_pools,
+      visible_impacted_pool_count: row.visible_impacted_pool_count,
+      hidden_impacted_pool_count: row.hidden_impacted_pool_count,
+      total_impacted_pool_count: row.total_impacted_pool_count,
       last_seen_at: row.last_seen_at,
       unread?: row.unread?
     }
@@ -84,6 +90,9 @@ defmodule CodexPoolerWeb.Admin.AlertNotificationsReadModel do
   defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: "Quota threshold reached"
 
   defp reason_title(%{rule_kind: "upstream_auth_state"}), do: "Upstream auth attention needed"
+
+  defp reason_title(%{rule_kind: "upstream_saved_reset_banked_first_seen"}),
+    do: "First-seen banked saved reset"
 
   defp reason_title(_row), do: "Alert condition matched"
 end

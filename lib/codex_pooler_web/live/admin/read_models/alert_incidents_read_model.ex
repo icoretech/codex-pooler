@@ -484,6 +484,10 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp reason_title(%{rule_kind: "upstream_quota_threshold"}), do: "Quota threshold reached"
   defp reason_title(%{rule_kind: "upstream_auth_state"}), do: "Upstream auth attention needed"
+
+  defp reason_title(%{rule_kind: "upstream_saved_reset_banked_first_seen"}),
+    do: "First-seen banked saved reset"
+
   defp reason_title(_incident), do: "Alert condition matched"
 
   defp reason_detail(%{rule_kind: "upstream_quota_threshold"}) do
@@ -492,6 +496,10 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp reason_detail(%{rule_kind: "upstream_auth_state"}) do
     "Persisted upstream account state matched an alert condition for at least one manageable impacted Pool."
+  end
+
+  defp reason_detail(%{rule_kind: "upstream_saved_reset_banked_first_seen"}) do
+    "Persisted saved-reset metadata shows an assigned upstream account first exposed a banked reset for at least one manageable impacted Pool."
   end
 
   defp reason_detail(%{rule_kind: "pool_all_assignments_in_state"}) do

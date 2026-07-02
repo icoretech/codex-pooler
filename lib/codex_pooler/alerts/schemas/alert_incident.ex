@@ -5,7 +5,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertIncident do
   import Ecto.Changeset
 
   @scope_types ~w(pool upstream_identity)
-  @rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments pool_all_assignments_in_state upstream_quota_threshold upstream_auth_state)
+  @rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments pool_all_assignments_in_state upstream_quota_threshold upstream_auth_state upstream_saved_reset_banked_first_seen)
   @severities ~w(info warning critical)
   @states ~w(open acknowledged resolved)
 

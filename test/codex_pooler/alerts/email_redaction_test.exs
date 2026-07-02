@@ -106,6 +106,74 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
            }
   end
 
+  @tag :saved_reset_banked_first_seen
+  test "saved reset alert email summary exposes only reset safe evidence" do
+    pool =
+      pool_fixture(%{
+        slug: "saved-reset-email-#{unique_suffix()}",
+        name: "Saved Reset Email Pool"
+      })
+
+    channel = alert_channel_fixture(email_to: "saved-reset-alerts@example.com")
+
+    rule =
+      alert_rule_fixture(pool,
+        rule_kind: "upstream_saved_reset_banked_first_seen",
+        scope_type: "upstream_identity",
+        severity: "info",
+        cooldown_minutes: 30
+      )
+
+    link_rule_channel!(rule, channel)
+
+    %{identity: identity} = upstream_assignment_fixture(pool)
+
+    incident =
+      alert_incident_fixture(
+        upstream_identity: identity,
+        rule_kind: "upstream_saved_reset_banked_first_seen",
+        severity: "info",
+        dedupe_key: "alert:saved-reset:#{identity.id}:2026-07-03T09:00:00Z",
+        safe_evidence_snapshot: saved_reset_evidence(),
+        suppression_metadata: unsafe_suppression_metadata()
+      )
+
+    alert_incident_target_fixture(incident, rule, pool, metadata: saved_reset_evidence())
+
+    email = EmailDelivery.alert_email(incident, channel)
+    refute_forbidden_values(email.text_body)
+    assert email.text_body =~ "Reason code: saved_reset_banked_first_seen"
+    assert email.text_body =~ "- available_count: 2"
+    assert email.text_body =~ "- reset_expires_at: 2026-07-03T09:00:00Z"
+    assert email.text_body =~ "- reset_first_seen_at: 2026-07-02T08:00:00Z"
+    assert email.text_body =~ "- source: persisted_saved_resets"
+    refute email.text_body =~ "provider-credit-hidden"
+    refute email.text_body =~ "pool_upstream_assignment_id"
+    refute email.text_body =~ "upstream_identity_id"
+
+    assert :ok =
+             perform_job(AlertDeliveryWorker, %{
+               "alert_incident_id" => incident.id,
+               "alert_channel_id" => channel.id
+             })
+
+    assert [attempt] = Repo.all(AlertDeliveryAttempt)
+
+    assert attempt.response_metadata["safe_evidence_summary"] == %{
+             "available_count" => 2,
+             "impacted_pool_count" => 1,
+             "path_style" => "codex",
+             "reason_code" => "saved_reset_banked_first_seen",
+             "reset_expires_at" => "2026-07-03T09:00:00Z",
+             "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "source" => "persisted_saved_resets"
+           }
+
+    attempt_metadata = Jason.encode!(attempt.response_metadata)
+    refute attempt_metadata =~ "provider-credit-hidden"
+    refute attempt_metadata =~ "pool_upstream_assignment_id"
+  end
+
   defp unsafe_evidence do
     %{
       "reason_code" => "no_usable_assignments",
@@ -124,6 +192,26 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
       "websocket_frame" => "websocket frame sentinel",
       "idempotency_key" => "raw idempotency key sentinel",
       "safe_to_ignore" => "not rendered because not in the alert summary allowlist"
+    }
+  end
+
+  defp saved_reset_evidence do
+    %{
+      "reason_code" => "saved_reset_banked_first_seen",
+      "reset_expires_at" => "2026-07-03T09:00:00Z",
+      "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "available_count" => 2,
+      "source" => "persisted_saved_resets",
+      "path_style" => "codex",
+      "impacted_pool_count" => 1,
+      "pool_id" => Ecto.UUID.generate(),
+      "upstream_identity_id" => Ecto.UUID.generate(),
+      "pool_upstream_assignment_id" => Ecto.UUID.generate(),
+      "provider_credit_id" => "provider-credit-hidden",
+      "provider_payload" => "provider payload sentinel",
+      "auth_json" => "auth json sentinel",
+      "token" => "Bearer raw-token-sentinel",
+      "request_body" => "raw request body sentinel"
     }
   end
 

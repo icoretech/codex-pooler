@@ -146,6 +146,117 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     assert deleted_rule.id == admin_rule.id
   end
 
+  @tag :saved_reset_banked_first_seen_authorization
+  test "saved reset first-seen rule management follows pool and channel visibility" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+    %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
+    admin_scope = Scope.for_user(admin)
+
+    assigned_pool =
+      pool_fixture(%{
+        slug: "saved-reset-alert-assigned-#{unique_suffix()}",
+        name: "Saved Reset Alert Assigned"
+      })
+
+    hidden_pool =
+      pool_fixture(%{
+        slug: "saved-reset-alert-hidden-#{unique_suffix()}",
+        name: "Saved Reset Alert Hidden"
+      })
+
+    disabled_pool =
+      pool_fixture(%{
+        slug: "saved-reset-alert-disabled-#{unique_suffix()}",
+        name: "Saved Reset Alert Disabled",
+        status: "disabled"
+      })
+
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: owner.id)
+    operator_pool_assignment_fixture(admin, disabled_pool, created_by_user_id: owner.id)
+
+    owner_channel =
+      alert_channel_fixture(
+        created_by_user_id: owner.id,
+        display_name: "Owner saved reset channel",
+        email_to: "owner-saved-reset@example.com"
+      )
+
+    admin_channel =
+      alert_channel_fixture(
+        created_by_user_id: admin.id,
+        display_name: "Admin saved reset channel",
+        email_to: "admin-saved-reset@example.com"
+      )
+
+    assert {:ok, owner_rule} =
+             Alerts.create_rule(
+               owner_scope,
+               saved_reset_rule_attrs(hidden_pool, %{
+                 display_name: "Owner saved reset rule",
+                 channel_ids: [owner_channel.id]
+               })
+             )
+
+    assert owner_rule.pool_id == hidden_pool.id
+
+    assert {:ok, admin_rule} =
+             Alerts.create_rule(
+               admin_scope,
+               saved_reset_rule_attrs(assigned_pool, %{
+                 display_name: "Admin saved reset rule",
+                 channel_ids: [admin_channel.id]
+               })
+             )
+
+    assert admin_rule.pool_id == assigned_pool.id
+
+    assert {:error, hidden_pool_error} =
+             Alerts.create_rule(
+               admin_scope,
+               saved_reset_rule_attrs(hidden_pool, %{display_name: "Hidden saved reset rule"})
+             )
+
+    assert hidden_pool_error.code == :capability_denied
+    refute hidden_pool_error.message =~ hidden_pool.id
+    refute hidden_pool_error.message =~ hidden_pool.name
+    refute hidden_pool_error.message =~ hidden_pool.slug
+
+    assert {:error, disabled_pool_error} =
+             Alerts.create_rule(
+               admin_scope,
+               saved_reset_rule_attrs(disabled_pool, %{display_name: "Disabled saved reset rule"})
+             )
+
+    assert disabled_pool_error.code in [:capability_denied, :pool_not_found]
+    refute disabled_pool_error.message =~ disabled_pool.id
+    refute disabled_pool_error.message =~ disabled_pool.name
+    refute disabled_pool_error.message =~ disabled_pool.slug
+
+    assert {:error, hidden_channel_error} =
+             Alerts.create_rule(
+               admin_scope,
+               saved_reset_rule_attrs(assigned_pool, %{
+                 display_name: "Hidden channel saved reset rule",
+                 channel_ids: [owner_channel.id]
+               })
+             )
+
+    assert hidden_channel_error.code == :channel_not_found
+    refute hidden_channel_error.message =~ owner_channel.display_name
+    refute hidden_channel_error.message =~ owner_channel.email_to
+
+    assert [%AlertRuleChannel{alert_channel_id: owner_channel_id}] =
+             Repo.all(from link in AlertRuleChannel, where: link.alert_rule_id == ^owner_rule.id)
+
+    assert owner_channel_id == owner_channel.id
+
+    assert [%AlertRuleChannel{alert_channel_id: admin_channel_id}] =
+             Repo.all(from link in AlertRuleChannel, where: link.alert_rule_id == ^admin_rule.id)
+
+    assert admin_channel_id == admin_channel.id
+  end
+
   test "assigned admins manage only their own channels" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     %{user: admin} = operator_fixture(owner, %{"email" => unique_user_email()})
@@ -484,6 +595,21 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     |> Map.merge(overrides)
   end
 
+  defp saved_reset_rule_attrs(pool, overrides) do
+    rule_attrs(
+      pool,
+      Map.merge(
+        %{
+          scope_type: "upstream_identity",
+          rule_kind: "upstream_saved_reset_banked_first_seen",
+          severity: "info",
+          cooldown_minutes: 30
+        },
+        Map.new(overrides)
+      )
+    )
+  end
+
   defp bell_incident_fixture(pool, dedupe_key, incident_attrs \\ %{}) do
     now = now()
 
@@ -505,4 +631,5 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
   end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp unique_suffix, do: System.unique_integer([:positive])
 end

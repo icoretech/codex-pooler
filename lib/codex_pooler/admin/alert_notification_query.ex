@@ -22,6 +22,9 @@ defmodule CodexPooler.Admin.AlertNotificationQuery do
           required(:severity) => String.t(),
           required(:state) => String.t(),
           required(:impacted_pools) => [impacted_pool()],
+          required(:visible_impacted_pool_count) => non_neg_integer(),
+          required(:hidden_impacted_pool_count) => non_neg_integer(),
+          required(:total_impacted_pool_count) => non_neg_integer(),
           required(:last_seen_at) => DateTime.t(),
           required(:unread?) => boolean()
         }
@@ -110,14 +113,21 @@ defmodule CodexPooler.Admin.AlertNotificationQuery do
   @spec notification_rows([query_row()], [Ecto.UUID.t()]) :: [row()]
   defp notification_rows(rows, pool_ids) do
     impacted_pools_by_incident = impacted_pools_by_incident(rows, pool_ids)
+    impacted_pool_counts_by_incident = impacted_pool_counts_by_incident(rows, pool_ids)
 
     Enum.map(rows, fn {incident, receipt} ->
+      counts =
+        Map.get(impacted_pool_counts_by_incident, incident.id, empty_impacted_pool_counts())
+
       %{
         id: incident.id,
         rule_kind: incident.rule_kind,
         severity: incident.severity,
         state: incident.state,
         impacted_pools: Map.get(impacted_pools_by_incident, incident.id, []),
+        visible_impacted_pool_count: counts.visible,
+        hidden_impacted_pool_count: counts.hidden,
+        total_impacted_pool_count: counts.total,
         last_seen_at: incident.last_seen_at,
         unread?: Alerts.incident_notification_unread?(incident, receipt)
       }
@@ -147,9 +157,46 @@ defmodule CodexPooler.Admin.AlertNotificationQuery do
     )
     |> Enum.group_by(& &1.incident_id)
     |> Map.new(fn {incident_id, pools} ->
-      {incident_id, Enum.map(pools, &Map.take(&1, [:id, :slug, :name]))}
+      unique_pools = Enum.uniq_by(pools, & &1.id)
+
+      {incident_id, Enum.map(unique_pools, &Map.take(&1, [:id, :slug, :name]))}
     end)
   end
+
+  @spec impacted_pool_counts_by_incident([query_row()], [Ecto.UUID.t()]) :: %{
+          optional(Ecto.UUID.t()) => %{
+            required(:visible) => non_neg_integer(),
+            required(:hidden) => non_neg_integer(),
+            required(:total) => non_neg_integer()
+          }
+        }
+  defp impacted_pool_counts_by_incident([], _pool_ids), do: %{}
+
+  defp impacted_pool_counts_by_incident(rows, pool_ids) do
+    incident_ids = rows |> Enum.map(fn {incident, _receipt} -> incident.id end) |> Enum.uniq()
+    visible_pool_ids = MapSet.new(pool_ids)
+
+    Repo.all(
+      from target in AlertIncidentTarget,
+        where: target.incident_id in ^incident_ids,
+        select: %{incident_id: target.incident_id, pool_id: target.pool_id}
+    )
+    |> Enum.group_by(& &1.incident_id)
+    |> Map.new(fn {incident_id, targets} ->
+      unique_pool_ids = targets |> Enum.map(& &1.pool_id) |> MapSet.new()
+      visible_count = Enum.count(unique_pool_ids, &MapSet.member?(visible_pool_ids, &1))
+      total_count = MapSet.size(unique_pool_ids)
+
+      {incident_id,
+       %{
+         visible: visible_count,
+         hidden: max(total_count - visible_count, 0),
+         total: total_count
+       }}
+    end)
+  end
+
+  defp empty_impacted_pool_counts, do: %{visible: 0, hidden: 0, total: 0}
 
   @spec visible_pool_ids(Scope.t()) :: {:ok, [Ecto.UUID.t()]} | {:error, Alerts.access_error()}
   defp visible_pool_ids(scope) do

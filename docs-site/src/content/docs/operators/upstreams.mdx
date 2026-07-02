@@ -104,6 +104,8 @@ Auto redemption is a per-upstream opt-in policy available from the account-card 
 
 Saved reset observations and redemption attempts stay metadata-only on `upstream_identities.metadata` under `saved_resets` and `saved_reset_redemption`. The saved-reset observation may include sanitized expiration rows in `available_expirations`, where each row has an `expires_at` timestamp and a pooler-owned `first_seen_at` timestamp. Legacy `available_expires_at` stays available for compatibility, and `next_expires_at`, `expires_observed_at`, and `expires_refresh_attempted_at` remain sanitized aggregate fields. Historical rows are backfilled with the migration time as `first_seen_at`; future observations preserve `first_seen_at` only while the same expiration remains present, and disappeared expirations are not retained. Missing or invalid provider expiration fields are not guessed.
 
+Operators can configure the optional `upstream_saved_reset_banked_first_seen` alert rule to notify once per upstream identity and saved-reset expiration when persisted metadata first reports a banked reset for a matching Pool assignment. The alert uses the same metadata-only observation boundary as the saved-reset UI; it does not call provider APIs during evaluation.
+
 Policy fields live on the upstream identity as `saved_reset_auto_redeem_enabled`, `saved_reset_auto_redeem_trigger_mode`, `saved_reset_auto_redeem_quota_threshold_percent`, `saved_reset_auto_redeem_min_blocked_minutes`, and `saved_reset_auto_redeem_keep_credits`. Do not copy provider payloads, raw provider credit objects, raw credit identifiers, titles, descriptions, request ids, redemption request identifiers, token material, secrets, or account credentials into metadata, logs, docs, or tests.
 
 ## Readiness States
