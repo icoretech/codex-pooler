@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.10...codex-pooler-v0.4.11) (2026-07-02)
+
+
+### Features
+
+* **alerts:** add saved reset first-seen alerts ([e354d38](https://github.com/icoretech/codex-pooler/commit/e354d38c7661a8260803cae6cacc762cd3b62319))
+
+
+### Bug Fixes
+
+* **admin:** refine operator settings layouts ([749a14f](https://github.com/icoretech/codex-pooler/commit/749a14f23b9898266fdf7117b1071630c3bce590))
+* **web:** set public page titles ([596ade7](https://github.com/icoretech/codex-pooler/commit/596ade7ba4e30b24cc2509821f3427c3fba4f686))
+* **websocket:** align owner submit forwarding timeout ([8b00cde](https://github.com/icoretech/codex-pooler/commit/8b00cdeb3aaf847f783a927a177069da10cf594f))
+
 ## [0.4.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.9...codex-pooler-v0.4.10) (2026-07-01)
 
 
