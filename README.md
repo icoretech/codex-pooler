@@ -110,6 +110,9 @@ assigned Pools.
 - 🏦 **Saved reset management:** surface reported saved reset capacity on upstream
   accounts, show informational expirations when available, and let operators
   queue account-level recovery or opt into guarded auto-redemption policy
+- 🚨 **Operator alerting:** define Pool-aware rules for capacity, upstream health,
+  saved reset events, and delivery failures, then notify operators through
+  admin incidents, email, or webhooks without exposing raw request content
 - 🖥️ **Operator dashboard:** manage Pool-scoped accounts, API keys, invites, saved
   resets, usage, request logs, audit logs, MCP access, and the owner-only jobs,
   operators, and system settings surfaces
