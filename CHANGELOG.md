@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.11...codex-pooler-v0.4.12) (2026-07-02)
+
+
+### Bug Fixes
+
+* **deps:** update dependency daisyui to ^5.6.7 ([#104](https://github.com/icoretech/codex-pooler/issues/104)) ([78b014f](https://github.com/icoretech/codex-pooler/commit/78b014f8555eaa10b807f9bba6e16c9c1f06c599))
+
 ## [0.4.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.10...codex-pooler-v0.4.11) (2026-07-02)
 
 
