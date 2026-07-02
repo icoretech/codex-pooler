@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.10...codex-pooler-v0.4.11) (2026-07-02)
+
+
+### Features
+
+* **alerts:** add saved reset first-seen alerts ([e354d38](https://github.com/icoretech/codex-pooler/commit/e354d38c7661a8260803cae6cacc762cd3b62319))
+
+
+### Bug Fixes
+
+* **admin:** refine operator settings layouts ([749a14f](https://github.com/icoretech/codex-pooler/commit/749a14f23b9898266fdf7117b1071630c3bce590))
+* **admin:** stop inferring fast mode from model slug ([a71ee93](https://github.com/icoretech/codex-pooler/commit/a71ee936c6c81c648e2ba1ae0bd548fd375cd0c6))
+* **deps:** update dependency @astrojs/starlight to v0.41.2 ([#102](https://github.com/icoretech/codex-pooler/issues/102)) ([d7bb5e0](https://github.com/icoretech/codex-pooler/commit/d7bb5e0ca4a78fc609bfdc926565520faa187370))
+* **web:** set public page titles ([596ade7](https://github.com/icoretech/codex-pooler/commit/596ade7ba4e30b24cc2509821f3427c3fba4f686))
+* **websocket:** align owner submit forwarding timeout ([8b00cde](https://github.com/icoretech/codex-pooler/commit/8b00cdeb3aaf847f783a927a177069da10cf594f))
+* **websocket:** close stale upstream sessions after missed pong ([5d72516](https://github.com/icoretech/codex-pooler/commit/5d72516d285303bb0d5e50ce542291ec6f798bdb))
+
 ## [0.4.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.9...codex-pooler-v0.4.10) (2026-07-01)
 
 
