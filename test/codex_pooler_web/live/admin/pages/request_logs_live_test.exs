@@ -87,9 +87,93 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    %{request: model_fast_request} =
+    %{request: requested_fast_request} =
       request_log_fixture(pool, %{
-        correlation_id: "req-live-model-fast",
+        correlation_id: "req-live-requested-fast",
+        requested_model: "gpt-live-fast-alias",
+        requested_service_tier: "fast",
+        actual_service_tier: "default",
+        status: "succeeded"
+      })
+
+    %{request: actual_priority_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-actual-priority",
+        requested_model: "gpt-live-actual-priority",
+        requested_service_tier: "default",
+        actual_service_tier: "priority",
+        status: "succeeded"
+      })
+
+    %{request: fallback_priority_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-fallback-priority",
+        requested_model: "gpt-live-fallback-priority",
+        service_tier: "priority",
+        status: "succeeded"
+      })
+
+    %{request: metadata_fast_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-fast",
+        requested_model: "gpt-live-metadata-fast",
+        request_metadata: %{"fast_mode" => true},
+        status: "succeeded"
+      })
+
+    %{request: metadata_codex_mode_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-codex-mode-fast",
+        requested_model: "gpt-live-metadata-codex-mode-fast",
+        request_metadata: %{"codex_mode" => "fast"},
+        status: "succeeded"
+      })
+
+    %{request: metadata_codex_nested_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-codex-nested-fast",
+        requested_model: "gpt-live-metadata-codex-nested-fast",
+        request_metadata: %{"codex" => %{"mode" => "fast"}},
+        status: "succeeded"
+      })
+
+    %{request: metadata_request_nested_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-request-nested-fast",
+        requested_model: "gpt-live-metadata-request-nested-fast",
+        request_metadata: %{"request" => %{"mode" => "fast"}},
+        status: "succeeded"
+      })
+
+    %{request: metadata_codex_scalar_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-codex-scalar",
+        requested_model: "gpt-live-metadata-codex-scalar",
+        request_metadata: %{"codex" => "fast"},
+        status: "succeeded"
+      })
+
+    %{request: metadata_request_scalar_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-metadata-request-scalar",
+        requested_model: "gpt-live-metadata-request-scalar",
+        request_metadata: %{"request" => "fast"},
+        status: "succeeded"
+      })
+
+    non_fast_tier_requests =
+      for {tier, index} <- Enum.with_index([nil, "", "default", "auto", "flex"], 1) do
+        request_log_fixture(pool, %{
+          correlation_id: "req-live-non-fast-tier-#{index}",
+          requested_model: "gpt-live-non-fast-tier-#{index}",
+          requested_service_tier: tier,
+          status: "succeeded"
+        }).request
+      end
+
+    %{request: model_default_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-live-model-default",
         requested_model: "gpt-5.4",
         requested_service_tier: "default",
         actual_service_tier: "default",
@@ -307,8 +391,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-#{fast_request.id}-fast-mode")
     refute has_element?(view, "#request-log-#{fast_request.id}-requested-tier")
 
-    assert has_element?(view, "#request-log-row-#{model_fast_request.id}", "gpt-5.4")
-    assert has_element?(view, "#request-log-row-#{model_fast_request.id}", "default")
+    assert has_element?(view, "#request-log-row-#{model_default_request.id}", "gpt-5.4")
+    assert has_element?(view, "#request-log-row-#{model_default_request.id}", "default")
+
+    refute has_element?(
+             view,
+             "#request-log-#{model_default_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
 
     assert has_element?(
              view,
@@ -317,8 +406,67 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-#{model_fast_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+             "#request-log-#{requested_fast_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
            )
+
+    assert has_element?(
+             view,
+             "#request-log-#{actual_priority_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{fallback_priority_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{metadata_fast_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{metadata_codex_mode_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{metadata_codex_nested_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{metadata_request_nested_request.id}-protocol [data-role='fast-mode-indicator'][data-speed-tier='fast']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-row-#{metadata_codex_scalar_request.id}",
+             "gpt-live-metadata-codex-scalar"
+           )
+
+    refute has_element?(
+             view,
+             "#request-log-#{metadata_codex_scalar_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-row-#{metadata_request_scalar_request.id}",
+             "gpt-live-metadata-request-scalar"
+           )
+
+    refute has_element?(
+             view,
+             "#request-log-#{metadata_request_scalar_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
+
+    for request <- non_fast_tier_requests do
+      refute has_element?(
+               view,
+               "#request-log-#{request.id}-protocol [data-role='fast-mode-indicator']"
+             )
+    end
 
     refute has_element?(view, "#request-log-#{request.id}-fast-mode")
 
@@ -949,6 +1097,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
+    %{request: actual_fast_tier_diff_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-model-actual-fast-tier-diff",
+        requested_model: "gpt-5.3-codex-spark",
+        service_tier: "default",
+        requested_service_tier: "flex",
+        actual_service_tier: "priority",
+        status: "succeeded"
+      })
+
     %{request: no_suffix_request} =
       request_log_fixture(pool, %{
         correlation_id: "req-model-bare",
@@ -1010,6 +1168,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{fast_tier_diff_request.id}-protocol [data-role='fast-mode-indicator']"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{actual_fast_tier_diff_request.id}-requested-tier",
+             "requested: flex"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-#{actual_fast_tier_diff_request.id}-protocol [data-role='fast-mode-indicator']"
            )
 
     assert has_element?(view, "#request-log-#{no_suffix_request.id}-model-details", "gpt-4o")

@@ -48,10 +48,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def speed_tier_mode(log) when is_map(log) do
     metadata = Map.get(log, :metadata)
-    model = Map.get(log, :requested_model)
-    tier = Map.get(log, :requested_service_tier)
 
-    if fast_metadata?(metadata) or model == "gpt-5.4" or service_tier_priority?(tier) do
+    tiers = [
+      Map.get(log, :requested_service_tier),
+      Map.get(log, :actual_service_tier),
+      Map.get(log, :service_tier)
+    ]
+
+    if fast_metadata?(metadata) or Enum.any?(tiers, &fast_service_tier?/1) do
       :fast
     end
   end
@@ -273,7 +277,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     requested = log.requested_service_tier
     effective = effective_service_tier(log)
 
-    if !fast_mode?(log) and is_binary(requested) and requested != "" and requested != effective do
+    if requested_tier_detail?(log, requested, effective) do
       "requested: #{requested}"
     else
       nil
@@ -378,15 +382,26 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def option_icon_class(option), do: Map.get(option, :icon_class, "text-base-content/60")
 
-  defp service_tier_priority?(tier) when is_binary(tier),
-    do: tier |> String.trim() |> String.downcase() == "priority"
+  defp fast_service_tier?(tier), do: normalize_service_tier(tier) in ["fast", "priority"]
 
-  defp service_tier_priority?(_tier), do: false
+  defp normalize_service_tier(tier) when is_binary(tier),
+    do: tier |> String.trim() |> String.downcase()
+
+  defp normalize_service_tier(_tier), do: nil
+
+  defp requested_tier_detail?(log, requested, effective) when is_binary(requested) do
+    requested = String.trim(requested)
+
+    requested != "" and requested != effective and !fast_service_tier?(requested) and
+      (!fast_mode?(log) or fast_service_tier?(effective))
+  end
+
+  defp requested_tier_detail?(_log, _requested, _effective), do: false
 
   defp fast_metadata?(%{} = metadata) do
     truthy?(Map.get(metadata, "fast_mode")) or Map.get(metadata, "codex_mode") == "fast" or
-      get_in(metadata, ["codex", "mode"]) == "fast" or
-      get_in(metadata, ["request", "mode"]) == "fast"
+      nested_metadata_value(metadata, "codex", "mode") == "fast" or
+      nested_metadata_value(metadata, "request", "mode") == "fast"
   end
 
   defp fast_metadata?(_metadata), do: false
@@ -428,12 +443,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defp endpoint_model?(model), do: String.starts_with?(String.trim(model), "/")
 
   defp route_class(%{metadata: metadata}) when is_map(metadata),
-    do: get_in(metadata, ["routing", "route_class"])
+    do: nested_metadata_value(metadata, "routing", "route_class")
 
   defp route_class(_log), do: nil
 
   defp openai_compatibility_origin(%{metadata: metadata}) when is_map(metadata) do
-    case get_in(metadata, ["openai_compatibility", "source_endpoint"]) do
+    case nested_metadata_value(metadata, "openai_compatibility", "source_endpoint") do
       endpoint when is_binary(endpoint) -> "translated from #{endpoint}"
       _endpoint -> nil
     end
@@ -442,18 +457,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   defp openai_compatibility_origin(_log), do: nil
 
   defp request_content_type(%{metadata: metadata}) when is_map(metadata),
-    do: get_in(metadata, ["request", "content_type"])
+    do: nested_metadata_value(metadata, "request", "content_type")
 
   defp request_content_type(_log), do: nil
 
   defp request_body_size(%{metadata: metadata}) when is_map(metadata) do
-    case get_in(metadata, ["request", "body_bytes"]) do
+    case nested_metadata_value(metadata, "request", "body_bytes") do
       bytes when is_integer(bytes) and bytes >= 0 -> "#{format_integer(bytes)} bytes"
       _bytes -> nil
     end
   end
 
   defp request_body_size(_log), do: nil
+
+  defp nested_metadata_value(%{} = metadata, key, nested_key) do
+    case Map.get(metadata, key) do
+      %{} = nested_metadata -> Map.get(nested_metadata, nested_key)
+      _value -> nil
+    end
+  end
 
   defp verbose_cached_token_breakdown(%{token_counts: nil}), do: nil
 
