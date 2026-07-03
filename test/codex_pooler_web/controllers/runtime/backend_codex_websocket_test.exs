@@ -2481,7 +2481,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         []
       )
 
-    Application.put_env(:codex_pooler, UpstreamWebsocketSession, keepalive_interval_ms: 20)
+    Application.put_env(:codex_pooler, UpstreamWebsocketSession,
+      keepalive_interval_ms: 20,
+      keepalive_pong_timeout_ms: 1_000
+    )
 
     on_exit(fn ->
       Application.put_env(
