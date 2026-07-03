@@ -24,12 +24,16 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
     rule = alert_rule_fixture(pool, %{display_name: "Load shape rule"})
     link_rule_channel!(rule, channel)
 
+    upstream_label = "Load shape upstream #{unique_suffix()}"
+    upstream_identity = upstream_identity_fixture(%{account_label: upstream_label})
+
     raw_prompt = "raw prompt #{unique_suffix()}"
     raw_url = "https://hooks.example.com/alerts/team-secret?token=#{unique_suffix()}"
 
     incident =
       alert_incident_fixture(
         pool: pool,
+        upstream_identity: upstream_identity,
         severity: "critical",
         safe_evidence_snapshot: %{"prompt" => raw_prompt}
       )
@@ -102,6 +106,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
                :state_label,
                :reason_title,
                :reason_detail,
+               :upstream_account_label,
                :occurrence_count,
                :first_seen_at,
                :last_seen_at,
@@ -115,6 +120,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModelTest do
              ])
 
     assert row.id == incident.id
+    assert row.upstream_account_label == upstream_label
 
     assert [%{label: "Load shape rule", value: rule_id, icon: "hero-bell-alert"} = linked_rule] =
              row.linked_rules

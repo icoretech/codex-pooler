@@ -341,12 +341,6 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
           <span data-role="incident-impacted-pool-name" class="truncate font-medium text-base-content">
             {pool.name}
           </span>
-          <span
-            data-role="incident-impacted-pool-slug"
-            class="truncate font-mono text-xs text-base-content/45"
-          >
-            {pool.slug}
-          </span>
         </li>
       </ul>
       <p

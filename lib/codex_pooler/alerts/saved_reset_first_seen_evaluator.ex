@@ -3,6 +3,7 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
   Builds metadata-only alert candidates for first-seen banked saved reset evidence.
   """
 
+  alias CodexPooler.Alerts.EvaluationCandidate
   alias CodexPooler.Alerts.IncidentLifecycle
   alias CodexPooler.Alerts.Schemas.AlertRule
   alias CodexPooler.Upstreams.SavedResets
@@ -29,23 +30,31 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
   @spec candidates(AlertRule.t(), assignment_projection(), DateTime.t()) :: [candidate()]
   def candidates(%AlertRule{} = rule, assignment, %DateTime{} = timestamp) do
     snapshot = SavedResets.snapshot(assignment.identity_metadata || %{}, timestamp)
+    dedupe_key = dedupe_key(assignment.upstream_identity_id)
+    baseline = rule_baseline(rule, timestamp)
 
-    if snapshot.available? do
+    alertable_expirations =
       snapshot.available_expirations
       |> Enum.map(&normalize_expiration/1)
       |> Enum.reject(&is_nil/1)
-      |> Enum.map(&candidate(rule, assignment, snapshot, timestamp, &1))
+      |> Enum.filter(&first_seen_on_or_after?(&1, baseline))
+
+    if snapshot.available? and alertable_expirations != [] do
+      [candidate(rule, assignment, snapshot, timestamp, dedupe_key, alertable_expirations)]
     else
-      []
+      [EvaluationCandidate.clear(rule, dedupe_key, timestamp)]
     end
   end
 
-  defp candidate(rule, assignment, snapshot, timestamp, expiration) do
+  defp candidate(rule, assignment, snapshot, timestamp, dedupe_key, expirations) do
     evidence = %{
       "reason_code" => @reason_code,
-      "reset_expires_at" => expiration.expires_at,
-      "reset_first_seen_at" => expiration.first_seen_at,
       "available_count" => snapshot.available_count,
+      "new_reset_count" => length(expirations),
+      "earliest_reset_first_seen_at" => min_datetime_iso(expirations, :first_seen_at),
+      "latest_reset_first_seen_at" => max_datetime_iso(expirations, :first_seen_at),
+      "next_reset_expires_at" => min_datetime_iso(expirations, :expires_at),
+      "latest_reset_expires_at" => max_datetime_iso(expirations, :expires_at),
       "source" => snapshot.source,
       "path_style" => snapshot.path_style,
       "pool_id" => rule.pool_id,
@@ -54,7 +63,7 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
     }
 
     match_attrs = %{
-      dedupe_key: dedupe_key(assignment.upstream_identity_id, expiration),
+      dedupe_key: dedupe_key,
       scope_type: rule.scope_type,
       rule_kind: rule.rule_kind,
       severity: rule.severity,
@@ -67,7 +76,7 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
 
     %{
       action: :match,
-      dedupe_key: match_attrs.dedupe_key,
+      dedupe_key: dedupe_key,
       rule_id: rule.id,
       rule_kind: rule.rule_kind,
       match_attrs: match_attrs
@@ -78,25 +87,28 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
     %{rule_id: rule.id, pool_id: rule.pool_id, metadata: stringify_metadata(metadata)}
   end
 
-  defp dedupe_key(upstream_identity_id, expiration) do
+  defp dedupe_key(upstream_identity_id) do
     Enum.join(
       [
         "alerts",
-        "v1",
+        "v2",
         @rule_kind,
         "upstream_identity",
-        upstream_identity_id || "none",
-        "reset_expires_at",
-        expiration.expires_at
+        upstream_identity_id || "none"
       ],
       ":"
     )
   end
 
   defp normalize_expiration(%{expires_at: expires_at, first_seen_at: first_seen_at}) do
-    with {:ok, normalized_expires_at} <- normalize_datetime(expires_at),
-         {:ok, normalized_first_seen_at} <- normalize_datetime(first_seen_at) do
-      %{expires_at: normalized_expires_at, first_seen_at: normalized_first_seen_at}
+    with {:ok, expires_at, expires_at_iso} <- normalize_datetime(expires_at),
+         {:ok, first_seen_at, first_seen_at_iso} <- normalize_datetime(first_seen_at) do
+      %{
+        expires_at: expires_at,
+        expires_at_iso: expires_at_iso,
+        first_seen_at: first_seen_at,
+        first_seen_at_iso: first_seen_at_iso
+      }
     else
       {:error, :invalid_datetime} -> nil
     end
@@ -104,10 +116,20 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
 
   defp normalize_expiration(_expiration), do: nil
 
+  defp normalize_datetime(%DateTime{} = value) do
+    value = DateTime.shift_zone!(value, "Etc/UTC")
+    {:ok, value, canonical_datetime(value)}
+  end
+
+  defp normalize_datetime(%NaiveDateTime{} = value) do
+    value = DateTime.from_naive!(value, "Etc/UTC")
+    {:ok, value, canonical_datetime(value)}
+  end
+
   defp normalize_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
       {:ok, datetime, _offset} ->
-        {:ok, canonical_datetime(datetime)}
+        normalize_datetime(datetime)
 
       {:error, _reason} ->
         {:error, :invalid_datetime}
@@ -115,6 +137,14 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
   end
 
   defp normalize_datetime(_value), do: {:error, :invalid_datetime}
+
+  defp first_seen_on_or_after?(%{first_seen_at: first_seen_at}, %DateTime{} = baseline) do
+    DateTime.compare(first_seen_at, baseline) != :lt
+  end
+
+  defp rule_baseline(%AlertRule{} = rule, fallback) do
+    AlertRule.saved_reset_first_seen_baseline_at(rule) || fallback
+  end
 
   defp canonical_datetime(%DateTime{microsecond: {0, _precision}} = datetime) do
     datetime
@@ -127,6 +157,20 @@ defmodule CodexPooler.Alerts.SavedResetFirstSeenEvaluator do
     |> Map.put(:microsecond, {microsecond, 6})
     |> DateTime.to_iso8601()
     |> String.replace(~r/0+Z$/, "Z")
+  end
+
+  defp min_datetime_iso(expirations, key), do: aggregate_datetime_iso(expirations, key, :lt)
+  defp max_datetime_iso(expirations, key), do: aggregate_datetime_iso(expirations, key, :gt)
+
+  defp aggregate_datetime_iso([first | rest], key, comparison) do
+    Enum.reduce(rest, first, fn expiration, selected ->
+      if DateTime.compare(Map.fetch!(expiration, key), Map.fetch!(selected, key)) == comparison do
+        expiration
+      else
+        selected
+      end
+    end)
+    |> Map.fetch!(:"#{key}_iso")
   end
 
   defp stringify_metadata(metadata),

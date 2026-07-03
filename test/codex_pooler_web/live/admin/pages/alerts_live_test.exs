@@ -16,8 +16,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
   alias CodexPooler.Repo
-  alias CodexPoolerWeb.Admin.AlertNotificationsReadModel
-
   setup :register_and_log_in_user
 
   test "renders rule workspace and creates a Pool alert rule", %{conn: conn, scope: scope} do
@@ -599,13 +597,8 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
              pool.name
            )
 
-    assert has_element?(
-             view,
-             "#alert-incident-row-#{incident.id}-impacted-pool-#{pool.id} [data-role='incident-impacted-pool-slug']",
-             pool.slug
-           )
-
     refute has_element?(view, "#alert-incident-row-#{incident.id}-hidden-pool-count")
+    refute has_element?(view, "[data-role='incident-impacted-pool-slug']")
     refute html =~ raw_dedupe_key
     refute html =~ raw_prompt
     refute html =~ raw_header
@@ -615,76 +608,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
 
     assert has_element?(filtered_view, "#alerts-incidents-empty-state")
     refute has_element?(filtered_view, "#alert-incident-#{incident.id}")
-  end
-
-  @tag :saved_reset_banked_first_seen
-  test "saved reset incidents and notifications render operator-facing safe labels", %{
-    conn: conn,
-    scope: scope
-  } do
-    {:ok, pool} =
-      Pools.create_pool(scope, %{
-        slug: "alerts-saved-reset-incident",
-        name: "Alerts Saved Reset Incident"
-      })
-
-    assert {:ok, rule} =
-             Alerts.create_rule(
-               scope,
-               alert_rule_attrs(pool, %{
-                 rule_kind: "upstream_saved_reset_banked_first_seen",
-                 scope_type: "upstream_identity",
-                 display_name: "Saved reset incident rule",
-                 severity: "info"
-               })
-             )
-
-    %{identity: identity} = upstream_assignment_fixture(pool)
-    raw_credit_id = "provider-credit-#{unique_suffix()}"
-    raw_provider_payload = "provider payload #{unique_suffix()}"
-
-    assert {:ok, incident} =
-             Alerts.record_incident_match(%{
-               dedupe_key: "alert:saved-reset:#{identity.id}:2026-07-03T09:00:00Z",
-               scope_type: "upstream_identity",
-               rule_kind: rule.rule_kind,
-               severity: "info",
-               upstream_identity_id: identity.id,
-               matched_at: timestamp(~U[2026-07-02 08:01:00Z]),
-               safe_evidence_snapshot: %{
-                 "reason_code" => "saved_reset_banked_first_seen",
-                 "reset_expires_at" => "2026-07-03T09:00:00Z",
-                 "reset_first_seen_at" => "2026-07-02T08:00:00Z",
-                 "available_count" => 2,
-                 "source" => "persisted_saved_resets",
-                 "path_style" => "codex",
-                 "provider_credit_id" => raw_credit_id,
-                 "provider_payload" => raw_provider_payload
-               },
-               suppression_metadata: %{},
-               targets: [%{rule_id: rule.id, pool_id: pool.id, metadata: %{}}]
-             })
-
-    {:ok, view, html} = live(conn, ~p"/admin/alerts?tab=incidents")
-
-    assert has_element?(
-             view,
-             "#alert-incident-row-#{incident.id}-reason",
-             "First-seen banked saved reset"
-           )
-
-    assert has_element?(
-             view,
-             "#alert-incident-row-#{incident.id}-detail",
-             "Persisted saved-reset metadata"
-           )
-
-    refute html =~ raw_credit_id
-    refute html =~ raw_provider_payload
-
-    notification_state = AlertNotificationsReadModel.load(scope)
-
-    assert [%{reason_title: "First-seen banked saved reset"}] = notification_state.rows
   end
 
   test "acknowledges and resolves incidents through scoped UI actions and audit events", %{

@@ -13,7 +13,7 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
   @expires_at "2026-06-01T00:00:00Z"
 
   @tag :saved_reset_banked_first_seen
-  test "zero-fraction expiration variants share one evaluator dedupe key and delivery" do
+  test "zero-fraction expiration variants keep the stable v2 upstream dedupe key" do
     Repo.delete_all(Oban.Job)
     {_pool, rule, identity} = saved_reset_pool("pool-normalized-expiration")
     channel = alert_channel_fixture(%{display_name: "Saved reset normalized email"})
@@ -24,6 +24,12 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
 
       assert [%{match_attrs: attrs}] =
                Alerts.evaluate_rule(rule, at: timestamp(~U[2026-05-30 18:05:00Z]))
+
+      assert attrs.dedupe_key == saved_reset_v2_dedupe_key(identity.id),
+             "v2 dedupe gap: saved-reset first-seen dedupe must be stable per upstream identity"
+
+      refute attrs.dedupe_key =~ "reset_expires_at",
+             "v2 dedupe gap: saved-reset first-seen dedupe must not include reset_expires_at"
 
       assert {:ok, result} = Alerts.record_incident_once(attrs)
       assert :ok = enqueue_lifecycle_deliveries(result)
@@ -42,7 +48,7 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
   end
 
   @tag :saved_reset_banked_first_seen
-  test "fractional expiration instants canonicalize precision without merging distinct instants" do
+  test "fractional expiration instants do not fan out aggregate upstream dedupe" do
     Repo.delete_all(Oban.Job)
     {_pool, rule, identity} = saved_reset_pool("pool-fractional-expiration")
 
@@ -60,7 +66,9 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
 
     assert dedupe_key_for.("2026-06-01T00:00:00.000000Z") == second_key
     assert dedupe_key_for.("2026-06-01T00:00:00.123000Z") == fractional_key
-    refute fractional_key == second_key
+
+    assert fractional_key == second_key,
+           "aggregate one-candidate gap: saved-reset first-seen dedupe must not fan out by reset_expires_at"
   end
 
   defp timestamp(value), do: %{value | microsecond: {0, 6}}
@@ -73,11 +81,15 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
   end
 
   defp saved_reset_rule_fixture(pool) do
+    baseline = timestamp(~U[2026-05-30 17:00:00Z])
+
     alert_rule_fixture(pool,
       scope_type: "upstream_identity",
       rule_kind: @rule_kind,
       severity: "info",
-      cooldown_minutes: 30
+      cooldown_minutes: 30,
+      created_at: baseline,
+      updated_at: baseline
     )
   end
 
@@ -120,4 +132,17 @@ defmodule CodexPooler.Alerts.SavedResetExpirationDedupeTest do
   defp enqueue_lifecycle_deliveries(_result), do: :ok
 
   defp delivery_job_count, do: length(all_enqueued(worker: AlertDeliveryWorker))
+
+  defp saved_reset_v2_dedupe_key(upstream_identity_id) do
+    Enum.join(
+      [
+        "alerts",
+        "v2",
+        @rule_kind,
+        "upstream_identity",
+        upstream_identity_id || "none"
+      ],
+      ":"
+    )
+  end
 end

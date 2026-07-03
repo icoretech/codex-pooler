@@ -15,6 +15,8 @@ defmodule CodexPooler.Alerts.RuleManagement do
 
   alias CodexPooler.Repo
 
+  @saved_reset_first_seen_rule_kind "upstream_saved_reset_banked_first_seen"
+
   @type access_error :: Authorization.access_error()
   @type rule_result :: {:ok, AlertRule.t()} | {:error, Ecto.Changeset.t() | access_error()}
 
@@ -63,7 +65,7 @@ defmodule CodexPooler.Alerts.RuleManagement do
     with {:ok, _existing_decision} <- Authorization.authorize_pool_operation(scope, rule.pool_id),
          {:ok, _target_decision} <- Authorization.authorize_pool_operation(scope, target_pool_id) do
       rule
-      |> update_rule_with_channels(scope, rule_update_attrs(attrs, target_pool_id, now()))
+      |> update_rule_with_channels(scope, rule_update_attrs(rule, attrs, target_pool_id, now()))
       |> AlertAudit.audit_rule_update(scope, rule, attrs)
     end
   end
@@ -139,13 +141,15 @@ defmodule CodexPooler.Alerts.RuleManagement do
       created_at: timestamp,
       updated_at: timestamp
     })
+    |> maybe_put_saved_reset_first_seen_create_baseline(timestamp)
   end
 
-  defp rule_update_attrs(attrs, target_pool_id, timestamp) do
+  defp rule_update_attrs(%AlertRule{} = rule, attrs, target_pool_id, timestamp) do
     attrs
     |> normalize_attrs(rule_update_attribute_keys())
     |> Map.put(:pool_id, target_pool_id)
     |> maybe_put_disabled_at(attrs, timestamp)
+    |> maybe_put_saved_reset_first_seen_enable_baseline(rule, timestamp)
     |> Map.put(:updated_at, timestamp)
   end
 
@@ -256,6 +260,40 @@ defmodule CodexPooler.Alerts.RuleManagement do
 
   defp disabled_at_for_state("disabled", timestamp), do: timestamp
   defp disabled_at_for_state(_state, _timestamp), do: nil
+
+  defp maybe_put_saved_reset_first_seen_create_baseline(attrs, timestamp) do
+    if saved_reset_first_seen_rule?(attrs) and
+         Map.get(attrs, :state, AlertRule.active_state()) == AlertRule.active_state() do
+      put_saved_reset_first_seen_baseline(attrs, timestamp)
+    else
+      attrs
+    end
+  end
+
+  defp maybe_put_saved_reset_first_seen_enable_baseline(attrs, rule, timestamp) do
+    final_state = Map.get(attrs, :state, rule.state)
+    final_rule_kind = Map.get(attrs, :rule_kind, rule.rule_kind)
+
+    if final_rule_kind == @saved_reset_first_seen_rule_kind and final_state == "active" and
+         (rule.state == "disabled" or rule.rule_kind != @saved_reset_first_seen_rule_kind) do
+      attrs
+      |> Map.put_new(:metadata, rule.metadata || %{})
+      |> put_saved_reset_first_seen_baseline(timestamp)
+    else
+      attrs
+    end
+  end
+
+  defp saved_reset_first_seen_rule?(attrs),
+    do: Map.get(attrs, :rule_kind) == @saved_reset_first_seen_rule_kind
+
+  defp put_saved_reset_first_seen_baseline(attrs, timestamp) do
+    metadata =
+      (Map.get(attrs, :metadata) || %{})
+      |> Map.put(AlertRule.saved_reset_first_seen_baseline_key(), DateTime.to_iso8601(timestamp))
+
+    Map.put(attrs, :metadata, metadata)
+  end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

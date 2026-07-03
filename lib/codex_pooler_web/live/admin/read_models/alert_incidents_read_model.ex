@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   @moduledoc false
 
+  import Ecto.Query
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Accounts.Scope
@@ -9,10 +10,16 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   alias CodexPooler.Alerts.Schemas.AlertChannel
   alias CodexPooler.Alerts.Schemas.AlertIncident
   alias CodexPooler.Alerts.Schemas.AlertRule
+  alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.AlertRuleForm
   alias CodexPoolerWeb.Admin.PoolFilterComponents
 
   @page_size 50
+  @email_like_regex ~r/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
+  @jwt_like_regex ~r/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
+  @sensitive_identity_regex ~r/(?i)\b(authorization|bearer|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|prompt|secret|token)\b/
+  @uuid_regex ~r/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i
 
   @type filter_error :: %{required(:field) => atom(), required(:message) => String.t()}
   @type option :: %{
@@ -59,6 +66,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
           required(:state_label) => String.t(),
           required(:reason_title) => String.t(),
           required(:reason_detail) => String.t(),
+          required(:upstream_account_label) => String.t() | nil,
           required(:occurrence_count) => pos_integer(),
           required(:first_seen_at) => DateTime.t(),
           required(:last_seen_at) => DateTime.t(),
@@ -267,6 +275,7 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp incident_rows(scope, incidents, filters) do
     projections = AlertIncidentRelationships.incident_relationship_projections(scope, incidents)
+    upstream_account_labels = upstream_account_labels(incidents)
 
     linked_rules_by_incident = projections.linked_rules_by_incident
 
@@ -276,15 +285,24 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
     incidents
     |> Enum.filter(&incident_matches_severity?(&1, filters.severity))
-    |> Enum.map(&incident_row(&1, linked_rules_by_incident, delivery_summaries))
+    |> Enum.map(
+      &incident_row(&1, linked_rules_by_incident, delivery_summaries, upstream_account_labels)
+    )
     |> Enum.filter(&incident_matches_link_filters?(&1, filters))
   end
 
-  defp incident_row(incident, linked_rules_by_incident, delivery_summaries) do
+  defp incident_row(
+         incident,
+         linked_rules_by_incident,
+         delivery_summaries,
+         upstream_account_labels
+       ) do
     linked_rules =
       linked_rules_by_incident
       |> Map.get(incident.id, [])
       |> linked_rule_options()
+
+    upstream_account_label = Map.get(upstream_account_labels, incident.upstream_identity_id)
 
     %{
       id: incident.id,
@@ -296,7 +314,8 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
       state: incident.state,
       state_label: state_label(incident.state),
       reason_title: reason_title(incident),
-      reason_detail: reason_detail(incident),
+      reason_detail: reason_detail(incident, upstream_account_label),
+      upstream_account_label: upstream_account_label,
       occurrence_count: incident.occurrence_count,
       first_seen_at: incident.first_seen_at,
       last_seen_at: incident.last_seen_at,
@@ -474,6 +493,54 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp retryable_label(false), do: nil
   defp retryable_label(_value), do: nil
 
+  defp upstream_account_labels(incidents) do
+    ids =
+      incidents
+      |> Enum.map(& &1.upstream_identity_id)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    case ids do
+      [] ->
+        %{}
+
+      [_ | _] ->
+        UpstreamIdentity
+        |> where([identity], identity.id in ^ids)
+        |> select([identity], %{
+          id: identity.id,
+          account_label: identity.account_label,
+          chatgpt_account_id: identity.chatgpt_account_id
+        })
+        |> Repo.all()
+        |> Map.new(&{&1.id, upstream_account_label(&1)})
+    end
+  end
+
+  defp upstream_account_label(identity) do
+    safe_account_identifier(identity.account_label) ||
+      safe_account_identifier(identity.chatgpt_account_id) ||
+      "Upstream account"
+  end
+
+  defp safe_account_identifier(value) do
+    case present_string(value) do
+      nil -> nil
+      label -> if account_identifier_safe?(label), do: label
+    end
+  end
+
+  defp account_identifier_safe?(label) do
+    cond do
+      label == "[redacted]" -> false
+      String.match?(label, @email_like_regex) -> false
+      String.match?(label, @uuid_regex) -> false
+      String.match?(label, @jwt_like_regex) -> false
+      String.match?(label, @sensitive_identity_regex) -> false
+      true -> true
+    end
+  end
+
   defp reason_title(%{rule_kind: "pool_no_usable_assignments"}), do: "No usable assignments"
 
   defp reason_title(%{rule_kind: "pool_low_usable_assignments"}),
@@ -486,33 +553,87 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
   defp reason_title(%{rule_kind: "upstream_auth_state"}), do: "Upstream auth attention needed"
 
   defp reason_title(%{rule_kind: "upstream_saved_reset_banked_first_seen"}),
-    do: "First-seen banked saved reset"
+    do: "New banked reset evidence"
 
   defp reason_title(_incident), do: "Alert condition matched"
 
-  defp reason_detail(%{rule_kind: "upstream_quota_threshold"}) do
+  defp reason_detail(incident, upstream_account_label)
+
+  defp reason_detail(%{rule_kind: "upstream_quota_threshold"}, _upstream_account_label) do
     "Persisted quota evidence crossed the configured threshold for at least one manageable impacted Pool."
   end
 
-  defp reason_detail(%{rule_kind: "upstream_auth_state"}) do
+  defp reason_detail(%{rule_kind: "upstream_auth_state"}, _upstream_account_label) do
     "Persisted upstream account state matched an alert condition for at least one manageable impacted Pool."
   end
 
-  defp reason_detail(%{rule_kind: "upstream_saved_reset_banked_first_seen"}) do
-    "Persisted saved-reset metadata shows an assigned upstream account first exposed a banked reset for at least one manageable impacted Pool."
+  defp reason_detail(
+         %{rule_kind: "upstream_saved_reset_banked_first_seen"} = incident,
+         upstream_account_label
+       ) do
+    label = upstream_account_label || "Upstream account"
+
+    [
+      "Persisted metadata shows new banked reset evidence on an upstream account: #{label}.",
+      saved_reset_count_detail(incident.safe_evidence_snapshot || %{}),
+      saved_reset_expiration_detail(incident.safe_evidence_snapshot || %{})
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
   end
 
-  defp reason_detail(%{rule_kind: "pool_all_assignments_in_state"}) do
+  defp reason_detail(%{rule_kind: "pool_all_assignments_in_state"}, _upstream_account_label) do
     "Persisted assignment and quota evidence show all enabled assignments in the selected attention state."
   end
 
-  defp reason_detail(%{rule_kind: "pool_low_usable_assignments"}) do
+  defp reason_detail(%{rule_kind: "pool_low_usable_assignments"}, _upstream_account_label) do
     "Persisted routing evidence shows fewer usable assignments than this rule requires."
   end
 
-  defp reason_detail(_incident) do
+  defp reason_detail(_incident, _upstream_account_label) do
     "Persisted routing evidence shows no currently usable assignment for this condition."
   end
+
+  defp saved_reset_count_detail(%{} = evidence) do
+    [
+      count_fragment(evidence["new_reset_count"], "new reset", "new resets"),
+      count_fragment(
+        evidence["available_count"],
+        "banked reset available",
+        "banked resets available"
+      )
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("; ")
+  end
+
+  defp saved_reset_count_detail(_evidence), do: nil
+
+  defp saved_reset_expiration_detail(%{} = evidence) do
+    [
+      expiration_fragment(
+        "next expires",
+        evidence["next_reset_expires_at"] || evidence["reset_expires_at"]
+      ),
+      expiration_fragment("latest expires", evidence["latest_reset_expires_at"])
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("; ")
+  end
+
+  defp saved_reset_expiration_detail(_evidence), do: nil
+
+  defp count_fragment(count, singular, plural) when is_integer(count) and count >= 0,
+    do: pluralize(count, singular, plural)
+
+  defp count_fragment(_count, _singular, _plural), do: nil
+
+  defp expiration_fragment(label, value) when is_binary(value) do
+    value = safe_detail_value(value)
+    if value == "", do: nil, else: "#{label} #{value}"
+  end
+
+  defp expiration_fragment(_label, _value), do: nil
 
   defp severity_filter_options do
     [%{label: "Any severity", value: "", icon: "hero-adjustments-horizontal"}] ++
@@ -566,6 +687,13 @@ defmodule CodexPoolerWeb.Admin.AlertIncidentsReadModel do
 
   defp pluralize(1, singular, _plural), do: "1 #{singular}"
   defp pluralize(count, _singular, plural), do: "#{count} #{plural}"
+
+  defp present_string(value) when is_binary(value) do
+    value = safe_text(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp present_string(_value), do: nil
 
   defp form_errors(errors), do: Enum.map(errors, &{&1.field, {&1.message, []}})
 

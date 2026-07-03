@@ -13,6 +13,8 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   @cooldown_minimum_minutes 5
   @cooldown_maximum_minutes 1440
   @default_cooldown_minutes 30
+  @saved_reset_first_seen_rule_kind "upstream_saved_reset_banked_first_seen"
+  @saved_reset_first_seen_baseline_key "saved_reset_first_seen_baseline_at"
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -140,6 +142,16 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   @spec disabled_state() :: state()
   def disabled_state, do: "disabled"
 
+  @spec saved_reset_first_seen_baseline_at(t()) :: DateTime.t() | nil
+  def saved_reset_first_seen_baseline_at(%__MODULE__{} = rule) do
+    if rule.rule_kind == @saved_reset_first_seen_rule_kind do
+      metadata_baseline_at(rule.metadata) || rule.created_at
+    end
+  end
+
+  @spec saved_reset_first_seen_baseline_key() :: String.t()
+  def saved_reset_first_seen_baseline_key, do: @saved_reset_first_seen_baseline_key
+
   defp trim_optional_string(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
@@ -148,4 +160,22 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   end
 
   defp trim_optional_string(value), do: value
+
+  defp metadata_baseline_at(metadata) when is_map(metadata) do
+    case Map.get(metadata, @saved_reset_first_seen_baseline_key) ||
+           Map.get(metadata, :saved_reset_first_seen_baseline_at) do
+      value when is_binary(value) -> parse_datetime(value)
+      %DateTime{} = value -> value
+      _value -> nil
+    end
+  end
+
+  defp metadata_baseline_at(_metadata), do: nil
+
+  defp parse_datetime(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      {:error, _reason} -> nil
+    end
+  end
 end
