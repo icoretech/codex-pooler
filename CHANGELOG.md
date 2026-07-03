@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.12...codex-pooler-v0.4.13) (2026-07-03)
+
+
+### Bug Fixes
+
+* **alerts:** dedupe saved reset first-seen incidents ([cf5773c](https://github.com/icoretech/codex-pooler/commit/cf5773cd9de4263f56d76f174a7103f9b96ad89c))
+* **ci:** isolate Pages artifacts per rerun ([a3456f4](https://github.com/icoretech/codex-pooler/commit/a3456f4705beaa558032c8df631b98812a5478da))
+* **ci:** skip Pages deploy for non-doc changes ([e903ef9](https://github.com/icoretech/codex-pooler/commit/e903ef91bd898011f19be8ace1110aa68902ea55))
+* **deps:** update dependency astro to v7.0.5 ([#103](https://github.com/icoretech/codex-pooler/issues/103)) ([4047494](https://github.com/icoretech/codex-pooler/commit/40474942c3660e0817dddac0289d8e10698d22e2))
+* **deps:** update dependency daisyui to ^5.6.10 ([#107](https://github.com/icoretech/codex-pooler/issues/107)) ([c3b5076](https://github.com/icoretech/codex-pooler/commit/c3b50762eee79d55a913655d6e4546af9d83693e))
+
 ## [0.4.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.11...codex-pooler-v0.4.12) (2026-07-02)
 
 
