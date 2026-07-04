@@ -464,7 +464,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             icon="hero-trash"
             label="Delete"
             variant={:danger}
-            phx-click="delete_account"
+            phx-click="open_delete_account"
             phx-value-id={@account.identity.id}
             disabled={@account.identity.status == "deleted"}
           />

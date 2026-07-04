@@ -35,6 +35,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :oauth_link_error, :map, default: nil
   attr :renaming_account, :map, default: nil
   attr :rename_account_form, :any, default: nil
+  attr :deleting_account, :map, default: nil
+  attr :delete_account_form, :any, required: true
   attr :editing_saved_reset_policy, :map, default: nil
   attr :saved_reset_policy_form, :any, required: true
   attr :confirming_saved_reset_redemption, :map, default: nil
@@ -86,6 +88,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       />
 
       <.rename_account_dialog account={@renaming_account} form={@rename_account_form} />
+      <.delete_account_dialog account={@deleting_account} form={@delete_account_form} />
       <.saved_reset_policy_dialog
         account={@editing_saved_reset_policy}
         form={@saved_reset_policy_form}
@@ -555,6 +558,73 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_rename_account">close</button>
+      </form>
+    </dialog>
+    """
+  end
+
+  attr :account, :map, default: nil
+  attr :form, :any, required: true
+
+  defp delete_account_dialog(assigns) do
+    assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
+
+    ~H"""
+    <dialog :if={@account} id="delete-upstream-account-dialog" class="modal" open>
+      <div class="modal-box max-w-xl border border-error/30 bg-base-100 p-0 shadow-2xl">
+        <div class="border-b border-error/20 px-6 py-5">
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">
+            Delete upstream account
+          </p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Confirm upstream account deletion</h2>
+          <p class="mt-2 text-sm leading-6 text-base-content/70">
+            Type the account label exactly to remove this upstream account from operator routing surfaces.
+          </p>
+        </div>
+        <.form
+          id="delete-upstream-account-form"
+          for={@form}
+          phx-submit="confirm_delete_account"
+          autocomplete="off"
+          class="grid gap-5 p-6"
+        >
+          <.input field={@form[:id]} type="hidden" />
+          <p class="rounded-box border border-base-300 bg-base-200/60 p-3 text-sm text-base-content/70">
+            Confirmation label: <span class="font-semibold text-base-content">{@account.label}</span>
+          </p>
+          <.input
+            field={@form[:confirmation_label]}
+            type="text"
+            label="Account label confirmation"
+            placeholder={@account.label}
+            required
+          />
+        </.form>
+
+        <AdminComponents.dialog_footer
+          id="delete-upstream-account-dialog-footer"
+          docs_url={@upstream_actions_docs_url}
+        >
+          <:actions>
+            <AdminComponents.action_button
+              id="delete-upstream-account-cancel"
+              icon="hero-x-mark"
+              label="Cancel"
+              phx-click="cancel_delete_account"
+            />
+            <AdminComponents.action_button
+              id="delete-upstream-account-submit"
+              icon="hero-trash"
+              label="Delete"
+              type="submit"
+              form="delete-upstream-account-form"
+              variant={:danger}
+            />
+          </:actions>
+        </AdminComponents.dialog_footer>
+      </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="button" phx-click="cancel_delete_account">close</button>
       </form>
     </dialog>
     """

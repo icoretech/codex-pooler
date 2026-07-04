@@ -52,6 +52,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         oauth_link_poll_timer: nil,
         renaming_account: nil,
         rename_account_form: nil,
+        deleting_account: nil,
+        delete_account_form: AccountLifecycleWorkflow.delete_form(nil),
         editing_saved_reset_policy: nil,
         saved_reset_policy_form: saved_reset_policy_form(%{}),
         confirming_saved_reset_redemption: nil,
@@ -207,6 +209,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply, close_rename_account_dialog(socket)}
   end
 
+  def handle_event("open_delete_account", %{"id" => identity_id}, socket) do
+    {:noreply,
+     socket
+     |> close_account_workflow_dialogs()
+     |> AccountLifecycleWorkflow.open_delete(identity_id)}
+  end
+
+  def handle_event("cancel_delete_account", _params, socket) do
+    {:noreply, AccountLifecycleWorkflow.close_delete(socket)}
+  end
+
+  def handle_event("confirm_delete_account", %{"upstream_delete" => delete_params}, socket) do
+    AccountLifecycleWorkflow.confirm_delete(socket, delete_params, &reload_upstreams/1)
+  end
+
   def handle_event("open_saved_reset_policy", %{"id" => identity_id}, socket) do
     case find_account(socket.assigns.upstream_accounts, identity_id) do
       nil ->
@@ -314,10 +331,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     AccountLifecycleWorkflow.reactivate(socket, identity_id, &reload_upstreams/1)
   end
 
-  def handle_event("delete_account", %{"id" => identity_id}, socket) do
-    AccountLifecycleWorkflow.delete(socket, identity_id, &reload_upstreams/1)
-  end
-
   def handle_event("refresh_account", %{"id" => identity_id}, socket) do
     AccountLifecycleWorkflow.refresh(socket, identity_id, &reload_upstreams/1)
   end
@@ -366,6 +379,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         oauth_link_error={@oauth_link_error}
         renaming_account={@renaming_account}
         rename_account_form={@rename_account_form}
+        deleting_account={@deleting_account}
+        delete_account_form={@delete_account_form}
         editing_saved_reset_policy={@editing_saved_reset_policy}
         saved_reset_policy_form={@saved_reset_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
@@ -505,6 +520,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     socket
     |> AuthJsonWorkflow.close()
     |> close_rename_account_dialog()
+    |> AccountLifecycleWorkflow.close_delete()
     |> OAuthWorkflow.close()
     |> close_saved_reset_policy_dialog()
   end

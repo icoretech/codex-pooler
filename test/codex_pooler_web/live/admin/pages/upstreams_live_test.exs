@@ -2354,6 +2354,55 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert Repo.get!(UpstreamIdentity, identity.id).account_label == "Renamed Codex"
   end
 
+  test "confirms upstream account deletion from the account actions menu", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "delete-upstream", name: "Delete Upstream"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Delete Codex",
+        account_identifier: "delete@example.com"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    view
+    |> element("#delete-upstream-account-#{identity.id}")
+    |> render_click()
+
+    assert has_element?(view, "#delete-upstream-account-dialog[open]", "Delete Codex")
+    assert has_element?(view, "#delete-upstream-account-form")
+    assert_admin_dialog_docs_link(view, "delete-upstream-account-dialog-footer")
+    assert Repo.get!(UpstreamIdentity, identity.id).status == "active"
+
+    view
+    |> element("#delete-upstream-account-form")
+    |> render_submit(%{
+      "upstream_delete" => %{
+        "id" => identity.id,
+        "confirmation_label" => "wrong label"
+      }
+    })
+
+    assert has_element?(view, "#delete-upstream-account-dialog[open]")
+    assert has_element?(view, "#delete-upstream-account-form", "type the account label exactly")
+    assert Repo.get!(UpstreamIdentity, identity.id).status == "active"
+
+    view
+    |> element("#delete-upstream-account-form")
+    |> render_submit(%{
+      "upstream_delete" => %{
+        "id" => identity.id,
+        "confirmation_label" => "Delete Codex"
+      }
+    })
+
+    refute has_element?(view, "#delete-upstream-account-dialog")
+    assert Repo.get!(UpstreamIdentity, identity.id).status == "deleted"
+  end
+
   test "keeps rename dialog open when the label is blank", %{
     conn: conn,
     scope: scope
@@ -4714,6 +4763,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
           "https://docs.codex-pooler.com/operators/upstreams/#import-authjson"
 
         "rename-upstream-account-dialog-footer" ->
+          "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
+
+        "delete-upstream-account-dialog-footer" ->
           "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
       end
 
