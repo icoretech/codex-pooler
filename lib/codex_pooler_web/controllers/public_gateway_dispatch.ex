@@ -31,6 +31,11 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
           accounting_endpoint: String.t(),
           gateway_executor: gateway_executor()
         ]
+  @type json_payload_dispatch_opts :: [
+          admission_endpoint: String.t(),
+          request_opts: GatewayHelpers.request_opts(),
+          gateway_executor: gateway_executor()
+        ]
 
   @spec authenticated(conn(), String.t(), String.t(), (auth() -> gateway_call_result())) :: conn()
   @spec authenticated(
@@ -71,6 +76,41 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
       {:error, reason} ->
         GatewayHelpers.send_error(conn, reason)
     end
+  end
+
+  @spec dispatch_json_payload(
+          conn(),
+          auth(),
+          String.t(),
+          String.t(),
+          String.t(),
+          map(),
+          json_payload_dispatch_opts()
+        ) :: gateway_call_result()
+  def dispatch_json_payload(
+        conn,
+        auth,
+        local_endpoint,
+        upstream_endpoint,
+        accounting_endpoint,
+        payload,
+        opts \\ []
+      )
+      when is_binary(local_endpoint) and is_binary(upstream_endpoint) and
+             is_binary(accounting_endpoint) and is_map(payload) do
+    request_options =
+      opts
+      |> Keyword.get(:request_opts, GatewayHelpers.request_opts(conn))
+      |> RequestOptions.from_conn_metadata(local_endpoint, payload)
+      |> RequestOptions.put_transport(upstream_endpoint: upstream_endpoint)
+
+    route_class = RequestOptions.route_class(request_options)
+    gateway_executor = Keyword.get(opts, :gateway_executor, &Gateway.execute/4)
+    admission_endpoint = Keyword.get(opts, :admission_endpoint, local_endpoint)
+
+    GatewayHelpers.admit(conn, route_class, %{endpoint: admission_endpoint}, fn ->
+      gateway_executor.(auth, accounting_endpoint, payload, request_options)
+    end)
   end
 
   @spec coerced(conn(), coercer(), success_normalizer(), dispatch_opts()) :: conn()

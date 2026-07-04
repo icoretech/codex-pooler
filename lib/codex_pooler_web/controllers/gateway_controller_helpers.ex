@@ -11,12 +11,18 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
   @type body_read_result :: {:ok, map()} | {:error, Contracts.gateway_error()}
   @type request_opts :: %{optional(atom()) => term()}
+  @type websocket_upgrade_opts :: [
+          openai_compatibility: keyword(),
+          openai_compatibility_origin: {String.t(), String.t()},
+          accepted_turn_state: String.t() | nil
+        ]
 
   @spec admit(conn(), String.t(), (-> gateway_call_result())) :: gateway_call_result()
   @spec admit(conn(), String.t(), map(), (-> gateway_call_result())) :: gateway_call_result()
@@ -127,6 +133,38 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     ]
   end
 
+  @spec upgrade_responses_websocket(conn(), Access.auth_context(), websocket_upgrade_opts()) ::
+          conn()
+  def upgrade_responses_websocket(conn, auth, opts \\ []) do
+    turn_state = websocket_turn_state(conn)
+
+    request_options =
+      conn
+      |> request_opts()
+      |> RequestOptions.for_websocket()
+      |> maybe_put_websocket_openai_compatibility(opts)
+      |> RequestOptions.put_continuity(
+        accepted_turn_state: websocket_continuity_turn_state(opts, turn_state)
+      )
+      |> maybe_mark_websocket_openai_origin(opts)
+
+    conn
+    |> put_resp_header("x-codex-turn-state", turn_state)
+    |> WebSockAdapter.upgrade(
+      CodexPoolerWeb.CodexResponsesSocket,
+      %{auth: auth, opts: request_options},
+      websocket_upgrade_opts()
+    )
+    |> halt()
+  rescue
+    error in WebSockAdapter.UpgradeError ->
+      send_error(conn, %{
+        status: 400,
+        code: "websocket_upgrade_required",
+        message: Exception.message(error)
+      })
+  end
+
   @spec send_or_error(conn(), gateway_call_result()) :: conn()
   def send_or_error(%Plug.Conn{} = conn, {:ok, result}), do: send_gateway_result(conn, result)
   def send_or_error(%Plug.Conn{} = conn, {:error, reason}), do: send_error(conn, reason)
@@ -209,6 +247,39 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     |> get_req_header("x-codex-turn-state")
     |> List.first()
     |> blank_to_nil()
+  end
+
+  defp websocket_turn_state(conn), do: accepted_turn_state(conn) || Ecto.UUID.generate()
+
+  defp websocket_continuity_turn_state(opts, turn_state) do
+    case Keyword.fetch(opts, :accepted_turn_state) do
+      {:ok, value} -> value
+      :error -> turn_state
+    end
+  end
+
+  defp maybe_put_websocket_openai_compatibility(%RequestOptions{} = request_options, opts) do
+    case Keyword.get(opts, :openai_compatibility, []) do
+      [] ->
+        request_options
+
+      compatibility when is_list(compatibility) ->
+        RequestOptions.put_openai_compatibility(request_options, compatibility)
+    end
+  end
+
+  defp maybe_mark_websocket_openai_origin(%RequestOptions{} = request_options, opts) do
+    case Keyword.get(opts, :openai_compatibility_origin) do
+      {public_endpoint, backend_endpoint} ->
+        RequestOptions.mark_openai_compatibility_origin(
+          request_options,
+          public_endpoint,
+          backend_endpoint
+        )
+
+      _origin ->
+        request_options
+    end
   end
 
   defp previous_response_id(conn) do

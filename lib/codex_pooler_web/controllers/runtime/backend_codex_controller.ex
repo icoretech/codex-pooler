@@ -87,35 +87,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   end
 
   def responses_stream(conn, _params) do
-    case GatewayHelpers.authenticate(conn) do
-      {:ok, auth} ->
-        turn_state = accepted_turn_state(conn)
-
-        request_options =
-          conn
-          |> GatewayHelpers.request_opts()
-          |> RequestOptions.for_websocket()
-          |> RequestOptions.put_continuity(accepted_turn_state: turn_state)
-
-        conn
-        |> put_resp_header("x-codex-turn-state", turn_state)
-        |> WebSockAdapter.upgrade(
-          CodexPoolerWeb.CodexResponsesSocket,
-          %{auth: auth, opts: request_options},
-          GatewayHelpers.websocket_upgrade_opts()
-        )
-        |> halt()
-
-      {:error, reason} ->
-        GatewayHelpers.send_error(conn, reason)
-    end
-  rescue
-    error in WebSockAdapter.UpgradeError ->
-      GatewayHelpers.send_error(conn, %{
-        status: 400,
-        code: "websocket_upgrade_required",
-        message: Exception.message(error)
-      })
+    PublicGatewayDispatch.websocket(
+      conn,
+      &GatewayHelpers.upgrade_responses_websocket(conn, &1),
+      authenticator: &GatewayHelpers.authenticate/1
+    )
   end
 
   defp proxy(conn, local_endpoint, upstream_endpoint) do
@@ -153,14 +129,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
 
     case CompactionTrigger.prepare_bridge(local_endpoint, payload) do
       :passthrough ->
-        proxy_gateway_json_payload(
+        PublicGatewayDispatch.dispatch_json_payload(
           conn,
+          auth,
           local_endpoint,
           upstream_endpoint,
           accounting_endpoint,
-          auth,
           payload,
-          opts
+          request_opts: opts
         )
 
       {:ok, compact_payload} ->
@@ -171,42 +147,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
     end
   end
 
-  defp proxy_gateway_json_payload(
-         conn,
-         local_endpoint,
-         upstream_endpoint,
-         accounting_endpoint,
-         auth,
-         payload,
-         opts
-       ) do
-    request_options =
-      opts
-      |> RequestOptions.from_conn_metadata(local_endpoint, payload)
-      |> RequestOptions.put_transport(upstream_endpoint: upstream_endpoint)
-
-    route_class = RequestOptions.route_class(request_options)
-
-    GatewayHelpers.admit(conn, route_class, %{endpoint: local_endpoint}, fn ->
-      Gateway.execute(auth, accounting_endpoint, payload, request_options)
-    end)
-  end
-
   defp proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts) do
     compact_endpoint = "/backend-api/codex/responses/compact"
 
-    request_options =
-      opts
-      |> RequestOptions.from_conn_metadata(compact_endpoint, compact_payload)
-      |> RequestOptions.put_transport(upstream_endpoint: compact_endpoint)
-
-    route_class = RequestOptions.route_class(request_options)
-
-    GatewayHelpers.admit(conn, route_class, %{endpoint: local_endpoint}, fn ->
-      auth
-      |> Gateway.execute(compact_endpoint, compact_payload, request_options)
-      |> CompactionTrigger.adapt_gateway_result()
-    end)
+    conn
+    |> PublicGatewayDispatch.dispatch_json_payload(
+      auth,
+      compact_endpoint,
+      compact_endpoint,
+      compact_endpoint,
+      compact_payload,
+      admission_endpoint: local_endpoint,
+      request_opts: opts
+    )
+    |> CompactionTrigger.adapt_gateway_result()
   end
 
   defp serve_models(conn, endpoint) do
@@ -274,24 +228,4 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
     |> GatewayHelpers.request_opts()
     |> RequestOptions.from_conn_metadata(endpoint, %{})
   end
-
-  defp accepted_turn_state(conn) do
-    conn
-    |> get_req_header("x-codex-turn-state")
-    |> List.first()
-    |> trimmed_header_value()
-    |> case do
-      nil -> Ecto.UUID.generate()
-      value -> value
-    end
-  end
-
-  defp trimmed_header_value(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      value -> value
-    end
-  end
-
-  defp trimmed_header_value(_value), do: nil
 end
