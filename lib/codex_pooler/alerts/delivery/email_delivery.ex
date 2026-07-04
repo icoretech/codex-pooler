@@ -1,26 +1,21 @@
 defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   @moduledoc false
 
-  import Ecto.Query
-
   alias CodexPooler.Accounting
 
   alias CodexPooler.Alerts.Schemas.{
     AlertChannel,
     AlertDeliveryAttempt,
-    AlertIncident,
-    AlertIncidentTarget,
-    AlertRule,
-    AlertRuleChannel
+    AlertIncident
   }
 
+  alias CodexPooler.Alerts.Delivery.AttemptLifecycle
   alias CodexPooler.Mailer
   alias CodexPooler.Mailer.Config, as: MailerConfig
   alias CodexPooler.Repo
 
   @subject_prefix "Codex Pooler alert"
   @delivery_adapter "email"
-  @default_cooldown_minutes AlertRule.default_cooldown_minutes()
   @retry_delays_seconds %{1 => 60, 2 => 300, 3 => 900, 4 => 1800}
   @retryable_failure_codes ~w(
     smtp_test_email_timeout
@@ -92,7 +87,8 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
     with {:ok, incident} <- fetch_incident(incident_id),
          {:ok, channel} <- fetch_channel(channel_id),
          :ok <- validate_email_channel(channel),
-         :ok <- ensure_not_suppressed(incident, channel, timestamp),
+         :ok <-
+           AttemptLifecycle.ensure_not_suppressed(incident, channel, timestamp, @delivery_adapter),
          :ok <- ensure_mailer_configured() do
       incident
       |> alert_email(channel)
@@ -100,25 +96,35 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
       |> record_delivery_result(incident, channel, attempt_number, timestamp)
     else
       {:discard, code, message} ->
-        record_discarded_attempt(
+        AttemptLifecycle.record_discarded_attempt(
           incident_id,
           channel_id,
           attempt_number,
           timestamp,
+          @delivery_adapter,
           code,
           message
         )
 
       {:failure, code, message} ->
-        record_failed_attempt(incident_id, channel_id, attempt_number, timestamp, code, message)
+        AttemptLifecycle.record_failed_attempt(
+          incident_id,
+          channel_id,
+          attempt_number,
+          timestamp,
+          @delivery_adapter,
+          code,
+          message
+        )
     end
   rescue
     error ->
-      record_failed_attempt(
+      AttemptLifecycle.record_failed_attempt(
         incident_id,
         channel_id,
         attempt_number,
         timestamp(opts),
+        @delivery_adapter,
         "alert_email_delivery_exception",
         exception_message(error)
       )
@@ -176,63 +182,14 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
       else: {:failure, "alert_email_mailer_unconfigured", "email delivery is not configured"}
   end
 
-  defp ensure_not_suppressed(%AlertIncident{} = incident, %AlertChannel{} = channel, timestamp) do
-    cooldown_minutes = cooldown_minutes(incident, channel)
-    since = DateTime.add(timestamp, -cooldown_minutes * 60, :second)
-
-    if recent_sent_attempt?(incident.id, channel.id, since) do
-      {:discard, "alert_delivery_cooldown_suppressed",
-       "alert email delivery is inside the cooldown window"}
-    else
-      :ok
-    end
-  end
-
-  defp recent_sent_attempt?(incident_id, channel_id, since) do
-    Repo.exists?(
-      from attempt in AlertDeliveryAttempt,
-        where:
-          attempt.incident_id == ^incident_id and attempt.channel_id == ^channel_id and
-            attempt.status == "sent" and
-            ((not is_nil(attempt.completed_at) and attempt.completed_at >= ^since) or
-               (is_nil(attempt.completed_at) and not is_nil(attempt.attempted_at) and
-                  attempt.attempted_at >= ^since))
-    )
-  end
-
-  defp cooldown_minutes(%AlertIncident{id: incident_id}, %AlertChannel{id: channel_id}) do
-    value =
-      Repo.one(
-        from target in AlertIncidentTarget,
-          join: rule in AlertRule,
-          on: rule.id == target.rule_id,
-          join: link in AlertRuleChannel,
-          on: link.alert_rule_id == rule.id and link.alert_channel_id == ^channel_id,
-          where: target.incident_id == ^incident_id,
-          select: max(rule.cooldown_minutes)
-      )
-
-    case value do
-      minutes when is_integer(minutes) and minutes > 0 -> minutes
-      _value -> @default_cooldown_minutes
-    end
-  end
-
   defp record_delivery_result({:ok, _receipt}, incident, channel, attempt_number, timestamp) do
-    insert_attempt(%{
-      incident_id: incident.id,
-      channel_id: channel.id,
-      attempt_number: attempt_number,
-      status: AlertDeliveryAttempt.sent_status(),
-      scheduled_at: timestamp,
-      attempted_at: timestamp,
-      completed_at: timestamp,
-      retryable: false,
-      response_metadata: success_metadata(incident, channel),
-      failure_metadata: %{},
-      created_at: timestamp,
-      updated_at: timestamp
-    })
+    AttemptLifecycle.insert_sent_attempt(
+      incident,
+      channel,
+      attempt_number,
+      timestamp,
+      success_metadata(incident, channel)
+    )
   end
 
   defp record_delivery_result({:error, reason}, incident, channel, attempt_number, timestamp) do
@@ -242,89 +199,18 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
     retryable =
       retryable_failure_code?(code) and attempt_number < AlertDeliveryAttempt.fixed_max_attempts()
 
-    status =
-      if retryable,
-        do: AlertDeliveryAttempt.retryable_status(),
-        else: AlertDeliveryAttempt.failed_status()
-
-    attrs = %{
-      incident_id: incident.id,
-      channel_id: channel.id,
-      attempt_number: attempt_number,
-      status: status,
-      scheduled_at: timestamp,
-      attempted_at: timestamp,
-      completed_at: timestamp,
+    AttemptLifecycle.record_failed_attempt(
+      incident.id,
+      channel.id,
+      attempt_number,
+      timestamp,
+      @delivery_adapter,
+      code,
+      sanitized.message,
       next_retry_at: next_retry_at(timestamp, attempt_number, retryable),
       retryable: retryable,
-      failure_code: code,
-      failure_message: sanitized.message,
-      response_metadata: base_metadata(incident, channel),
-      failure_metadata: failure_metadata(code, sanitized.message, retryable),
-      created_at: timestamp,
-      updated_at: timestamp
-    }
-
-    case insert_attempt(attrs) do
-      {:ok, attempt} when retryable ->
-        {:error, %{code: code, retryable: true, attempt_id: attempt.id}}
-
-      {:ok, attempt} ->
-        {:ok, attempt}
-
-      {:error, _reason} = error ->
-        error
-    end
-  end
-
-  defp record_discarded_attempt(incident_id, channel_id, attempt_number, timestamp, code, message) do
-    insert_attempt(%{
-      incident_id: incident_id,
-      channel_id: channel_id,
-      attempt_number: attempt_number,
-      status: AlertDeliveryAttempt.discarded_status(),
-      scheduled_at: timestamp,
-      attempted_at: timestamp,
-      completed_at: timestamp,
-      retryable: false,
-      failure_code: code,
-      failure_message: message,
-      response_metadata: %{"delivery_adapter" => @delivery_adapter},
-      failure_metadata: failure_metadata(code, message, false),
-      created_at: timestamp,
-      updated_at: timestamp
-    })
-  end
-
-  defp record_failed_attempt(incident_id, channel_id, attempt_number, timestamp, code, message) do
-    insert_attempt(%{
-      incident_id: incident_id,
-      channel_id: channel_id,
-      attempt_number: attempt_number,
-      status: AlertDeliveryAttempt.failed_status(),
-      scheduled_at: timestamp,
-      attempted_at: timestamp,
-      completed_at: timestamp,
-      retryable: false,
-      failure_code: code,
-      failure_message: message,
-      response_metadata: %{"delivery_adapter" => @delivery_adapter},
-      failure_metadata: failure_metadata(code, message, false),
-      created_at: timestamp,
-      updated_at: timestamp
-    })
-  end
-
-  defp insert_attempt(attrs) do
-    %AlertDeliveryAttempt{}
-    |> AlertDeliveryAttempt.changeset(sanitize_attempt_attrs(attrs))
-    |> Repo.insert()
-  end
-
-  defp sanitize_attempt_attrs(attrs) do
-    attrs
-    |> Map.update(:response_metadata, %{}, &safe_metadata/1)
-    |> Map.update(:failure_metadata, %{}, &safe_metadata/1)
+      response_metadata: base_metadata(incident, channel)
+    )
   end
 
   defp success_metadata(%AlertIncident{} = incident, %AlertChannel{} = channel) do
@@ -359,18 +245,6 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
     |> Map.put("safe_evidence_summary", safe_evidence_summary(incident.safe_evidence_snapshot))
     |> compact_map()
   end
-
-  defp failure_metadata(code, message, retryable) do
-    %{
-      "delivery_adapter" => @delivery_adapter,
-      "failure_code" => code,
-      "failure_message" => message,
-      "retryable" => retryable
-    }
-    |> safe_metadata()
-  end
-
-  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata || %{})
 
   defp alert_subject(%AlertIncident{} = incident) do
     [@subject_prefix, incident.severity, incident.rule_kind]
@@ -453,6 +327,8 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   end
 
   defp reason_code(_evidence), do: nil
+
+  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata || %{})
 
   defp optional_line(_label, nil), do: nil
   defp optional_line(label, value), do: "#{label}: #{value}"

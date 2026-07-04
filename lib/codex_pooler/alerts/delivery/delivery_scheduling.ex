@@ -3,6 +3,7 @@ defmodule CodexPooler.Alerts.Delivery.DeliveryScheduling do
 
   import Ecto.Query
 
+  alias CodexPooler.Alerts.Delivery.AttemptLifecycle
   alias CodexPooler.Alerts.Delivery.EmailDelivery
   alias CodexPooler.Alerts.Delivery.WebhookDelivery
 
@@ -92,18 +93,11 @@ defmodule CodexPooler.Alerts.Delivery.DeliveryScheduling do
   end
 
   defp recent_sent_attempt_within_cooldown?(incident_id, delivery_channel, timestamp) do
-    cooldown_minutes = delivery_channel.cooldown_minutes || AlertRule.default_cooldown_minutes()
-    since = DateTime.add(timestamp, -cooldown_minutes * 60, :second)
-
-    Repo.exists?(
-      from attempt in AlertDeliveryAttempt,
-        where:
-          attempt.incident_id == ^incident_id and
-            attempt.channel_id == ^delivery_channel.channel_id and
-            attempt.status == "sent" and
-            ((not is_nil(attempt.completed_at) and attempt.completed_at >= ^since) or
-               (is_nil(attempt.completed_at) and not is_nil(attempt.attempted_at) and
-                  attempt.attempted_at >= ^since))
+    AttemptLifecycle.sent_attempt_within_cooldown?(
+      incident_id,
+      delivery_channel.channel_id,
+      delivery_channel.cooldown_minutes,
+      timestamp
     )
   end
 
