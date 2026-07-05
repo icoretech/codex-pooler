@@ -65,6 +65,18 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
              queue_timeout_ms: 5_000
            }
 
+    assert settings.bulkheads["proxy_websocket"] == %{
+             max_concurrency: 24,
+             queue_limit: 96,
+             queue_timeout_ms: 10_000
+           }
+
+    assert settings.bulkheads["proxy_stream"] == %{
+             max_concurrency: 24,
+             queue_limit: 96,
+             queue_timeout_ms: 10_000
+           }
+
     assert settings.sse_keepalive_interval_ms == 10_000
     assert settings.circuit_failure_threshold == 3
     assert settings.upstream_connect_timeout_ms == 15_000

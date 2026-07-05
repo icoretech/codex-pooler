@@ -24,11 +24,11 @@ defmodule CodexPooler.RouteClass do
   ]
 
   @default_bulkheads %{
-    @proxy_http => %{max_concurrency: 16, queue_limit: 32, queue_timeout_ms: 5_000},
+    @proxy_http => %{max_concurrency: 32, queue_limit: 128, queue_timeout_ms: 10_000},
     @proxy_control => %{max_concurrency: 8, queue_limit: 16, queue_timeout_ms: 5_000},
-    @proxy_stream => %{max_concurrency: 8, queue_limit: 16, queue_timeout_ms: 5_000},
-    @proxy_websocket => %{max_concurrency: 8, queue_limit: 16, queue_timeout_ms: 5_000},
-    @proxy_compact => %{max_concurrency: 4, queue_limit: 8, queue_timeout_ms: 5_000},
+    @proxy_stream => %{max_concurrency: 24, queue_limit: 96, queue_timeout_ms: 10_000},
+    @proxy_websocket => %{max_concurrency: 24, queue_limit: 96, queue_timeout_ms: 10_000},
+    @proxy_compact => %{max_concurrency: 8, queue_limit: 32, queue_timeout_ms: 10_000},
     @file_upload => %{max_concurrency: 4, queue_limit: 8, queue_timeout_ms: 5_000},
     @audio_transcription => %{max_concurrency: 4, queue_limit: 8, queue_timeout_ms: 5_000},
     @admin_browser => %{max_concurrency: 8, queue_limit: 16, queue_timeout_ms: 5_000},
