@@ -22,6 +22,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
 
   @type delivery_error ::
           :invalid_alert_delivery_args
+          | Ecto.Changeset.t()
           | %{required(:code) => String.t(), optional(:retryable) => boolean()}
 
   @type delivery_result :: {:ok, AlertDeliveryAttempt.t()} | {:error, delivery_error()}
@@ -78,15 +79,8 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
           message
         )
 
-      {:failure, %AlertDeliveryAttempt{} = attempt, code, message} ->
-        AttemptLifecycle.finalize_failed_attempt(
-          attempt,
-          timestamp,
-          @delivery_adapter,
-          code,
-          message,
-          retryable: false
-        )
+      {:error, %Ecto.Changeset{}} = error ->
+        error
     end
   rescue
     error ->
@@ -385,7 +379,7 @@ defmodule CodexPooler.Alerts.Delivery.WebhookDelivery do
     |> safe_metadata()
   end
 
-  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata || %{})
+  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata)
 
   defp reason_code(%{} = evidence) do
     evidence = safe_metadata(evidence)

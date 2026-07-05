@@ -72,6 +72,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
           | :channel_disabled
           | :mailer_unconfigured
           | :cooldown_suppressed
+          | Ecto.Changeset.t()
           | %{required(:code) => String.t(), optional(:retryable) => boolean()}
 
   @type delivery_result :: {:ok, AlertDeliveryAttempt.t()} | {:error, delivery_error()}
@@ -328,7 +329,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
 
   defp reason_code(_evidence), do: nil
 
-  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata || %{})
+  defp safe_metadata(metadata), do: Accounting.sanitize_metadata(metadata)
 
   defp optional_line(_label, nil), do: nil
   defp optional_line(label, value), do: "#{label}: #{value}"
