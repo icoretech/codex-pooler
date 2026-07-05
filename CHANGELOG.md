@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.13...codex-pooler-v0.4.14) (2026-07-05)
+
+
+### Bug Fixes
+
+* **alerts:** align delivery error contracts ([956a0d4](https://github.com/icoretech/codex-pooler/commit/956a0d4b8beee6b41efcc456c34ee86e52ddea2f))
+* **deps:** update dependency @astrojs/starlight to v0.41.3 ([#112](https://github.com/icoretech/codex-pooler/issues/112)) ([5df9ff3](https://github.com/icoretech/codex-pooler/commit/5df9ff3dc55897ee98de62cc49bcf9ce85641625))
+* **deps:** update dependency apexcharts to ^5.16.0 ([#111](https://github.com/icoretech/codex-pooler/issues/111)) ([1e03485](https://github.com/icoretech/codex-pooler/commit/1e034857d0b52747fa26825ab8ad06d0b04977ff))
+* **deps:** update dependency astro to v7.0.6 ([#109](https://github.com/icoretech/codex-pooler/issues/109)) ([0fd3cb4](https://github.com/icoretech/codex-pooler/commit/0fd3cb4dfa34a1d190f8417f72fb3489a98e5960))
+* require upstream deletion confirmation ([9e26403](https://github.com/icoretech/codex-pooler/commit/9e264030c22a88f4225128b489d2caacdb2312bd))
+* **tests:** stabilize persistent websocket keepalive timing ([4ad058a](https://github.com/icoretech/codex-pooler/commit/4ad058aeb93ad85ed3a4dd3ee5df358861daca21))
+
 ## [0.4.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.12...codex-pooler-v0.4.13) (2026-07-03)
 
 
