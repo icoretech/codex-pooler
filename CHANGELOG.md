@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.14...codex-pooler-v0.4.15) (2026-07-07)
+
+
+### Bug Fixes
+
+* align alerts admin filters and notifications ([a612b9a](https://github.com/icoretech/codex-pooler/commit/a612b9aeaaf2b3a1d0af56d680e2e76b2181fd78))
+* **deps:** update dependency daisyui to ^5.6.13 ([#113](https://github.com/icoretech/codex-pooler/issues/113)) ([4d0870b](https://github.com/icoretech/codex-pooler/commit/4d0870be3723f3cd6fa6fb7fe621fa487e632370))
+* **gateway:** raise runtime bulkhead defaults ([1eb01c5](https://github.com/icoretech/codex-pooler/commit/1eb01c5a92a291407ad7044625552a28af262414))
+* send browser headers for Codex auth requests ([3ecf80e](https://github.com/icoretech/codex-pooler/commit/3ecf80e17c7c6e1f6e96120c64e162f0bf8e78db))
+
 ## [0.4.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.13...codex-pooler-v0.4.14) (2026-07-05)
 
 
