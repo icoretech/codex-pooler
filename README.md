@@ -770,12 +770,16 @@ can use Codex Pooler's backend compact route while normal OMP model traffic stay
 on the narrow OpenAI-compatible `/v1` Responses route. Do not use
 `compaction.remoteEndpoint` for this path: OMP reserves that setting for generic
 summary services that accept `{systemPrompt, prompt}` JSON, not provider-native
-Responses compact payloads.
+Responses compact payloads. In this setup, `omp config get
+compaction.remoteEndpoint` should remain `(not set)`; remote capability comes
+from the provider-level `remoteCompaction` block in `models.yml`.
 
 `remoteCompaction.v2StreamingEnabled: true` lets OMP use the Codex-style
 streaming compaction path. OMP sends a normal backend Responses request with a
 terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`; Codex Pooler
-bridges that request to the backend compact route and returns Responses SSE.
+bridges that request to the backend compact route and returns Responses SSE. The
+V2 flag is not a global `compaction` setting: keep it inside
+`remoteCompaction`.
 
 Current OMP source derives an effort thinking surface, including `xhigh`, for
 custom `openai-responses` models that set `reasoning: true`. You only need an
