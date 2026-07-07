@@ -24,6 +24,10 @@ providers:
     api: openai-responses
     apiKey: CODEX_POOLER_API_KEY
     authHeader: true
+    remoteCompaction:
+      enabled: true
+      api: openai-codex-responses
+      endpoint: https://codex-pooler.example.com/backend-api/codex/responses/compact
     models:
       - id: gpt-5.5
         name: GPT-5.5 via Codex Pooler
@@ -47,9 +51,11 @@ providers:
         maxTokens: 128000
 ```
 
-For local setup, change `baseUrl` to `http://localhost:4000/v1`.
+For local setup, change `baseUrl` to `http://localhost:4000/v1` and `remoteCompaction.endpoint` to `http://localhost:4000/backend-api/codex/responses/compact`.
 
 `apiKey: CODEX_POOLER_API_KEY` makes OMP resolve that environment variable at runtime. `authHeader: true` makes OMP send the Pool API key as `Authorization: Bearer ...`. Define only model ids your assigned Pool can serve.
+
+Keep `remoteCompaction` under the `codex-pooler` provider so `/compact remote` can use Codex Pooler's backend compact route while normal OMP model traffic stays on the narrow OpenAI-compatible `/v1` Responses route. Do not use `compaction.remoteEndpoint` for this path: OMP reserves that setting for generic summary services that accept `{systemPrompt, prompt}` JSON, not provider-native Responses compact payloads.
 
 Current OMP derives an effort thinking surface, including `xhigh`, for custom `openai-responses` models that set `reasoning: true`. Add an explicit `thinking` block only when you want to override the inferred effort list, wire mapping, or per-model default level.
 

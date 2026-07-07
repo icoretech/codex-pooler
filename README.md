@@ -727,6 +727,10 @@ providers:
     api: openai-responses
     apiKey: CODEX_POOLER_API_KEY
     authHeader: true
+    remoteCompaction:
+      enabled: true
+      api: openai-codex-responses
+      endpoint: http://localhost:4000/backend-api/codex/responses/compact
     models:
       - id: gpt-5.5
         name: GPT-5.5 via Codex Pooler
@@ -754,7 +758,15 @@ providers:
 runtime. `authHeader: true` makes OMP send the Pool API key as
 `Authorization: Bearer ...`. Define only model ids your assigned Pool can
 serve. For deployed instances, change `baseUrl` to
-`https://codex-pooler.example.com/v1`.
+`https://codex-pooler.example.com/v1` and change `remoteCompaction.endpoint` to
+`https://codex-pooler.example.com/backend-api/codex/responses/compact`.
+
+Keep `remoteCompaction` under the `codex-pooler` provider so `/compact remote`
+can use Codex Pooler's backend compact route while normal OMP model traffic stays
+on the narrow OpenAI-compatible `/v1` Responses route. Do not use
+`compaction.remoteEndpoint` for this path: OMP reserves that setting for generic
+summary services that accept `{systemPrompt, prompt}` JSON, not provider-native
+Responses compact payloads.
 
 Current OMP source derives an effort thinking surface, including `xhigh`, for
 custom `openai-responses` models that set `reasoning: true`. You only need an
