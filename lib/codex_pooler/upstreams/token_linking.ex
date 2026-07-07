@@ -116,6 +116,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
             |> then(&Map.merge(identity.metadata || %{}, &1))
           end)
           |> Map.put(:account_label, identity.account_label)
+          |> preserve_operator_workspace_slot(identity, attrs)
 
         with {:ok, active_identity} <- activate_identity_with_plan(identity, attrs) do
           {:ok, :existing, active_identity}
@@ -465,6 +466,10 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       is_binary(target_workspace_id) and incoming_workspace_id == target_workspace_id ->
         :ok
 
+      is_binary(target_workspace_id) and is_nil(incoming_workspace_id) and
+          operator_workspace_slot?(target_identity) ->
+        :ok
+
       is_binary(target_workspace_id) ->
         {:error, identity_mismatch_error()}
 
@@ -500,6 +505,20 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   defp maybe_preserve_relink_assignment_label(assignment_attrs, _assignment, _attrs),
     do: assignment_attrs
 
+  defp preserve_operator_workspace_slot(identity_attrs, identity, %{target_identity_id: target_id})
+       when is_binary(target_id) do
+    if operator_workspace_slot?(identity) and is_nil(present_string(Map.get(identity_attrs, :workspace_id))) do
+      identity_attrs
+      |> Map.put(:workspace_id, identity.workspace_id)
+      |> Map.put(:workspace_label, identity.workspace_label)
+      |> Map.put(:seat_type, identity.seat_type)
+    else
+      identity_attrs
+    end
+  end
+
+  defp preserve_operator_workspace_slot(identity_attrs, _identity, _attrs), do: identity_attrs
+
   defp exact_workspace_identity?(%UpstreamIdentity{id: target_id}, account_id, workspace_id) do
     case IdentityLifecycle.get_upstream_identity_by_chatgpt_account_and_workspace(
            account_id,
@@ -525,6 +544,11 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       %UpstreamIdentity{} = identity ->
         not is_nil(present_string(identity.workspace_id))
     end)
+  end
+
+  defp operator_workspace_slot?(%UpstreamIdentity{metadata: metadata, workspace_id: workspace_id}) do
+    present_string(workspace_id) != nil and
+      is_map(metadata) and metadata["workspace_slot_source"] == "operator_override"
   end
 
   defp target_identity_id(opts) do

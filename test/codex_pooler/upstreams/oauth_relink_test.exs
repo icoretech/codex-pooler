@@ -331,6 +331,58 @@ defmodule CodexPooler.Upstreams.OAuthRelinkTest do
     assert Repo.aggregate(EncryptedSecret, :count) == 1
   end
 
+  test "browser relink preserves an operator workspace slot when OAuth omits workspace claims" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    account_id = "acct_relink_operator_slot"
+
+    legacy_identity = active_upstream_identity_fixture(relink_identity_attrs(account_id, nil))
+
+    operator_slot =
+      active_upstream_identity_fixture(
+        relink_identity_attrs(account_id, "operator:business-seat-2")
+        |> Map.merge(%{
+          account_label: "Second business seat",
+          workspace_label: "Business seat 2",
+          metadata: %{"workspace_slot_source" => "operator_override"}
+        })
+      )
+
+    assert {:ok, slot_assignment} =
+             PoolAssignments.create_pool_assignment(pool, operator_slot)
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: "operator-slot-access",
+           refresh_token: "operator-slot-refresh",
+           id_token: relink_id_token(account_id, nil)
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool, upstream_identity: operator_slot)
+
+    assert {:ok, %{status: :completed, identity: relinked, assignment: relinked_assignment}} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(authorization_state(authorization_url), "operator-slot-code")
+             )
+
+    assert relinked.id == operator_slot.id
+    assert relinked.account_label == "Second business seat"
+    assert relinked.workspace_id == "operator:business-seat-2"
+    assert relinked.workspace_label == "Business seat 2"
+    assert relinked_assignment.id == slot_assignment.id
+    assert Repo.get!(UpstreamIdentity, legacy_identity.id).workspace_id == nil
+    assert Repo.aggregate(UpstreamIdentity, :count) == 2
+
+    assert {:ok, "operator-slot-access"} =
+             Secrets.decrypt_active_secret(operator_slot, "access_token")
+  end
+
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     Scope.for_user(user, ["instance_owner"])
