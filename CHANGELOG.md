@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.15...codex-pooler-v0.4.16) (2026-07-07)
+
+
+### Bug Fixes
+
+* **deps:** update dependency daisyui to ^5.6.14 ([#118](https://github.com/icoretech/codex-pooler/issues/118)) ([fcf173d](https://github.com/icoretech/codex-pooler/commit/fcf173d550850ed23978b669d897d5ec7d890548))
+* **omp:** accept encrypted compaction replay items ([1f9b86f](https://github.com/icoretech/codex-pooler/commit/1f9b86ff5df40a50ec31a95e3573cf0fc030d267))
+* **upstreams:** preserve selected workspace on relink ([157561f](https://github.com/icoretech/codex-pooler/commit/157561f8fadb79e9048d8593dd4b9a5d9a0082c0))
+
 ## [0.4.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.14...codex-pooler-v0.4.15) (2026-07-07)
 
 
