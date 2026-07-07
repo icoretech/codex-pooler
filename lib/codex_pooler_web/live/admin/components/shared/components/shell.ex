@@ -454,13 +454,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
       <section
         id="admin-notifications-popover"
-        class="dropdown-content z-50 mt-3 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 p-4 text-left shadow-2xl"
+        class="dropdown-content z-50 mt-3 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-box border border-base-300 bg-base-100 text-left shadow-2xl"
         aria-label="Admin notifications"
       >
-        <header class="flex items-start justify-between gap-3">
-          <div class="grid gap-1">
-            <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-              notifications
+        <header class="flex items-center justify-between gap-3 border-b border-base-300 bg-base-200/50 px-4 py-3">
+          <div class="grid gap-0.5">
+            <p class="text-sm font-semibold text-base-content">Alert notifications</p>
+            <p class="text-xs text-base-content/55">
+              {notification_header_summary(@center)}
             </p>
           </div>
           <button
@@ -479,7 +480,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
         <ul
           id="admin-notifications-list"
-          class="mt-3 max-h-96 overflow-y-auto overscroll-contain"
+          class="max-h-96 overflow-y-auto overscroll-contain p-2"
           data-role="admin-notifications-list"
         >
           <li
@@ -491,10 +492,10 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
             </span>
             No active notifications
           </li>
-          <li :for={row <- notification_rows(@center)} class="py-1">
+          <li :for={row <- notification_rows(@center)} class="py-1 first:pt-0 last:pb-0">
             <article
               id={notification_row_id(row)}
-              class="rounded-box border border-base-300 bg-base-100 p-3 transition-colors hover:bg-base-200/60"
+              class={notification_row_class(row)}
               data-role="admin-notification-row"
               data-alert-anchor-id={notification_anchor_id(row)}
             >
@@ -515,7 +516,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   <span
                     :if={notification_row_unread?(row)}
                     data-role="admin-notification-unread-indicator"
-                    class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[0.65rem] font-semibold leading-none text-primary"
+                    class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium leading-none text-primary"
                   >
                     <span class="size-1.5 rounded-full bg-primary" aria-hidden="true"></span> Unread
                   </span>
@@ -538,20 +539,25 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
               <div
                 :if={notification_impacted_pools(row) != []}
-                class="mt-3 flex flex-wrap gap-1.5"
+                class="mt-3 grid gap-1.5"
                 data-role="admin-notification-pools"
               >
-                <span
-                  :for={pool <- notification_impacted_pools(row)}
-                  class={AdminBadges.metadata_chip_class(:neutral)}
-                  data-role="admin-notification-pool-label"
-                >
-                  {notification_pool_label(pool)}
-                </span>
+                <p class="text-[0.68rem] font-semibold uppercase tracking-wide text-base-content/45">
+                  Impacted Pools
+                </p>
+                <div class="flex flex-wrap gap-1.5">
+                  <span
+                    :for={pool <- notification_impacted_pools(row)}
+                    class={AdminBadges.metadata_chip_class(:neutral)}
+                    data-role="admin-notification-pool-label"
+                  >
+                    {notification_pool_label(pool)}
+                  </span>
+                </div>
               </div>
 
               <div
-                class="mt-3 grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2"
+                class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-base-300/70 pt-3"
                 data-role="admin-notification-actions"
               >
                 <button
@@ -565,29 +571,31 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
                   <span>View incident</span>
                 </button>
-                <button
-                  :if={notification_row_unread?(row)}
-                  id={"admin-notification-mark-read-#{notification_row_value(row, :id)}"}
-                  type="button"
-                  class="btn btn-secondary btn-xs shrink-0 gap-1 px-2"
-                  data-role="admin-notification-mark-read"
-                  phx-click="mark_alert_notification_read"
-                  phx-value-id={notification_row_value(row, :id)}
-                >
-                  <.icon name="hero-envelope-open" class="size-3.5" />
-                  <span>Mark read</span>
-                </button>
-                <button
-                  id={"admin-notification-dismiss-#{notification_row_value(row, :id)}"}
-                  type="button"
-                  class="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/60 hover:text-base-content"
-                  data-role="admin-notification-dismiss"
-                  aria-label="Dismiss notification"
-                  phx-click="dismiss_alert_notification"
-                  phx-value-id={notification_row_value(row, :id)}
-                >
-                  <.icon name="hero-x-mark" class="size-3.5" />
-                </button>
+                <div class="flex shrink-0 items-center gap-1.5">
+                  <button
+                    :if={notification_row_unread?(row)}
+                    id={"admin-notification-mark-read-#{notification_row_value(row, :id)}"}
+                    type="button"
+                    class="btn btn-secondary btn-xs shrink-0 gap-1 px-2"
+                    data-role="admin-notification-mark-read"
+                    phx-click="mark_alert_notification_read"
+                    phx-value-id={notification_row_value(row, :id)}
+                  >
+                    <.icon name="hero-envelope-open" class="size-3.5" />
+                    <span>Mark read</span>
+                  </button>
+                  <button
+                    id={"admin-notification-dismiss-#{notification_row_value(row, :id)}"}
+                    type="button"
+                    class="btn btn-ghost btn-xs btn-square shrink-0 text-base-content/60 hover:text-base-content"
+                    data-role="admin-notification-dismiss"
+                    aria-label="Dismiss notification"
+                    phx-click="dismiss_alert_notification"
+                    phx-value-id={notification_row_value(row, :id)}
+                  >
+                    <.icon name="hero-x-mark" class="size-3.5" />
+                  </button>
+                </div>
               </div>
             </article>
           </li>
@@ -635,16 +643,26 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
   defp notification_row_unread?(%{unread?: unread?}) when is_boolean(unread?), do: unread?
   defp notification_row_unread?(_row), do: false
 
-  defp notification_severity_chip_class(%{severity: "critical"}),
-    do: AdminBadges.metadata_chip_class(:error)
+  defp notification_severity_chip_class(%{severity: severity}),
+    do: AdminBadges.alert_severity_chip_class(severity)
 
-  defp notification_severity_chip_class(%{severity: "warning"}),
-    do: AdminBadges.metadata_chip_class(:warning)
+  defp notification_severity_chip_class(_row), do: AdminBadges.alert_severity_chip_class(nil)
 
-  defp notification_severity_chip_class(%{severity: "info"}),
-    do: AdminBadges.metadata_chip_class(:info)
+  defp notification_row_class(row) do
+    [
+      "rounded-box border bg-base-100 p-3 transition-colors hover:bg-base-200/60",
+      notification_row_unread?(row) && "border-primary/25 bg-primary/5",
+      !notification_row_unread?(row) && "border-base-300"
+    ]
+  end
 
-  defp notification_severity_chip_class(_row), do: AdminBadges.metadata_chip_class(:neutral)
+  defp notification_header_summary(center) do
+    cond do
+      notification_badge_count(center) > 0 -> "#{notification_badge_label(center)} unread"
+      notification_has_rows?(center) -> "All visible alerts are read"
+      true -> "No active alerts"
+    end
+  end
 
   defp notification_severity_label(%{severity_label: label}) when is_binary(label), do: label
   defp notification_severity_label(_row), do: "Unknown severity"

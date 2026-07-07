@@ -28,89 +28,90 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
       id="alerts-incidents-section"
       class="grid min-w-0 gap-4"
     >
-      <AdminComponents.admin_surface
-        id="alerts-incidents-filters"
-        title="Incident filters"
-        description="Filter persisted alert incidents without exposing hidden Pool impact or raw evidence keys."
-        overflow={:visible}
+      <AdminComponents.filter_form
+        id="alerts-incidents-filter-form"
+        for={@incident_filter_form}
+        phx-submit="filter_incidents"
+        mobile_single_column
+        single_row
+        control_size={:default}
       >
-        <AdminComponents.filter_form
-          id="alerts-incidents-filter-form"
-          for={@incident_filter_form}
-          phx-submit="filter_incidents"
-          compact
-          mobile_single_column
-        >
-          <PoolFilterComponents.pool_filter_dropdown
-            id="alerts-incident-pool-filter"
-            label="Impacted Pool"
-            hidden_id="alerts-incident-pool-id"
-            event="select_incident_pool_filter"
-            selected_value={@incident_filter_values["pool_id"] || ""}
-            options={@incident_pool_filter_options}
+        <PoolFilterComponents.pool_filter_dropdown
+          id="alerts-incident-pool-filter"
+          label="Impacted Pool"
+          hidden_id="alerts-incident-pool-id"
+          event="select_incident_pool_filter"
+          selected_value={@incident_filter_values["pool_id"] || ""}
+          options={@incident_pool_filter_options}
+        />
+        <.input
+          id="alerts-incident-severity-filter"
+          field={@incident_filter_form[:severity]}
+          type="select"
+          label="Severity"
+          options={option_tuples(@incident_severity_filter_options)}
+          class={incident_filter_select_class()}
+        />
+        <.input
+          id="alerts-incident-state-filter"
+          field={@incident_filter_form[:state]}
+          type="select"
+          label="State"
+          options={option_tuples(@incident_state_filter_options)}
+          class={incident_filter_select_class()}
+        />
+        <.input
+          id="alerts-incident-rule-filter"
+          field={@incident_filter_form[:rule_id]}
+          type="select"
+          label="Rule"
+          options={option_tuples(@incident_rule_filter_options)}
+          class={incident_filter_select_class()}
+        />
+        <.input
+          id="alerts-incident-channel-filter"
+          field={@incident_filter_form[:channel_id]}
+          type="select"
+          label="Channel"
+          options={option_tuples(@incident_channel_filter_options)}
+          class={incident_filter_select_class()}
+        />
+        <:actions>
+          <AdminComponents.action_button
+            id="alerts-incidents-filter-submit"
+            icon="hero-funnel"
+            label="Apply"
+            type="submit"
+            variant={:primary}
           />
-          <.input
-            id="alerts-incident-severity-filter"
-            field={@incident_filter_form[:severity]}
-            type="select"
-            label="Severity"
-            options={option_tuples(@incident_severity_filter_options)}
-          />
-          <.input
-            id="alerts-incident-state-filter"
-            field={@incident_filter_form[:state]}
-            type="select"
-            label="State"
-            options={option_tuples(@incident_state_filter_options)}
-          />
-          <:advanced>
-            <.input
-              id="alerts-incident-rule-filter"
-              field={@incident_filter_form[:rule_id]}
-              type="select"
-              label="Rule"
-              options={option_tuples(@incident_rule_filter_options)}
-            />
-            <.input
-              id="alerts-incident-channel-filter"
-              field={@incident_filter_form[:channel_id]}
-              type="select"
-              label="Channel"
-              options={option_tuples(@incident_channel_filter_options)}
-            />
-          </:advanced>
-          <:actions>
-            <AdminComponents.action_button
-              id="alerts-incidents-filter-submit"
-              icon="hero-funnel"
-              label="Apply"
-              type="submit"
-              variant={:primary}
-            />
-            <.link
-              id="alerts-incidents-filter-clear"
-              patch={~p"/admin/alerts?#{%{"tab" => "incidents"}}"}
-              class="btn btn-secondary btn-sm"
-            >
-              Clear
-            </.link>
-          </:actions>
-        </AdminComponents.filter_form>
-
-        <div
-          :if={@incident_filter_errors != []}
-          id="alerts-incidents-filter-errors"
-          class="mt-3 grid gap-2"
-        >
-          <p
-            :for={error <- @incident_filter_errors}
-            id={"alerts-incidents-filter-error-#{error.field}"}
-            class="text-sm text-error"
+          <.link
+            id="alerts-incidents-filter-clear"
+            patch={~p"/admin/alerts?#{%{"tab" => "incidents"}}"}
+            class="btn btn-secondary btn-sm"
           >
-            {error.message}
-          </p>
+            Clear
+          </.link>
+        </:actions>
+      </AdminComponents.filter_form>
+
+      <div
+        :if={@incident_filter_errors != []}
+        id="alerts-incidents-filter-errors"
+        class="alert alert-warning items-start"
+      >
+        <.icon name="hero-exclamation-triangle" class="size-5" />
+        <div>
+          <p class="font-semibold">Some filters were ignored</p>
+          <ul class="mt-1 list-disc space-y-1 pl-5 text-sm">
+            <li
+              :for={error <- @incident_filter_errors}
+              id={"alerts-incidents-filter-error-#{error.field}"}
+            >
+              {error.message}
+            </li>
+          </ul>
         </div>
-      </AdminComponents.admin_surface>
+      </div>
 
       <AdminComponents.admin_surface
         id="alerts-incidents-list"
@@ -450,10 +451,10 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
     """
   end
 
-  def severity_chip_class("critical"), do: AdminBadges.status_chip_class("open")
-  def severity_chip_class("warning"), do: AdminBadges.status_chip_class("paused")
-  def severity_chip_class("info"), do: AdminBadges.status_chip_class("pending")
-  def severity_chip_class(_severity), do: AdminBadges.status_chip_class(nil)
+  defp incident_filter_select_class,
+    do: "select select-bordered h-10 min-h-10 w-full text-sm font-normal"
+
+  def severity_chip_class(severity), do: AdminBadges.alert_severity_chip_class(severity)
 
   def format_datetime(nil), do: "not recorded"
 

@@ -61,8 +61,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   def handle_event("resolve_incident", params, socket),
     do: {:noreply, resolve_incident(socket, params)}
 
-  def handle_event("open_create_rule", _params, socket), do: {:noreply, open_create_rule(socket)}
-
   def handle_event("open_edit_rule", params, socket),
     do: {:noreply, open_edit_rule(socket, params)}
 
@@ -83,9 +81,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
 
   def handle_event("confirm_delete_rule", params, socket),
     do: {:noreply, confirm_delete_rule(socket, params)}
-
-  def handle_event("open_create_channel", _params, socket),
-    do: {:noreply, open_create_channel(socket)}
 
   def handle_event("open_edit_channel", params, socket),
     do: {:noreply, open_edit_channel(socket, params)}
@@ -125,29 +120,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
           id="alerts-page-header"
           title="Alerts"
           description="Configure Pool-scoped alert rules and safe delivery channels for serving risk, quota evidence, and upstream account state."
-        >
-          <:actions>
-            <AdminComponents.action_button
-              :if={@selected_tab == "channels"}
-              id="alerts-create-channel-action"
-              icon="hero-plus"
-              label="New channel"
-              phx-click="open_create_channel"
-              variant={:primary}
-              size={:md}
-            />
-            <AdminComponents.action_button
-              :if={@selected_tab == "rules"}
-              id="alerts-create-rule-action"
-              icon="hero-plus"
-              label="New rule"
-              phx-click="open_create_rule"
-              variant={:primary}
-              size={:md}
-              disabled={@manageable_pools == []}
-            />
-          </:actions>
-        </AdminComponents.page_header>
+        />
 
         <section id="alerts-workspace" class="grid gap-4">
           <AlertsPageComponents.workspace_header selected_tab={@selected_tab} />
@@ -326,12 +299,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
     end
   end
 
-  defp open_create_rule(socket) do
-    socket
-    |> assign(rule_form_mode: :create, editing_rule: nil)
-    |> reset_rule_form()
-  end
-
   defp open_edit_rule(socket, %{"id" => rule_id}) do
     case find_visible_rule(socket.assigns.rules, rule_id) do
       %AlertRule{} = rule ->
@@ -435,12 +402,6 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         |> assign_alert_state()
         |> put_flash(:error, "Alert rule could not be deleted")
     end
-  end
-
-  defp open_create_channel(socket) do
-    socket
-    |> assign(channel_form_mode: :create, editing_channel: nil)
-    |> reset_channel_form()
   end
 
   defp open_edit_channel(socket, %{"id" => channel_id}) do

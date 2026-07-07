@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
       assert has_element?(view, "#admin-notifications-button[role='button']")
       assert has_element?(view, "#admin-notifications-popover[aria-label='Admin notifications']")
 
-      assert has_element?(view, "#admin-notifications-list.mt-3.max-h-96.overflow-y-auto")
+      assert has_element?(view, "#admin-notifications-list.max-h-96.overflow-y-auto")
       assert has_element?(view, "#admin-notifications-list", "No active notifications")
 
       assert has_element?(
@@ -66,7 +66,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
       assert_single_notification_shell(html)
       assert has_element?(view, "#admin-notifications-badge", "2")
       assert has_element?(view, "#admin-notifications-dismiss-all", "Dismiss all")
-      assert has_element?(view, "#admin-notifications-list.mt-3.max-h-96.overflow-y-auto")
+      assert has_element?(view, "#admin-notifications-list.max-h-96.overflow-y-auto")
 
       assert_notification_row(view, critical,
         severity: "Critical",
@@ -109,7 +109,19 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
 
     assert has_element?(view, "#{row_selector} [data-role='admin-notification-heading']")
     assert has_element?(view, "#{row_selector} [data-role='admin-notification-meta']")
-    assert has_element?(view, "#{row_selector} [data-role='admin-notification-actions'].grid")
+    assert has_element?(view, "#{row_selector}.rounded-box.border.bg-base-100.p-3")
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='admin-notification-severity'].inline-flex.items-center.rounded-full"
+           )
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='admin-notification-state'].inline-flex.items-center.rounded-full"
+           )
+
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-actions'].flex")
 
     assert has_element?(
              view,
@@ -143,7 +155,7 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     assert_single_notification_shell(html)
     assert has_element?(view, "#admin-notifications-badge", "99+")
     assert has_element?(view, "#admin-notifications-dismiss-all")
-    assert has_element?(view, "#admin-notifications-list.mt-3.max-h-96.overflow-y-auto")
+    assert has_element?(view, "#admin-notifications-list.max-h-96.overflow-y-auto")
     assert count_occurrences(html, ~s(data-role="admin-notification-row")) == 50
   end
 
@@ -278,6 +290,8 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     assert has_element?(view, row_selector, Keyword.fetch!(opts, :title))
     assert has_element?(view, "#{row_selector}-severity", Keyword.fetch!(opts, :severity))
     assert has_element?(view, "#{row_selector}-state", Keyword.fetch!(opts, :state))
+    assert has_element?(view, "#{row_selector}-severity[data-role='admin-notification-severity']")
+    assert has_element?(view, "#{row_selector}-state[data-role='admin-notification-state']")
     assert has_element?(view, row_selector, Keyword.fetch!(opts, :pool))
     assert has_element?(view, row_selector, Keyword.fetch!(opts, :last_seen))
   end

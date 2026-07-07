@@ -143,7 +143,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
       <AdminComponents.admin_surface
         id="alerts-rule-form-panel"
         title={rule_form_title(@rule_form_mode)}
-        description="Choose a manageable Pool first, then configure the rule condition."
+        description="The rule form is always available on this tab. Edit an existing row or save the inline values below."
         overflow={:visible}
       >
         <.form
@@ -208,13 +208,28 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               max={AlertRule.cooldown_maximum_minutes()}
               required
             />
-            <.input
-              id="alert-rule-model"
-              field={@rule_form[:model]}
-              type="text"
-              label="Model filter"
-              placeholder="Optional model id"
-            />
+            <div
+              :if={
+                model_scope_visible?(
+                  AlertRuleForm.value(@rule_form[:rule_kind]),
+                  AlertRuleForm.value(@rule_form[:model])
+                )
+              }
+              id="alert-rule-model-scope-field"
+              class="grid gap-1"
+            >
+              <.input
+                id="alert-rule-model"
+                field={@rule_form[:model]}
+                type="text"
+                label="Model scope"
+                placeholder="All models"
+                autocomplete="off"
+              />
+              <p id="alert-rule-model-scope-help" class="px-1 text-xs leading-5 text-base-content/55">
+                {model_scope_help(AlertRuleForm.value(@rule_form[:rule_kind]))}
+              </p>
+            </div>
           </div>
 
           <div
@@ -273,7 +288,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               id="alert-rule-no-extra-fields"
               class="text-sm leading-6 text-base-content/65"
             >
-              This rule fires when the selected Pool has no usable upstream assignments for the optional model filter.
+              This rule fires when the selected Pool has no usable upstream assignments for the optional model scope.
             </p>
             <p
               :if={
@@ -309,6 +324,31 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
     """
   end
 
+  defp model_scope_visible?(rule_kind, model) do
+    model_scope_supported?(rule_kind) or present_string?(model)
+  end
+
+  defp model_scope_supported?(rule_kind)
+       when rule_kind in [
+              "pool_no_usable_assignments",
+              "pool_low_usable_assignments",
+              "pool_all_assignments_in_state",
+              "upstream_quota_threshold"
+            ],
+       do: true
+
+  defp model_scope_supported?(_rule_kind), do: false
+
+  defp model_scope_help(rule_kind) do
+    if model_scope_supported?(rule_kind) do
+      "Optional. Leave blank to evaluate all models for this Pool; set a model id to scope assignment coverage or quota evidence."
+    else
+      "This condition does not use model scope. Clear the stored value and save if this rule was created before the form was simplified."
+    end
+  end
+
+  defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_string?(_value), do: false
   defp rule_form_title(:edit), do: "Edit rule"
   defp rule_form_title(_mode), do: "Create rule"
 

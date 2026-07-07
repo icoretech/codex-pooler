@@ -90,6 +90,12 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
 
   def metadata_chip_class(tone \\ :neutral), do: chip_class(tone)
 
+  @spec alert_severity_chip_class(String.t() | nil) :: String.t()
+  def alert_severity_chip_class("critical"), do: chip_class(:error)
+  def alert_severity_chip_class("warning"), do: chip_class(:warning)
+  def alert_severity_chip_class("info"), do: chip_class(:info)
+  def alert_severity_chip_class(_severity), do: chip_class(:neutral)
+
   def routing_strategy_label(strategy) do
     case routing_strategy_presentation(strategy) do
       %{label: label} -> label

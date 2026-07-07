@@ -27,6 +27,17 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(view, "#alerts-tab-rules[aria-selected='true']", "Rules")
     assert has_element?(view, "#alerts-rules-section")
     assert has_element?(view, "#alerts-rule-form")
+    refute has_element?(view, "#alerts-create-rule-action")
+    assert has_element?(view, "#alert-rule-model")
+    assert has_element?(view, "#alert-rule-model-scope-field", "Model scope")
+    assert has_element?(view, "#alert-rule-model[placeholder='All models']")
+
+    assert has_element?(
+             view,
+             "#alert-rule-model-scope-help",
+             "Leave blank to evaluate all models"
+           )
+
     assert has_element?(view, "#alert-rule-pool-id option[value='#{pool.id}']", pool.name)
 
     view
@@ -200,7 +211,8 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
       alert_rule_fixture(pool,
         created_by_user_id: scope.user.id,
         display_name: "Original alert rule",
-        cooldown_minutes: 30
+        cooldown_minutes: 30,
+        model: "gpt-4.1"
       )
 
     {:ok, view, _html} = live(conn, ~p"/admin/alerts")
@@ -210,6 +222,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     |> render_click()
 
     assert has_element?(view, "#alerts-rule-form-panel", "Edit rule")
+    assert has_element?(view, "#alert-rule-model[value='gpt-4.1']")
 
     view
     |> element("#alerts-rule-form")
@@ -347,6 +360,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(view, "#alerts-tab-channels[aria-selected='true']", "Channels")
     assert has_element?(view, "#alerts-channels-section")
     assert has_element?(view, "#alerts-channel-form")
+    refute has_element?(view, "#alerts-create-channel-action")
     assert has_element?(view, "#alert-channel-email-to")
 
     view
@@ -572,11 +586,27 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     assert has_element?(view, "#alerts-tab-incidents[aria-selected='true']", "Incidents")
     assert has_element?(view, "#alerts-incidents-section")
     assert has_element?(view, "#alerts-incidents-filter-form")
+
+    assert has_element?(
+             view,
+             "#alerts-incidents-filter-form[phx-hook='AdminFilterDropdowns'].bg-transparent.p-0"
+           )
+
+    assert has_element?(
+             view,
+             "#alerts-incidents-filter-form [data-role='filter-fields'][data-layout='single-row']"
+           )
+
+    refute has_element?(view, "#alerts-incidents-filter-form-advanced")
+    refute has_element?(view, "#alerts-incidents-filter-form", "Advanced filters")
+
+    refute has_element?(view, "#alerts-incidents-filters")
+    refute has_element?(view, "#alerts-incidents-section", "Incident filters")
     assert has_element?(view, "#alerts-incident-pool-filter [data-role='pool-filter-trigger']")
-    assert has_element?(view, "#alerts-incident-severity-filter")
-    assert has_element?(view, "#alerts-incident-state-filter")
-    assert has_element?(view, "#alerts-incident-rule-filter")
-    assert has_element?(view, "#alerts-incident-channel-filter")
+    assert has_element?(view, "#alerts-incident-severity-filter.select-bordered.h-10.min-h-10")
+    assert has_element?(view, "#alerts-incident-state-filter.select-bordered.h-10.min-h-10")
+    assert has_element?(view, "#alerts-incident-rule-filter.select-bordered.h-10.min-h-10")
+    assert has_element?(view, "#alerts-incident-channel-filter.select-bordered.h-10.min-h-10")
 
     assert has_element?(view, "#alert-incident-#{incident.id}")
     assert has_element?(view, "#alert-incident-card-#{incident.id}")
