@@ -467,6 +467,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
   end
 
+  test "retries fresh upstream websocket close before terminal output" do
+    parent = self()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close([]),
+           FakeUpstream.sse_stream([
+             %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_ws_fresh_retry"}
+             }
+           ])
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+
+    request =
+      raw_websocket_request(FakeUpstream.url(upstream) <> "/backend-api/codex/responses", parent)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:upstream_websocket_frame, completed_frame}, 1_000
+    assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert [first_request, second_request] = FakeUpstream.requests(upstream)
+    assert first_request.websocket_connection_id != second_request.websocket_connection_id
+  end
+
   test "returns only bounded retained body while writing every upstream websocket frame" do
     parent = self()
 

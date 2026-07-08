@@ -175,18 +175,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp request_key(%Request{} = request), do: {request.url, request.headers}
 
   defp request_on_connection(state, key, %Request{} = request) do
-    reused_connection? = reusable_connection?(state, key)
-
     case request_once_on_connection(state, key, request) do
       {:ok, result, state} ->
-        if reused_connection? and pre_response_reconnectable?(result) do
+        if pre_response_reconnectable?(result) do
           {:retry, state}
         else
           {:ok, result, state}
         end
 
       {:error, reason, state} ->
-        if reused_connection? and pre_response_reconnectable?(reason) do
+        if pre_response_reconnectable?(reason) do
           {:retry, state}
         else
           result = request_error(reason, state)
@@ -195,9 +193,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         end
     end
   end
-
-  defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
-  defp reusable_connection?(_state, _key), do: false
 
   defp request_on_reconnected(state, key, %Request{} = request) do
     case request_once_on_connection(state, key, request) do
