@@ -39,7 +39,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 372000
+        contextWindow: 258400
         maxTokens: 128000
       - id: gpt-5.6-luna
         name: GPT-5.6 Luna via Codex Pooler
@@ -49,7 +49,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 372000
+        contextWindow: 258400
         maxTokens: 128000
       - id: gpt-5.6-sol
         name: GPT-5.6 Sol via Codex Pooler
@@ -59,7 +59,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 372000
+        contextWindow: 258400
         maxTokens: 128000
 ```
 
@@ -73,7 +73,7 @@ Keep `remoteCompaction` under the `codex-pooler` provider so `/compact remote` c
 
 Current OMP derives an effort thinking surface, including `xhigh`, for custom `openai-responses` models that set `reasoning: true`. Add an explicit `thinking` block only when you want to override the inferred effort list, wire mapping, or per-model default level.
 
-OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept `contextTokens`. The examples keep the GPT-5.6 tiered models on a 372k context window and 128k output budget: `gpt-5.6-luna` handles lightweight roles, `gpt-5.6-terra` handles daily agent work, and `gpt-5.6-sol` is reserved for slow, planning, and design escalation. `compaction.reserveTokens: 128000` asks OMP to compact before a prompt plus a long completion can exceed that 372k window.
+OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept `contextTokens`. The examples keep the GPT-5.6 tiered models on a 258.4k context window and 128k output budget: `gpt-5.6-luna` handles lightweight roles, `gpt-5.6-terra` handles daily agent work, and `gpt-5.6-sol` is reserved for slow, planning, and design escalation. `compaction.reserveTokens: 128000` asks OMP to compact before a prompt plus a long completion can exceed that 258.4k window.
 
 For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist handoff material to disk. Those settings reduce context-overflow risk, but they cannot repair an OMP client bug that skips its own mid-run compaction check. If an OMP plan appears to restart work after a very large turn, upgrade OMP when a newer release is available and restart or resume the session before treating it as a Codex Pooler routing issue.
 

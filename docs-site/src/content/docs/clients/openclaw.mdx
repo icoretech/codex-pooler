@@ -54,8 +54,8 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-5.6 Luna via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 372000,
-            contextTokens: 372000,
+            contextWindow: 272000,
+            contextTokens: 258400,
             maxTokens: 128000,
           },
           {
@@ -63,8 +63,8 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-5.6 Terra via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 372000,
-            contextTokens: 372000,
+            contextWindow: 272000,
+            contextTokens: 258400,
             maxTokens: 128000,
           },
           {
@@ -72,8 +72,8 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
             name: "GPT-5.6 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 372000,
-            contextTokens: 372000,
+            contextWindow: 272000,
+            contextTokens: 258400,
             maxTokens: 128000,
           },
         ],
@@ -85,7 +85,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
 
 Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseUrl` to `http://localhost:4000/v1`.
 
-OpenClaw separates the provider/native `contextWindow` from the effective runtime `contextTokens` budget. Its OpenAI `gpt-5.6-*` catalog uses a 372k native/effective window and a 128k output budget. The explicit compaction reserve keeps local prompt history under the remaining 244k budget before a long completion. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning.
+OpenClaw separates the provider/native `contextWindow` from the effective runtime `contextTokens` budget. Codex-served GPT-5.6 examples use the Codex raw 272k window, the 258400 effective budget, and a 128k output budget. The explicit compaction reserve keeps local prompt history under the remaining 130400-token budget before a long completion. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning.
 
 ## Operator MCP server
 
