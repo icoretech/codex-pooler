@@ -74,6 +74,9 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
       json_array?(trimmed) ->
         decision(:json_array, 100)
 
+      concatenated_json_objects?(trimmed) ->
+        decision(:json_array, 100)
+
       json_document?(trimmed) ->
         decision(:json_document, 100)
 
@@ -119,6 +122,109 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   end
 
   defp confidence(points), do: min(points, 100) / 100
+
+  @spec normalize_concatenated_json_objects(term()) :: {:ok, String.t(), pos_integer()} | :error
+  def normalize_concatenated_json_objects(content) when is_binary(content) do
+    with {:ok, rows} <- decode_concatenated_json_objects(content),
+         row_count when row_count >= 2 <- length(rows),
+         {:ok, normalized} <- Jason.encode(rows) do
+      {:ok, normalized, row_count}
+    else
+      _not_concatenated -> :error
+    end
+  end
+
+  def normalize_concatenated_json_objects(_content), do: :error
+
+  defp concatenated_json_objects?(content) do
+    case decode_concatenated_json_objects(content) do
+      {:ok, [_first, _second | _rest]} -> true
+      _other -> false
+    end
+  end
+
+  defp decode_concatenated_json_objects(content) do
+    content
+    |> String.trim()
+    |> decode_object_stream([])
+  end
+
+  defp decode_object_stream("", _rows), do: :error
+
+  defp decode_object_stream(content, rows) do
+    case decode_leading_json_object(content) do
+      {:ok, row, rest} ->
+        rest
+        |> trim_leading_json_whitespace()
+        |> continue_object_stream([row | rows])
+
+      :error ->
+        :error
+    end
+  end
+
+  defp continue_object_stream({"", _separator_bytes}, [_last, _previous | _rest] = rows) do
+    {:ok, Enum.reverse(rows)}
+  end
+
+  defp continue_object_stream({"", _separator_bytes}, _rows), do: :error
+
+  defp continue_object_stream({next, separator_bytes}, rows) when separator_bytes > 0 do
+    decode_object_stream(next, rows)
+  end
+
+  defp continue_object_stream({_next, _separator_bytes}, _rows), do: :error
+
+  defp decode_leading_json_object(<<?{, _rest::binary>> = content) do
+    with {:ok, byte_end} <- json_object_byte_end(content),
+         object_json = binary_part(content, 0, byte_end),
+         {:ok, %Jason.OrderedObject{} = row} <-
+           Jason.decode(object_json, objects: :ordered_objects) do
+      rest = binary_part(content, byte_end, byte_size(content) - byte_end)
+      {:ok, row, rest}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp decode_leading_json_object(_content), do: :error
+
+  defp json_object_byte_end(<<?{, rest::binary>>), do: scan_json_object(rest, 1, 1)
+
+  defp scan_json_object(<<>>, _offset, _depth), do: :error
+
+  defp scan_json_object(<<34, rest::binary>>, offset, depth),
+    do: scan_json_string(rest, offset + 1, depth)
+
+  defp scan_json_object(<<?{, rest::binary>>, offset, depth),
+    do: scan_json_object(rest, offset + 1, depth + 1)
+
+  defp scan_json_object(<<?}, _rest::binary>>, offset, 1), do: {:ok, offset + 1}
+
+  defp scan_json_object(<<?}, rest::binary>>, offset, depth),
+    do: scan_json_object(rest, offset + 1, depth - 1)
+
+  defp scan_json_object(<<_byte, rest::binary>>, offset, depth),
+    do: scan_json_object(rest, offset + 1, depth)
+
+  defp scan_json_string(<<>>, _offset, _depth), do: :error
+
+  defp scan_json_string(<<92, _escaped, rest::binary>>, offset, depth),
+    do: scan_json_string(rest, offset + 2, depth)
+
+  defp scan_json_string(<<34, rest::binary>>, offset, depth),
+    do: scan_json_object(rest, offset + 1, depth)
+
+  defp scan_json_string(<<_byte, rest::binary>>, offset, depth),
+    do: scan_json_string(rest, offset + 1, depth)
+
+  defp trim_leading_json_whitespace(content), do: trim_leading_json_whitespace(content, 0)
+
+  defp trim_leading_json_whitespace(<<byte, rest::binary>>, count)
+       when byte in [?\s, ?\n, ?\r, ?\t],
+       do: trim_leading_json_whitespace(rest, count + 1)
+
+  defp trim_leading_json_whitespace(content, count), do: {content, count}
 
   defp json_array?(content) do
     case Jason.decode(content) do

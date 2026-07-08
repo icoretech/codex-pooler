@@ -116,6 +116,76 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.JsonArrayLosslessTes
       assert Enum.count(values, fn {key, _value} -> key == "repeat" end) == 2
     end
 
+    test "normalizes whitespace-separated JSON object streams" do
+      original = """
+      {
+        "row": 1,
+        "title": "first result",
+        "url": "https://example.com/one",
+        "metadata": {"score": 10, "labels": ["alpha", "beta"]}
+      }
+      {
+        "row": 2,
+        "title": "second result",
+        "url": "https://example.com/two",
+        "metadata": {"score": 9, "labels": ["gamma"]}
+      }
+      """
+
+      assert {:ok, %{content: compressed, metadata: metadata}} =
+               JsonArrayLossless.compress(original, model: @model)
+
+      assert Jason.decode!(compressed) == [
+               %{
+                 "row" => 1,
+                 "title" => "first result",
+                 "url" => "https://example.com/one",
+                 "metadata" => %{"score" => 10, "labels" => ["alpha", "beta"]}
+               },
+               %{
+                 "row" => 2,
+                 "title" => "second result",
+                 "url" => "https://example.com/two",
+                 "metadata" => %{"score" => 9, "labels" => ["gamma"]}
+               }
+             ]
+
+      assert metadata.row_count == 2
+      assert metadata.compressed_bytes == byte_size(compressed)
+      assert metadata.compressed_bytes < byte_size(original)
+    end
+
+    test "preserves duplicate keys in normalized object streams" do
+      original = """
+      {
+        "repeat": "first",
+        "repeat": "second",
+        "status": "kept",
+        "payload": "alpha beta gamma delta epsilon"
+      }
+      {
+        "repeat": "third",
+        "repeat": "fourth",
+        "status": "kept",
+        "payload": "zeta eta theta iota kappa"
+      }
+      """
+
+      assert {:ok, %{content: compressed}} = JsonArrayLossless.compress(original, model: @model)
+
+      [%Jason.OrderedObject{values: first_values}, %Jason.OrderedObject{values: second_values}] =
+        Jason.decode!(compressed, objects: :ordered_objects)
+
+      assert Enum.count(first_values, fn {key, _value} -> key == "repeat" end) == 2
+      assert Enum.count(second_values, fn {key, _value} -> key == "repeat" end) == 2
+    end
+
+    test "skips single objects and mixed concatenated JSON tokens" do
+      assert :skip = JsonArrayLossless.compress(~S({"status":"ok"}), model: @model)
+      assert :skip = JsonArrayLossless.compress(~S({"first":1}{"second":2}), model: @model)
+      assert :skip = JsonArrayLossless.compress(~S({"first":1} true {"second":2}), model: @model)
+    end
+
     test "skips invalid JSON array-looking text" do
       assert :skip = JsonArrayLossless.compress(~S([{"status": "open",}]), model: @model)
     end

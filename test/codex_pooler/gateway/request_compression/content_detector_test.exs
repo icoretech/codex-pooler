@@ -78,6 +78,32 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
       assert_noop(:text, ContentDetector.detect(~S([{"status":])))
     end
 
+    test "detects whitespace-separated JSON objects as JSON array content" do
+      object_stream = ~S({"title":"first result","url":"https://example.com/one"}
+      {"title":"second result","url":"https://example.com/two"})
+
+      assert %{
+               kind: :json_array,
+               confidence: 1.0,
+               compressible: true,
+               strategy: :json_array_lossless
+             } = ContentDetector.detect(object_stream)
+    end
+
+    test "keeps single objects and malformed object streams out of array detection" do
+      assert %{kind: :json_document, strategy: :json_document_lossless} =
+               ContentDetector.detect(~S({"status":"ok"}))
+
+      for body <- [
+            ~S({"first":1}{"second":2}),
+            ~S({"first":1} not-json {"second":2}),
+            ~S({"first":1} ["not", "an", "object"])
+          ] do
+        assert %{kind: kind} = ContentDetector.detect(body)
+        refute kind == :json_array
+      end
+    end
+
     test "detects git diffs at and above request-compression confidence" do
       positive = """
       --- a/example.txt
