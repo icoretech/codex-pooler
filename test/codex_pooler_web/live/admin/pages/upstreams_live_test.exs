@@ -712,7 +712,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   @tag :subject_identity_display
-  test "distinguishes duplicate workspace rows by safe subject refs on upstream account cards", %{
+  test "hides subject refs and raw subjects on upstream account cards", %{
     conn: conn,
     scope: scope
   } do
@@ -760,22 +760,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         second_raw_subject
       )
 
-    first_subject_ref = subject_ref(first_raw_subject)
-    second_subject_ref = subject_ref(second_raw_subject)
-    assert first_subject_ref != second_subject_ref
-
     {:ok, view, html} = live(conn, ~p"/admin/upstreams")
 
-    assert has_element?(
+    refute has_element?(
              view,
-             "#upstream-account-#{first_identity.id}-subject-ref[data-role='upstream-subject-ref']",
-             "Subject #{first_subject_ref}"
+             "#upstream-account-#{first_identity.id}-subject-ref[data-role='upstream-subject-ref']"
            )
 
-    assert has_element?(
+    refute has_element?(
              view,
-             "#upstream-account-#{second_identity.id}-subject-ref[data-role='upstream-subject-ref']",
-             "Subject #{second_subject_ref}"
+             "#upstream-account-#{second_identity.id}-subject-ref[data-role='upstream-subject-ref']"
            )
 
     refute html =~ first_raw_subject
@@ -4860,15 +4854,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     })
     |> Repo.update!()
-  end
-
-  defp subject_ref(raw_subject) do
-    digest =
-      :crypto.hash(:sha256, raw_subject)
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 12)
-
-    "subj:" <> digest
   end
 
   defp audit_events(action, target_id) do
