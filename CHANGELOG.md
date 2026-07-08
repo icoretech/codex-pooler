@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.16...codex-pooler-v0.4.17) (2026-07-08)
+
+
+### Bug Fixes
+
+* compress concatenated JSON object streams ([f2efb62](https://github.com/icoretech/codex-pooler/commit/f2efb62d0f877ebe9685f7d595417cd7c391c068))
+* lock targeted oauth relink assignments ([f1a67e3](https://github.com/icoretech/codex-pooler/commit/f1a67e3014c0d2a19641e372b78efee81c6151bb))
+* require pool assignment for targeted oauth relink ([f1f35f1](https://github.com/icoretech/codex-pooler/commit/f1f35f1274e1ba2c8526c58c168f8bbafb20d39c))
+
 ## [0.4.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.15...codex-pooler-v0.4.16) (2026-07-07)
 
 
