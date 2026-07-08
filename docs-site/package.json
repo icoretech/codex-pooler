@@ -18,6 +18,6 @@
   },
   "overrides": {
     "volar-service-yaml": "0.0.71",
-    "yaml-language-server": "1.23.0"
+    "yaml-language-server": "1.24.0"
   }
 }
