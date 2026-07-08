@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.18](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.17...codex-pooler-v0.4.18) (2026-07-08)
+
+
+### Bug Fixes
+
+* **admin:** align alert incident filters ([056e76f](https://github.com/icoretech/codex-pooler/commit/056e76f0c7141fe9db0859555f997bfe72216d32))
+* **admin:** remove upstream subject badge ([b1b5e0c](https://github.com/icoretech/codex-pooler/commit/b1b5e0c97ea85a0f978c470590c891b83899cf7d))
+* **gateway:** account websocket pre-visible close retries ([8189f9e](https://github.com/icoretech/codex-pooler/commit/8189f9e5204c5ca245b1718076b7cc0ed81ec2b6))
+* **gateway:** retry fresh websocket pre-terminal closes ([2550163](https://github.com/icoretech/codex-pooler/commit/255016393f67d6667292c9882b7a1f44634b3c65))
+* **quota:** merge usage snapshots over zero stream evidence ([f0ae360](https://github.com/icoretech/codex-pooler/commit/f0ae3609762be5ae9daf51951382743ace36777c))
+
 ## [0.4.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.16...codex-pooler-v0.4.17) (2026-07-08)
 
 
