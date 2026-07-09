@@ -10,6 +10,7 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
     upstream_secret_key: Base.encode64(:crypto.hash(:sha256, "test-upstream-secret-key")),
     upstream_secret_key_version: "test-v1"
   ]
+  @minimum_codex_client_version "0.144.0"
 
   setup do
     previous = Application.get_env(:codex_pooler, CodexPooler.Upstreams.Secrets)
@@ -57,9 +58,18 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
     second_headers = Map.new(second_request.headers)
 
     assert first_request.path == "/backend-api/codex/models"
-    assert URI.decode_query(first_request.query_string)["client_version"] == "0.144.0"
+
+    assert Version.compare(
+             URI.decode_query(first_request.query_string)["client_version"],
+             @minimum_codex_client_version
+           ) in [:eq, :gt]
+
     assert second_request.path == "/backend-api/codex/models"
-    assert URI.decode_query(second_request.query_string)["client_version"] == "0.144.0"
+
+    assert Version.compare(
+             URI.decode_query(second_request.query_string)["client_version"],
+             @minimum_codex_client_version
+           ) in [:eq, :gt]
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")

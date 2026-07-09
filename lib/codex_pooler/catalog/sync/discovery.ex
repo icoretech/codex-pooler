@@ -9,6 +9,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   alias CodexPooler.Upstreams.Secrets
 
   @default_codex_upstream_base_url "https://chatgpt.com"
+  # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
   @default_codex_client_version "0.144.0"
   @secret_kind "access_token"
 

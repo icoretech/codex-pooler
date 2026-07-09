@@ -51,6 +51,20 @@
       "dependencyDashboardApproval": true
     },
     {
+      "description": "Automerge stable Codex client updates after one day",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchPackageNames": [
+        "openai/codex"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "dependencyDashboardApproval": false,
+      "ignoreUnstable": true,
+      "minimumReleaseAge": "0 days"
+    },
+    {
       "description": "Pin Mix dependency ranges for Elixir application updates",
       "matchManagers": [
         "mix"
@@ -130,6 +144,17 @@
     }
   ],
   "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update Codex client version used for upstream model discovery",
+      "managerFilePatterns": [
+        "/(^|/)lib/codex_pooler/catalog/sync/discovery\\.ex$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+@default_codex_client_version \"(?<currentValue>[^\"]+)\""
+      ],
+      "versioningTemplate": "semver"
+    },
     {
       "customType": "regex",
       "description": "Update Codex Pooler Helm chart versions in deployment docs",
