@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.21](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.20...codex-pooler-v0.4.21) (2026-07-09)
+
+
+### Bug Fixes
+
+* **catalog:** discover gpt-5.6 models ([8a02d79](https://github.com/icoretech/codex-pooler/commit/8a02d7949de980c25d539a9bdae78c3163c04163))
+
 ## [0.4.20](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.19...codex-pooler-v0.4.20) (2026-07-09)
 
 
