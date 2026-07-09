@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @receive_timeout_ms 25
@@ -124,17 +125,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   test "http request does not reuse Cloudflare cookies for non-ChatGPT upstream origins" do
     {:ok, upstream} =
       FakeUpstream.start_link(
-        {:sequence,
-         [
-           FakeUpstream.json_response_with_headers(
-             %{"ok" => true},
-             [{"set-cookie", "__cf_bm=dispatch-token; Path=/; HttpOnly; Secure"}]
-           ),
-           FakeUpstream.json_response(%{"ok" => true})
-         ]}
+        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
       )
 
     on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    chatgpt_url =
+      "https://dispatch-cookie-#{System.unique_integer([:positive])}.chatgpt.com/backend-api/codex/responses"
+
+    assert CloudflareCookies.store_from_headers(chatgpt_url, [
+             {"set-cookie", "__cf_bm=dispatch-token; Path=/; HttpOnly; Secure"}
+           ])
+
+    assert [{"cookie", "__cf_bm=dispatch-token"}] =
+             CloudflareCookies.request_headers(chatgpt_url, [])
 
     payload = %{"model" => "example-model"}
     url = FakeUpstream.url(upstream) <> "/backend-api/codex/responses"
@@ -145,7 +149,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       upstream_payload: Jason.encode!(payload),
       original_payload: payload,
       identity: upstream_identity(),
-      request_options: RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 1_000},
+          "/backend-api/codex/responses",
+          payload
+        )
     }
 
     assert {:ok, _response} = UpstreamDispatch.http_request(request)
