@@ -1,0 +1,49 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "omp.responses.gpt56_clean_first_turn.v1",
+  "sdk_name": "Oh My Pi",
+  "sdk_package": "@oh-my-pi/pi-coding-agent",
+  "sdk_version": "16.3.14",
+  "version_provenance": "Observed from a sanitized OMP 16.3.14 request projection and verified against the local v16.3.14 source checkout on 2026-07-09; fixture records structural metadata only.",
+  "endpoint": "/v1/responses",
+  "http_method": "POST",
+  "scenario": "Clean GPT-5.6 Responses first turn with max reasoning, automatic summary, encrypted reasoning inclusion, priority tier, and a flat function tool.",
+  "top_level_keys": ["model", "input", "instructions", "stream", "store", "max_output_tokens", "prompt_cache_key", "reasoning", "include", "service_tier", "tools"],
+  "input_item_types": ["message:user without explicit type"],
+  "content_part_types": ["input_text"],
+  "tool_shape_keys": ["type", "name", "description", "parameters"],
+  "expected_decision": {
+    "status": "translate",
+    "allowed_values": ["accept", "translate", "reject", "passthrough"]
+  },
+  "owner_placeholder": "omp_gpt56_responses_lite_fix",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-gpt-5.6-model",
+    "message_placeholder": "sample-user-message",
+    "instructions_placeholder": "sample-instructions",
+    "prompt_cache_key_placeholder": "sample-cache-key",
+    "tool_placeholder": "sample-tool"
+  },
+  "structural_summary": {
+    "payload_kind": "omp_gpt56_clean_first_turn",
+    "previous_response_id_present": false,
+    "explicit_message_type_present": false,
+    "reasoning_effort": "max",
+    "reasoning_summary": "auto",
+    "service_tier": "priority",
+    "flat_function_tool_shape": true,
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "The public Responses adapter adds the missing message type while preserving the OMP first-turn fields.",
+      "After model selection, Responses Lite models require reasoning.context=all_turns and parallel_tool_calls=false before upstream dispatch."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false
+  }
+}

@@ -526,6 +526,47 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert request.request_metadata["pricing"]["actual_service_tier"] == "priority"
     end
 
+    test "explicit priority settles at standard pricing when upstream returns default" do
+      setup = accounting_setup()
+
+      priority_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          config: pricing_config(%{"service_tier" => "priority"}),
+          input_token_micros: Decimal.new(100),
+          output_token_micros: Decimal.new(200)
+        })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{
+                   "model" => setup.model.exposed_model_id,
+                   "service_tier" => "priority",
+                   "max_output_tokens" => 1
+                 },
+                 %{correlation_id: "corr-priority-downgraded-to-default"}
+               )
+
+      assert reserved.pricing_snapshot.id == priority_pricing.id
+      assert reserved.reservation.details["service_tier"] == "priority"
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{status: "usage_known", input_tokens: 2, output_tokens: 1, total_tokens: 3},
+                 %{response_status_code: 200, attempt_metadata: %{"service_tier" => "default"}}
+               )
+
+      assert result.settlement.pricing_snapshot_id == setup.pricing.id
+      assert result.settlement.details["requested_service_tier"] == "priority"
+      assert result.settlement.details["actual_service_tier"] == "default"
+      assert result.settlement.details["service_tier"] == "standard"
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(40))
+    end
+
     test "auto service tier settles from normalized upstream usage tier" do
       setup = accounting_setup()
 

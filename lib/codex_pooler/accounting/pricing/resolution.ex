@@ -833,8 +833,9 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
     cond do
       requested == "batch" and not batch_usage? -> {:unpriced, "unpriced_batch_tier"}
+      requested == "batch" -> mapped_service_tier(requested, batch_usage?)
+      actual not in [nil, "auto"] -> mapped_service_tier(actual, batch_usage?)
       requested == "auto" and actual in [nil, "auto"] -> {:unpriced, "unpriced_auto_tier"}
-      requested == "auto" -> mapped_service_tier(actual, batch_usage?)
       true -> mapped_service_tier(requested, batch_usage?)
     end
   end

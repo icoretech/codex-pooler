@@ -1071,6 +1071,96 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["reasoning"] == %{"context" => "current_turn"}
   end
 
+  test "POST /v1/responses normalizes an OMP 16.3.14 GPT-5.6 first turn for Responses Lite",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_omp_gpt56_first_turn",
+               "object" => "response",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    setup =
+      upstream
+      |> gateway_setup()
+      |> put_setup_model_source_metadata!(%{
+        "use_responses_lite" => true,
+        "capabilities" => %{"reasoning" => true, "responses" => true, "tools" => true},
+        "service_tiers" => [
+          %{"id" => "priority", "name" => "Priority", "description" => "Priority service"}
+        ]
+      })
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic OMP request"}]
+          }
+        ],
+        "instructions" => "synthetic OMP instructions",
+        "stream" => true,
+        "store" => false,
+        "max_output_tokens" => 64_000,
+        "prompt_cache_key" => "synthetic-omp-cache-key",
+        "reasoning" => %{"effort" => "max", "summary" => "auto"},
+        "include" => ["reasoning.encrypted_content"],
+        "service_tier" => "priority",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "lookup_fixture",
+            "description" => "synthetic fixture tool",
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{},
+              "required" => [],
+              "additionalProperties" => false
+            }
+          }
+        ]
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "event: response.completed\n"
+    assert conn.resp_body =~ "resp_v1_omp_gpt56_first_turn"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["x-openai-internal-codex-responses-lite"] == "true"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+    assert captured.json["parallel_tool_calls"] == false
+
+    assert captured.json["reasoning"] == %{
+             "context" => "all_turns",
+             "effort" => "max",
+             "summary" => "auto"
+           }
+
+    assert [%{"type" => "message", "role" => "user"}] = captured.json["input"]
+    assert [%{"type" => "function", "name" => "lookup_fixture"}] = captured.json["tools"]
+    refute Map.has_key?(captured.json, "max_output_tokens")
+  end
+
   test "POST /v1/responses forwards encrypted compaction replay before dispatch", %{conn: conn} do
     upstream =
       start_upstream(
@@ -5912,6 +6002,19 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     |> put_req_header("upgrade", "websocket")
     |> put_req_header("sec-websocket-version", "13")
     |> put_req_header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+  end
+
+  defp put_setup_model_source_metadata!(setup, source_metadata) when is_map(source_metadata) do
+    metadata =
+      setup.model.metadata
+      |> Map.put("source_assignment_models", %{setup.assignment.id => source_metadata})
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{metadata: metadata})
+      |> Repo.update!()
+
+    %{setup | model: model}
   end
 
   defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do

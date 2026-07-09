@@ -77,6 +77,7 @@
     "openai-node-responses-basic.json",
     "openai-python-chat-basic.json",
     "opencode-responses-replay-continuation.json",
+    "omp-responses-gpt56-clean-first-turn.json",
     "hermes-responses-completed-assistant-replay.json",
     "openclaw-responses-assistant-thinking-replay.json",
     "vercel-ai-responses-tool-continuation.json",

@@ -67,19 +67,26 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
   def record_settlement_written!(
         %LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
       ) do
-    write_settlement_fact!(entry)
+    write_settlement_fact!(entry, :chronological)
   end
 
   def record_settlement_written!(
         %{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
       ) do
-    write_settlement_fact!(entry)
+    write_settlement_fact!(entry, :chronological)
   end
 
   def record_settlement_written!(%LedgerEntry{}), do: :ok
   def record_settlement_written!(%{}), do: :ok
 
-  defp write_settlement_fact!(entry) do
+  @spec replace_settlement_written!(LedgerEntry.t()) :: write_result()
+  def replace_settlement_written!(
+        %LedgerEntry{entry_kind: @entry_settlement, amount_status: @amount_recorded} = entry
+      ) do
+    write_settlement_fact!(entry, :replace)
+  end
+
+  defp write_settlement_fact!(entry, conflict_mode) do
     timestamp = now()
     attrs = settlement_attrs(entry, timestamp)
 
@@ -90,7 +97,7 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
         |> Map.put(:request_id, entry.request_id)
         |> Map.put(:inserted_at, timestamp)
       ],
-      on_conflict: settlement_conflict_query(attrs),
+      on_conflict: settlement_conflict(attrs, conflict_mode),
       conflict_target: :request_id
     )
 
@@ -147,6 +154,9 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
              ^entry_id > fact.latest_settlement_entry_id),
       update: [set: ^updates]
   end
+
+  defp settlement_conflict(attrs, :chronological), do: settlement_conflict_query(attrs)
+  defp settlement_conflict(attrs, :replace), do: [set: Map.to_list(attrs)]
 
   defp pricing_status(%LedgerEntry{details: details}) when is_map(details),
     do: Map.get(details, "pricing_status")

@@ -423,6 +423,28 @@ defmodule CodexPooler.Accounting.Rollups do
 
   def accumulate!(%Request{}, %LedgerEntry{}), do: :ok
 
+  @spec replace!(Request.t(), LedgerEntry.t(), Request.t(), LedgerEntry.t()) :: :ok
+  def replace!(
+        %Request{} = previous_request,
+        %LedgerEntry{} = previous_settlement,
+        %Request{} = request,
+        %LedgerEntry{} = settlement
+      ) do
+    subtract!(previous_request, previous_settlement)
+    accumulate!(request, settlement)
+  end
+
+  defp subtract!(%Request{} = request, %LedgerEntry{} = settlement) do
+    delta = rollup_delta(request, settlement)
+    date = DateTime.to_date(settlement.occurred_at || now())
+
+    request
+    |> daily_rollup_identities(settlement)
+    |> Enum.each(&subtract_rollup!(&1, date, delta))
+
+    subtract_hourly_model_usage_rollup!(request, settlement, delta)
+  end
+
   defp daily_rollup_identities(%Request{} = request, %LedgerEntry{} = settlement) do
     [
       %{dimension_kind: "pool", pool_id: request.pool_id},
@@ -571,6 +593,31 @@ defmodule CodexPooler.Accounting.Rollups do
     end
   end
 
+  defp subtract_hourly_model_usage_rollup!(request, settlement, delta) do
+    case hourly_model_identity(request) do
+      nil ->
+        :ok
+
+      identity ->
+        lookup = %{
+          bucket_started_at: hour_bucket(settlement.occurred_at || now()),
+          pool_id: request.pool_id,
+          model_code: identity.model_code
+        }
+
+        rollup = Repo.get_by!(HourlyModelUsageRollup, lookup)
+        attrs = subtract_rollup_attrs(rollup, delta, now())
+
+        if attrs.request_count == 0 do
+          Repo.delete!(rollup)
+        else
+          rollup |> Ecto.Changeset.change(attrs) |> Repo.update!()
+        end
+
+        :ok
+    end
+  end
+
   defp hourly_model_usage_increment_conflict(delta, model_id, now) do
     from rollup in HourlyModelUsageRollup,
       update: [
@@ -620,21 +667,7 @@ defmodule CodexPooler.Accounting.Rollups do
     case existing do
       %DailyRollup{} = rollup ->
         rollup
-        |> Ecto.Changeset.change(%{
-          request_count: rollup.request_count + delta.request_count,
-          success_count: rollup.success_count + delta.success_count,
-          failure_count: rollup.failure_count + delta.failure_count,
-          retry_count: rollup.retry_count + delta.retry_count,
-          input_tokens: rollup.input_tokens + delta.input_tokens,
-          cached_input_tokens: rollup.cached_input_tokens + delta.cached_input_tokens,
-          output_tokens: rollup.output_tokens + delta.output_tokens,
-          reasoning_tokens: rollup.reasoning_tokens + delta.reasoning_tokens,
-          total_tokens: rollup.total_tokens + delta.total_tokens,
-          estimated_cost_micros:
-            Decimal.add(rollup.estimated_cost_micros, delta.estimated_cost_micros),
-          settled_cost_micros: Decimal.add(rollup.settled_cost_micros, delta.settled_cost_micros),
-          updated_at: now
-        })
+        |> Ecto.Changeset.change(add_rollup_attrs(rollup, delta, now))
         |> Repo.update!()
 
       nil ->
@@ -643,6 +676,53 @@ defmodule CodexPooler.Accounting.Rollups do
         |> then(&struct(DailyRollup, &1))
         |> Repo.insert!()
     end
+  end
+
+  defp subtract_rollup!(identity, date, delta) do
+    rollup = Repo.get_by!(DailyRollup, rollup_lookup(identity, date))
+    attrs = subtract_rollup_attrs(rollup, delta, now())
+
+    if attrs.request_count == 0 do
+      Repo.delete!(rollup)
+    else
+      rollup |> Ecto.Changeset.change(attrs) |> Repo.update!()
+    end
+  end
+
+  defp add_rollup_attrs(rollup, delta, timestamp) do
+    %{
+      request_count: rollup.request_count + delta.request_count,
+      success_count: rollup.success_count + delta.success_count,
+      failure_count: rollup.failure_count + delta.failure_count,
+      retry_count: rollup.retry_count + delta.retry_count,
+      input_tokens: rollup.input_tokens + delta.input_tokens,
+      cached_input_tokens: rollup.cached_input_tokens + delta.cached_input_tokens,
+      output_tokens: rollup.output_tokens + delta.output_tokens,
+      reasoning_tokens: rollup.reasoning_tokens + delta.reasoning_tokens,
+      total_tokens: rollup.total_tokens + delta.total_tokens,
+      estimated_cost_micros:
+        Decimal.add(rollup.estimated_cost_micros, delta.estimated_cost_micros),
+      settled_cost_micros: Decimal.add(rollup.settled_cost_micros, delta.settled_cost_micros),
+      updated_at: timestamp
+    }
+  end
+
+  defp subtract_rollup_attrs(rollup, delta, timestamp) do
+    %{
+      request_count: rollup.request_count - delta.request_count,
+      success_count: rollup.success_count - delta.success_count,
+      failure_count: rollup.failure_count - delta.failure_count,
+      retry_count: rollup.retry_count - delta.retry_count,
+      input_tokens: rollup.input_tokens - delta.input_tokens,
+      cached_input_tokens: rollup.cached_input_tokens - delta.cached_input_tokens,
+      output_tokens: rollup.output_tokens - delta.output_tokens,
+      reasoning_tokens: rollup.reasoning_tokens - delta.reasoning_tokens,
+      total_tokens: rollup.total_tokens - delta.total_tokens,
+      estimated_cost_micros:
+        Decimal.sub(rollup.estimated_cost_micros, delta.estimated_cost_micros),
+      settled_cost_micros: Decimal.sub(rollup.settled_cost_micros, delta.settled_cost_micros),
+      updated_at: timestamp
+    }
   end
 
   defp rollup_lookup(

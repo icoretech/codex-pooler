@@ -55,8 +55,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 194400,
+            "context": 353400,
+            "input": 289400,
             "output": 64000
           }
         },
@@ -73,8 +73,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 194400,
+            "context": 353400,
+            "input": 289400,
             "output": 64000
           }
         },
@@ -91,8 +91,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 194400,
+            "context": 353400,
+            "input": 289400,
             "output": 64000
           }
         }
@@ -104,7 +104,7 @@ Store the Pool API key outside the config and read it through environment expans
 
 Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseURL` to `http://localhost:4000/v1`.
 
-OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. `194400` leaves 174k usable input tokens after the default 20k reserve, so 174k input plus a 64k output cap stays inside the 258.4k GPT-5.6 window used by these examples. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap.
+OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. `289400` leaves 269.4k usable input tokens after the default 20k reserve, so 269.4k input plus a 64k output cap stays inside the 353.4k GPT-5.6 window used by these examples. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap.
 
 ## Remote MCP example
 

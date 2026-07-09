@@ -230,32 +230,53 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     }
 
     Repo.transaction(fn ->
-      {request, attempt, reservation} = lock_finalization_rows(request, attempt)
+      {request, attempt, reservation, existing_settlement} =
+        lock_finalization_rows(request, attempt)
 
-      attempt = persist_final_attempt(attempt, usage, attrs, finalization)
-      RequestLogFacts.record_attempt_written!(attempt)
+      case finalization_action(existing_settlement, usage) do
+        {:reuse, settlement} ->
+          release =
+            Repo.get_by!(
+              LedgerEntry,
+              source_event_id: LedgerEntries.release_source_event_id(request.id)
+            )
 
-      pricing =
-        PricingResolution.lookup_for_settlement(
-          request,
-          attempt,
-          reservation,
-          usage,
-          attrs,
-          timestamp
-        )
+          %{request: request, attempt: attempt, settlement: settlement, release: release}
 
-      request = persist_final_request(request, usage, pricing, finalization)
+        action ->
+          previous_request = request
+          attempt = persist_final_attempt(attempt, usage, attrs, finalization)
+          RequestLogFacts.record_attempt_written!(attempt)
 
-      settlement_state =
-        build_settlement_context(request, attempt, reservation, usage, pricing, finalization)
+          pricing =
+            PricingResolution.lookup_for_settlement(
+              request,
+              attempt,
+              reservation,
+              usage,
+              attrs,
+              timestamp
+            )
 
-      %{settlement: settlement, release: release} =
-        persist_settlement_entries(request, attempt, reservation, settlement_state)
+          request = persist_final_request(request, usage, pricing, finalization)
 
-      RequestLogFacts.record_settlement_written!(settlement)
+          settlement_state =
+            build_settlement_context(request, attempt, reservation, usage, pricing, finalization)
 
-      %{request: request, attempt: attempt, settlement: settlement, release: release}
+          %{settlement: settlement, release: release, status: settlement_status} =
+            persist_settlement_entries(
+              request,
+              attempt,
+              reservation,
+              settlement_state,
+              previous_request,
+              settlement_to_replace(action)
+            )
+
+          record_settlement_fact!(settlement, settlement_status)
+
+          %{request: request, attempt: attempt, settlement: settlement, release: release}
+      end
     end)
     |> unwrap_transaction()
     |> tap_request_finalized_events()
@@ -265,13 +286,47 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     request = Repo.get!(Request, request.id, lock: "FOR UPDATE")
     attempt = Repo.get!(Attempt, attempt.id, lock: "FOR UPDATE")
 
-    reservation =
-      Repo.get_by!(LedgerEntry,
-        source_event_id: LedgerEntries.reservation_source_event_id(request.id)
+    reservation_source_event_id = LedgerEntries.reservation_source_event_id(request.id)
+
+    reservation_query =
+      from entry in LedgerEntry,
+        where: entry.source_event_id == ^reservation_source_event_id
+
+    ledger_entries =
+      Repo.all(
+        from entry in LedgerEntry,
+          where:
+            entry.request_id == ^request.id and
+              (entry.source_event_id == ^reservation_source_event_id or
+                 (entry.entry_kind == "settlement" and entry.amount_status == "recorded")),
+          lock: "FOR UPDATE"
       )
 
-    {request, attempt, reservation}
+    reservation =
+      Enum.find(ledger_entries, &(&1.source_event_id == reservation_source_event_id)) ||
+        raise Ecto.NoResultsError, queryable: reservation_query
+
+    existing_settlement =
+      Enum.find(
+        ledger_entries,
+        &(&1.entry_kind == "settlement" and &1.amount_status == "recorded")
+      )
+
+    {request, attempt, reservation, existing_settlement}
   end
+
+  defp finalization_action(nil, _usage), do: :insert
+
+  defp finalization_action(%LedgerEntry{usage_status: @usage_known} = settlement, _usage),
+    do: {:reuse, settlement}
+
+  defp finalization_action(%LedgerEntry{} = settlement, %{status: @usage_known}),
+    do: {:replace, settlement}
+
+  defp finalization_action(%LedgerEntry{} = settlement, _usage), do: {:reuse, settlement}
+
+  defp settlement_to_replace({:replace, settlement}), do: settlement
+  defp settlement_to_replace(:insert), do: nil
 
   defp persist_final_attempt(attempt, usage, attrs, finalization) do
     attempt =
@@ -330,16 +385,30 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     }
   end
 
-  defp persist_settlement_entries(request, attempt, reservation, state) do
-    {settlement, settlement_status} =
-      request
-      |> LedgerEntries.settlement_attrs(attempt, reservation, %{
+  defp persist_settlement_entries(
+         request,
+         attempt,
+         reservation,
+         state,
+         previous_request,
+         previous_settlement
+       ) do
+    settlement_attrs =
+      LedgerEntries.settlement_attrs(request, attempt, reservation, %{
         usage: state.usage,
         pricing: state.pricing,
         context: state.settlement_context,
         timestamp: state.timestamp
       })
-      |> LedgerEntries.create_or_get_with_status!()
+
+    {settlement, settlement_status} =
+      case previous_settlement do
+        %LedgerEntry{} = existing ->
+          {LedgerEntries.replace_settlement!(existing, settlement_attrs), :replaced}
+
+        nil ->
+          LedgerEntries.create_or_get_with_status!(settlement_attrs)
+      end
 
     release =
       request
@@ -350,10 +419,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       })
       |> LedgerEntries.create_or_get!()
 
-    if settlement_status == :inserted, do: Rollups.accumulate!(request, settlement)
+    case settlement_status do
+      :inserted -> Rollups.accumulate!(request, settlement)
+      :replaced -> Rollups.replace!(previous_request, previous_settlement, request, settlement)
+      :existing -> :ok
+    end
 
-    %{settlement: settlement, release: release}
+    %{settlement: settlement, release: release, status: settlement_status}
   end
+
+  defp record_settlement_fact!(settlement, :replaced),
+    do: RequestLogFacts.replace_settlement_written!(settlement)
+
+  defp record_settlement_fact!(settlement, _status),
+    do: RequestLogFacts.record_settlement_written!(settlement)
 
   defp tap_request_log_event({:ok, %{request: request}} = result, reason) do
     Events.broadcast_request_logs(request.pool_id, reason, %{

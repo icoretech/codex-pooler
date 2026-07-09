@@ -12,6 +12,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @entry_release "release"
   @entry_settlement "settlement"
   @amount_recorded "recorded"
+  @amount_voided "voided"
   @usage_pending "usage_pending"
   @usage_known "usage_known"
   @source_event_conflict_target {:unsafe_fragment,
@@ -108,6 +109,21 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       {0, []} ->
         {Repo.get_by!(LedgerEntry, source_event_id: source_event_id), :existing}
     end
+  end
+
+  @spec replace_settlement!(LedgerEntry.t(), map()) :: LedgerEntry.t()
+  def replace_settlement!(%LedgerEntry{} = existing, attrs) do
+    existing
+    |> Ecto.Changeset.change(%{amount_status: @amount_voided})
+    |> Repo.update!()
+
+    attrs
+    |> Map.put(:correction_of_entry_id, existing.id)
+    |> Map.put(
+      :source_event_id,
+      reconciled_settlement_source_event_id(Map.fetch!(attrs, :request_id))
+    )
+    |> create_or_get!()
   end
 
   @spec window_usages(Ecto.UUID.t(), keyword(DateTime.t()) | %{usage_window() => DateTime.t()}) ::
@@ -355,6 +371,9 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
 
   @spec settlement_source_event_id(Ecto.UUID.t()) :: String.t()
   def settlement_source_event_id(id), do: "request:#{id}:settlement"
+
+  @spec reconciled_settlement_source_event_id(Ecto.UUID.t()) :: String.t()
+  def reconciled_settlement_source_event_id(id), do: "request:#{id}:settlement:usage-known"
 
   @spec release_source_event_id(Ecto.UUID.t()) :: String.t()
   def release_source_event_id(id), do: "request:#{id}:release"

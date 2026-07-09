@@ -151,6 +151,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input()
     |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_responses_lite(request_options)
     |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> maybe_put_websocket_responses_lite_client_metadata(request_options)
@@ -163,17 +164,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
            transport: %{
              upstream_endpoint: "/backend-api/codex/responses/compact"
            }
-         }
+         } = request_options
        ) do
-    normalize_backend_codex_compact_payload(payload)
+    normalize_backend_codex_compact_payload(payload, request_options)
   end
 
   defp strip_backend_codex_fields(
          payload,
          "/backend-api/codex/responses/compact",
-         %RequestOptions{}
+         %RequestOptions{} = request_options
        ) do
-    normalize_backend_codex_compact_payload(payload)
+    normalize_backend_codex_compact_payload(payload, request_options)
   end
 
   defp strip_backend_codex_fields(
@@ -205,13 +206,30 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
     |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_responses_lite(opts)
     |> ToolSchemaLowering.lower_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
   end
 
-  defp normalize_backend_codex_compact_payload(payload) do
-    normalize_backend_codex_reasoning_effort(payload)
+  defp normalize_backend_codex_compact_payload(payload, opts) do
+    payload
+    |> normalize_backend_codex_reasoning_effort()
+    |> normalize_backend_codex_responses_lite(opts)
   end
+
+  defp normalize_backend_codex_responses_lite(
+         payload,
+         %RequestOptions{routing: %{use_responses_lite?: true}}
+       ) do
+    reasoning =
+      payload |> Map.get("reasoning") |> reasoning_map() |> Map.put("context", "all_turns")
+
+    payload
+    |> Map.put("reasoning", reasoning)
+    |> Map.put("parallel_tool_calls", false)
+  end
+
+  defp normalize_backend_codex_responses_lite(payload, %RequestOptions{}), do: payload
 
   defp remove_backend_codex_encrypted_tool_schema_markers(%{"tools" => tools} = payload)
        when is_list(tools) do

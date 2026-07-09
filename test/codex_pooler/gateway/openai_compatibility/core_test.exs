@@ -1508,6 +1508,46 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       refute Map.has_key?(incomplete_call, "status")
     end
 
+    test "OMP 16.3.14 GPT-5.6 clean first turn preserves supported Responses fields" do
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic OMP request"}]
+          }
+        ],
+        "instructions" => "synthetic OMP instructions",
+        "stream" => true,
+        "store" => false,
+        "max_output_tokens" => 64_000,
+        "prompt_cache_key" => "synthetic-omp-cache-key",
+        "reasoning" => %{"effort" => "max", "summary" => "auto"},
+        "include" => ["reasoning.encrypted_content"],
+        "service_tier" => "priority",
+        "tools" => [
+          flat_function_tool("lookup_fixture", %{
+            "type" => "object",
+            "properties" => %{},
+            "required" => [],
+            "additionalProperties" => false
+          })
+        ]
+      }
+
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+      assert [%{"type" => "message", "role" => "user"}] = coerced["input"]
+      assert coerced["instructions"] == "synthetic OMP instructions"
+      assert coerced["max_output_tokens"] == 64_000
+      assert coerced["prompt_cache_key"] == "synthetic-omp-cache-key"
+      assert coerced["reasoning"] == %{"effort" => "max", "summary" => "auto"}
+      assert coerced["include"] == ["reasoning.encrypted_content"]
+      assert coerced["service_tier"] == "priority"
+      assert [%{"type" => "function", "name" => "lookup_fixture"}] = coerced["tools"]
+      refute Map.has_key?(coerced, "parallel_tool_calls")
+    end
+
     test "OMP post-compaction replay forwards encrypted compaction item" do
       payload = %{
         "model" => "gpt-fixture-text",

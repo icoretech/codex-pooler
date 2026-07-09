@@ -81,7 +81,7 @@ Leave `requires_openai_auth = true` unless you are deliberately running Codex Po
 
 If Codex repeatedly enters a broken login/account state with a Pooler provider, advanced users can change the provider to `requires_openai_auth = false`. That makes Codex treat the provider as gateway-only and use only `env_key` for runtime auth, but Codex will no longer appear signed in for that provider and account-dependent features, including mobile/app-server features, may be unavailable.
 
-When Codex Pooler serves current model metadata, Codex does not need explicit client-side context overrides. If you must pin `gpt-5.6-terra` before Codex has refreshed backend metadata, use Codex's raw window fields: `model_context_window = 272000` and `model_auto_compact_token_limit = 244800`. Codex computes an effective 95% turn budget, so the client-visible budget is 258400 tokens, and it does not send an OpenAI SDK-style output cap on normal `/responses` turns.
+When Codex Pooler serves current model metadata, Codex does not need explicit client-side context overrides. If you must pin `gpt-5.6-terra` before Codex has refreshed backend metadata, use Codex's raw window fields: `model_context_window = 372000` and `model_auto_compact_token_limit = 334800`. Codex computes an effective 95% turn budget, so the client-visible budget is 353400 tokens, and it does not send an OpenAI SDK-style output cap on normal `/responses` turns.
 
 ## Request compression behavior
 

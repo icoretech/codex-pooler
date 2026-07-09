@@ -2,7 +2,16 @@ defmodule CodexPooler.AccountingTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, DailyRollup, LedgerEntry, Rollups}
+
+  alias CodexPooler.Accounting.{
+    Attempt,
+    DailyRollup,
+    HourlyModelUsageRollup,
+    LedgerEntry,
+    RequestLogFact,
+    Rollups
+  }
+
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Repo
@@ -322,6 +331,110 @@ defmodule CodexPooler.AccountingTest do
       assert rollup.request_count == 1
       assert rollup.success_count == 1
       assert rollup.total_tokens == 10
+    end
+
+    test "late known usage replaces an unknown settlement and its projections" do
+      setup = accounting_setup()
+      first_timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      known_timestamp = DateTime.add(first_timestamp, 1, :second)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 5},
+                 %{correlation_id: "corr-late-known-usage"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, failed} =
+               Accounting.finalize_failure(reserved.request, attempt, %{
+                 last_error_code: "owner_drained",
+                 now: first_timestamp,
+                 usage: %{status: "usage_unknown", source: "owner_drained"}
+               })
+
+      assert failed.request.status == "failed"
+      assert failed.settlement.usage_status == "usage_unknown"
+
+      known_usage = %{
+        status: "usage_known",
+        source: "late_owner_completion",
+        recorded_at: known_timestamp,
+        input_tokens: 7,
+        output_tokens: 3,
+        total_tokens: 10
+      }
+
+      assert {:ok, reconciled} =
+               Accounting.finalize_success(failed.request, failed.attempt, known_usage, %{
+                 now: known_timestamp,
+                 response_status_code: 200
+               })
+
+      assert reconciled.request.status == "succeeded"
+      assert reconciled.request.usage_status == "usage_known"
+      assert reconciled.attempt.status == "succeeded"
+      assert reconciled.attempt.usage_status == "usage_known"
+      assert reconciled.settlement.usage_status == "usage_known"
+      assert reconciled.settlement.correction_of_entry_id == failed.settlement.id
+      assert reconciled.settlement.source_event_id =~ ":settlement:usage-known"
+
+      assert {:ok, repeated} =
+               Accounting.finalize_success(
+                 reconciled.request,
+                 reconciled.attempt,
+                 known_usage,
+                 %{now: known_timestamp, response_status_code: 200}
+               )
+
+      assert repeated.settlement.id == reconciled.settlement.id
+
+      settlements =
+        Repo.all(
+          from entry in LedgerEntry,
+            where: entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement",
+            order_by: [asc: entry.created_at, asc: entry.id]
+        )
+
+      assert [voided, recorded] = settlements
+      assert voided.id == failed.settlement.id
+      assert voided.amount_status == "voided"
+      assert recorded.id == reconciled.settlement.id
+      assert recorded.amount_status == "recorded"
+
+      assert [daily_rollup] =
+               Repo.all(
+                 from rollup in DailyRollup,
+                   where:
+                     rollup.api_key_id == ^setup.api_key.id and
+                       rollup.dimension_kind == "api_key"
+               )
+
+      assert daily_rollup.request_count == 1
+      assert daily_rollup.success_count == 1
+      assert daily_rollup.failure_count == 0
+      assert daily_rollup.total_tokens == 10
+
+      assert [hourly_rollup] =
+               Repo.all(
+                 from rollup in HourlyModelUsageRollup,
+                   where:
+                     rollup.pool_id == ^setup.pool.id and
+                       rollup.model_code == ^setup.model.exposed_model_id
+               )
+
+      assert hourly_rollup.request_count == 1
+      assert hourly_rollup.success_count == 1
+      assert hourly_rollup.failure_count == 0
+      assert hourly_rollup.total_tokens == 10
+
+      fact = Repo.get_by!(RequestLogFact, request_id: reserved.request.id)
+      assert fact.latest_attempt_status == "succeeded"
+      assert fact.latest_settlement_entry_id == reconciled.settlement.id
+      assert fact.latest_settlement_usage_status == "usage_known"
+      assert fact.latest_total_tokens == 10
     end
 
     test "releases stale undispatched reservations without settling usage" do

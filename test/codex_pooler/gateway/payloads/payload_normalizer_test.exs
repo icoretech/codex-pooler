@@ -553,6 +553,76 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "adds required Responses Lite controls for HTTP, compact, and websocket JSON" do
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "input" => "hello",
+        "parallel_tool_calls" => true,
+        "reasoning" => %{"effort" => "max", "summary" => "auto"}
+      }
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      http_options =
+        RequestOptions.build(
+          %{use_responses_lite?: true},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      compact_options =
+        RequestOptions.build(
+          %{use_responses_lite?: true},
+          "/backend-api/codex/responses/compact",
+          payload
+        )
+
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      for request_options <- [http_options, compact_options, websocket_options] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   request_options.transport.upstream_endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+
+        assert upstream["reasoning"] == %{
+                 "context" => "all_turns",
+                 "effort" => "max",
+                 "summary" => "auto"
+               }
+
+        assert upstream["parallel_tool_calls"] == false
+      end
+    end
+
+    test "adds Responses Lite reasoning context when the client omits reasoning" do
+      payload = %{"model" => "gpt-5.6-terra", "input" => "hello"}
+
+      request_options =
+        RequestOptions.build(
+          %{use_responses_lite?: true},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "provider-model"},
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+      assert upstream["reasoning"] == %{"context" => "all_turns"}
+      assert upstream["parallel_tool_calls"] == false
+    end
+
     test "maps enforced ultra reasoning effort to max only in the backend Codex upstream payload" do
       payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "low"}}
 
