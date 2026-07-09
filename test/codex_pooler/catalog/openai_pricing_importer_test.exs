@@ -64,6 +64,31 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert pricing_count_for_version(first.price_version) == count_after_first
   end
 
+  test "imports vendored gpt-5.6 output pricing separately from cache writes" do
+    assert {:ok, _result} = OpenAIPricingImporter.import_file(@pricing_path)
+
+    assert_gpt56_vendored_snapshot!("gpt-5.6-luna", %{
+      input: "1.0",
+      cached_input: "0.1",
+      output: "6.0",
+      cache_write: 1.25
+    })
+
+    assert_gpt56_vendored_snapshot!("gpt-5.6-terra", %{
+      input: "2.5",
+      cached_input: "0.25",
+      output: "15.0",
+      cache_write: 3.125
+    })
+
+    assert_gpt56_vendored_snapshot!("gpt-5.6-sol", %{
+      input: "5.0",
+      cached_input: "0.5",
+      output: "30.0",
+      cache_write: 6.25
+    })
+  end
+
   test "maps decimals, config dimensions, and reasoning fallback correctly" do
     path =
       write_tmp_json!(%{
@@ -270,6 +295,28 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     |> File.read!()
     |> Jason.decode!()
     |> Map.fetch!("generated_at")
+  end
+
+  defp assert_gpt56_vendored_snapshot!(model, expected) do
+    payload = @pricing_path |> File.read!() |> Jason.decode!()
+    source_prices = get_in(payload, ["models", model, "prices", "standard", "default"])
+
+    assert source_prices["cache_write"] == expected.cache_write
+    assert source_prices["cache_write"] != source_prices["output"]
+
+    snapshot =
+      Repo.one!(
+        from s in PricingSnapshot,
+          where:
+            s.price_version == ^vendored_price_version() and s.model_identifier == ^model and
+              fragment("?->>'service_tier'", s.config) == "standard" and
+              fragment("?->>'price_bucket'", s.config) == "default"
+      )
+
+    assert Decimal.equal?(snapshot.input_token_micros, Decimal.new(expected.input))
+    assert Decimal.equal?(snapshot.cached_input_token_micros, Decimal.new(expected.cached_input))
+    assert Decimal.equal?(snapshot.output_token_micros, Decimal.new(expected.output))
+    assert Decimal.equal?(snapshot.reasoning_token_micros, Decimal.new(expected.output))
   end
 
   defp seed_existing_snapshot!(suffix) do
