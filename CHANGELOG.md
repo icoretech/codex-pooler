@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.22](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.21...codex-pooler-v0.4.22) (2026-07-09)
+
+
+### Bug Fixes
+
+* **gateway:** normalize ultra thinking alias ([1686028](https://github.com/icoretech/codex-pooler/commit/168602821caa8c64c7d387f7ee0d2d6cd3f998d6))
+* **gateway:** support gpt-5.6 Responses Lite models ([7473e2c](https://github.com/icoretech/codex-pooler/commit/7473e2c3df5d3746ed50a132379a5ce3b5c10e64))
+* **upstreams:** persist quota snapshots atomically ([fb9b517](https://github.com/icoretech/codex-pooler/commit/fb9b51782f2106ee938c573bc20128f94d6d0295))
+
 ## [0.4.21](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.20...codex-pooler-v0.4.21) (2026-07-09)
 
 
