@@ -9,6 +9,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  @runtime_quota_sources ~w(codex_rate_limit_event codex_response_headers)
+
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
 
   @spec evidence_changeset(identity_ref(), map(), DateTime.t()) ::
@@ -155,12 +157,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Quota.AccountQuotaWindow{} = existing,
          timestamp
        ) do
-    case zero_percent_only_merge_decision(evidence, existing, timestamp) do
-      {:ok, decision} ->
-        decision
+    cond do
+      usage_api_account_supersedes_runtime_rollback?(evidence, existing, timestamp) ->
+        true
 
-      :continue ->
-        quality_supersedes?(evidence, existing, timestamp)
+      runtime_account_percent_rollback?(evidence, existing, timestamp) ->
+        false
+
+      true ->
+        case zero_percent_only_merge_decision(evidence, existing, timestamp) do
+          {:ok, decision} ->
+            decision
+
+          :continue ->
+            quality_supersedes?(evidence, existing, timestamp)
+        end
     end
   end
 
@@ -179,6 +190,40 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         :continue
     end
   end
+
+  defp usage_api_account_supersedes_runtime_rollback?(
+         %Evidence{source: "codex_usage_api", used_percent: %Decimal{} = incoming_percent} =
+           evidence,
+         %Quota.AccountQuotaWindow{source: source, used_percent: %Decimal{} = existing_percent} =
+           existing,
+         timestamp
+       )
+       when source in @runtime_quota_sources do
+    account_quota_identity?(evidence) and same_evidence_identity?(evidence, existing) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      Decimal.compare(incoming_percent, existing_percent) != :lt
+  end
+
+  defp usage_api_account_supersedes_runtime_rollback?(_evidence, _existing, _timestamp),
+    do: false
+
+  defp runtime_account_percent_rollback?(
+         %Evidence{source: source, used_percent: %Decimal{} = incoming_percent} = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           used_percent: %Decimal{} = existing_percent
+         } =
+           existing,
+         timestamp
+       )
+       when source in @runtime_quota_sources do
+    account_quota_identity?(evidence) and same_evidence_identity?(evidence, existing) and
+      weak_capacity?(evidence) and stronger_current_quota_information?(existing, timestamp) and
+      Decimal.compare(incoming_percent, existing_percent) == :lt and
+      not exhausted_by_used_percent?(evidence)
+  end
+
+  defp runtime_account_percent_rollback?(_evidence, _existing, _timestamp), do: false
 
   defp quality_supersedes?(
          %Evidence{} = evidence,
@@ -273,6 +318,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       lower_string(evidence.model) == lower_string(existing.model) and
       lower_string(evidence.upstream_model) == lower_string(existing.upstream_model)
   end
+
+  defp account_quota_identity?(%{quota_key: "account", quota_scope: "account"}), do: true
+  defp account_quota_identity?(_evidence_or_window), do: false
 
   defp incoming_refreshes_existing?(
          %Evidence{source: "codex_usage_api"} = evidence,

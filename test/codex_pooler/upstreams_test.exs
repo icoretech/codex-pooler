@@ -5068,6 +5068,165 @@ defmodule CodexPooler.UpstreamsTest do
       assert Enum.all?(windows, &QuotaWindows.usable_window?/1)
     end
 
+    test "runtime rate-limit events do not roll back fresh account usage API quota" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      usage_reset_at = DateTime.add(observed_at, 6 * 24 * 60 * 60, :second)
+      runtime_reset_at = DateTime.add(observed_at, 7 * 24 * 60 * 60, :second)
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   %{
+                     quota_key: "account",
+                     quota_scope: "account",
+                     window_kind: "secondary",
+                     window_minutes: 10_080,
+                     used_percent: Decimal.new("19"),
+                     reset_at: usage_reset_at,
+                     source: "codex_usage_api",
+                     source_precision: "observed",
+                     freshness_state: "fresh",
+                     last_sync_at: observed_at,
+                     observed_at: observed_at
+                   }
+                 ],
+                 delete_missing?: false
+               )
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows_from_codex_rate_limit_event(
+                 identity,
+                 %{
+                   "type" => "codex.rate_limits",
+                   "rate_limits" => %{
+                     "secondary" => %{
+                       "used_percent" => 1,
+                       "window_minutes" => 10_080,
+                       "reset_at" => DateTime.to_unix(runtime_reset_at)
+                     }
+                   }
+                 },
+                 DateTime.add(observed_at, 60, :second)
+               )
+
+      assert [stored_weekly] =
+               identity
+               |> QuotaWindows.list_quota_windows()
+               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+      assert stored_weekly.source == "codex_usage_api"
+      assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("19"))
+      assert DateTime.compare(stored_weekly.reset_at, usage_reset_at) == :eq
+    end
+
+    test "fresh account usage API quota corrects lower runtime rate-limit evidence" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      runtime_reset_at = DateTime.add(observed_at, 7 * 24 * 60 * 60, :second)
+      usage_reset_at = DateTime.add(observed_at, 6 * 24 * 60 * 60, :second)
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows_from_codex_rate_limit_event(
+                 identity,
+                 %{
+                   "type" => "codex.rate_limits",
+                   "rate_limits" => %{
+                     "secondary" => %{
+                       "used_percent" => 1,
+                       "window_minutes" => 10_080,
+                       "reset_at" => DateTime.to_unix(runtime_reset_at)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   %{
+                     quota_key: "account",
+                     quota_scope: "account",
+                     window_kind: "secondary",
+                     window_minutes: 10_080,
+                     used_percent: Decimal.new("19"),
+                     reset_at: usage_reset_at,
+                     source: "codex_usage_api",
+                     source_precision: "observed",
+                     freshness_state: "fresh",
+                     last_sync_at: DateTime.add(observed_at, 60, :second),
+                     observed_at: DateTime.add(observed_at, 60, :second)
+                   }
+                 ],
+                 delete_missing?: false
+               )
+
+      assert [stored_weekly] =
+               identity
+               |> QuotaWindows.list_quota_windows()
+               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+      assert stored_weekly.source == "codex_usage_api"
+      assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("19"))
+      assert DateTime.compare(stored_weekly.reset_at, usage_reset_at) == :eq
+    end
+
+    test "runtime rate-limit events still raise account usage pressure" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      usage_reset_at = DateTime.add(observed_at, 6 * 24 * 60 * 60, :second)
+      runtime_reset_at = DateTime.add(observed_at, 7 * 24 * 60 * 60, :second)
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   %{
+                     quota_key: "account",
+                     quota_scope: "account",
+                     window_kind: "secondary",
+                     window_minutes: 10_080,
+                     used_percent: Decimal.new("19"),
+                     reset_at: usage_reset_at,
+                     source: "codex_usage_api",
+                     source_precision: "observed",
+                     freshness_state: "fresh",
+                     last_sync_at: observed_at,
+                     observed_at: observed_at
+                   }
+                 ],
+                 delete_missing?: false
+               )
+
+      assert {:ok, _windows} =
+               QuotaWindows.upsert_quota_windows_from_codex_rate_limit_event(
+                 identity,
+                 %{
+                   "type" => "codex.rate_limits",
+                   "rate_limits" => %{
+                     "secondary" => %{
+                       "used_percent" => 91,
+                       "window_minutes" => 10_080,
+                       "reset_at" => DateTime.to_unix(runtime_reset_at)
+                     }
+                   }
+                 },
+                 DateTime.add(observed_at, 60, :second)
+               )
+
+      assert [stored_weekly] =
+               identity
+               |> QuotaWindows.list_quota_windows()
+               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+      assert stored_weekly.source == "codex_rate_limit_event"
+      assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("91.0"))
+      assert DateTime.compare(stored_weekly.reset_at, runtime_reset_at) == :eq
+    end
+
     test "stores Spark rate-limit events without deriving rolling weekly resets" do
       identity = active_identity_fixture()
       observed_at = ~U[2026-04-27 12:00:00Z]
