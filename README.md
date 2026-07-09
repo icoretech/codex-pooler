@@ -272,7 +272,7 @@ terminal and desktop/IDE experience. Keep the provider id as `codex-pooler-ws`,
 but keep the provider `name` exactly `OpenAI`. In current Codex sources, `name`
 is not just
 a display label: exact `OpenAI` matching enables OpenAI-family behavior such as
-remote compaction, web search/image availability, and Codex backend request
+remote compaction, web search/image availability, and Codex backend request-body
 compression.
 
 Put provider and auth settings in the user-level config file. Codex resolves
