@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.20](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.19...codex-pooler-v0.4.20) (2026-07-09)
+
+
+### Bug Fixes
+
+* **upstreams:** preserve explicit quota reset times ([ed935b7](https://github.com/icoretech/codex-pooler/commit/ed935b7233dcdf7fbc807f246f3e272ce8933992))
+* **upstreams:** preserve usage quota against runtime rollbacks ([7526b8c](https://github.com/icoretech/codex-pooler/commit/7526b8c091ef38382f9bcee068849e2ff2cdda73))
+* **upstreams:** stabilize quota reset evidence ([e97be7e](https://github.com/icoretech/codex-pooler/commit/e97be7ed1c35f565820a0e2698ad97baf3024617))
+* **upstreams:** stabilize quota usage probing ([542cc6c](https://github.com/icoretech/codex-pooler/commit/542cc6c2f875488dac49e2659de55fcaacadc0a3))
+
 ## [0.4.19](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.18...codex-pooler-v0.4.19) (2026-07-09)
 
 
