@@ -180,6 +180,10 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
     end
   end
 
+  defp remaining_percent(%Decimal{} = remaining, nil, _used_percent) do
+    if Decimal.compare(remaining, Decimal.new(0)) == :gt, do: nil, else: Decimal.new(0)
+  end
+
   defp remaining_percent(_remaining, _capacity, %Decimal{} = used_percent) do
     Decimal.new(100)
     |> Decimal.sub(used_percent)

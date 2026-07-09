@@ -5854,6 +5854,112 @@ defmodule CodexPooler.UpstreamsTest do
       assert Decimal.equal?(merged_window.used_percent, Decimal.new("9"))
     end
 
+    @tag :upstream_quota_evidence_stability
+    test "credit-only monthly usage remains usable without fabricating percent capacity" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      reset_at = DateTime.add(observed_at, 15, :day)
+
+      assert {:ok, [window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   credits: 3817,
+                   used_percent: Decimal.new("100"),
+                   reset_at: reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      measurements = Measurements.for_window(window)
+
+      assert measurements.remaining == Decimal.new(3817)
+      assert measurements.capacity == nil
+      assert measurements.remaining_percent == nil
+      refute "exhausted" in QuotaWindows.routing_window_reason_codes(window, observed_at)
+      assert QuotaWindows.usable_window?(window, observed_at)
+
+      assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+               QuotaWindows.routing_quota_eligibility(identity, at: observed_at)
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "credit-only monthly usage refresh keeps existing capacity and recalculates used percent" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      reset_at = DateTime.add(observed_at, 30, :day)
+      weak_observed_at = DateTime.add(observed_at, 60, :second)
+      weak_reset_at = DateTime.add(weak_observed_at, 15, :day)
+
+      assert {:ok, [known_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   active_limit: 4018,
+                   credits: 3817,
+                   used_percent: Decimal.new("5"),
+                   reset_at: reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert {:ok, [merged_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   credits: 3817,
+                   used_percent: Decimal.new("100"),
+                   reset_at: weak_reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: weak_observed_at
+                 }
+               ])
+
+      expected_used_percent =
+        Decimal.new(4018)
+        |> Decimal.sub(Decimal.new(3817))
+        |> Decimal.mult(Decimal.new(100))
+        |> Decimal.div(Decimal.new(4018))
+
+      measurements = Measurements.for_window(merged_window)
+
+      assert merged_window.id == known_window.id
+      assert merged_window.active_limit == 4018
+      assert merged_window.credits == 3817
+      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
+
+      assert Decimal.equal?(
+               Decimal.round(merged_window.used_percent, 6),
+               Decimal.round(expected_used_percent, 6)
+             )
+
+      assert Decimal.equal?(Decimal.round(measurements.remaining_percent, 0), Decimal.new("95"))
+      assert QuotaWindows.usable_window?(merged_window, weak_observed_at)
+
+      assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+               QuotaWindows.routing_quota_eligibility(identity, at: weak_observed_at)
+    end
+
     test "headers cannot roll back a reset advanced by usage evidence" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)

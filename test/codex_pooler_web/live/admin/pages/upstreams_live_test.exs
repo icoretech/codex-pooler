@@ -2710,13 +2710,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
     monthly = Enum.find(account.quota_limits, &(&1.key == :primary_30d))
 
-    assert monthly.percent_label == "0%"
+    assert monthly.percent_label == "not reported"
     assert monthly.count_label == "3,817 credits"
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limit-primary_30d", "30d")
-    assert has_element?(view, "#upstream-account-#{identity.id}-limit-primary_30d", "0%")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-limit-primary_30d",
+             "not reported"
+           )
 
     assert has_element?(
              view,

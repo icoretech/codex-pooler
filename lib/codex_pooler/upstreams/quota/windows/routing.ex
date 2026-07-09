@@ -376,6 +376,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   defp positive_credits?(_window), do: false
 
+  defp exhausted?(%Quota.AccountQuotaWindow{credits: credits} = window)
+       when is_integer(credits) and credits > 0 do
+    if WindowClassifier.monthly_primary?(window),
+      do: false,
+      else: exhausted_by_used_percent?(window)
+  end
+
   defp exhausted?(%Quota.AccountQuotaWindow{used_percent: %Decimal{}} = window) do
     exhausted_by_used_percent?(window)
   end
