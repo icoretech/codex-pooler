@@ -1,7 +1,7 @@
 ARG DEBIAN_MIRROR=
 ARG DEBIAN_SECURITY_MIRROR=
 
-FROM node:26.4.0-slim AS assets_deps
+FROM node:26.5.0-slim AS assets_deps
 
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
