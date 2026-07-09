@@ -392,8 +392,6 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage",
                "/backend-api/codex/usage"
              ]
     end
@@ -506,8 +504,6 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
         assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                  "/backend-api/wham/usage",
-                 "/wham/usage",
-                 "/api/codex/usage",
                  "/backend-api/codex/usage"
                ]
       end
@@ -610,7 +606,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         start_upstream(
           {:path_json,
            %{
-             "/api/codex/usage" => {429, %{"error" => "rate_limited"}}
+             "/backend-api/wham/usage" => {429, %{"error" => "rate_limited"}}
            }}
         )
 
@@ -644,9 +640,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert window.observed_at == observed_at
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
-               "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage"
+               "/backend-api/wham/usage"
              ]
     end
 
@@ -728,7 +722,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       for status <- [401, 403] do
         upstream =
           start_upstream(
-            {:path_json, %{"/api/codex/usage" => {status, %{"error" => "rejected"}}}}
+            {:path_json, %{"/backend-api/wham/usage" => {status, %{"error" => "rejected"}}}}
           )
 
         {pool, assignment} =
@@ -749,9 +743,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         assert window.observed_at == observed_at
 
         assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
-                 "/backend-api/wham/usage",
-                 "/wham/usage",
-                 "/api/codex/usage"
+                 "/backend-api/wham/usage"
                ]
       end
     end
@@ -763,7 +755,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         start_upstream(
           {:path_json,
            %{
-             "/api/codex/usage" => {429, %{"error" => "rate_limited"}}
+             "/backend-api/wham/usage" => {429, %{"error" => "rate_limited"}}
            }}
         )
 
@@ -777,9 +769,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert window.observed_at == observed_at
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
-               "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage"
+               "/backend-api/wham/usage"
              ]
     end
 
@@ -792,7 +782,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         start_upstream(
           {:path_json,
            %{
-             "/api/codex/usage" => {401, %{"error" => "usage_probe_rejected"}},
+             "/backend-api/wham/usage" => {401, %{"error" => "usage_probe_rejected"}},
              "/oauth/token" => {503, %{"error" => provider_body}}
            }}
         )
@@ -857,9 +847,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert [] = incomplete_token_refresh_jobs(identity.id)
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
-               "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage"
+               "/backend-api/wham/usage"
              ]
 
       safe_surfaces = [
@@ -884,7 +872,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         start_upstream(
           {:path_json,
            %{
-             "/api/codex/usage" => {401, %{"error" => "expired_access_token"}},
+             "/backend-api/wham/usage" => {401, %{"error" => "expired_access_token"}},
              "/oauth/token" => {503, %{"error" => provider_body}}
            }}
         )

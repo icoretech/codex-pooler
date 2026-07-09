@@ -4247,6 +4247,75 @@ defmodule CodexPooler.UpstreamsTest do
       assert DateTime.compare(refreshed.reset_at, explicit_reset_at) == :eq
     end
 
+    test "relative model usage reset refreshes do not keep sliding an existing 5h reset" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      first_reset_at = DateTime.add(observed_at, 18_000, :second)
+
+      payload = fn used_percent, reset_at ->
+        %{
+          "rate_limit" => %{},
+          "additional_rate_limits" => [
+            %{
+              "limit_name" => "GPT-5.3-Codex-Spark",
+              "metered_feature" => "codex_bengalfox",
+              "rate_limit" => %{
+                "primary_window" => %{
+                  "used_percent" => used_percent,
+                  "limit_window_seconds" => 18_000,
+                  "reset_after_seconds" => 18_000,
+                  "reset_at" => DateTime.to_iso8601(reset_at)
+                }
+              }
+            }
+          ]
+        }
+      end
+
+      assert {:ok, [primary]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(0, first_reset_at),
+                 observed_at
+               )
+
+      assert primary.quota_key == "codex_spark"
+      assert primary.window_kind == "primary"
+      assert primary.source_precision == "observed"
+      assert DateTime.compare(primary.reset_at, first_reset_at) == :eq
+
+      refresh_at = DateTime.add(observed_at, 60, :second)
+      sliding_reset_at = DateTime.add(refresh_at, 18_000, :second)
+
+      assert {:ok, [refreshed]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(0, sliding_reset_at),
+                 refresh_at
+               )
+
+      assert refreshed.source_precision == "observed"
+      assert Decimal.equal?(refreshed.used_percent, Decimal.new("0.000"))
+      assert DateTime.compare(refreshed.reset_at, first_reset_at) == :eq
+
+      higher_usage_at = DateTime.add(observed_at, 120, :second)
+      later_sliding_reset_at = DateTime.add(higher_usage_at, 18_000, :second)
+
+      assert {:ok, [raised]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(1, later_sliding_reset_at),
+                 higher_usage_at
+               )
+
+      assert Decimal.equal?(raised.used_percent, Decimal.new("1.000"))
+      assert DateTime.compare(raised.reset_at, first_reset_at) == :eq
+
+      assert [stored] = QuotaWindows.list_quota_windows(identity)
+      assert DateTime.compare(stored.reset_at, first_reset_at) == :eq
+      assert Decimal.equal?(stored.used_percent, Decimal.new("1.000"))
+    end
+
     test "explicit usage reset corrects older rows derived from relative countdowns" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -4503,7 +4572,7 @@ defmodule CodexPooler.UpstreamsTest do
       refute QuotaWindows.quota_window_selection_data(identity).usable?
     end
 
-    test "continues past weekly-only wham responses to refresh 5h quota from API usage fallback" do
+    test "continues past weekly-only wham responses to refresh 5h quota from backend Codex fallback" do
       primary_payload = %{
         "rate_limit" => %{
           "primary_window" => %{
@@ -4517,9 +4586,8 @@ defmodule CodexPooler.UpstreamsTest do
 
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" => {200, primary_payload},
-          "/backend-api/codex/usage" => {200, weekly_only_payload()},
-          "/wham/usage" => {200, weekly_only_payload()}
+          "/backend-api/wham/usage" => {200, weekly_only_payload()},
+          "/backend-api/codex/usage" => {200, primary_payload}
         })
 
       pool = pool_fixture()
@@ -4558,15 +4626,14 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage"
+               "/backend-api/codex/usage"
              ]
     end
 
     test "provider usage refresh updates reported plan metadata" do
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" =>
+          "/backend-api/wham/usage" =>
             {200,
              %{
                "plan_type" => "Team",
@@ -4621,7 +4688,7 @@ defmodule CodexPooler.UpstreamsTest do
     test "continues usage probing when an earlier 200 response is weekly-only" do
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" =>
+          "/backend-api/wham/usage" =>
             {200,
              weekly_only_payload(%{
                "additional_rate_limits" => [
@@ -4692,8 +4759,6 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage",
                "/backend-api/codex/usage"
              ]
     end
@@ -4704,7 +4769,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" =>
+          "/backend-api/wham/usage" =>
             {200,
              weekly_only_payload(%{
                "additional_rate_limits" => [
@@ -4833,8 +4898,6 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage",
                "/backend-api/codex/usage"
              ]
     end
@@ -4893,8 +4956,6 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage",
                "/backend-api/codex/usage"
              ]
     end
@@ -4906,14 +4967,6 @@ defmodule CodexPooler.UpstreamsTest do
         FakeUpstream.start_link(
           {:sequence,
            [
-             FakeUpstream.raw_response(html_403,
-               status: 403,
-               headers: [{"content-type", "text/html; charset=utf-8"}]
-             ),
-             FakeUpstream.raw_response(html_403,
-               status: 403,
-               headers: [{"content-type", "text/html; charset=utf-8"}]
-             ),
              FakeUpstream.raw_response(html_403,
                status: 403,
                headers: [{"content-type", "text/html; charset=utf-8"}]
@@ -4952,8 +5005,6 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage",
-               "/api/codex/usage",
                "/backend-api/codex/usage"
              ]
     end
@@ -5004,7 +5055,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Enum.map(requests, & &1.path) == [
                "/backend-api/wham/usage",
-               "/wham/usage"
+               "/backend-api/codex/usage"
              ]
 
       [_first_request, second_request | _rest] = FakeUpstream.requests(upstream)
@@ -7706,7 +7757,7 @@ defmodule CodexPooler.UpstreamsTest do
     test "reconciliation records sanitized identity conflicts without refreshing health plan or quota" do
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" =>
+          "/backend-api/wham/usage" =>
             {200,
              %{
                "plan_type" => "Team",

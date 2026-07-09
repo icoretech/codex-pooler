@@ -4239,16 +4239,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     }
 
     first_stale_upstream =
-      start_upstream({:path_json, %{"/api/codex/usage" => {200, stale_quota_response}}})
+      start_upstream({:path_json, %{"/backend-api/wham/usage" => {200, stale_quota_response}}})
 
     second_stale_upstream =
-      start_upstream({:path_json, %{"/api/codex/usage" => {200, stale_quota_response}}})
+      start_upstream({:path_json, %{"/backend-api/wham/usage" => {200, stale_quota_response}}})
 
     sticky_upstream =
       start_upstream(
         {:path_json,
          %{
-           "/api/codex/usage" => {200, stale_quota_response},
+           "/backend-api/wham/usage" => {200, stale_quota_response},
            "/backend-api/codex/responses" =>
              {200,
               %{
@@ -4341,7 +4341,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     }
 
     sticky_upstream =
-      start_upstream({:path_json, %{"/api/codex/usage" => {200, exhausted_quota_response}}})
+      start_upstream(
+        {:path_json, %{"/backend-api/wham/usage" => {200, exhausted_quota_response}}}
+      )
 
     fallback_upstream =
       start_upstream(
@@ -7926,24 +7928,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp assert_usage_probe_then_response(upstream) do
     assert [
-             %{path: "/backend-api/wham/usage"},
-             %{path: "/wham/usage"},
              usage_request,
              response_request
            ] = FakeUpstream.requests(upstream)
 
-    assert usage_request.path == "/api/codex/usage"
+    assert usage_request.path == "/backend-api/wham/usage"
     {usage_request, response_request}
   end
 
   defp assert_usage_probe_requests(upstream) do
-    assert [
-             %{path: "/backend-api/wham/usage"},
-             %{path: "/wham/usage"},
-             usage_request
-           ] = FakeUpstream.requests(upstream)
+    assert [usage_request] = FakeUpstream.requests(upstream)
 
-    assert usage_request.path == "/api/codex/usage"
+    assert usage_request.path == "/backend-api/wham/usage"
     usage_request
   end
 

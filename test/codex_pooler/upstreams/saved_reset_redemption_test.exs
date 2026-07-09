@@ -192,12 +192,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment)
 
-      assert [consume_request, backend_wham_request, wham_request, usage_request] =
-               FakeUpstream.requests(fake)
+      assert [consume_request, usage_request] = FakeUpstream.requests(fake)
 
       assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
-      assert backend_wham_request.path == "/backend-api/wham/usage"
-      assert wham_request.path == "/wham/usage"
       assert usage_request.path == "/api/codex/usage"
 
       persisted = Repo.reload!(identity)

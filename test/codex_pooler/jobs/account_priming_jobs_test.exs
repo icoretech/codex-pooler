@@ -41,7 +41,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
 
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" =>
+          "/backend-api/wham/usage" =>
             {200,
              %{
                "rate_limit" => %{
@@ -142,7 +142,7 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
 
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" => {401, %{"error" => "expired"}}
+          "/backend-api/wham/usage" => {401, %{"error" => "expired"}}
         })
 
       {pool, assignment, identity} = codex_assignment_fixture(upstream)
@@ -256,7 +256,8 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
     test "failed account-link priming records sanitized failure and discards without retry" do
       upstream =
         start_path_upstream(%{
-          "/api/codex/usage" => {500, %{"error" => %{"message" => "Bearer secret-token failed"}}},
+          "/backend-api/wham/usage" =>
+            {500, %{"error" => %{"message" => "Bearer secret-token failed"}}},
           "/codex/models" => {200, %{"models" => [%{"id" => "gpt-failure"}]}}
         })
 

@@ -262,13 +262,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       assert assignment_id == assignment.id
       assert identity_id == identity.id
-      assert length(FakeUpstream.requests(upstream)) == 4
+      assert length(FakeUpstream.requests(upstream)) == 2
       assert get_in(Repo.reload!(identity).metadata, ["saved_resets", "available_count"]) == 0
 
       assert {:ok, _filtered_candidates, _filtered_options} =
                RouteFiltering.filter_candidates(filter_input)
 
-      assert length(FakeUpstream.requests(upstream)) == 4
+      assert length(FakeUpstream.requests(upstream)) == 2
     end
 
     test "does not redeem saved reset for a circuit-open candidate" do
@@ -985,8 +985,6 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   defp assert_auto_redeem_usage_requests(upstream) do
     assert [
              consume_request,
-             %{path: "/backend-api/wham/usage"},
-             %{path: "/wham/usage"},
              usage_request
            ] = FakeUpstream.requests(upstream)
 

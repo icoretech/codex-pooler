@@ -13,11 +13,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
   @account_quota_key "account"
   @usage_auth_refresh_skew_seconds 5 * 60
-  @codex_usage_paths [
+  @chatgpt_usage_paths [
     "/backend-api/wham/usage",
-    "/wham/usage",
-    "/api/codex/usage",
     "/backend-api/codex/usage"
+  ]
+  @codex_api_usage_paths [
+    "/api/codex/usage",
+    "/backend-api/codex/usage",
+    "/backend-api/wham/usage"
   ]
 
   @type usage_fetch_result :: {:ok, term(), String.t(), [map()]} | {:error, term()}
@@ -76,17 +79,50 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
           keyword()
         ) :: usage_fetch_result()
   def fetch(%UpstreamIdentity{} = identity, assignment, access_token, observed_at, opts) do
-    base = EndpointMetadata.usage_base_url(identity, assignment)
+    base =
+      identity
+      |> EndpointMetadata.usage_base_url(assignment)
+      |> EndpointMetadata.normalize_base_url()
+
     timeout = Keyword.get(opts, :receive_timeout, 30_000)
     headers = usage_headers(access_token, identity.chatgpt_account_id)
 
-    Enum.reduce_while(@codex_usage_paths, {:error, :not_found}, fn path, last_result ->
+    identity
+    |> usage_paths(assignment)
+    |> Enum.reduce_while({:error, :not_found}, fn path, last_result ->
       base
       |> usage_url(path)
       |> probe_usage_url(identity, headers, observed_at, timeout)
       |> reduce_usage_probe_result(last_result)
     end)
   end
+
+  defp usage_paths(%UpstreamIdentity{} = identity, %PoolUpstreamAssignment{} = assignment) do
+    case configured_usage_path(identity, assignment) do
+      path when path in ["/api/codex/usage", "/backend-api/codex/usage"] ->
+        [path | @codex_api_usage_paths]
+        |> Enum.uniq()
+
+      _chatgpt_path ->
+        @chatgpt_usage_paths
+    end
+  end
+
+  defp configured_usage_path(
+         %UpstreamIdentity{} = identity,
+         %PoolUpstreamAssignment{} = assignment
+       ) do
+    metadata_usage_path(assignment.metadata) || metadata_usage_path(identity.metadata)
+  end
+
+  defp metadata_usage_path(%{} = metadata) do
+    case Map.get(metadata, "saved_resets") do
+      %{} = saved_resets -> Map.get(saved_resets, "usage_path") || Map.get(metadata, "usage_path")
+      _other -> Map.get(metadata, "usage_path")
+    end
+  end
+
+  defp metadata_usage_path(_metadata), do: nil
 
   defp maybe_retry_after_token_refresh(identity, assignment, observed_at, opts) do
     if access_token_refresh_due_after_usage_auth_failure?(identity, observed_at) do

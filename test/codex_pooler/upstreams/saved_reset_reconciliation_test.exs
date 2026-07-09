@@ -23,7 +23,10 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     %{identity: identity, assignment: assignment} =
       active_upstream_assignment_fixture(pool_fixture(), %{
-        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
       })
 
     assert {:ok, updated_identity} =
@@ -70,7 +73,10 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     %{identity: identity, assignment: assignment} =
       active_upstream_assignment_fixture(pool_fixture(), %{
-        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
       })
 
     assert {:ok, updated_identity} =
@@ -85,8 +91,6 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
            } = SavedResets.snapshot(Repo.reload!(updated_identity))
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
-             "/backend-api/wham/usage",
-             "/wham/usage",
              "/api/codex/usage",
              "/backend-api/wham/rate-limit-reset-credits"
            ]
@@ -142,8 +146,6 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     refute Jason.encode!(saved_resets) =~ "not-a-date"
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
-             "/backend-api/wham/usage",
-             "/wham/usage",
              "/api/codex/usage",
              "/backend-api/wham/rate-limit-reset-credits"
            ]
@@ -176,8 +178,6 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
            } = SavedResets.snapshot(Repo.reload!(updated_identity))
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
-             "/backend-api/wham/usage",
-             "/wham/usage",
              "/api/codex/usage"
            ]
   end
@@ -193,7 +193,10 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     %{identity: identity, assignment: assignment} =
       active_upstream_assignment_fixture(pool_fixture(), %{
-        metadata: %{"usage_base_url" => FakeUpstream.url(fake)}
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
       })
 
     assert {:ok, updated_identity} =

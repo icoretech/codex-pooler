@@ -11,6 +11,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   @runtime_quota_sources ~w(codex_rate_limit_event codex_response_headers)
   @usage_reset_forward_tolerance_seconds 5 * 60
+  @relative_reset_refresh_tolerance_seconds 5
 
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
 
@@ -146,6 +147,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       incoming_usage_advances_runtime_reset?(evidence, existing, timestamp) ->
         merge_usage_reset_with_existing_percent_attrs(existing, attrs, timestamp)
 
+      incoming_relative_usage_extends_existing_reset?(evidence, existing, timestamp) ->
+        merge_weak_usage_with_existing_reset_attrs(existing, attrs, timestamp)
+
       incoming_weak_usage_extends_existing_reset?(evidence, existing, timestamp) ->
         merge_weak_usage_with_existing_reset_attrs(existing, attrs, timestamp)
 
@@ -264,6 +268,25 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp incoming_weak_usage_extends_existing_reset?(_evidence, _existing, _timestamp),
+    do: false
+
+  defp incoming_relative_usage_extends_existing_reset?(
+         %Evidence{source: "codex_usage_api", reset_at: %DateTime{} = incoming_reset} =
+           evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           reset_at: %DateTime{} = existing_reset
+         } = existing,
+         timestamp
+       ) do
+    rollback_guarded_quota_identity?(evidence) and same_evidence_identity?(evidence, existing) and
+      weak_capacity?(evidence) and relative_reset_metadata?(evidence.metadata) and
+      Evidence.current_freshness_state(existing, timestamp) == "fresh" and
+      DateTime.diff(incoming_reset, existing_reset, :second) >
+        @relative_reset_refresh_tolerance_seconds
+  end
+
+  defp incoming_relative_usage_extends_existing_reset?(_evidence, _existing, _timestamp),
     do: false
 
   defp quality_supersedes?(
