@@ -10,7 +10,7 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
 
   @default_codex_upstream_base_url "https://chatgpt.com"
   # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  @default_codex_client_version "0.144.0"
+  @default_codex_client_version "0.144.1"
   @secret_kind "access_token"
 
   @type catalog_error :: %{required(:code) => atom(), required(:message) => String.t()}
