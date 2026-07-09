@@ -2630,7 +2630,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   @tag :upstream_quota_evidence_stability
-  test "model quota rows hide zero percent-only unknown capacity evidence", %{
+  test "model quota rows show reset-bearing observed zero usage evidence", %{
+    conn: conn,
     scope: scope
   } do
     {:ok, pool} =
@@ -2667,7 +2668,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              ])
 
     [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
-    refute Enum.any?(account.quota_limits, &(&1.key == "model-codex_spark-primary-300"))
+    spark = quota_limit!(account, "model-codex_spark-primary-300")
+
+    assert Decimal.equal?(spark.percent, Decimal.new("100"))
+    assert spark.percent_value == 100
+    assert spark.percent_label == "100%"
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    selector = "#upstream-account-#{identity.id}-limit-model-codex_spark-primary-300"
+
+    assert has_element?(view, selector, "100%")
+    assert has_element?(view, "#{selector}-progress[value='100']")
+    assert has_element?(view, "#{selector}-reset")
   end
 
   @tag :upstream_quota_evidence_stability

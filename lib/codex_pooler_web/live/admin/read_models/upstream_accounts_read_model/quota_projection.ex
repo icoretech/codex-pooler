@@ -276,6 +276,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          quota_scope: scope,
          active_limit: active_limit,
          credits: credits,
+         reset_at: %DateTime{},
+         used_percent: %Decimal{} = used_percent,
+         source: "codex_usage_api",
+         source_precision: source_precision
+       })
+       when scope in ["model", "upstream_model"] and active_limit in [nil, 0] and
+              credits in [nil, 0] and source_precision in ["observed", "authoritative"] do
+    used_percent |> remaining_percent_from_used() |> decimal_clamp_percent()
+  end
+
+  defp quota_remaining_percent(%Quota.AccountQuotaWindow{
+         quota_scope: scope,
+         active_limit: active_limit,
+         credits: credits,
          used_percent: %Decimal{} = used_percent
        })
        when scope in ["model", "upstream_model"] and active_limit in [nil, 0] and
