@@ -54,7 +54,7 @@ base_url = "https://codex-pooler.example.com/backend-api/codex"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
-requires_openai_auth = true
+requires_openai_auth = false
 ```
 
 With a local Codex Pooler instance, change `base_url` to `http://localhost:4000/backend-api/codex`.
@@ -72,10 +72,10 @@ base_url = "https://codex-pooler.example.com/backend-api/codex"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = false
-requires_openai_auth = true
+requires_openai_auth = false
 ```
 
-Both providers use the same Pool API key and the same Codex backend compatibility route in Codex CLI and Codex Desktop. Codex Pooler routes each request through Pool policy, account eligibility, limits, session continuity, and request accounting.
+Both providers use the same Pool API key and the same Codex backend compatibility route in Codex CLI and Codex Desktop. Keep `requires_openai_auth = false` so Codex uses `env_key` for the Pool API key and does not start the ChatGPT/OpenAI account login flow for this provider. Codex Pooler routes each request through Pool policy, account eligibility, limits, session continuity, and request accounting.
 
 When Codex Pooler serves current model metadata, Codex does not need explicit client-side context overrides. If you must pin `gpt-5.6-terra` before Codex has refreshed backend metadata, use Codex's raw window fields: `model_context_window = 272000` and `model_auto_compact_token_limit = 244800`. Codex computes an effective 95% turn budget, so the client-visible budget is 258400 tokens, and it does not send an OpenAI SDK-style output cap on normal `/responses` turns.
 

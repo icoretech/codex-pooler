@@ -302,7 +302,7 @@ base_url = "http://localhost:4000/backend-api/codex"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
-requires_openai_auth = true
+requires_openai_auth = false
 ```
 
 Keep an HTTP/SSE provider when you need to force non-websocket behavior for a
@@ -317,11 +317,15 @@ base_url = "http://localhost:4000/backend-api/codex"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = false
-requires_openai_auth = true
+requires_openai_auth = false
 ```
 
 For deployed instances, change `base_url` to
 `https://codex-pooler.example.com/backend-api/codex`.
+
+Keep `requires_openai_auth = false` for Codex Pooler providers that use
+`env_key`: the Pool API key authenticates the runtime route, and Codex should
+not start the ChatGPT/OpenAI account login flow for this provider.
 
 When Codex Pooler serves current model metadata, Codex does not need explicit
 client-side context overrides. If you must pin `gpt-5.6-terra` before Codex has
