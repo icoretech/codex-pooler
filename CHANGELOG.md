@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.19](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.18...codex-pooler-v0.4.19) (2026-07-09)
+
+
+### Bug Fixes
+
+* **admin:** align quota card percent semantics ([91c2fba](https://github.com/icoretech/codex-pooler/commit/91c2fba6ce042e356f4eaf36e799b2fd4927db27))
+* **admin:** correct upstream quota card semantics ([6161bb3](https://github.com/icoretech/codex-pooler/commit/6161bb384a5725bf93e34ab84e5c2e356d54c0e6))
+* **admin:** preserve model quota percent evidence ([6fc4f0e](https://github.com/icoretech/codex-pooler/commit/6fc4f0ed9bf2f548e943d905b19ddcbb7869412d))
+* **deps:** update dependency daisyui to ^5.6.15 ([#127](https://github.com/icoretech/codex-pooler/issues/127)) ([74f0309](https://github.com/icoretech/codex-pooler/commit/74f0309ace36e838006fed1545d97d8662e1b175))
+* **deps:** update dependency daisyui to ^5.6.16 ([#128](https://github.com/icoretech/codex-pooler/issues/128)) ([69a8477](https://github.com/icoretech/codex-pooler/commit/69a8477bd045fb16efad9bc276a231aa561237ff))
+* **quotas:** hide unreported additional quota rows ([07a187a](https://github.com/icoretech/codex-pooler/commit/07a187a95348ecfee6a44b975d8057c04edb29ba))
+* **quotas:** preserve monthly credit capacity ([a94efdb](https://github.com/icoretech/codex-pooler/commit/a94efdb497d71127888297af22808775dbdf0a3e))
+* **quotas:** preserve useful model quota evidence ([9d623d8](https://github.com/icoretech/codex-pooler/commit/9d623d8449f2a05f4702b7dd497d87fd93ee9a1b))
+* **quotas:** preserve useful upstream quota evidence ([7c60f46](https://github.com/icoretech/codex-pooler/commit/7c60f46ec3670a6803db51689edf36cb387299cd))
+* **upstreams:** reuse ChatGPT Cloudflare cookies ([87fc5bf](https://github.com/icoretech/codex-pooler/commit/87fc5bfeed7726c383b0f958da219701b4820e8e))
+
 ## [0.4.18](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.17...codex-pooler-v0.4.18) (2026-07-08)
 
 
