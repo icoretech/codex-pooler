@@ -277,6 +277,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     }
   end
 
+  defp quota_remaining_percent(%Quota.AccountQuotaWindow{
+         quota_scope: scope,
+         active_limit: active_limit,
+         credits: credits,
+         used_percent: %Decimal{} = used_percent
+       })
+       when scope in ["model", "upstream_model"] and active_limit in [nil, 0] and
+              credits in [nil, 0] do
+    used_percent |> remaining_percent_from_used() |> decimal_clamp_percent()
+  end
+
   defp quota_remaining_percent(%Quota.AccountQuotaWindow{} = window) do
     window
     |> Measurements.for_window()
@@ -337,6 +348,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   end
 
   defp quota_reset_title(_reset_at, _datetime_preferences), do: nil
+
+  defp remaining_percent_from_used(%Decimal{} = used_percent) do
+    Decimal.sub(Decimal.new(100), used_percent)
+  end
+
+  defp decimal_clamp_percent(%Decimal{} = value) do
+    value
+    |> decimal_non_negative()
+    |> Decimal.min(Decimal.new(100))
+  end
 
   defp decimal_non_negative(%Decimal{} = value), do: Decimal.max(value, Decimal.new(0))
 end

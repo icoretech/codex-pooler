@@ -2349,6 +2349,91 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert weekly.percent_label == "not reported"
   end
 
+  test "account quota rows keep nonzero percent-only usage visible", %{
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "nonzero-percent-only-upstream",
+        name: "Nonzero Percent Pool"
+      })
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Nonzero Percent Codex",
+        assignment_label: "Nonzero Percent assignment"
+      })
+
+    now = DateTime.utc_now()
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 active_limit: 0,
+                 credits: 0,
+                 used_percent: Decimal.new("12"),
+                 reset_at: DateTime.add(now, 5, :hour),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 observed_at: now
+               }
+             ])
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    primary = Enum.find(account.quota_limits, &(&1.key == :primary_5h))
+
+    assert primary.percent == Decimal.new("88.000")
+    assert primary.percent_value == 88
+    assert primary.percent_label == "88%"
+  end
+
+  test "model quota rows keep zero percent-only evidence visible as full remaining", %{
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "zero-model-percent-upstream",
+        name: "Zero Model Percent Pool"
+      })
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Zero Model Codex",
+        assignment_label: "Zero Model assignment"
+      })
+
+    now = DateTime.utc_now()
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "codex_spark",
+                 quota_scope: "model",
+                 quota_family: "codex_spark",
+                 model: "gpt-5.3-codex-spark",
+                 display_label: "GPT-5.3-Codex-Spark",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("0"),
+                 reset_at: DateTime.add(now, 5, :hour),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 observed_at: now
+               }
+             ])
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    primary_model = Enum.find(account.quota_limits, &(&1.key == "model-codex_spark-primary-300"))
+
+    assert primary_model.percent == Decimal.new("100.000")
+    assert primary_model.percent_value == 100
+    assert primary_model.percent_label == "100%"
+  end
+
   test "renames upstream account labels from the account actions menu", %{
     conn: conn,
     scope: scope
