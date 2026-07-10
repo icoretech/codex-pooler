@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.24](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.23...codex-pooler-v0.4.24) (2026-07-10)
+
+
+### Bug Fixes
+
+* **admin:** keep observed zero-use quotas visible ([28fa875](https://github.com/icoretech/codex-pooler/commit/28fa87509601c889d883575f3cac0ea897592653))
+* **gateway:** enforce canonical Codex user agent ([9bfd7bc](https://github.com/icoretech/codex-pooler/commit/9bfd7bc884440034c0ac9eccbb2ec4ebdba7f973))
+* **gateway:** send trusted Codex client identity ([56d38f9](https://github.com/icoretech/codex-pooler/commit/56d38f95d545f188c247f02d491b32ce2a7231e0))
+
 ## [0.4.23](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.22...codex-pooler-v0.4.23) (2026-07-10)
 
 
