@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @type review_section :: {String.t(), [review_row()]}
   @type selector_state :: map()
   @type selector_attrs :: %{String.t() => term()}
+  @type form_error :: {:expires_at, {String.t(), keyword()}}
 
   @limit_fields ~w(
     max_requests_per_minute
@@ -52,9 +53,20 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     |> merge_binding_params("model", model_binding)
   end
 
-  @spec form(params()) :: Phoenix.HTML.Form.t()
-  def form(params) when is_map(params) do
-    params |> default_params() |> to_form(as: :api_key)
+  @spec form(params(), keyword()) :: Phoenix.HTML.Form.t()
+  def form(params, opts \\ []) when is_map(params) and is_list(opts) do
+    params
+    |> default_params()
+    |> to_form(as: :api_key, errors: Keyword.get(opts, :errors, []))
+  end
+
+  @spec expiry_errors(params()) :: [form_error()]
+  def expiry_errors(params) do
+    if invalid_expiry?(params["expires_at"]) do
+      [expires_at: {"must be a valid date and time", []}]
+    else
+      []
+    end
   end
 
   @spec normalize_params(params(), [Pool.t()]) :: params()
@@ -103,6 +115,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     []
     |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, "Display name is required")
     |> maybe_add_error(blank_to_nil(params["pool_id"]) == nil, "Pool is required")
+    |> maybe_add_error(
+      invalid_expiry?(params["expires_at"]),
+      "Expiry must be a valid date and time"
+    )
     |> maybe_add_error(
       params["model_mode"] == "selected_models" and policy_model_identifiers(params) == [],
       "Selected model mode needs at least one model"
@@ -154,10 +170,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     [{"Do not enforce", ""} | Enum.map(selected_values, &{&1, &1})]
   end
 
-  @spec review_sections(Phoenix.HTML.Form.t(), selector_state()) :: [review_section()]
-  def review_sections(form, selector_state) do
+  @spec review_sections(Phoenix.HTML.Form.t(), selector_state(), Pool.t() | nil) ::
+          [review_section()]
+  def review_sections(form, selector_state, selected_pool) do
     [
-      {"Basics", basics_review_rows(form)},
+      {"Basics", basics_review_rows(form, selected_pool)},
       {"Models", model_review_rows(form, selector_state)},
       {"Limits", limit_review_rows(form)}
     ]
@@ -213,6 +230,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       String.length(value) == 19 -> value <> "Z"
       true -> value
     end
+  end
+
+  defp invalid_expiry?(value) do
+    case expires_at_value(value) do
+      nil -> false
+      normalized_value -> not valid_rfc3339_datetime?(normalized_value)
+    end
+  end
+
+  defp valid_rfc3339_datetime?(value) do
+    match?({:ok, %DateTime{}, _offset}, DateTime.from_iso8601(value))
   end
 
   defp split_allow_list_text(value) when is_binary(value) do
@@ -339,10 +367,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     end
   end
 
-  defp basics_review_rows(form) do
+  defp basics_review_rows(form, selected_pool) do
     [
       {"Name", blank_to_nil(form[:display_name].value) || "Missing"},
-      {"Pool", blank_to_nil(form[:pool_id].value) || "Missing"},
+      {"Pool", selected_pool_name(selected_pool)},
       {"Status", form[:status].value || "active"},
       {"Expires", blank_to_nil(form[:expires_at].value) || "Never"}
     ]
@@ -364,9 +392,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       |> Enum.flat_map(fn field ->
         [
           {"Default #{limit_field_label(field)}",
-           blank_to_nil(form[String.to_atom("default_#{field}")].value)},
+           normalized_limit_value(form[String.to_atom("default_#{field}")].value)},
           {"Model #{limit_field_label(field)}",
-           blank_to_nil(form[String.to_atom("model_#{field}")].value)}
+           normalized_limit_value(form[String.to_atom("model_#{field}")].value)}
         ]
       end)
       |> Enum.reject(fn {_label, value} -> is_nil(value) end)
@@ -375,6 +403,33 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       [] -> [{"Limits", "No caps configured"}]
       rows -> rows
     end
+  end
+
+  defp selected_pool_name(%Pool{name: name}), do: name
+  defp selected_pool_name(_pool), do: "Missing"
+
+  defp normalized_limit_value(value) do
+    case value |> blank_to_nil() |> parse_integer() do
+      {:ok, integer} -> format_integer(integer)
+      :error -> blank_to_nil(value)
+    end
+  end
+
+  defp parse_integer(nil), do: :error
+
+  defp parse_integer(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> {:ok, integer}
+      _other -> :error
+    end
+  end
+
+  defp format_integer(integer) do
+    integer
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+    |> String.reverse()
   end
 
   defp model_mode_label("selected_models"), do: "Selected models"
