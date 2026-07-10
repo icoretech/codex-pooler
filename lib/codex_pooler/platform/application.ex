@@ -19,7 +19,7 @@ defmodule CodexPooler.Application do
       {Task.Supervisor,
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
-      {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor, max_children: 4},
+      {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor},
       {Phoenix.PubSub, name: CodexPooler.PubSub},
       {Postgrex.Notifications, postgres_notifications_config()},
       CodexPooler.Events.PostgresBridge,

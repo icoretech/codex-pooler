@@ -35,6 +35,32 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       assert window.source == "codex_rate_limit_event"
       assert Decimal.equal?(window.used_percent, Decimal.new("42.0"))
       assert DateTime.compare(window.reset_at, reset_at) == :eq
+
+      wait_for_rate_limit_event_tasks()
+    end
+
+    test "persists rate-limit events while other persistence tasks are running" do
+      identity = active_upstream_assignment_fixture().identity
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+      blocker_pids = start_rate_limit_event_task_blockers(4)
+
+      on_exit(fn ->
+        Enum.each(blocker_pids, &send(&1, :release_rate_limit_event_task))
+      end)
+
+      assert :ok =
+               RateLimitObserver.record_complete_events(
+                 identity,
+                 "event: codex.rate_limits\n" <>
+                   "data: #{Jason.encode!(codex_rate_limits_payload(42, reset_at))}\n\n"
+               )
+
+      assert window = wait_for_rate_limit_event_window(identity, "primary")
+      assert window.source == "codex_rate_limit_event"
+      assert Decimal.equal?(window.used_percent, Decimal.new("42.0"))
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+
+      Enum.each(blocker_pids, &send(&1, :release_rate_limit_event_task))
       wait_for_rate_limit_event_tasks()
     end
 
@@ -219,6 +245,30 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
         }
       }
     }
+  end
+
+  defp start_rate_limit_event_task_blockers(count) do
+    parent = self()
+
+    blocker_pids =
+      for _index <- 1..count do
+        {:ok, pid} =
+          Task.Supervisor.start_child(CodexPooler.RateLimitEventSupervisor, fn ->
+            send(parent, {:rate_limit_event_task_blocked, self()})
+
+            receive do
+              :release_rate_limit_event_task -> :ok
+            end
+          end)
+
+        pid
+      end
+
+    for _index <- 1..count do
+      assert_receive {:rate_limit_event_task_blocked, _pid}, 1_000
+    end
+
+    blocker_pids
   end
 
   defp codex_rate_limits_payload(used_percent, reset_at) do
