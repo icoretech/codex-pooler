@@ -1881,24 +1881,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   end
 
   defp broadcast_usage_events(pool_id, count) do
-    test_pid = self()
-
-    task =
-      Task.async(fn ->
-        receive do
-          :broadcast_usage_events ->
-            Enum.each(1..count, fn _index ->
-              assert {:ok, _event} = Events.broadcast_usage(pool_id, "usage_updated", %{})
-            end)
-
-            send(test_pid, :usage_events_broadcast)
-        end
-      end)
-
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, test_pid, task.pid)
-    send(task.pid, :broadcast_usage_events)
-    assert_receive :usage_events_broadcast
-    Task.await(task)
+    Enum.each(1..count, fn _index ->
+      assert {:ok, _event} = Events.broadcast_usage(pool_id, "usage_updated", %{})
+    end)
   end
 
   defp capture_repo_queries(query_pid, fun) when is_pid(query_pid) and is_function(fun, 0) do
