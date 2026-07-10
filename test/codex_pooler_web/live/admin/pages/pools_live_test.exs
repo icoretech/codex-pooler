@@ -1449,6 +1449,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert {:ok, _event} = Events.broadcast_usage(pool.id, "usage_updated", %{})
     _ = :sys.get_state(view.pid)
 
+    state = :sys.get_state(view.pid)
+    send(view.pid, {:refresh_pool_traffic, state.socket.assigns.pool_traffic_refresh_token})
+    _ = :sys.get_state(view.pid)
+
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-tokens-per-sec", "50")
@@ -1458,6 +1462,146 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "100 tokens")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "1 request")
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
+  end
+
+  test "coalesces traffic refreshes, ignores request logs, and makes stale timers harmless", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "coalesced-traffic", name: "Coalesced Traffic"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    state = :sys.get_state(view.pid)
+
+    assert state.socket.assigns.subscribed_pool_event_topics ==
+             MapSet.new(["pools", "upstreams", "usage"])
+
+    {_result, request_log_queries} =
+      capture_repo_queries(view.pid, fn ->
+        assert {:ok, _event} = Events.broadcast_request_logs(pool.id, "request_logged", %{})
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert request_log_queries == []
+
+    {_result, traffic_queries} =
+      capture_repo_queries(view.pid, fn ->
+        broadcast_usage_events(pool.id, 100)
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert traffic_queries == []
+
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns.pool_traffic_dirty?
+    assert is_reference(state.socket.assigns.pool_traffic_refresh_timer)
+    timer_token = state.socket.assigns.pool_traffic_refresh_token
+
+    {_result, timer_queries} =
+      capture_repo_queries(view.pid, fn ->
+        send(view.pid, {:refresh_pool_traffic, timer_token})
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert timer_queries != []
+
+    state = :sys.get_state(view.pid)
+    refute state.socket.assigns.pool_traffic_dirty?
+    assert is_nil(state.socket.assigns.pool_traffic_refresh_timer)
+
+    {_result, stale_timer_queries} =
+      capture_repo_queries(view.pid, fn ->
+        send(view.pid, {:refresh_pool_traffic, timer_token})
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert stale_timer_queries == []
+  end
+
+  test "defers traffic in every Pool dialog, flushes once on close, and preserves edit drafts", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "deferred-dialogs", name: "Deferred Dialogs"})
+
+    {:ok, archived_pool} =
+      Pools.create_pool(scope, %{slug: "deferred-delete", name: "Deferred Delete"})
+
+    assert {:ok, _archived_pool} = Pools.change_pool_status(scope, archived_pool, "archived")
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    open_create_dialog(view)
+
+    assert_deferred_traffic_refresh(view, pool.id)
+
+    {_result, create_flush_queries} =
+      capture_repo_queries(view.pid, fn ->
+        render_click(view, "cancel_create")
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert create_flush_queries != []
+    assert_no_pending_pool_traffic_refresh(view)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    view
+    |> element("#pool-edit-dialog-tab-routing")
+    |> render_click()
+
+    assert has_element?(view, "#pool-edit-dialog-tab-routing[aria-selected='true']")
+
+    assert_deferred_traffic_refresh(view, pool.id)
+
+    {_result, lifecycle_queries} =
+      capture_repo_queries(view.pid, fn ->
+        assert {:ok, _event} = Events.broadcast_pools(pool.id, "pool_changed", %{})
+
+        assert {:ok, _event} =
+                 Events.broadcast_upstreams(pool.id, "upstream_assignment_changed", %{})
+
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert lifecycle_queries != []
+    assert has_element?(view, "#pool-edit-dialog-tab-routing[aria-selected='true']")
+
+    {_result, edit_flush_queries} =
+      capture_repo_queries(view.pid, fn ->
+        render_click(view, "cancel_edit")
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert edit_flush_queries != []
+    assert_no_pending_pool_traffic_refresh(view)
+
+    view |> element("#delete-pool-#{archived_pool.id}") |> render_click()
+    assert_deferred_traffic_refresh(view, pool.id)
+
+    {_result, delete_flush_queries} =
+      capture_repo_queries(view.pid, fn ->
+        render_click(view, "cancel_delete")
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert delete_flush_queries != []
+    assert_no_pending_pool_traffic_refresh(view)
+
+    open_create_dialog(view)
+    assert_deferred_traffic_refresh(view, pool.id)
+
+    view
+    |> element("#pool-create-form")
+    |> render_submit(%{"pool" => %{"name" => "Mutation clears traffic refresh"}})
+
+    assert has_element?(
+             view,
+             "#pool-row-#{Repo.get_by!(Pool, slug: "mutation-clears-traffic-refresh").id}"
+           )
+
+    assert_no_pending_pool_traffic_refresh(view)
   end
 
   test "preserves supporting routing settings when editing from pools dialog", %{
@@ -1714,6 +1858,79 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   defp open_create_dialog(view) do
     view |> element("#pools-page-create-action") |> render_click()
+  end
+
+  defp assert_deferred_traffic_refresh(view, pool_id) do
+    {_result, traffic_queries} =
+      capture_repo_queries(view.pid, fn ->
+        broadcast_usage_events(pool_id, 100)
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert traffic_queries == []
+
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns.pool_traffic_dirty?
+    assert is_nil(state.socket.assigns.pool_traffic_refresh_timer)
+  end
+
+  defp assert_no_pending_pool_traffic_refresh(view) do
+    state = :sys.get_state(view.pid)
+    refute state.socket.assigns.pool_traffic_dirty?
+    assert is_nil(state.socket.assigns.pool_traffic_refresh_timer)
+  end
+
+  defp broadcast_usage_events(pool_id, count) do
+    test_pid = self()
+
+    task =
+      Task.async(fn ->
+        receive do
+          :broadcast_usage_events ->
+            Enum.each(1..count, fn _index ->
+              assert {:ok, _event} = Events.broadcast_usage(pool_id, "usage_updated", %{})
+            end)
+
+            send(test_pid, :usage_events_broadcast)
+        end
+      end)
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, test_pid, task.pid)
+    send(task.pid, :broadcast_usage_events)
+    assert_receive :usage_events_broadcast
+    Task.await(task)
+  end
+
+  defp capture_repo_queries(query_pid, fun) when is_pid(query_pid) and is_function(fun, 0) do
+    test_pid = self()
+    handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() == query_pid do
+            send(test_pid, {handler_id, metadata[:source]})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_sources(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_query_sources(handler_id, sources) do
+    receive do
+      {^handler_id, source} -> drain_repo_query_sources(handler_id, [to_string(source) | sources])
+    after
+      0 -> Enum.reverse(sources)
+    end
   end
 
   defp assert_policy_editor_docs_link(view, dialog_id) do

@@ -11,6 +11,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPoolerWeb.Admin.PoolsReadModel
   alias CodexPoolerWeb.Admin.PoolWizardComponents
 
+  @pool_event_topics ["pools", "upstreams", "usage"]
+  @pool_traffic_refresh_delay_ms 1_000
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -31,7 +34,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_filter_form: PoolForm.filter_form(),
        pool_metrics: PoolsReadModel.empty_metrics(),
        data_load_warnings: [],
-       subscribed_pool_events?: false
+       subscribed_pool_events?: false,
+       pool_traffic_dirty?: false,
+       pool_traffic_refresh_timer: nil,
+       pool_traffic_refresh_token: nil
      )
      |> load_pools()}
   end
@@ -46,7 +52,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          |> assign(:create_form, PoolForm.create_form())
          |> assign(:pool_wizard_step, "details")
          |> clear_editing()
-         |> clear_deleting()}
+         |> clear_deleting()
+         |> defer_pool_traffic_refresh()}
 
       {:error, reason} ->
         {:noreply,
@@ -57,7 +64,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_event("cancel_create", _params, socket) do
-    {:noreply, close_create_dialog(socket)}
+    {:noreply, socket |> close_create_dialog() |> flush_deferred_pool_traffic_refresh()}
   end
 
   def handle_event("create_pool", %{"pool" => pool_params}, socket) do
@@ -70,6 +77,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:noreply,
        socket
        |> put_flash(:info, "Pool created")
+       |> clear_pool_traffic_refresh()
        |> close_create_dialog()
        |> load_pools()}
     else
@@ -104,7 +112,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          |> assign(:editing_pool, pool)
          |> assign(:edit_form, PoolForm.edit_form(pool))
          |> assign(:pool_wizard_step, "details")
-         |> clear_deleting()}
+         |> clear_deleting()
+         |> defer_pool_traffic_refresh()}
     end
   end
 
@@ -113,7 +122,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_event("cancel_edit", _params, socket) do
-    {:noreply, clear_editing(socket)}
+    {:noreply, socket |> clear_editing() |> flush_deferred_pool_traffic_refresh()}
   end
 
   def handle_event("save_pool", %{"pool_edit" => pool_params}, socket) do
@@ -129,6 +138,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:noreply,
        socket
        |> put_flash(:info, "Pool updated")
+       |> clear_pool_traffic_refresh()
        |> clear_editing()
        |> load_pools()}
     else
@@ -165,12 +175,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          |> clear_editing()
          |> assign(:deleting_pool, pool)
          |> assign(:delete_form, PoolForm.delete_form(pool))
-         |> update(:delete_form_version, &(&1 + 1))}
+         |> update(:delete_form_version, &(&1 + 1))
+         |> defer_pool_traffic_refresh()}
     end
   end
 
   def handle_event("cancel_delete", _params, socket) do
-    {:noreply, clear_deleting(socket)}
+    {:noreply, socket |> clear_deleting() |> flush_deferred_pool_traffic_refresh()}
   end
 
   def handle_event("confirm_delete_pool", %{"pool_delete" => pool_params}, socket) do
@@ -183,6 +194,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:noreply,
        socket
        |> put_flash(:info, "Pool deleted")
+       |> clear_pool_traffic_refresh()
        |> clear_deleting()
        |> load_pools()}
     else
@@ -237,18 +249,39 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @impl true
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
-    if pool_event_refresh?(topics, pool_id) do
-      {:noreply, load_pools(socket)}
+    case pool_event_kind(topics, pool_id) do
+      :lifecycle -> {:noreply, load_pools(socket)}
+      :usage -> {:noreply, schedule_pool_traffic_refresh(socket)}
+      :ignore -> {:noreply, socket}
+    end
+  end
+
+  def handle_info({:refresh_pool_traffic, refresh_token}, socket) do
+    if socket.assigns.pool_traffic_refresh_token == refresh_token do
+      {:noreply,
+       socket
+       |> clear_pool_traffic_refresh()
+       |> load_pools()}
     else
       {:noreply, socket}
     end
   end
 
-  defp pool_event_refresh?(topics, pool_id) when is_list(topics) and is_binary(pool_id) do
-    Enum.any?(topics, &(&1 in ["pools", "upstreams", "usage", "request_logs"]))
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp pool_event_kind(topics, pool_id) when is_list(topics) and is_binary(pool_id) do
+    with {:ok, topics} <- Events.validate_topics(topics) do
+      cond do
+        Enum.any?(topics, &(&1 in ["pools", "upstreams"])) -> :lifecycle
+        "usage" in topics -> :usage
+        true -> :ignore
+      end
+    else
+      {:error, :invalid_topics} -> :ignore
+    end
   end
 
-  defp pool_event_refresh?(_topics, _pool_id), do: false
+  defp pool_event_kind(_topics, _pool_id), do: :ignore
 
   @impl true
   def render(assigns) do
@@ -380,7 +413,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     |> Enum.map(& &1.pool.id)
     |> MapSet.new()
     |> then(fn target_pool_ids ->
-      {socket, _stale_pool_ids} = PoolEventSubscriptions.reconcile(socket, target_pool_ids)
+      {socket, _stale_pool_ids} =
+        PoolEventSubscriptions.reconcile(socket, target_pool_ids, @pool_event_topics)
+
       socket
     end)
   end
@@ -415,6 +450,75 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   defp clear_deleting(socket),
     do: assign(socket, deleting_pool: nil, delete_form: PoolForm.delete_form())
+
+  defp schedule_pool_traffic_refresh(socket) do
+    socket = assign(socket, :pool_traffic_dirty?, true)
+
+    if pool_dialog_open?(socket) do
+      cancel_pool_traffic_refresh_timer(socket)
+    else
+      case socket.assigns.pool_traffic_refresh_timer do
+        timer_ref when is_reference(timer_ref) ->
+          socket
+
+        nil ->
+          refresh_token = make_ref()
+
+          timer_ref =
+            Process.send_after(
+              self(),
+              {:refresh_pool_traffic, refresh_token},
+              @pool_traffic_refresh_delay_ms
+            )
+
+          assign(socket,
+            pool_traffic_refresh_timer: timer_ref,
+            pool_traffic_refresh_token: refresh_token
+          )
+      end
+    end
+  end
+
+  defp defer_pool_traffic_refresh(socket) do
+    if socket.assigns.pool_traffic_dirty? do
+      cancel_pool_traffic_refresh_timer(socket)
+    else
+      socket
+    end
+  end
+
+  defp flush_deferred_pool_traffic_refresh(socket) do
+    if socket.assigns.pool_traffic_dirty? and not pool_dialog_open?(socket) do
+      socket
+      |> clear_pool_traffic_refresh()
+      |> load_pools()
+    else
+      socket
+    end
+  end
+
+  defp clear_pool_traffic_refresh(socket) do
+    socket
+    |> cancel_pool_traffic_refresh_timer()
+    |> assign(
+      pool_traffic_dirty?: false,
+      pool_traffic_refresh_timer: nil,
+      pool_traffic_refresh_token: nil
+    )
+  end
+
+  defp cancel_pool_traffic_refresh_timer(socket) do
+    if is_reference(socket.assigns.pool_traffic_refresh_timer) do
+      Process.cancel_timer(socket.assigns.pool_traffic_refresh_timer, async: false, info: false)
+    end
+
+    assign(socket, pool_traffic_refresh_timer: nil, pool_traffic_refresh_token: nil)
+  end
+
+  defp pool_dialog_open?(socket) do
+    socket.assigns.creating_pool or not is_nil(socket.assigns.editing_pool) or
+      not is_nil(socket.assigns.deleting_pool)
+  end
 
   defp error_message(%Ecto.Changeset{} = changeset) do
     changeset
