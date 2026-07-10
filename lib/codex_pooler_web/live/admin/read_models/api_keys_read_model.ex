@@ -3,19 +3,27 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
-  alias CodexPooler.Accounting
   alias CodexPooler.Catalog
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPoolerWeb.Admin.ApiKeyPolicyForm
-  alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.OptionLoaderFallback
 
   @type data_load_warning :: map()
   @type filters :: %{optional(String.t()) => String.t()}
   @type option :: {String.t(), Ecto.UUID.t() | String.t()}
   @type pool_lookup :: %{optional(Ecto.UUID.t()) => Pool.t()}
-  @type usage_summary :: map()
+  @type api_key_row :: %{
+          required(:id) => Ecto.UUID.t(),
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:display_name) => String.t(),
+          required(:key_prefix) => String.t(),
+          required(:status) => String.t(),
+          required(:last_used_at) => DateTime.t() | nil,
+          required(:expires_at) => DateTime.t() | nil,
+          required(:allowed_model_identifiers) => [String.t()] | nil,
+          required(:metadata) => map()
+        }
   @type model_policy_summary :: %{
           required(:unavailable?) => boolean(),
           required(:unavailable_identifiers) => [String.t()],
@@ -28,16 +36,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
           required(:id) => Ecto.UUID.t() | nil,
           required(:dom_id) => String.t(),
           required(:name) => String.t(),
-          required(:api_keys) => [APIKey.t()],
+          required(:api_keys) => [api_key_row()],
           required(:count_label) => String.t()
         }
   @type page_state :: %{
           required(:pools) => [Pool.t()],
           required(:pool_lookup) => pool_lookup(),
-          required(:api_keys) => [APIKey.t()],
+          required(:api_keys) => [api_key_row()],
           required(:filter_values) => filters(),
           required(:selected_pool) => Pool.t() | nil,
-          required(:api_key_usage_summaries) => %{optional(Ecto.UUID.t()) => usage_summary()},
           required(:api_key_model_policy_summaries) => %{
             optional(Ecto.UUID.t()) => model_policy_summary()
           },
@@ -71,18 +78,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     visible_api_keys =
       filter_model_policy(pool_filtered_api_keys, model_policy_filter, model_policy_summaries)
 
-    usage_summaries = usage_summaries(visible_api_keys)
+    visible_api_key_rows = Enum.map(visible_api_keys, &api_key_row/1)
 
     %{
       pools: pools,
       pool_lookup: pool_lookup,
-      api_keys: visible_api_keys,
+      api_keys: visible_api_key_rows,
       filter_values: filter_values,
       selected_pool: selected_pool,
-      api_key_usage_summaries: usage_summaries,
       api_key_model_policy_summaries: model_policy_summaries,
       api_key_pool_groups:
-        pool_groups(filter_pools(pools, selected_pool), pool_lookup, visible_api_keys),
+        pool_groups(filter_pools(pools, selected_pool), pool_lookup, visible_api_key_rows),
       pool_options: pool_options(pools),
       model_policy_filter: model_policy_filter,
       unavailable_model_policy_count: unavailable_model_policy_count,
@@ -104,28 +110,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     %{}
     |> Map.put("pool_id", pool_filter_value(pool))
     |> Map.put("model_policy", model_policy_filter || "")
-  end
-
-  @spec usage_for_params(map()) :: usage_summary()
-  def usage_for_params(%{"id" => api_key_id, "pool_id" => pool_id}) do
-    case {blank_to_nil(api_key_id), blank_to_nil(pool_id)} do
-      {nil, _pool_id} -> empty_usage()
-      {_api_key_id, nil} -> empty_usage()
-      {api_key_id, pool_id} -> load_api_key_usage(pool_id, api_key_id)
-    end
-  end
-
-  def usage_for_params(_params), do: empty_usage()
-
-  @spec empty_usage() :: usage_summary()
-  def empty_usage do
-    %{
-      available?: false,
-      request_count: 0,
-      total_tokens: 0,
-      cached_input_tokens: 0,
-      limits: []
-    }
   end
 
   @spec model_selector_state(Pool.t() | nil, map()) :: map()
@@ -160,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     Enum.map(pools, &{&1.name, &1.id})
   end
 
-  @spec pool_groups([Pool.t()], pool_lookup(), [APIKey.t()]) :: [pool_group()]
+  @spec pool_groups([Pool.t()], pool_lookup(), [api_key_row()]) :: [pool_group()]
   def pool_groups(pools, pool_lookup, api_keys) do
     api_keys_by_pool_id = Enum.group_by(api_keys, & &1.pool_id)
 
@@ -220,43 +204,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   def unavailable_model_policy_count_label(1), do: "1 affected key"
   def unavailable_model_policy_count_label(count), do: "#{count} affected keys"
 
-  @spec usage_present?(usage_summary() | nil) :: boolean()
-  def usage_present?(usage) do
-    positive_integer?(usage[:request_count]) or positive_integer?(usage[:total_tokens]) or
-      positive_integer?(usage[:cached_input_tokens])
-  end
-
-  @spec row_usage_cost(usage_summary() | nil) :: String.t() | nil
-  def row_usage_cost(%{total_cost_status: "priced", total_cost_usd: %Decimal{} = usd}) do
-    "Cost #{Format.money(usd)}"
-  end
-
-  def row_usage_cost(_usage), do: nil
-
-  @spec format_token_count(integer() | Decimal.t() | nil | term()) :: String.t()
-  def format_token_count(value) when is_integer(value) or is_float(value) or is_nil(value),
-    do: Format.token_count(value)
-
-  def format_token_count(%Decimal{} = value), do: Format.token_count(value)
-  def format_token_count(value), do: value |> to_string() |> blank_to_nil() || "unknown"
-
-  @spec format_integer(integer() | Decimal.t() | nil | term()) :: String.t()
-  def format_integer(value) when is_integer(value) do
-    value
-    |> Integer.to_string()
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
-  end
-
-  def format_integer(%Decimal{} = value),
-    do: value |> Decimal.round(0) |> Decimal.to_integer() |> format_integer()
-
-  def format_integer(nil), do: "unknown"
-  def format_integer(value), do: value |> to_string() |> blank_to_nil() || "unknown"
-
-  @spec api_key_operator_notes(APIKey.t() | term()) :: String.t() | nil
-  def api_key_operator_notes(%APIKey{metadata: metadata}) when is_map(metadata) do
+  @spec api_key_operator_notes(api_key_row() | APIKey.t() | term()) :: String.t() | nil
+  def api_key_operator_notes(%{metadata: metadata}) when is_map(metadata) do
     metadata
     |> Map.get("operator_notes", Map.get(metadata, :operator_notes))
     |> blank_to_nil()
@@ -362,12 +311,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
        ),
        do: nil
 
-  defp usage_summaries(api_keys) do
-    api_keys
-    |> Enum.map(& &1.id)
-    |> Accounting.list_api_key_usage_summaries()
-  end
-
   defp filter_api_keys(api_keys, nil), do: api_keys
 
   defp filter_api_keys(api_keys, %Pool{id: pool_id}) do
@@ -382,13 +325,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
 
   defp filter_pools(pools, nil), do: pools
   defp filter_pools(_pools, %Pool{} = pool), do: [pool]
-
-  defp load_api_key_usage(pool_id, api_key_id) do
-    case Accounting.build_api_key_self_usage(pool_id, api_key_id) do
-      {:ok, usage} -> Map.put(usage, :available?, true)
-      {:error, _reason} -> empty_usage()
-    end
-  end
 
   defp pool_dom_id(pool) do
     pool.slug
@@ -459,7 +395,19 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     end
   end
 
-  defp positive_integer?(value), do: is_integer(value) and value > 0
+  defp api_key_row(%APIKey{} = api_key) do
+    Map.take(api_key, [
+      :id,
+      :pool_id,
+      :display_name,
+      :key_prefix,
+      :status,
+      :last_used_at,
+      :expires_at,
+      :allowed_model_identifiers,
+      :metadata
+    ])
+  end
 
   defp dom_token(value) do
     value

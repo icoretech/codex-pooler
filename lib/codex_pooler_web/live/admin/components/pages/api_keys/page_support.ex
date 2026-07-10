@@ -11,8 +11,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageSupport do
     if value == "", do: nil, else: value
   end
 
-  def api_key_delete_form(%APIKey{} = api_key) do
-    %{"id" => api_key.id, "confirmation_prefix" => ""}
+  @spec api_key_delete_form(%{required(:id) => Ecto.UUID.t()}) :: Phoenix.HTML.Form.t()
+  def api_key_delete_form(%{id: api_key_id}) do
+    %{"id" => api_key_id, "confirmation_prefix" => ""}
     |> Component.to_form(as: :api_key_delete)
   end
 

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   alias CodexPoolerWeb.Admin.ApiKeysReadModel
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :created_secret, :map, required: true
 
@@ -148,8 +149,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
 
   attr :pools, :list, required: true
   attr :groups, :list, required: true
-  attr :usage_summaries, :map, required: true
   attr :model_policy_summaries, :map, required: true
+  attr :datetime_preferences, :map, required: true
   attr :selected_pool, :any, default: nil
   attr :model_policy_filter, :string, default: nil
   attr :unavailable_model_policy_count, :integer, required: true
@@ -279,7 +280,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <article
             :for={api_key <- group.api_keys}
             id={"api-key-row-#{api_key.id}"}
-            class="relative grid min-w-0 gap-4 p-4 transition-colors hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(11rem,0.8fr)_minmax(14rem,1fr)_auto] xl:items-start"
+            class="relative grid min-w-0 gap-4 p-4 transition-colors hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto] xl:items-start"
           >
             <div
               id={"api-key-row-#{api_key.id}-key"}
@@ -309,9 +310,17 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 {api_key.status}
               </span>
             </div>
-            <div id={"api-key-row-#{api_key.id}-usage"} class="grid gap-1">
-              <span class="text-xs font-medium text-base-content/50">Recorded usage</span>
-              <.api_key_row_usage usage={Map.get(@usage_summaries, api_key.id)} />
+            <div class="grid gap-2 text-sm text-base-content/70">
+              <div id={"api-key-row-#{api_key.id}-last-used"} class="grid gap-0.5">
+                <span class="text-xs font-medium text-base-content/50">Last used</span>
+                <span>{last_used_label(api_key.last_used_at, @datetime_preferences)}</span>
+              </div>
+              <div id={"api-key-row-#{api_key.id}-expires"} class="grid gap-0.5">
+                <span class="text-xs font-medium text-base-content/50">Expires</span>
+                <span class={expiry_label_class(api_key.expires_at)}>
+                  {expiry_label(api_key.expires_at, @datetime_preferences)}
+                </span>
+              </div>
             </div>
             <div class="grid min-w-0 gap-2 text-sm text-base-content/70">
               <span class="text-xs font-medium text-base-content/50">Model access</span>
@@ -454,38 +463,32 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     """
   end
 
-  attr :usage, :map, default: nil
+  defp last_used_label(nil, _datetime_preferences), do: "Never used"
 
-  defp api_key_row_usage(%{usage: usage} = assigns) when is_map(usage) do
-    assigns = assign(assigns, :show_usage?, ApiKeysReadModel.usage_present?(usage))
+  defp last_used_label(%DateTime{} = last_used_at, datetime_preferences),
+    do: DateTimeDisplay.format_datetime(last_used_at, datetime_preferences)
 
-    ~H"""
-    <div :if={@show_usage?} class="grid gap-0.5 text-sm tabular-nums text-base-content">
-      <span class="font-medium">
-        {ApiKeysReadModel.format_integer(@usage.request_count)} requests
-      </span>
-      <span class="text-xs text-base-content/70">
-        {ApiKeysReadModel.format_token_count(@usage.total_tokens)} tokens
-      </span>
-      <span
-        :if={ApiKeysReadModel.usage_present?(%{cached_input_tokens: @usage.cached_input_tokens})}
-        class="text-xs text-base-content/60"
-      >
-        {ApiKeysReadModel.format_token_count(@usage.cached_input_tokens)} cached input
-      </span>
-      <span :if={ApiKeysReadModel.row_usage_cost(@usage)} class="text-xs text-base-content/60">
-        {ApiKeysReadModel.row_usage_cost(@usage)}
-      </span>
-    </div>
-    <span :if={!@show_usage?} class="text-sm text-base-content/50">No usage recorded</span>
-    """
+  defp last_used_label(_last_used_at, _datetime_preferences), do: "Never used"
+
+  defp expiry_label(nil, _datetime_preferences), do: "No expiry"
+
+  defp expiry_label(%DateTime{} = expires_at, datetime_preferences) do
+    formatted = DateTimeDisplay.format_datetime(expires_at, datetime_preferences)
+
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :lt,
+      do: "Expired · #{formatted}",
+      else: formatted
   end
 
-  defp api_key_row_usage(assigns) do
-    ~H"""
-    <span class="text-sm text-base-content/50">No usage recorded</span>
-    """
+  defp expiry_label(_expires_at, _datetime_preferences), do: "No expiry"
+
+  defp expiry_label_class(%DateTime{} = expires_at) do
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :lt,
+      do: "font-medium text-error",
+      else: nil
   end
+
+  defp expiry_label_class(_expires_at), do: nil
 
   attr :id, :string, required: true
   attr :notes, :string, required: true

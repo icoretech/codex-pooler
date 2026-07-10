@@ -25,7 +25,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        api_keys: [],
        filter_values: %{"pool_id" => ""},
        selected_pool: nil,
-       api_key_usage_summaries: %{},
        api_key_model_policy_summaries: %{},
        api_key_form: nil,
        api_key_params: %{},
@@ -35,7 +34,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
        api_key_wizard_step: "basics",
        api_key_model_selector_state: ApiKeysReadModel.empty_model_selector_state(),
        api_key_review_errors: [],
-       api_key_wizard_usage: ApiKeysReadModel.empty_usage(),
        creating_api_key: false,
        editing_api_key: nil,
        deleting_api_key: nil,
@@ -79,16 +77,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   end
 
   def handle_event("api_key_wizard_step", %{"step" => step}, socket) do
-    {:noreply, assign(socket, :api_key_wizard_step, ApiKeyWizardComponents.normalize_step(step))}
+    {:noreply, assign_api_key_wizard_step(socket, ApiKeyWizardComponents.normalize_step(step))}
   end
 
   def handle_event("api_key_wizard_next", _params, socket) do
-    {:noreply,
-     assign(
-       socket,
-       :api_key_wizard_step,
-       ApiKeyWizardComponents.next_step(socket.assigns.api_key_wizard_step)
-     )}
+    next_step = ApiKeyWizardComponents.next_step(socket.assigns.api_key_wizard_step)
+
+    {:noreply, assign_api_key_wizard_step(socket, next_step)}
   end
 
   def handle_event("api_key_wizard_back", _params, socket) do
@@ -173,7 +168,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
       nil ->
         {:noreply, put_flash(socket, :error, "API key was not found")}
 
-      api_key ->
+      %{id: _id} = api_key ->
         {:noreply,
          socket
          |> assign(
@@ -197,9 +192,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
     api_key_id = delete_params["id"]
     confirmation_prefix = Support.blank_to_nil(delete_params["confirmation_prefix"])
 
-    with %APIKey{} = deleting_api_key <- socket.assigns.deleting_api_key,
-         true <- deleting_api_key.id == api_key_id,
-         true <- deleting_api_key.key_prefix == confirmation_prefix,
+    with %{id: deleting_api_key_id, key_prefix: deleting_api_key_prefix} <-
+           socket.assigns.deleting_api_key,
+         true <- deleting_api_key_id == api_key_id,
+         true <- deleting_api_key_prefix == confirmation_prefix,
          {:ok, _api_key} <- Access.delete_api_key(socket.assigns.current_scope, api_key_id) do
       {:noreply,
        socket
@@ -241,13 +237,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
   end
 
   @impl true
-  def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
+  def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket)
+      when is_binary(pool_id) and is_list(topics) do
     if api_key_event_in_scope?(socket, pool_id, topics) do
       {:noreply, load_api_keys(socket, reset_form: false, clear_secret: false)}
     else
       {:noreply, socket}
     end
   end
+
+  def handle_info({Events, _event}, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do
@@ -351,13 +350,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
               review_sections={
                 ApiKeyPolicyForm.review_sections(
                   @api_key_form,
-                  @api_key_model_selector_state
+                  @api_key_model_selector_state,
+                  ApiKeysReadModel.selected_pool(@pools, @api_key_params["pool_id"])
                 )
               }
               review_errors={@api_key_review_errors}
-              usage={@api_key_wizard_usage}
               warnings={@api_key_model_selector_state.warnings}
-              datetime_preferences={@datetime_preferences}
             />
           </:review>
         </ApiKeyWizardComponents.api_key_wizard>
@@ -372,8 +370,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         <ApiKeyPageComponents.api_key_groups
           pools={@pools}
           groups={@api_key_pool_groups}
-          usage_summaries={@api_key_usage_summaries}
           model_policy_summaries={@api_key_model_policy_summaries}
+          datetime_preferences={@datetime_preferences}
           selected_pool={@selected_pool}
           model_policy_filter={@model_policy_filter}
           unavailable_model_policy_count={@unavailable_model_policy_count}
@@ -469,7 +467,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
     assign(socket, deleting_api_key: nil, delete_form: nil)
   end
 
-  defp reset_delete_form(%{assigns: %{deleting_api_key: %APIKey{} = api_key}} = socket) do
+  defp reset_delete_form(%{assigns: %{deleting_api_key: %{id: _id} = api_key}} = socket) do
     socket
     |> assign(:delete_form, Support.api_key_delete_form(api_key))
     |> update(:delete_form_version, &(&1 + 1))
@@ -496,14 +494,21 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
     pools
     |> PoolEventSubscriptions.pool_id_set()
     |> then(fn target_pool_ids ->
-      {socket, _stale_pool_ids} = PoolEventSubscriptions.reconcile(socket, target_pool_ids)
+      {socket, _stale_pool_ids} =
+        PoolEventSubscriptions.reconcile(socket, target_pool_ids, ["pools"])
+
       socket
     end)
   end
 
   defp api_key_event_in_scope?(socket, pool_id, topics) do
-    Enum.any?(topics, &(&1 in ["pools", "request_logs", "usage"])) and
-      MapSet.member?(socket.assigns.subscribed_pool_ids, pool_id)
+    case Events.validate_topics(topics) do
+      {:ok, topics} ->
+        "pools" in topics and MapSet.member?(socket.assigns.subscribed_pool_ids, pool_id)
+
+      {:error, :invalid_topics} ->
+        false
+    end
   end
 
   defp maybe_reset_form(socket, opts, pools) do
@@ -529,20 +534,28 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   defp assign_api_key_wizard_state(socket, params) do
     params = ApiKeyPolicyForm.normalize_params(params, socket.assigns.pools)
-    form = ApiKeyPolicyForm.form(params)
+    form = ApiKeyPolicyForm.form(params, errors: ApiKeyPolicyForm.expiry_errors(params))
     pool = ApiKeysReadModel.selected_pool(socket.assigns.pools, params["pool_id"])
     model_selector_state = ApiKeysReadModel.model_selector_state(pool, params)
     review_errors = ApiKeyPolicyForm.review_errors(params)
-    usage = ApiKeysReadModel.usage_for_params(params)
 
     assign(socket,
       api_key_params: params,
       api_key_form: form,
       api_key_model_selector_state: model_selector_state,
-      api_key_review_errors: review_errors,
-      api_key_wizard_usage: usage
+      api_key_review_errors: review_errors
     )
   end
 
   defp error_message(reason), do: Support.error_message(reason)
+
+  defp assign_api_key_wizard_step(socket, "review") do
+    if ApiKeyPolicyForm.expiry_errors(socket.assigns.api_key_params) == [] do
+      assign(socket, :api_key_wizard_step, "review")
+    else
+      assign(socket, :api_key_wizard_step, "basics")
+    end
+  end
+
+  defp assign_api_key_wizard_step(socket, step), do: assign(socket, :api_key_wizard_step, step)
 end
