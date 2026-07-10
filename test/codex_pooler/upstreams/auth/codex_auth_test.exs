@@ -153,6 +153,48 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
   end
 
   describe "device-code OAuth protocol" do
+    test "device-code flow normalizes a trailing issuer slash across provider urls" do
+      provider =
+        start_provider!(%{
+          "/api/accounts/deviceauth/usercode" =>
+            {200,
+             FakeOpenAIAuthProvider.device_code_response(
+               device_auth_id: "device-auth-normalized",
+               user_code: "NORMALIZED-CODE",
+               interval: "5"
+             )},
+          "/api/accounts/deviceauth/token" =>
+            {200,
+             FakeOpenAIAuthProvider.authorization_code_response(
+               authorization_code: "device-authorization-code-normalized",
+               code_verifier: "device-code-verifier-normalized"
+             )},
+          "/oauth/token" => {200, FakeOpenAIAuthProvider.token_response()}
+        })
+
+      issuer = FakeOpenAIAuthProvider.url(provider)
+      Application.put_env(:codex_pooler, CodexAuth, issuer: issuer <> "/")
+
+      assert CodexAuth.issuer() == issuer
+      assert CodexAuth.device_redirect_uri() == issuer <> "/deviceauth/callback"
+
+      assert {:ok, device_code} = CodexAuth.request_device_code()
+      assert device_code["verification_url"] == issuer <> "/codex/device"
+
+      assert {:ok, %{access_token: "access-token-example"}} =
+               CodexAuth.poll_device_authorization(device_code)
+
+      assert [user_code_request, poll_request, token_request] =
+               FakeOpenAIAuthProvider.requests(provider)
+
+      assert user_code_request.path == "/api/accounts/deviceauth/usercode"
+      assert poll_request.path == "/api/accounts/deviceauth/token"
+      assert token_request.path == "/oauth/token"
+
+      form = FakeOpenAIAuthProvider.decode_form_request(token_request)
+      assert form["redirect_uri"] == issuer <> "/deviceauth/callback"
+    end
+
     test "device-code request posts the client id and normalizes provider fields" do
       provider =
         start_provider!(%{
@@ -238,7 +280,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
       assert form["grant_type"] == "authorization_code"
       assert form["code"] == "device-authorization-code"
       assert form["code_verifier"] == "device-code-verifier"
-      assert form["redirect_uri"] == CodexAuth.device_redirect_uri()
+
+      assert form["redirect_uri"] ==
+               FakeOpenAIAuthProvider.url(provider) <> "/deviceauth/callback"
     end
 
     test "device-code pending and slow_down responses keep retry hints sanitized" do

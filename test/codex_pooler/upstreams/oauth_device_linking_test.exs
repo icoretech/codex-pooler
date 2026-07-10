@@ -163,7 +163,9 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     form = FakeOpenAIAuthProvider.decode_form_request(token_request)
     assert form["code"] == "device-authorization-code-success"
     assert form["code_verifier"] == "device-code-verifier-success"
-    assert form["redirect_uri"] == CodexAuth.device_redirect_uri()
+
+    assert form["redirect_uri"] ==
+             FakeOpenAIAuthProvider.url(provider) <> "/deviceauth/callback"
 
     refute_result_contains(result, [
       "device-auth-linking",

@@ -8,7 +8,6 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   @issuer "https://auth.openai.com"
   @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
   @browser_redirect_uri "http://localhost:1455/auth/callback"
-  @device_redirect_uri "https://auth.openai.com/deviceauth/callback"
   @authorization_scope "openid profile email offline_access api.connectors.read api.connectors.invoke"
 
   @type auth_error :: %{
@@ -87,7 +86,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
         "originator" => oauth_originator()
       })
 
-    issuer() |> String.trim_trailing("/") |> Kernel.<>("/oauth/authorize?#{query}")
+    issuer() <> "/oauth/authorize?#{query}"
   end
 
   @spec exchange_authorization_code(String.t(), String.t(), String.t()) :: token_response()
@@ -166,7 +165,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   def browser_redirect_uri, do: @browser_redirect_uri
 
   @spec device_redirect_uri() :: String.t()
-  def device_redirect_uri, do: @device_redirect_uri
+  def device_redirect_uri, do: issuer() <> "/deviceauth/callback"
 
   @spec oauth_originator() :: String.t()
   def oauth_originator, do: CodexClientIdentity.originator()
@@ -176,6 +175,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     :codex_pooler
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:issuer, @issuer)
+    |> String.trim_trailing("/")
   end
 
   @spec client() :: auth_client()
@@ -269,7 +269,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
     end
 
     @spec browser_origin() :: String.t()
-    defp browser_origin, do: CodexAuth.issuer() |> String.trim_trailing("/")
+    defp browser_origin, do: CodexAuth.issuer()
 
     @spec request_device_code() :: CodexAuth.device_code_response()
     def request_device_code do
