@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.23](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.22...codex-pooler-v0.4.23) (2026-07-10)
+
+
+### Features
+
+* **admin:** redesign API key registries ([5bb9f73](https://github.com/icoretech/codex-pooler/commit/5bb9f7314f75fb2f7ce7b9a045b06db8e75337f6))
+
+
+### Bug Fixes
+
+* **admin:** show observed zero-use model quotas ([d58b818](https://github.com/icoretech/codex-pooler/commit/d58b81851bb468c65b3040a1cfc6ef129448dbab))
+* **upstreams:** prevent weekly quota evidence rollback ([e7f5039](https://github.com/icoretech/codex-pooler/commit/e7f5039d2088a52e31f1f036974d5a027657c750))
+
 ## [0.4.22](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.21...codex-pooler-v0.4.22) (2026-07-09)
 
 
