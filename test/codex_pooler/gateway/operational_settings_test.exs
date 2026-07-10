@@ -83,7 +83,6 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_pool_timeout_ms == 15_000
     assert settings.upstream_receive_timeout_ms == 300_000
     assert settings.websocket_idle_timeout_ms == 1_800_000
-    assert settings.upstream_user_agent == "auto"
     assert settings.model_context_window_overrides == %{}
   end
 
@@ -117,7 +116,6 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
                  "upstream_pool_timeout_ms" => 222,
                  "upstream_receive_timeout_ms" => 333,
                  "websocket_idle_timeout_ms" => 444_000,
-                 "upstream_user_agent" => "codex_cli_rs/9.9.9",
                  "expired_alias_ttl_seconds" => 120,
                  "bridge_owner_lease_ttl_seconds" => 45,
                  "bridge_owner_lease_renewal_seconds" => 15,
@@ -164,21 +162,18 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_pool_timeout_ms == 222
     assert settings.upstream_receive_timeout_ms == 333
     assert settings.websocket_idle_timeout_ms == 444_000
-    assert settings.upstream_user_agent == "codex_cli_rs/9.9.9"
     assert settings.model_context_window_overrides == %{"gpt-test-model" => 131_072}
   end
 
-  test "current/0 self-heals cached settings structs created before new gateway fields existed" do
+  test "current/0 self-heals cached settings created before websocket idle timeout existed" do
     stale_settings = %{
       Settings.default()
-      | gateway: Map.delete(Settings.default().gateway, :upstream_user_agent)
+      | gateway: Map.delete(Settings.default().gateway, :websocket_idle_timeout_ms)
     }
 
     :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
 
-    assert OperationalSettings.current().upstream_user_agent == "auto"
     assert OperationalSettings.current().websocket_idle_timeout_ms == 1_800_000
-    assert InstanceSettings.current().gateway.upstream_user_agent == "auto"
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 1_800_000
   end
 

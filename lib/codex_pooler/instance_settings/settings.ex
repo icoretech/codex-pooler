@@ -23,7 +23,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :upstream_connect_timeout_ms,
     :upstream_pool_timeout_ms,
     :upstream_receive_timeout_ms,
-    :upstream_user_agent,
     :expired_alias_ttl_seconds,
     :bridge_owner_lease_ttl_seconds,
     :bridge_owner_lease_renewal_seconds,
@@ -45,7 +44,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :upstream_connect_timeout_ms, :integer
       field :upstream_pool_timeout_ms, :integer
       field :upstream_receive_timeout_ms, :integer
-      field :upstream_user_agent, :string
       field :expired_alias_ttl_seconds, :integer
       field :bridge_owner_lease_ttl_seconds, :integer
       field :bridge_owner_lease_renewal_seconds, :integer
@@ -224,7 +222,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
-      :upstream_user_agent,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -242,7 +239,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
-      :upstream_user_agent,
       :expired_alias_ttl_seconds,
       :bridge_owner_lease_ttl_seconds,
       :bridge_owner_lease_renewal_seconds,
@@ -261,9 +257,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_positive_integer(:upstream_connect_timeout_ms)
     |> validate_positive_integer(:upstream_pool_timeout_ms)
     |> validate_positive_integer(:upstream_receive_timeout_ms)
-    |> update_change(:upstream_user_agent, &normalize_upstream_user_agent/1)
-    |> validate_length(:upstream_user_agent, min: 1, max: 256)
-    |> validate_format(:upstream_user_agent, ~r/^[^\r\n]+$/)
     |> validate_positive_integer(:expired_alias_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_ttl_seconds)
     |> validate_positive_integer(:bridge_owner_lease_renewal_seconds)
@@ -274,9 +267,6 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_change(:bulkheads, &validate_bulkheads/2)
     |> validate_change(:model_context_window_overrides, &validate_positive_integer_map/2)
   end
-
-  defp normalize_upstream_user_agent(value) when is_binary(value), do: String.trim(value)
-  defp normalize_upstream_user_agent(value), do: value
 
   defp ingress_changeset(ingress, attrs) do
     ingress

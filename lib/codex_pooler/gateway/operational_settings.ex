@@ -4,10 +4,8 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   """
 
   alias CodexPooler.{InstanceSettings, RouteClass}
-  alias CodexPooler.Upstreams.CodexClientIdentity
 
   @default_decompression_algorithms ["gzip", "deflate", "zstd"]
-  @default_upstream_user_agent CodexClientIdentity.automatic_user_agent_setting()
   @default_bulkheads RouteClass.default_bulkheads()
   @websocket_owner_forwarding_env "CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING"
   @websocket_owner_forwarding_allowed_values "true,false,1,0,yes,no,on,off"
@@ -49,7 +47,6 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           upstream_pool_timeout_ms: pos_integer(),
           upstream_receive_timeout_ms: pos_integer(),
           websocket_idle_timeout_ms: pos_integer(),
-          upstream_user_agent: String.t(),
           model_context_window_overrides: %{String.t() => pos_integer()}
         }
 
@@ -78,7 +75,6 @@ defmodule CodexPooler.Gateway.OperationalSettings do
             upstream_pool_timeout_ms: :timer.seconds(15),
             upstream_receive_timeout_ms: :timer.minutes(5),
             websocket_idle_timeout_ms: @websocket_idle_timeout_default_ms,
-            upstream_user_agent: @default_upstream_user_agent,
             model_context_window_overrides: %{}
 
   @spec current() :: t()
@@ -119,13 +115,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       upstream_receive_timeout_ms: settings.gateway.upstream_receive_timeout_ms,
       websocket_idle_timeout_ms:
         clamp_websocket_idle_timeout(settings.gateway.websocket_idle_timeout_ms),
-      upstream_user_agent: settings.gateway.upstream_user_agent,
       model_context_window_overrides: settings.gateway.model_context_window_overrides
     }
   end
-
-  @spec default_upstream_user_agent() :: String.t()
-  def default_upstream_user_agent, do: @default_upstream_user_agent
 
   @spec firewall_enabled?(t()) :: boolean()
   def firewall_enabled?(%__MODULE__{firewall_allowlist: allowlist}), do: allowlist != []

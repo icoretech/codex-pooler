@@ -76,7 +76,6 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     assert Classification.bucket_for!(:bridge_owner_lease) == :db_runtime_cached
     assert Classification.bucket_for!(:circuit_thresholds) == :db_runtime_cached
     assert Classification.bucket_for!(:bulkheads) == :db_runtime_cached
-    assert Classification.bucket_for!(:upstream_user_agent) == :db_runtime_cached
     assert Classification.bucket_for!(:smtp_delivery) == :db_runtime_cached
     assert Classification.bucket_for!(:mcp_service_enabled) == :db_runtime_cached
   end

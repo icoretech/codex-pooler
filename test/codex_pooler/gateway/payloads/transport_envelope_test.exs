@@ -48,7 +48,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
           " upstream-token ",
           [{"accept", "application/json"}],
           include_codex_identity?: true,
-          upstream_user_agent: "codex_cli_rs/9.9.9",
           forwarded_headers: [
             {"user-agent", "downstream-harness/1.0"},
             {"originator", "downstream-originator"},
@@ -63,7 +62,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
       assert headers == [
                {"authorization", "Bearer upstream-token"},
-               {"user-agent", "codex_cli_rs/9.9.9"},
+               {"user-agent", "codex_cli_rs/#{version}"},
                {"originator", "codex_cli_rs"},
                {"version", version},
                {"chatgpt-account-id", "acct_test"},

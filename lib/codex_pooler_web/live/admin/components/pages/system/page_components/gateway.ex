@@ -30,19 +30,6 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <FormControls.scalar_controls form={gateway_form} controls={gateway_scalar_controls()} />
           </div>
-          <div class="max-w-2xl">
-            <.input
-              id="instance-settings-upstream-user-agent"
-              field={gateway_form[:upstream_user_agent]}
-              type="text"
-              label="Upstream Codex user-agent override"
-              placeholder="auto"
-            />
-            <p class="mt-1 text-xs leading-5 text-base-content/55">
-              Keep <code>auto</code> to follow the bundled Codex client version. A custom value
-              overrides only User-Agent; trusted originator and version headers remain server-owned.
-            </p>
-          </div>
           <div class="grid gap-4 lg:grid-cols-2">
             <FormControls.json_textarea
               id="instance-settings-bulkheads"

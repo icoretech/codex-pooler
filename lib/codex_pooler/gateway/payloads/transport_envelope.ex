@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   Shared upstream HTTP transport envelope helpers.
   """
 
-  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Upstreams.CodexClientIdentity
@@ -49,10 +48,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
 
   defp codex_identity_headers(opts) do
     if Keyword.get(opts, :include_codex_identity?, false) do
-      user_agent_setting =
-        Keyword.get(opts, :upstream_user_agent, OperationalSettings.current().upstream_user_agent)
-
-      CodexClientIdentity.headers(user_agent_setting)
+      CodexClientIdentity.headers()
     else
       []
     end

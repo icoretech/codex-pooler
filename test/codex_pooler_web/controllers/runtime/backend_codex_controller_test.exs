@@ -33,6 +33,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 
   @supported_compression_model "gpt-4o"
@@ -1474,21 +1475,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :installation_id_metadata
-  test "POST /backend-api/codex/v1/responses forwards approved lineage metadata headers and configured user-agent",
+  test "POST /backend-api/codex/v1/responses forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
-    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
-    configured_upstream_user_agent = "codex_cli_rs/task4-regression"
-
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{upstream_user_agent: configured_upstream_user_agent}
-    )
-
-    on_exit(fn ->
-      if previous_env,
-        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
-        else: Application.delete_env(:codex_pooler, OperationalSettings)
-    end)
-
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -1521,7 +1509,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert_approved_lineage_headers_forwarded!(captured, metadata)
     assert_disallowed_client_headers_not_forwarded!(captured, setup)
-    assert Map.new(captured.headers)["user-agent"] == configured_upstream_user_agent
     assert_lineage_metadata_not_persisted!(setup, metadata)
   end
 
@@ -7233,21 +7220,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :installation_id_metadata
-  test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata headers and configured user-agent",
+  test "POST /backend-api/codex/v1/responses/compact forwards approved lineage metadata with trusted Codex identity",
        %{conn: conn} do
-    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
-    configured_upstream_user_agent = "codex_cli_rs/task5-compact-regression"
-
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{upstream_user_agent: configured_upstream_user_agent}
-    )
-
-    on_exit(fn ->
-      if previous_env,
-        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
-        else: Application.delete_env(:codex_pooler, OperationalSettings)
-    end)
-
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -7289,7 +7263,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert_approved_lineage_headers_forwarded!(captured, metadata)
     assert_disallowed_client_headers_not_forwarded!(captured, setup)
-    assert captured_headers["user-agent"] == configured_upstream_user_agent
     assert_lineage_metadata_not_persisted!(setup, metadata)
   end
 
@@ -8764,11 +8737,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   defp assert_disallowed_client_headers_not_forwarded!(captured, setup) do
     captured_headers = Map.new(captured.headers)
+    codex_version = CodexClientIdentity.version()
 
     assert captured_headers["authorization"] == "Bearer upstream-token"
     assert captured_headers["accept"] in ["application/json", "text/event-stream"]
     assert captured_headers["content-type"] == "application/json"
-    assert captured_headers["user-agent"] != "lineage-client-user-agent"
+    assert captured_headers["user-agent"] == "codex_cli_rs/#{codex_version}"
+    assert captured_headers["originator"] == CodexClientIdentity.originator()
+    assert captured_headers["version"] == codex_version
 
     refute Map.has_key?(captured_headers, "cookie")
     refute Map.has_key?(captured_headers, "idempotency-key")
