@@ -921,6 +921,77 @@ defmodule CodexPooler.Admin.StatsTest do
     assert top_api_key.settled_cost_micros == 700_000
   end
 
+  test "pool_usage_metrics_by_pool_ids/2 materializes bounded settlement bucket rows" do
+    pool = pool_fixture(%{slug: "stats-bounded-buckets", name: "Stats Bounded Buckets"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:34:56.000000Z]
+
+    for minute <- 1..4 do
+      insert_timed_usage!(
+        pool,
+        api_key,
+        assignment,
+        identity,
+        ~U[2026-01-10 12:00:00.000000Z] |> DateTime.add(minute, :minute),
+        minute * 10
+      )
+    end
+
+    {metrics, query_events} =
+      collect_repo_query_events(fn ->
+        Stats.pool_usage_metrics_by_pool_ids([pool.id], as_of: as_of, traffic_window: "1h")
+      end)
+
+    assert metrics[pool.id].request_count == 4
+    assert metrics[pool.id].settled_cost_micros == 100
+    assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 100
+
+    grouped_bucket_events =
+      Enum.filter(query_events, &(&1.projection == :settlement_usage_buckets))
+
+    safe_keys = MapSet.new([:command, :duration, :projection, :row_count, :source])
+    assert Enum.all?(query_events, &(MapSet.new(Map.keys(&1)) == safe_keys))
+
+    assert [grouped_bucket_event] = grouped_bucket_events
+    assert grouped_bucket_event.command == "SELECT"
+    assert grouped_bucket_event.row_count == 1
+    assert grouped_bucket_event.source in [nil, ""]
+
+    refute Enum.any?(query_events, fn event ->
+             event.projection != :settlement_usage_buckets and event.source == "ledger_entries" and
+               event.command == "SELECT" and event.row_count > 1
+           end)
+  end
+
+  test "pool usage buckets preserve fixed labels across every supported window" do
+    pool = pool_fixture(%{slug: "stats-all-bucket-windows", name: "Stats All Bucket Windows"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:34:56.000000Z]
+
+    insert_timed_usage!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      ~U[2026-01-10 12:10:00.000000Z],
+      10
+    )
+
+    for {window, bucket_count} <- [{"1h", 1}, {"5h", 5}, {"24h", 24}, {"7d", 7}] do
+      metrics =
+        Stats.pool_usage_metrics_by_pool_ids([pool.id],
+          as_of: as_of,
+          traffic_window: window
+        )
+
+      assert length(metrics[pool.id].token_histogram) == bucket_count
+      assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 10
+      assert metrics[pool.id].settled_cost_micros == 10
+    end
+  end
+
   test "UTC window boundaries include exact start and end and exclude adjacent rows" do
     scope = owner_scope()
     pool = pool_fixture(%{slug: "stats-boundary", name: "Stats Boundary"})
@@ -943,6 +1014,9 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.filters.ended_at == as_of
     assert dashboard.kpis.requests.value == 2
     assert dashboard.kpis.tokens.total_tokens == 50
+    assert dashboard.kpis.settled_cost.micros == 50
+    assert Enum.sum(Enum.map(dashboard.charts.tokens, & &1.total_tokens)) == 30
+    assert Enum.sum(Enum.map(dashboard.charts.settled_cost, & &1.settled_cost_micros)) == 30
   end
 
   test "selected hard-deleted pool ids are excluded from management-visible stats" do
@@ -1386,6 +1460,61 @@ defmodule CodexPooler.Admin.StatsTest do
     |> Ecto.Changeset.change(%{occurred_at: timestamp, created_at: timestamp})
     |> Repo.update!()
   end
+
+  defp collect_repo_query_events(fun) when is_function(fun, 0) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        &__MODULE__.handle_repo_query_event/4,
+        {handler_id, self()}
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  def handle_repo_query_event(_event, measurements, metadata, {handler_id, test_pid}) do
+    if metadata[:repo] == Repo do
+      send(test_pid, {
+        handler_id,
+        %{
+          source: to_string(metadata[:source]),
+          command: repo_query_command(metadata[:query]),
+          row_count: repo_query_row_count(metadata[:result]),
+          duration: measurements[:total_time],
+          projection: metadata[:options][:reporting_projection]
+        }
+      })
+    end
+  end
+
+  defp drain_repo_query_events(handler_id, events) do
+    receive do
+      {^handler_id, event} -> drain_repo_query_events(handler_id, [event | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp repo_query_command(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+  end
+
+  defp repo_query_row_count({:ok, %{num_rows: row_count}}) when is_integer(row_count),
+    do: row_count
+
+  defp repo_query_row_count(%{num_rows: row_count}) when is_integer(row_count), do: row_count
+  defp repo_query_row_count(_result), do: 0
 
   defp upsert_primary_5h!(identity, now) do
     assert {:ok, [_window]} =

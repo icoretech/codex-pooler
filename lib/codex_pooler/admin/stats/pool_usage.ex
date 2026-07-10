@@ -69,11 +69,16 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
         started_at
       )
 
-    histogram_settlements =
-      AccountingReporting.settlements_for_pool_ids(pool_ids, histogram_started_at, ended_at)
+    settlement_usage_buckets =
+      AccountingReporting.settlement_usage_buckets_for_pool_ids(
+        pool_ids,
+        pool_bucket_granularity(window),
+        histogram_started_at,
+        ended_at
+      )
 
-    token_histograms = pool_token_histograms(pool_ids, histogram_settlements, ended_at, window)
-    cost_micros = pool_settled_cost_micros(pool_ids, histogram_settlements)
+    token_histograms = pool_token_histograms(pool_ids, settlement_usage_buckets, ended_at, window)
+    cost_micros = pool_settled_cost_micros(pool_ids, settlement_usage_buckets)
 
     request_histograms =
       pool_request_histograms(
@@ -144,7 +149,7 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
 
     entries_by_pool_bucket =
       Enum.group_by(settlements, fn settlement ->
-        {settlement.pool_id, Buckets.label(settlement.occurred_at, window)}
+        {settlement.pool_id, Buckets.label(settlement.bucket, window)}
       end)
 
     Map.new(pool_ids, fn pool_id ->

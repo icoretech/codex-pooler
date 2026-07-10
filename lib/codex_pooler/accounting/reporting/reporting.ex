@@ -32,6 +32,18 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:source) => model_usage_source(),
           required(:rows) => [model_usage_bucket()]
         }
+  @type settlement_bucket_granularity :: :hour | :day
+  @type settlement_usage_bucket :: %{
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:bucket) => DateTime.t(),
+          required(:request_count) => non_neg_integer(),
+          required(:input_tokens) => non_neg_integer(),
+          required(:cached_input_tokens) => non_neg_integer(),
+          required(:output_tokens) => non_neg_integer(),
+          required(:reasoning_tokens) => non_neg_integer(),
+          required(:total_tokens) => non_neg_integer(),
+          required(:settled_cost_micros) => non_neg_integer()
+        }
 
   @spec settlements_for_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: [map()]
   def settlements_for_pool_ids([], _started_at, _ended_at), do: []
@@ -102,6 +114,38 @@ defmodule CodexPooler.Accounting.Reporting do
         }
     )
   end
+
+  @spec settlement_usage_buckets_for_pool_ids(
+          [Ecto.UUID.t()],
+          settlement_bucket_granularity(),
+          DateTime.t(),
+          DateTime.t()
+        ) :: [settlement_usage_bucket()]
+  def settlement_usage_buckets_for_pool_ids(pool_ids, granularity, started_at, ended_at)
+
+  def settlement_usage_buckets_for_pool_ids(
+        pool_ids,
+        granularity,
+        %DateTime{} = started_at,
+        %DateTime{} = ended_at
+      )
+      when granularity in [:hour, :day] do
+    pool_ids = valid_pool_ids(pool_ids)
+
+    if pool_ids == [] or DateTime.compare(started_at, ended_at) == :gt do
+      []
+    else
+      query = settlement_usage_bucket_query(pool_ids, granularity, started_at, ended_at)
+
+      query
+      |> Repo.all(telemetry_options: [reporting_projection: :settlement_usage_buckets])
+      |> Enum.map(&normalize_settlement_usage_bucket/1)
+      |> Enum.sort_by(&{&1.pool_id, DateTime.to_unix(&1.bucket, :microsecond)})
+    end
+  end
+
+  def settlement_usage_buckets_for_pool_ids(_pool_ids, _granularity, _started_at, _ended_at),
+    do: []
 
   @spec token_totals_by_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
           optional(Ecto.UUID.t()) => non_neg_integer()
@@ -335,6 +379,135 @@ defmodule CodexPooler.Accounting.Reporting do
       total_tokens: non_negative_integer(usage.total_tokens)
     }
   end
+
+  defp settlement_usage_bucket_query(pool_ids, granularity, started_at, ended_at) do
+    entries =
+      from entry in LedgerEntry,
+        where:
+          entry.pool_id in ^pool_ids and entry.entry_kind == ^@settlement and
+            entry.amount_status == ^@recorded and entry.occurred_at >= ^started_at and
+            entry.occurred_at <= ^ended_at
+
+    entries
+    |> select_settlement_bucket(granularity)
+    |> aggregate_settlement_buckets()
+  end
+
+  defp select_settlement_bucket(query, :hour) do
+    select(query, [entry], %{
+      pool_id: entry.pool_id,
+      bucket: fragment("date_trunc('hour', ?)", entry.occurred_at),
+      request_count: entry.request_count,
+      usage_status: entry.usage_status,
+      input_tokens: entry.input_tokens,
+      cached_input_tokens: entry.cached_input_tokens,
+      output_tokens: entry.output_tokens,
+      reasoning_tokens: entry.reasoning_tokens,
+      total_tokens: entry.total_tokens,
+      settled_cost_micros: entry.settled_cost_micros
+    })
+  end
+
+  defp select_settlement_bucket(query, :day) do
+    select(query, [entry], %{
+      pool_id: entry.pool_id,
+      bucket: fragment("date_trunc('day', ?)", entry.occurred_at),
+      request_count: entry.request_count,
+      usage_status: entry.usage_status,
+      input_tokens: entry.input_tokens,
+      cached_input_tokens: entry.cached_input_tokens,
+      output_tokens: entry.output_tokens,
+      reasoning_tokens: entry.reasoning_tokens,
+      total_tokens: entry.total_tokens,
+      settled_cost_micros: entry.settled_cost_micros
+    })
+  end
+
+  defp aggregate_settlement_buckets(entries) do
+    from entry in subquery(entries),
+      group_by: [entry.pool_id, entry.bucket],
+      select: %{
+        pool_id: entry.pool_id,
+        bucket: entry.bucket,
+        request_count: sum(entry.request_count),
+        input_tokens:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.input_tokens
+            )
+          ),
+        cached_input_tokens:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.cached_input_tokens
+            )
+          ),
+        output_tokens:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.output_tokens
+            )
+          ),
+        reasoning_tokens:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.reasoning_tokens
+            )
+          ),
+        total_tokens:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.total_tokens
+            )
+          ),
+        settled_cost_micros:
+          sum(
+            fragment(
+              "CASE WHEN ? = ? THEN ROUND(?, 0) ELSE 0 END",
+              entry.usage_status,
+              ^@usage_known,
+              entry.settled_cost_micros
+            )
+          )
+      }
+  end
+
+  defp normalize_settlement_usage_bucket(row) do
+    %{
+      pool_id: row.pool_id,
+      bucket: row.bucket,
+      request_count: non_negative_integer(row.request_count),
+      input_tokens: non_negative_integer(row.input_tokens),
+      cached_input_tokens: non_negative_integer(row.cached_input_tokens),
+      output_tokens: non_negative_integer(row.output_tokens),
+      reasoning_tokens: non_negative_integer(row.reasoning_tokens),
+      total_tokens: non_negative_integer(row.total_tokens),
+      settled_cost_micros: non_negative_integer(row.settled_cost_micros)
+    }
+  end
+
+  defp valid_pool_ids(pool_ids) when is_list(pool_ids) do
+    pool_ids
+    |> Enum.filter(&(is_binary(&1) and match?({:ok, _binary}, Ecto.UUID.dump(&1))))
+    |> Enum.uniq()
+  end
+
+  defp valid_pool_ids(_pool_ids), do: []
 
   defp normalize_model_usage_bucket(row) do
     %{
