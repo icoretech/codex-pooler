@@ -90,7 +90,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       when is_list(headers) and is_list(opts) do
     envelope_opts =
       opts
-      |> Keyword.put(:include_user_agent?, true)
+      |> Keyword.put(:include_codex_identity?, true)
       |> Keyword.put(
         :forwarded_headers,
         regular_runtime_forwarded_metadata_headers(request_options)
@@ -629,7 +629,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp safe_log_value(_value), do: nil
 
   defp upstream_headers(identity, token, headers) do
-    TransportEnvelope.headers(identity, token, headers, include_user_agent?: true)
+    TransportEnvelope.headers(identity, token, headers, include_codex_identity?: true)
   end
 
   defp mark_visible_output(request, data) when is_binary(data) and data != "" do

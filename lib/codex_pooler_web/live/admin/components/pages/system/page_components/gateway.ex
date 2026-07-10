@@ -35,11 +35,12 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
               id="instance-settings-upstream-user-agent"
               field={gateway_form[:upstream_user_agent]}
               type="text"
-              label="Upstream Codex user-agent"
-              placeholder="codex_cli_rs/0.0.0"
+              label="Upstream Codex user-agent override"
+              placeholder="auto"
             />
             <p class="mt-1 text-xs leading-5 text-base-content/55">
-              Sent to upstream Codex-compatible routes instead of forwarding downstream client user-agent strings.
+              Keep <code>auto</code> to follow the bundled Codex client version. A custom value
+              overrides only User-Agent; trusted originator and version headers remain server-owned.
             </p>
           </div>
           <div class="grid gap-4 lg:grid-cols-2">

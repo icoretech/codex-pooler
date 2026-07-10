@@ -83,7 +83,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_pool_timeout_ms == 15_000
     assert settings.upstream_receive_timeout_ms == 300_000
     assert settings.websocket_idle_timeout_ms == 1_800_000
-    assert settings.upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert settings.upstream_user_agent == "auto"
     assert settings.model_context_window_overrides == %{}
   end
 
@@ -176,9 +176,9 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
     :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
 
-    assert OperationalSettings.current().upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert OperationalSettings.current().upstream_user_agent == "auto"
     assert OperationalSettings.current().websocket_idle_timeout_ms == 1_800_000
-    assert InstanceSettings.current().gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert InstanceSettings.current().gateway.upstream_user_agent == "auto"
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 1_800_000
   end
 

@@ -3,14 +3,12 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   Upstream model catalog discovery and payload normalization.
   """
 
-  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.EndpointMetadata
   alias CodexPooler.Upstreams.Secrets
 
   @default_codex_upstream_base_url "https://chatgpt.com"
-  # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  @default_codex_client_version "0.144.1"
   @secret_kind "access_token"
 
   @type catalog_error :: %{required(:code) => atom(), required(:message) => String.t()}
@@ -85,22 +83,16 @@ defmodule CodexPooler.Catalog.Sync.Discovery do
   end
 
   defp model_catalog_path do
-    "/backend-api/codex/models?client_version=" <> URI.encode_www_form(codex_client_version())
-  end
-
-  defp codex_client_version do
-    :codex_pooler
-    |> Application.get_env(CodexPooler.Catalog, [])
-    |> Keyword.get(:codex_client_version, @default_codex_client_version)
-    |> to_string()
+    "/backend-api/codex/models?client_version=" <>
+      URI.encode_www_form(CodexClientIdentity.version())
   end
 
   defp model_catalog_headers(identity, token) do
-    headers = [
-      {"authorization", "Bearer #{String.trim(token)}"},
-      {"accept", "application/json"},
-      {"user-agent", OperationalSettings.current().upstream_user_agent}
-    ]
+    headers =
+      [
+        {"authorization", "Bearer #{String.trim(token)}"},
+        {"accept", "application/json"}
+      ] ++ CodexClientIdentity.headers()
 
     case present_string(identity.chatgpt_account_id) do
       nil -> headers

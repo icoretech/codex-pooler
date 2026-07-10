@@ -51,7 +51,7 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Automerge stable Codex client updates after one day",
+      "description": "Automerge stable Codex client updates immediately",
       "matchManagers": [
         "custom.regex"
       ],
@@ -146,12 +146,12 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Update Codex client version used for upstream model discovery",
+      "description": "Update Codex client version used for upstream identity and model discovery",
       "managerFilePatterns": [
-        "/(^|/)lib/codex_pooler/catalog/sync/discovery\\.ex$/"
+        "/(^|/)lib/codex_pooler/upstreams/codex_client_identity\\.ex$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+@default_codex_client_version \"(?<currentValue>[^\"]+)\""
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) extractVersion=(?<extractVersion>\\S+)\\s+@default_client_version \"(?<currentValue>[^\"]+)\""
       ],
       "versioningTemplate": "semver"
     },

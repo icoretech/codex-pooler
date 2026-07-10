@@ -46,7 +46,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.gateway.circuit_half_open_probe_limit == 1
     assert settings.gateway.circuit_success_threshold == 1
     assert settings.gateway.websocket_idle_timeout_ms == 1_800_000
-    assert settings.gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert settings.gateway.upstream_user_agent == "auto"
     assert settings.files.max_size_bytes == 25 * 1024 * 1024
     assert settings.transcription.max_upload_bytes == 26_214_400
 
@@ -268,7 +268,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     Repo.query!("UPDATE instance_settings SET gateway = gateway - 'upstream_user_agent'")
     InstanceSettings.reset_cache_for_test()
 
-    assert InstanceSettings.current().gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert InstanceSettings.current().gateway.upstream_user_agent == "auto"
 
     assert {:ok, updated} =
              InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
@@ -276,7 +276,7 @@ defmodule CodexPooler.InstanceSettingsTest do
              })
 
     assert updated.files.upload_ttl_seconds == 600
-    assert updated.gateway.upstream_user_agent == "codex_cli_rs/0.0.0"
+    assert updated.gateway.upstream_user_agent == "auto"
   end
 
   test "legacy singleton settings rows backfill the websocket idle timeout without losing updates" do

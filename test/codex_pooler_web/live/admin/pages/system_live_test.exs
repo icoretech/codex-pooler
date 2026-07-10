@@ -757,7 +757,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "Maximum time allowed to establish a connection to an upstream account.",
           "Maximum time a gateway request may wait for an available pooled connection.",
           "Maximum idle receive window while waiting for upstream response data.",
-          "Sent to upstream Codex-compatible routes instead of forwarding downstream client user-agent strings.",
+          "trusted originator and version headers remain server-owned.",
           "How long expired response aliases stay available for continuity lookups.",
           "How long a bridge owner lease remains valid without renewal.",
           "How often active bridge owners renew their lease while work is running.",
@@ -892,7 +892,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
-             "#instance-settings-upstream-user-agent[value='codex_cli_rs/0.0.0']"
+             "#instance-settings-upstream-user-agent[value='auto']"
            )
 
     html =

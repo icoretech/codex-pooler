@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "timeout_config/2" do
@@ -38,16 +39,21 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   describe "headers/4" do
-    test "uses the configured synthetic upstream user-agent and does not forward downstream user-agent" do
+    test "synthesizes trusted identity and ignores downstream identity headers" do
+      version = CodexClientIdentity.version()
+
       headers =
         TransportEnvelope.headers(
           identity(),
           " upstream-token ",
           [{"accept", "application/json"}],
-          include_user_agent?: true,
+          include_codex_identity?: true,
           upstream_user_agent: "codex_cli_rs/9.9.9",
           forwarded_headers: [
             {"user-agent", "downstream-harness/1.0"},
+            {"originator", "downstream-originator"},
+            {"version", "0.0.1"},
+            {"chatgpt-account-id", "acct_downstream"},
             {"x-openai-client-user-agent", "downstream-openai-client"},
             {"x-codex-turn-state", "safe-turn-state"},
             {"authorization", "Bearer downstream"},
@@ -58,6 +64,8 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       assert headers == [
                {"authorization", "Bearer upstream-token"},
                {"user-agent", "codex_cli_rs/9.9.9"},
+               {"originator", "codex_cli_rs"},
+               {"version", version},
                {"chatgpt-account-id", "acct_test"},
                {"accept", "application/json"},
                {"x-openai-client-user-agent", "downstream-openai-client"},
@@ -78,19 +86,21 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
     test "builds regular runtime headers with only approved forwarded metadata" do
       options = runtime_options("/backend-api/codex/responses")
+      version = CodexClientIdentity.version()
 
       headers =
         UpstreamDispatch.regular_runtime_headers(
           identity(),
           " upstream-token ",
           options,
-          [{"content-type", "application/json"}, {"accept", "text/event-stream"}],
-          upstream_user_agent: "codex_cli_rs/9.9.9"
+          [{"content-type", "application/json"}, {"accept", "text/event-stream"}]
         )
 
       assert headers == [
                {"authorization", "Bearer upstream-token"},
-               {"user-agent", "codex_cli_rs/9.9.9"},
+               {"user-agent", "codex_cli_rs/#{version}"},
+               {"originator", "codex_cli_rs"},
+               {"version", version},
                {"chatgpt-account-id", "acct_test"},
                {"content-type", "application/json"},
                {"accept", "text/event-stream"},
@@ -155,6 +165,9 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     approved_forwarded_metadata_headers() ++
       [
         {"User-Agent", "downstream-harness/1.0"},
+        {"originator", "downstream-originator"},
+        {"version", "0.0.1"},
+        {"chatgpt-account-id", "acct_downstream"},
         {"authorization", "Bearer downstream"},
         {"cookie", "downstream-cookie"},
         {"idempotency-key", "downstream-idempotency"},

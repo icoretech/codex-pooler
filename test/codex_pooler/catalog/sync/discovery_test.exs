@@ -5,6 +5,7 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
 
   alias CodexPooler.Catalog.Sync.Discovery
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Upstreams.CodexClientIdentity
 
   @secret_config [
     upstream_secret_key: Base.encode64(:crypto.hash(:sha256, "test-upstream-secret-key")),
@@ -64,6 +65,8 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
              @minimum_codex_client_version
            ) in [:eq, :gt]
 
+    assert_codex_client_identity_headers(first_headers)
+
     assert second_request.path == "/backend-api/codex/models"
 
     assert Version.compare(
@@ -71,7 +74,17 @@ defmodule CodexPooler.Catalog.Sync.DiscoveryTest do
              @minimum_codex_client_version
            ) in [:eq, :gt]
 
+    assert_codex_client_identity_headers(second_headers)
+
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+  end
+
+  defp assert_codex_client_identity_headers(headers) do
+    version = CodexClientIdentity.version()
+
+    assert headers["user-agent"] == "codex_cli_rs/#{version}"
+    assert headers["originator"] == CodexClientIdentity.originator()
+    assert headers["version"] == version
   end
 end

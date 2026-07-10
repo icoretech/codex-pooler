@@ -32,6 +32,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -816,7 +817,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.request_metadata["codex_session_id"] == session.id
   end
 
-  test "websocket dispatch ignores regular runtime forwarded metadata headers" do
+  test "websocket dispatch synthesizes Codex identity and ignores runtime metadata headers" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -874,7 +875,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert captured.json["generate"] == true
     assert captured.json["previous_response_id"] == "resp_ws_forwarded_metadata_previous"
     assert header!(captured.headers, "openai-beta") == "responses_websockets=2026-02-06"
-    assert header!(captured.headers, "user-agent") == "codex_cli_rs/0.0.0"
+
+    assert header!(captured.headers, "user-agent") ==
+             "codex_cli_rs/#{CodexClientIdentity.version()}"
+
+    assert header!(captured.headers, "originator") == CodexClientIdentity.originator()
+    assert header!(captured.headers, "version") == CodexClientIdentity.version()
 
     for {name, _value} <- forwarded_headers do
       refute Enum.any?(captured.headers, fn {header_name, _value} -> header_name == name end)

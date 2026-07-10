@@ -4,9 +4,10 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   """
 
   alias CodexPooler.{InstanceSettings, RouteClass}
+  alias CodexPooler.Upstreams.CodexClientIdentity
 
   @default_decompression_algorithms ["gzip", "deflate", "zstd"]
-  @default_upstream_user_agent "codex_cli_rs/0.0.0"
+  @default_upstream_user_agent CodexClientIdentity.automatic_user_agent_setting()
   @default_bulkheads RouteClass.default_bulkheads()
   @websocket_owner_forwarding_env "CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING"
   @websocket_owner_forwarding_allowed_values "true,false,1,0,yes,no,on,off"

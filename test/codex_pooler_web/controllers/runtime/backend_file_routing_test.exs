@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.CodexClientIdentity
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
@@ -175,7 +176,11 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     assert header!(create_request.headers, "chatgpt-account-id") ==
              upstream_assignment.identity.chatgpt_account_id
 
-    assert header!(create_request.headers, "user-agent") == "codex_cli_rs/0.0.0"
+    assert header!(create_request.headers, "user-agent") ==
+             "codex_cli_rs/#{CodexClientIdentity.version()}"
+
+    assert header!(create_request.headers, "originator") == CodexClientIdentity.originator()
+    assert header!(create_request.headers, "version") == CodexClientIdentity.version()
     assert header!(create_request.headers, "x-openai-client") == "codex-cli"
 
     assert header!(create_request.headers, "x-openai-extra-file-bridge") ==

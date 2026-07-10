@@ -3,12 +3,13 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   Codex OAuth/device authorization client used by invite onboarding.
   """
 
+  alias CodexPooler.Upstreams.CodexClientIdentity
+
   @issuer "https://auth.openai.com"
   @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
   @browser_redirect_uri "http://localhost:1455/auth/callback"
   @device_redirect_uri "https://auth.openai.com/deviceauth/callback"
   @authorization_scope "openid profile email offline_access api.connectors.read api.connectors.invoke"
-  @oauth_originator "codex_cli_rs"
 
   @type auth_error :: %{
           required(:code) => atom(),
@@ -168,7 +169,7 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   def device_redirect_uri, do: @device_redirect_uri
 
   @spec oauth_originator() :: String.t()
-  def oauth_originator, do: @oauth_originator
+  def oauth_originator, do: CodexClientIdentity.originator()
 
   @spec issuer() :: String.t()
   def issuer do

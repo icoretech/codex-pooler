@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @type timeout_settings :: %{
@@ -40,18 +41,18 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
     [
       {"authorization", "Bearer #{String.trim(token)}"}
     ]
-    |> Kernel.++(user_agent_headers(opts))
+    |> Kernel.++(codex_identity_headers(opts))
     |> Kernel.++(codex_account_headers(identity))
     |> Kernel.++(headers)
     |> Kernel.++(safe_forwarded_headers(Keyword.get(opts, :forwarded_headers, [])))
   end
 
-  defp user_agent_headers(opts) do
-    if Keyword.get(opts, :include_user_agent?, false) do
-      user_agent =
+  defp codex_identity_headers(opts) do
+    if Keyword.get(opts, :include_codex_identity?, false) do
+      user_agent_setting =
         Keyword.get(opts, :upstream_user_agent, OperationalSettings.current().upstream_user_agent)
 
-      [{"user-agent", user_agent}]
+      CodexClientIdentity.headers(user_agent_setting)
     else
       []
     end

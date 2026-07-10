@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.CloudflareCookies
+  alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @receive_timeout_ms 25
@@ -163,6 +164,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     [first_request, second_request] = FakeUpstream.requests(upstream)
     first_headers = Map.new(first_request.headers)
     second_headers = Map.new(second_request.headers)
+    version = CodexClientIdentity.version()
+
+    assert first_headers["user-agent"] == "codex_cli_rs/#{version}"
+    assert first_headers["originator"] == CodexClientIdentity.originator()
+    assert first_headers["version"] == version
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
