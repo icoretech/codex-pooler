@@ -6955,7 +6955,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     @tag :quota_confirmed_convergence
     @tag :quota_reset_cycle_regression
-    test "fresh account primary evidence starts a newer reset cycle from a stale canonical row" do
+    test "fresh account primary evidence refreshes a stale canonical within reset tolerance" do
       identity = active_identity_fixture()
       evaluation_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -6980,24 +6980,8 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert Quotas.Evidence.current_freshness_state(canonical, evaluation_at) == "stale"
 
-      candidate_at = DateTime.add(evaluation_at, -2, :second)
-
-      candidate =
-        record_confirmed_convergence!(
-          identity,
-          :account,
-          "primary",
-          "14",
-          canonical_reset_at,
-          candidate_at
-        )
-
-      assert_canonical_snapshot(candidate, canonical)
-      assert_confirmed_candidate(candidate, "14", canonical_reset_at, candidate_at)
-      assert Quotas.Evidence.current_freshness_state(candidate, evaluation_at) == "stale"
-
       incoming_at = DateTime.add(evaluation_at, -1, :second)
-      incoming_reset_at = DateTime.add(canonical_reset_at, 2, :hour)
+      incoming_reset_at = DateTime.add(canonical_reset_at, 3, :second)
 
       refreshed =
         record_confirmed_convergence!(
@@ -7337,20 +7321,20 @@ defmodule CodexPooler.UpstreamsTest do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
       cutoff_margin = 60
 
-      for {label, candidate_at, reset_at, confirmation_at, confirms?} <- [
+      for {label, candidate_at, reset_at, confirmation_at, expected_result} <- [
             {:ttl_in_budget, DateTime.add(now, -ttl + cutoff_margin, :second),
-             DateTime.add(now, cutoff_margin, :second), now, true},
+             DateTime.add(now, cutoff_margin, :second), now, :confirmed},
             {:ttl_past, DateTime.add(now, -ttl - cutoff_margin, :second),
-             DateTime.add(now, cutoff_margin, :second), now, false},
-            {:reset_exact, DateTime.add(now, -2, :second), now, now, false},
+             DateTime.add(now, cutoff_margin, :second), now, :refreshed_stale},
+            {:reset_exact, DateTime.add(now, -2, :second), now, now, :rejected},
             {:reset_future, DateTime.add(now, -2, :second),
-             DateTime.add(now, cutoff_margin, :second), now, true},
+             DateTime.add(now, cutoff_margin, :second), now, :confirmed},
             {:future_skew_in_budget, DateTime.add(now, future_skew - cutoff_margin, :second),
              DateTime.add(now, future_skew + 60, :second),
-             DateTime.add(now, future_skew + 1, :second), true},
+             DateTime.add(now, future_skew + 1, :second), :confirmed},
             {:future_skew_past, DateTime.add(now, future_skew + cutoff_margin, :second),
              DateTime.add(now, future_skew + cutoff_margin + 60, :second),
-             DateTime.add(now, future_skew + cutoff_margin + 1, :second), false}
+             DateTime.add(now, future_skew + cutoff_margin + 1, :second), :rejected}
           ] do
         identity = active_identity_fixture(%{account_label: "Candidate cutoff #{label}"})
         canonical_at = DateTime.add(candidate_at, -1, :second)
@@ -7385,12 +7369,21 @@ defmodule CodexPooler.UpstreamsTest do
             confirmation_at
           )
 
-        if confirms? do
-          assert Decimal.equal?(second.used_percent, Decimal.new("14"))
-          refute confirmed_candidate(second)
-        else
-          assert_canonical_snapshot(first, canonical)
-          assert_canonical_snapshot(second, canonical)
+        case expected_result do
+          :confirmed ->
+            assert Decimal.equal?(second.used_percent, Decimal.new("14"))
+            refute confirmed_candidate(second)
+
+          :refreshed_stale ->
+            assert_canonical_snapshot(first, canonical)
+            assert Decimal.equal?(second.used_percent, Decimal.new("14"))
+            assert DateTime.compare(second.reset_at, reset_at) == :eq
+            assert DateTime.compare(second.observed_at, confirmation_at) == :eq
+            refute confirmed_candidate(second)
+
+          :rejected ->
+            assert_canonical_snapshot(first, canonical)
+            assert_canonical_snapshot(second, canonical)
         end
       end
     end

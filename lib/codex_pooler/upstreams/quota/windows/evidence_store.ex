@@ -370,8 +370,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       Evidence.expired?(existing, timestamp) ->
         :incoming
 
-      Evidence.current_freshness_state(existing, timestamp) != "fresh" and
-          forward_reset_cycle?(evidence, existing) ->
+      Evidence.current_freshness_state(existing, timestamp) != "fresh" ->
         :incoming
 
       weak_zero_percent_evidence?(evidence) ->
