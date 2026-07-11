@@ -118,7 +118,7 @@ if [[ -z "$pod" ]]; then
 fi
 
 temp_output="${output}.tmp"
-eval_code="result = CodexPooler.Upstreams.Reconciliation.QuotaConvergenceVerifier.run(mode: \"${mode}\", samples: ${samples}, interval_ms: ${interval_ms}); case result do {:ok, report} -> IO.puts(Jason.encode!(report)); {:error, error} -> IO.puts(Jason.encode!(error)); System.halt(1) end"
+eval_code="{:ok, _started} = Application.ensure_all_started(:ecto_sql); {:ok, _started} = Application.ensure_all_started(:req); {:ok, _repo} = CodexPooler.Repo.start_link(); {:ok, _finch} = Finch.start_link(name: CodexPooler.Finch); result = CodexPooler.Upstreams.Reconciliation.QuotaConvergenceVerifier.run(mode: \"${mode}\", samples: ${samples}, interval_ms: ${interval_ms}); case result do {:ok, report} -> IO.puts(Jason.encode!(report)); {:error, error} -> IO.puts(Jason.encode!(error)); System.halt(1) end"
 kubectl --context "$context" -n "$namespace" exec "$pod" -- env ERL_AFLAGS= RELEASE_NODE="quota_selector_$$" \
   /app/bin/codex_pooler eval "$eval_code" >"$temp_output"
 validate_output "$temp_output"
