@@ -290,8 +290,6 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflight do
 
   defp issue(code, message, path), do: %{code: code, message: message, path: path}
 
-  defp format_file_error(reason) when is_atom(reason),
+  defp format_file_error(reason),
     do: reason |> :file.format_error() |> to_string()
-
-  defp format_file_error(reason), do: inspect(reason)
 end

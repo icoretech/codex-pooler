@@ -83,6 +83,18 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
              OpenAIPricingPreflight.validate_file(path)
   end
 
+  test "returns a controlled file_read_failed error for a missing file" do
+    path =
+      Path.join(System.tmp_dir!(), "missing-pricing-#{System.unique_integer([:positive])}.json")
+
+    assert %{
+             compatible?: false,
+             errors: [%{code: :file_read_failed, message: message, path: ^path}]
+           } = OpenAIPricingPreflight.validate_file(path)
+
+    assert message == :enoent |> :file.format_error() |> to_string()
+  end
+
   defp valid_payload(extra_buckets) do
     %{
       "generated_at" => "2026-07-11T12:34:56Z",
