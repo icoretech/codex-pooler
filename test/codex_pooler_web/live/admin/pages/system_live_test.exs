@@ -6,7 +6,6 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
   import Ecto.Query
   import CodexPooler.AccountsFixtures
-  import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
