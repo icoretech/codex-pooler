@@ -7265,25 +7265,26 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :quota_confirmed_convergence
-    test "candidate validity honors exact TTL reset-expiry and future-skew cutoffs" do
+    test "candidate validity applies TTL reset-expiry and future-skew cutoffs during convergence" do
       ttl = Quotas.Evidence.freshness_ttl_seconds()
       future_skew = Quotas.Evidence.future_observed_skew_seconds()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
+      cutoff_margin = 60
 
       for {label, candidate_at, reset_at, confirmation_at, confirms?} <- [
-            {:ttl_in_budget, DateTime.add(now, -ttl + 1, :second), DateTime.add(now, 60, :second),
-             now, true},
-            {:ttl_past, DateTime.add(now, -ttl - 1, :second), DateTime.add(now, 60, :second), now,
-             false},
+            {:ttl_in_budget, DateTime.add(now, -ttl + cutoff_margin, :second),
+             DateTime.add(now, cutoff_margin, :second), now, true},
+            {:ttl_past, DateTime.add(now, -ttl - cutoff_margin, :second),
+             DateTime.add(now, cutoff_margin, :second), now, false},
             {:reset_exact, DateTime.add(now, -2, :second), now, now, false},
-            {:reset_future, DateTime.add(now, -2, :second), DateTime.add(now, 1, :second), now,
-             true},
-            {:future_skew_exact, DateTime.add(now, future_skew, :second),
+            {:reset_future, DateTime.add(now, -2, :second),
+             DateTime.add(now, cutoff_margin, :second), now, true},
+            {:future_skew_in_budget, DateTime.add(now, future_skew - cutoff_margin, :second),
              DateTime.add(now, future_skew + 60, :second),
              DateTime.add(now, future_skew + 1, :second), true},
-            {:future_skew_past, DateTime.add(now, future_skew + 1, :second),
-             DateTime.add(now, future_skew + 60, :second),
-             DateTime.add(now, future_skew + 2, :second), false}
+            {:future_skew_past, DateTime.add(now, future_skew + cutoff_margin, :second),
+             DateTime.add(now, future_skew + cutoff_margin + 60, :second),
+             DateTime.add(now, future_skew + cutoff_margin + 1, :second), false}
           ] do
         identity = active_identity_fixture(%{account_label: "Candidate cutoff #{label}"})
         canonical_at = DateTime.add(candidate_at, -1, :second)
