@@ -489,7 +489,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           "input" => [
             %{
               "role" => "assistant",
-              "id" => "msg_v1_ws_opencode_assistant",
+              "id" => "msg-1",
               "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
             },
             %{
@@ -542,6 +542,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              ]
 
       assert hd(captured.json["input"])["role"] == "assistant"
+      refute Map.has_key?(hd(captured.json["input"]), "id")
+      assert Enum.at(captured.json["input"], 1)["id"] == "rs_v1_ws_opencode_reasoning"
+      assert Enum.at(captured.json["input"], 2)["id"] == "fc_v1_ws_opencode_call"
 
       assert Enum.at(captured.json["input"], 2)["call_id"] == "fc_v1_ws_opencode_call"
       assert Enum.at(captured.json["input"], 2)["namespace"] == "browser.search"
@@ -2263,17 +2266,20 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "encrypted_content" => "synthetic-encrypted-reasoning"
           },
           %{
+            "id" => "msg-1",
             "role" => "assistant",
             "phase" => "commentary",
             "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}]
           },
           %{
+            "id" => "fc_v1_http_replay",
             "type" => "function_call",
             "call_id" => "call_v1_http_replay",
             "name" => "lookup_fixture",
             "arguments" => "{\"value\":\"sample\"}"
           },
           %{
+            "id" => "fco-1",
             "type" => "function_call_output",
             "call_id" => "call_v1_http_replay",
             "output" => "synthetic tool output"
@@ -2303,6 +2309,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     refute inspect(captured.json["input"]) =~ "synthetic-encrypted-reasoning"
     assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 1)
+    refute Map.has_key?(Enum.at(captured.json["input"], 1), "id")
+    assert Enum.at(captured.json["input"], 2)["id"] == "fc_v1_http_replay"
+    assert Enum.at(captured.json["input"], 2)["call_id"] == "call_v1_http_replay"
+    refute Map.has_key?(Enum.at(captured.json["input"], 3), "id")
+    assert Enum.at(captured.json["input"], 3)["call_id"] == "call_v1_http_replay"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"

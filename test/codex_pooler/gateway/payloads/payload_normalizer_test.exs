@@ -780,6 +780,130 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       assert Jason.decode!(encoded)["service_tier"] == "priority"
     end
+
+    test "sanitizes backend Codex optional response item IDs for HTTP and websocket" do
+      input = [
+        %{"type" => "message", "id" => "msg-1", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "msg_1", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "msg_a_b", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "_1", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "msg_", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => 123, "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        "preserved-list-element",
+        %{"type" => "item_reference", "id" => "legacy-reference"},
+        %{
+          "type" => "message",
+          "id" => "msg-2",
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "id" => "nested-legacy", "text" => "ok"}]
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco-1",
+          "call_id" => "call_1",
+          "output" => "done"
+        }
+      ]
+
+      expected_input = [
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "msg_1", "role" => "assistant", "content" => []},
+        %{"type" => "message", "id" => "msg_a_b", "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        %{"type" => "message", "role" => "assistant", "content" => []},
+        "preserved-list-element",
+        %{"type" => "item_reference", "id" => "legacy-reference"},
+        %{
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "id" => "nested-legacy", "text" => "ok"}]
+        },
+        %{"type" => "function_call_output", "call_id" => "call_1", "output" => "done"}
+      ]
+
+      payload = %{"model" => "gpt-5.5", "input" => input}
+      model = %Model{upstream_model_id: "provider-model"}
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      options_by_transport = [
+        http: http_options,
+        websocket: RequestOptions.for_websocket(http_options, payload)
+      ]
+
+      for {transport, request_options} <- options_by_transport do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+        assert upstream["input"] == expected_input, "unexpected #{transport} input"
+      end
+    end
+
+    test "leaves non-list or missing backend Codex input unchanged for HTTP and websocket" do
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for payload <- [
+            %{"model" => "gpt-5.5", "input" => %{"id" => "msg-1"}},
+            %{"model" => "gpt-5.5", "metadata" => %{"id" => "msg-1"}}
+          ] do
+        http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+        for request_options <- [
+              http_options,
+              RequestOptions.for_websocket(http_options, payload)
+            ] do
+          assert {:ok, encoded} =
+                   PayloadNormalizer.upstream_payload(
+                     payload,
+                     model,
+                     "/backend-api/codex/responses",
+                     request_options
+                   )
+
+          upstream = Jason.decode!(encoded)
+
+          if Map.has_key?(payload, "input") do
+            assert upstream["input"] == payload["input"]
+          else
+            refute Map.has_key?(upstream, "input")
+          end
+        end
+      end
+    end
+
+    test "does not sanitize response item IDs for unrelated endpoints" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [%{"type" => "message", "id" => "msg-1", "content" => []}]
+      }
+
+      endpoint = "/backend-api/example/responses"
+
+      request_options_by_transport = [
+        http: RequestOptions.build(%{}, endpoint, payload),
+        websocket: RequestOptions.build(%{transport: "websocket"}, endpoint, payload)
+      ]
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for {transport, request_options} <- request_options_by_transport do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert Jason.decode!(encoded)["input"] == payload["input"],
+               "unexpected #{transport} input"
+      end
+    end
   end
 
   defp encrypted_tool_schema_payload do

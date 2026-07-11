@@ -150,6 +150,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input()
+    |> maybe_sanitize_backend_codex_response_item_ids(request_options)
     |> normalize_backend_codex_reasoning_effort()
     |> normalize_backend_codex_responses_lite(request_options)
     |> ToolSchemaLowering.lower_non_strict_function_tools()
@@ -205,6 +206,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
+    |> sanitize_backend_codex_response_item_ids()
     |> normalize_backend_codex_reasoning_effort()
     |> normalize_backend_codex_responses_lite(opts)
     |> ToolSchemaLowering.lower_non_strict_function_tools()
@@ -284,6 +286,45 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp normalize_backend_codex_websocket_input(payload), do: payload
+
+  defp maybe_sanitize_backend_codex_response_item_ids(
+         payload,
+         %RequestOptions{
+           transport: %{upstream_endpoint: "/backend-api/codex/responses"}
+         }
+       ) do
+    sanitize_backend_codex_response_item_ids(payload)
+  end
+
+  defp maybe_sanitize_backend_codex_response_item_ids(payload, %RequestOptions{}), do: payload
+
+  @spec sanitize_backend_codex_response_item_ids(map()) :: map()
+  defp sanitize_backend_codex_response_item_ids(%{"input" => input} = payload)
+       when is_list(input) do
+    Map.put(payload, "input", Enum.map(input, &sanitize_backend_codex_response_item_id/1))
+  end
+
+  defp sanitize_backend_codex_response_item_ids(payload), do: payload
+
+  @spec sanitize_backend_codex_response_item_id(term()) :: term()
+  defp sanitize_backend_codex_response_item_id(%{"type" => "item_reference"} = item),
+    do: item
+
+  defp sanitize_backend_codex_response_item_id(%{"id" => id} = item) do
+    if prefixed_response_item_id?(id), do: item, else: Map.delete(item, "id")
+  end
+
+  defp sanitize_backend_codex_response_item_id(item), do: item
+
+  @spec prefixed_response_item_id?(term()) :: boolean()
+  defp prefixed_response_item_id?(id) when is_binary(id) do
+    case :binary.match(id, "_") do
+      {position, 1} -> position > 0 and position + 1 < byte_size(id)
+      :nomatch -> false
+    end
+  end
+
+  defp prefixed_response_item_id?(_id), do: false
 
   defp backend_codex_encrypted_agent_message?(%{
          "type" => "agent_message",
