@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility.Context
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -38,7 +39,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       snapshot = SavedResets.snapshot(identity, timestamp)
 
       windows_by_identity_id =
-        Windows.list_quota_windows_by_identity_ids(context.candidate_identity_ids)
+        context.candidate_identity_ids
+        |> Windows.list_evidence_by_identity_ids()
+        |> compatible_source_windows_by_identity(snapshot, timestamp)
 
       identity_windows = Map.get(windows_by_identity_id, identity.id, [])
 
@@ -64,6 +67,23 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           {:noop, "gateway_auto_trigger_not_current"}
       end
     end
+  end
+
+  defp compatible_source_windows(windows, %{source: source}) when is_binary(source) do
+    Enum.filter(windows, &(&1.source == source))
+  end
+
+  defp compatible_source_windows(windows, _snapshot), do: windows
+
+  defp compatible_source_windows_by_identity(windows_by_identity_id, snapshot, timestamp) do
+    Map.new(windows_by_identity_id, fn {identity_id, windows} ->
+      windows =
+        windows
+        |> compatible_source_windows(snapshot)
+        |> WindowSelector.logical_windows(timestamp)
+
+      {identity_id, windows}
+    end)
   end
 
   @spec validate_locked_lifecycle(UpstreamIdentity.t(), PoolUpstreamAssignment.t()) ::

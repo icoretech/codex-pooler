@@ -2497,12 +2497,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                }
              ])
 
-    assert [stored_usage_window] =
+    assert stored_windows =
              identity
-             |> QuotaWindows.list_quota_windows()
+             |> QuotaWindows.list_evidence()
              |> Enum.filter(&(&1.quota_key == "codex_spark" and &1.window_kind == "primary"))
 
-    assert stored_usage_window.source == "codex_usage_api"
+    assert Enum.sort(Enum.map(stored_windows, & &1.source)) ==
+             ["codex_response_headers", "codex_usage_api"]
 
     execute_scheduled_upstreams_reload(view)
 

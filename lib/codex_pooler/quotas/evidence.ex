@@ -66,6 +66,14 @@ defmodule CodexPooler.Quotas.Evidence do
   @default_future_observed_skew_seconds 5 * 60
 
   @type errors :: %{optional(atom()) => [String.t()]}
+  @type persistence_identity_key ::
+          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer(),
+           String.t(), String.t(), String.t(), String.t()}
+  @type descriptor_key ::
+          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), String.t(),
+           String.t(), String.t()}
+  @type logical_window_key ::
+          {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer()}
   @type t :: %__MODULE__{
           quota_key: String.t(),
           window_kind: String.t(),
@@ -236,21 +244,42 @@ defmodule CodexPooler.Quotas.Evidence do
   @spec to_window_attrs(t()) :: map()
   def to_window_attrs(%__MODULE__{} = evidence), do: Map.from_struct(evidence)
 
-  @spec identity_key(t()) :: tuple()
-  def identity_key(%__MODULE__{} = evidence) do
+  @spec identity_key(t() | map()) :: persistence_identity_key()
+  def identity_key(evidence) when is_map(evidence) do
     {
-      evidence.quota_scope,
-      evidence.quota_family,
-      normalize_identity_part(evidence.model),
-      normalize_identity_part(evidence.upstream_model),
-      evidence.quota_key,
-      evidence.window_kind,
-      evidence.window_minutes,
-      evidence.source,
-      optional_identity_part(evidence.raw_limit_id),
-      optional_identity_part(evidence.raw_limit_name),
-      optional_identity_part(evidence.raw_metered_feature)
+      fetch(evidence, :quota_scope),
+      fetch(evidence, :quota_family),
+      normalize_identity_part(fetch(evidence, :model)),
+      normalize_identity_part(fetch(evidence, :upstream_model)),
+      fetch(evidence, :quota_key),
+      fetch(evidence, :window_kind),
+      fetch(evidence, :window_minutes),
+      fetch(evidence, :source),
+      optional_identity_part(fetch(evidence, :raw_limit_id)),
+      optional_identity_part(fetch(evidence, :raw_limit_name)),
+      optional_identity_part(fetch(evidence, :raw_metered_feature))
     }
+  end
+
+  @spec descriptor_key(t() | map()) :: descriptor_key()
+  def descriptor_key(evidence) when is_map(evidence) do
+    evidence
+    |> identity_key()
+    |> then(fn {scope, family, model, upstream_model, quota_key, _kind, _minutes, source,
+                raw_limit_id, raw_limit_name, raw_metered_feature} ->
+      {scope, family, model, upstream_model, quota_key, source, raw_limit_id, raw_limit_name,
+       raw_metered_feature}
+    end)
+  end
+
+  @spec logical_window_key(t() | map()) :: logical_window_key()
+  def logical_window_key(evidence) when is_map(evidence) do
+    evidence
+    |> identity_key()
+    |> then(fn {scope, family, model, upstream_model, quota_key, kind, minutes, _source,
+                _raw_limit_id, _raw_limit_name, _raw_metered_feature} ->
+      {scope, family, model, upstream_model, quota_key, kind, minutes}
+    end)
   end
 
   # Reason: evidence normalization preserves all optional upstream quota identity fields.

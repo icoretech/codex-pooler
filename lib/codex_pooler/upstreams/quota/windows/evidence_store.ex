@@ -13,8 +13,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @usage_reset_forward_tolerance_seconds 5 * 60
   @relative_reset_refresh_tolerance_seconds 5
   @account_snapshot_reset_tolerance_seconds 5
+  @candidate_metadata_key "__quota_confirmed_candidate_v1"
+  @candidate_version 1
 
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
+  @type candidate :: %{
+          required(:used_percent) => Decimal.t(),
+          required(:reset_at) => DateTime.t(),
+          required(:observed_at) => DateTime.t()
+        }
 
   @spec evidence_changeset(identity_ref(), map(), DateTime.t()) ::
           {:ok, Ecto.Changeset.t()} | {:error, Evidence.errors() | map()}
@@ -67,12 +74,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         |> Evidence.to_window_attrs()
         |> Map.put(:upstream_identity_id, identity_id)
 
-      existing = get_existing_evidence(identity_id, evidence)
-      timestamped_attrs = merge_attrs(existing, attrs, evidence)
+      with {:ok, existing} <- get_existing_evidence(identity_id, evidence) do
+        timestamped_attrs = merge_attrs(existing, attrs, evidence)
 
-      existing
-      |> Quota.AccountQuotaWindow.changeset(timestamped_attrs)
-      |> Repo.insert_or_update()
+        result =
+          existing
+          |> Quota.AccountQuotaWindow.changeset(timestamped_attrs)
+          |> Repo.insert_or_update()
+
+        clear_provider_candidates_after_runtime(result, evidence, existing, identity_id)
+      end
     else
       {:error, _errors} = error -> error
       _missing_identity -> {:error, %{upstream_identity_id: ["can't be blank"]}}
@@ -108,15 +119,87 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
+  @spec put_candidate(map(), Evidence.t()) :: map()
+  def put_candidate(metadata, %Evidence{
+        used_percent: %Decimal{} = used_percent,
+        reset_at: %DateTime{} = reset_at,
+        observed_at: %DateTime{} = observed_at
+      })
+      when is_map(metadata) do
+    Map.put(metadata, @candidate_metadata_key, %{
+      "version" => @candidate_version,
+      "used_percent" => canonical_decimal_string(used_percent),
+      "reset_at" => DateTime.to_iso8601(reset_at),
+      "observed_at" => DateTime.to_iso8601(observed_at),
+      "count" => 1
+    })
+  end
+
+  @spec parse_candidate(map()) :: {:ok, candidate()} | :none
+  def parse_candidate(metadata) when is_map(metadata) do
+    with %{
+           "version" => @candidate_version,
+           "used_percent" => used_percent,
+           "reset_at" => reset_at,
+           "observed_at" => observed_at,
+           "count" => 1
+         } = encoded <- Map.get(metadata, @candidate_metadata_key),
+         true <- map_size(encoded) == 5,
+         {:ok, decimal} <- parse_decimal(used_percent),
+         {:ok, parsed_reset_at} <- parse_datetime(reset_at),
+         {:ok, parsed_observed_at} <- parse_datetime(observed_at) do
+      {:ok, %{used_percent: decimal, reset_at: parsed_reset_at, observed_at: parsed_observed_at}}
+    else
+      _invalid -> :none
+    end
+  end
+
+  @spec candidate_equivalent?(candidate(), Evidence.t()) :: boolean()
+  def candidate_equivalent?(
+        %{used_percent: candidate_percent, reset_at: candidate_reset},
+        %Evidence{
+          used_percent: %Decimal{} = incoming_percent,
+          reset_at: %DateTime{} = incoming_reset
+        }
+      ) do
+    valid_percent?(candidate_percent) and
+      valid_percent?(incoming_percent) and
+      Decimal.compare(Decimal.normalize(candidate_percent), Decimal.normalize(incoming_percent)) ==
+        :eq and
+      reset_times_equivalent?(candidate_reset, incoming_reset)
+  end
+
+  def candidate_equivalent?(_candidate, _evidence), do: false
+
+  @spec candidate_valid?(candidate(), DateTime.t()) :: boolean()
+  def candidate_valid?(
+        %{reset_at: %DateTime{} = reset_at, observed_at: %DateTime{} = observed_at},
+        %DateTime{} = timestamp
+      ) do
+    DateTime.compare(reset_at, timestamp) == :gt and
+      DateTime.diff(timestamp, observed_at, :second) <= Evidence.freshness_ttl_seconds() and
+      DateTime.diff(observed_at, timestamp, :second) <= Evidence.future_observed_skew_seconds()
+  end
+
+  def candidate_valid?(_candidate, _timestamp), do: false
+
+  @spec clear_candidate(map()) :: map()
+  def clear_candidate(metadata) when is_map(metadata),
+    do: Map.delete(metadata, @candidate_metadata_key)
+
   defp get_existing_evidence(identity_id, %Evidence{} = evidence) do
-    exact_existing_evidence(identity_id, evidence) ||
-      alias_existing_evidence(identity_id, evidence) ||
-      fallback_existing_evidence(identity_id, evidence) ||
-      %Quota.AccountQuotaWindow{}
+    with {:ok, nil} <- exact_existing_evidence(identity_id, evidence),
+         {:ok, nil} <- alias_existing_evidence(identity_id, evidence),
+         {:ok, nil} <- fallback_existing_evidence(identity_id, evidence) do
+      {:ok, %Quota.AccountQuotaWindow{}}
+    else
+      {:ok, %Quota.AccountQuotaWindow{} = window} -> {:ok, window}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp exact_existing_evidence(identity_id, %Evidence{} = evidence) do
-    Repo.one(
+    Repo.all(
       from window in Quota.AccountQuotaWindow,
         where: window.upstream_identity_id == ^identity_id,
         where: window.quota_scope == ^evidence.quota_scope,
@@ -128,36 +211,71 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         where: window.quota_key == ^evidence.quota_key,
         where: window.window_kind == ^evidence.window_kind,
         where: window.window_minutes == ^evidence.window_minutes,
-        order_by: [desc: window.merge_precedence, desc: window.observed_at],
-        limit: 1
+        where: window.source == ^evidence.source,
+        where:
+          fragment("COALESCE(?, '')", window.raw_limit_id) ==
+            ^optional_string(evidence.raw_limit_id),
+        where:
+          fragment("COALESCE(?, '')", window.raw_limit_name) ==
+            ^optional_string(evidence.raw_limit_name),
+        where:
+          fragment("COALESCE(?, '')", window.raw_metered_feature) ==
+            ^optional_string(evidence.raw_metered_feature),
+        limit: 2
     )
+    |> unambiguous_existing(:ambiguous_quota_window_identity)
   end
 
   defp alias_existing_evidence(identity_id, %Evidence{quota_key: "codex_spark"} = evidence) do
-    Repo.one(
+    Repo.all(
       from window in Quota.AccountQuotaWindow,
         where: window.upstream_identity_id == ^identity_id,
-        where: window.quota_key in ["gpt_5_3_codex_spark", "codex_bengalfox", "codex_other"],
+        where:
+          window.quota_key in [
+            "codex_spark",
+            "gpt_5_3_codex_spark",
+            "codex_bengalfox",
+            "codex_other"
+          ],
+        where: window.quota_scope == ^evidence.quota_scope,
+        where: window.quota_family == ^evidence.quota_family,
+        where: fragment("COALESCE(lower(?), '')", window.model) == ^lower_string(evidence.model),
+        where:
+          fragment("COALESCE(lower(?), '')", window.upstream_model) ==
+            ^lower_string(evidence.upstream_model),
         where: window.window_kind == ^evidence.window_kind,
         where: window.window_minutes == ^evidence.window_minutes,
         where: window.source == ^evidence.source,
-        order_by: [desc: window.merge_precedence, desc: window.observed_at],
-        limit: 1
+        limit: 2
     )
+    |> resolve_alias_existing(evidence)
   end
 
-  defp alias_existing_evidence(_identity_id, _evidence), do: nil
+  defp alias_existing_evidence(_identity_id, _evidence), do: {:ok, nil}
 
-  defp fallback_existing_evidence(identity_id, %Evidence{} = evidence) do
-    Repo.one(
-      from window in Quota.AccountQuotaWindow,
-        where: window.upstream_identity_id == ^identity_id,
-        where: window.quota_key == ^evidence.quota_key,
-        where: window.window_kind == ^evidence.window_kind,
-        where: window.window_minutes == ^evidence.window_minutes,
-        order_by: [desc: window.merge_precedence, desc: window.observed_at],
-        limit: 1
-    )
+  defp fallback_existing_evidence(_identity_id, _evidence), do: {:ok, nil}
+
+  defp unambiguous_existing([], _code), do: {:ok, nil}
+  defp unambiguous_existing([window], _code), do: {:ok, window}
+
+  defp unambiguous_existing([_first, _second], code) do
+    {:error, %{code: code, message: "quota window lookup was ambiguous"}}
+  end
+
+  defp resolve_alias_existing([], _evidence), do: {:ok, nil}
+
+  defp resolve_alias_existing([window], %Evidence{} = evidence) do
+    if alias_raw_identity_matches?(window, evidence), do: {:ok, window}, else: {:ok, nil}
+  end
+
+  defp resolve_alias_existing([_first, _second], _evidence) do
+    {:error, %{code: :ambiguous_quota_window_alias, message: "quota window lookup was ambiguous"}}
+  end
+
+  defp alias_raw_identity_matches?(window, evidence) do
+    optional_string(window.raw_limit_id) == optional_string(evidence.raw_limit_id) and
+      optional_string(window.raw_limit_name) == optional_string(evidence.raw_limit_name) and
+      optional_string(window.raw_metered_feature) == optional_string(evidence.raw_metered_feature)
   end
 
   defp merge_attrs(%Quota.AccountQuotaWindow{id: nil} = existing, attrs, _evidence),
@@ -166,9 +284,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp merge_attrs(%Quota.AccountQuotaWindow{} = existing, attrs, %Evidence{} = evidence) do
     timestamp = now()
 
-    case account_usage_snapshot_decision(evidence, existing, timestamp) do
-      :incoming -> put_timestamps(attrs, existing)
-      :existing -> window_attrs(existing)
+    case confirmed_snapshot_decision(evidence, existing, timestamp) do
+      :incoming -> accepted_snapshot_attrs(existing, attrs, timestamp)
+      {:candidate, metadata} -> candidate_snapshot_attrs(existing, metadata, timestamp)
+      :existing -> rejected_snapshot_attrs(existing, timestamp)
       :continue -> merge_attrs_by_quality(existing, attrs, evidence, timestamp)
     end
   end
@@ -203,32 +322,22 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
-  # ChatGPT usage replicas can return distinct percentage/reset pairs for the same
-  # account. Compare those observations as whole snapshots so persistence never
-  # fabricates a pair that the provider did not report.
-  @spec account_usage_snapshot_decision(
+  @spec confirmed_snapshot_decision(
           Evidence.t(),
           Quota.AccountQuotaWindow.t(),
           DateTime.t()
-        ) :: :incoming | :existing | :continue
-  defp account_usage_snapshot_decision(
+        ) :: :incoming | :existing | :continue | {:candidate, map()}
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
+  defp confirmed_snapshot_decision(
          %Evidence{
            source: "codex_usage_api",
            source_precision: incoming_precision,
-           quota_scope: "account",
-           quota_key: "account",
-           window_kind: "primary",
-           window_minutes: 300,
            reset_at: %DateTime{},
            used_percent: %Decimal{}
          } = evidence,
          %Quota.AccountQuotaWindow{
            source: "codex_usage_api",
            source_precision: existing_precision,
-           quota_scope: "account",
-           quota_key: "account",
-           window_kind: "primary",
-           window_minutes: 300,
            reset_at: %DateTime{},
            used_percent: %Decimal{}
          } = existing,
@@ -236,77 +345,224 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        )
        when incoming_precision in ["observed", "authoritative"] and
               existing_precision in ["observed", "authoritative"] do
-    if comparable_account_usage_snapshots?(evidence, existing, timestamp) do
-      choose_account_usage_snapshot(evidence, existing, timestamp)
-    else
-      :continue
-    end
-  end
+    cond do
+      Evidence.identity_key(evidence) != Evidence.identity_key(existing) ->
+        :continue
 
-  defp account_usage_snapshot_decision(_evidence, _existing, _timestamp), do: :continue
+      not weak_capacity?(evidence) or not weak_capacity?(existing) ->
+        :continue
 
-  @spec comparable_account_usage_snapshots?(
-          Evidence.t(),
-          Quota.AccountQuotaWindow.t(),
-          DateTime.t()
-        ) :: boolean()
-  defp comparable_account_usage_snapshots?(evidence, existing, timestamp) do
-    same_evidence_identity?(evidence, existing) and weak_capacity?(evidence) and
-      weak_capacity?(existing) and
-      Evidence.current_freshness_state(existing, timestamp) == "fresh"
-  end
-
-  @spec choose_account_usage_snapshot(
-          Evidence.t(),
-          Quota.AccountQuotaWindow.t(),
-          DateTime.t()
-        ) :: :incoming | :existing
-  defp choose_account_usage_snapshot(evidence, existing, timestamp) do
-    if Evidence.current_freshness_state(evidence, timestamp) == "fresh" do
-      compare_account_usage_snapshots(evidence, existing)
-    else
-      :existing
-    end
-  end
-
-  @spec compare_account_usage_snapshots(Evidence.t(), Quota.AccountQuotaWindow.t()) ::
-          :incoming | :existing
-  defp compare_account_usage_snapshots(
-         %Evidence{used_percent: incoming_percent, reset_at: incoming_reset},
-         %Quota.AccountQuotaWindow{
-           used_percent: existing_percent,
-           reset_at: existing_reset
-         }
-       ) do
-    case Decimal.compare(incoming_percent, existing_percent) do
-      :gt ->
-        :incoming
-
-      :lt ->
+      not newer_observation?(evidence.observed_at, existing.observed_at) ->
         :existing
 
-      :eq ->
-        equal_usage_snapshot_decision(incoming_percent, incoming_reset, existing_reset)
+      Evidence.current_freshness_state(evidence, timestamp) != "fresh" ->
+        :existing
+
+      relative_reset_metadata?(evidence.metadata) and
+          relative_reset_metadata?(existing.metadata) ->
+        relative_snapshot_decision(evidence, existing)
+
+      relative_reset_metadata?(evidence.metadata) ->
+        if higher_used_percent?(evidence.used_percent, existing.used_percent),
+          do: :continue,
+          else: :existing
+
+      Evidence.expired?(existing, timestamp) ->
+        :incoming
+
+      weak_zero_percent_evidence?(evidence) ->
+        weak_zero_snapshot_decision(evidence, existing, timestamp)
+
+      forward_reset_cycle?(evidence, existing) ->
+        :incoming
+
+      true ->
+        compare_confirmed_snapshot(evidence, existing, timestamp)
     end
   end
 
-  @spec equal_usage_snapshot_decision(Decimal.t(), DateTime.t(), DateTime.t()) ::
-          :incoming | :existing
-  defp equal_usage_snapshot_decision(used_percent, incoming_reset, existing_reset) do
-    cond do
-      reset_times_equivalent?(incoming_reset, existing_reset) ->
-        :incoming
+  defp confirmed_snapshot_decision(
+         %Evidence{source: "codex_usage_api", used_percent: %Decimal{}} = evidence,
+         %Quota.AccountQuotaWindow{source: "codex_usage_api"} = existing,
+         _timestamp
+       ) do
+    same_confirmed_identity? = Evidence.identity_key(evidence) == Evidence.identity_key(existing)
 
-      positive_percent?(used_percent) and DateTime.compare(incoming_reset, existing_reset) == :gt ->
-        :incoming
+    cond do
+      not same_confirmed_identity? or not weak_capacity?(evidence) or not weak_capacity?(existing) ->
+        :continue
+
+      relative_reset_metadata?(evidence.metadata) ->
+        :continue
 
       true ->
         :existing
     end
   end
 
+  defp confirmed_snapshot_decision(_evidence, _existing, _timestamp), do: :continue
+
+  @spec compare_confirmed_snapshot(
+          Evidence.t(),
+          Quota.AccountQuotaWindow.t(),
+          DateTime.t()
+        ) :: :incoming | {:candidate, map()}
+  defp compare_confirmed_snapshot(
+         %Evidence{used_percent: incoming_percent} = evidence,
+         %Quota.AccountQuotaWindow{
+           used_percent: existing_percent
+         } = existing,
+         timestamp
+       ) do
+    case compare_percent(incoming_percent, existing_percent) do
+      comparison when comparison in [:gt, :eq] -> :incoming
+      :lt -> lower_snapshot_decision(evidence, existing, timestamp)
+    end
+  end
+
+  @spec lower_snapshot_decision(Evidence.t(), Quota.AccountQuotaWindow.t(), DateTime.t()) ::
+          :incoming | {:candidate, map()}
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
+  defp lower_snapshot_decision(%Evidence{} = evidence, existing, timestamp) do
+    case parse_candidate(existing.metadata || %{}) do
+      {:ok, candidate} ->
+        cond do
+          not newer_observation?(evidence.observed_at, candidate.observed_at) ->
+            {:candidate, existing.metadata || %{}}
+
+          candidate_valid?(candidate, timestamp) and
+            newer_observation?(candidate.observed_at, existing.observed_at) and
+              candidate_equivalent?(candidate, evidence) ->
+            :incoming
+
+          true ->
+            {:candidate, put_candidate(clear_candidate(existing.metadata || %{}), evidence)}
+        end
+
+      :none ->
+        {:candidate, put_candidate(clear_candidate(existing.metadata || %{}), evidence)}
+    end
+  end
+
+  defp compare_percent(%Decimal{} = left, %Decimal{} = right),
+    do: Decimal.compare(Decimal.normalize(left), Decimal.normalize(right))
+
+  defp newer_observation?(%DateTime{} = incoming, %DateTime{} = existing),
+    do: DateTime.compare(incoming, existing) == :gt
+
+  defp forward_reset_cycle?(
+         %Evidence{window_kind: "primary", reset_at: %DateTime{} = incoming},
+         %Quota.AccountQuotaWindow{reset_at: %DateTime{} = existing}
+       ),
+       do: DateTime.diff(incoming, existing, :second) > @usage_reset_forward_tolerance_seconds
+
+  defp forward_reset_cycle?(_evidence, _existing), do: false
+
   defp reset_times_equivalent?(%DateTime{} = left, %DateTime{} = right) do
     abs(DateTime.diff(left, right, :second)) <= @account_snapshot_reset_tolerance_seconds
+  end
+
+  defp accepted_snapshot_attrs(existing, attrs, timestamp) do
+    attrs
+    |> Map.put(:active_limit, preserved_active_limit(existing, Map.get(attrs, :active_limit)))
+    |> Map.put(:credits, preserved_credits(existing, Map.get(attrs, :credits)))
+    |> Map.put(
+      :metadata,
+      existing.metadata
+      |> Kernel.||(%{})
+      |> Map.merge(Map.get(attrs, :metadata, %{}))
+      |> clear_candidate()
+    )
+    |> Map.put_new(:created_at, existing.created_at || timestamp)
+    |> Map.put(:updated_at, timestamp)
+  end
+
+  defp candidate_snapshot_attrs(existing, metadata, timestamp) do
+    existing
+    |> window_attrs()
+    |> Map.put(:metadata, metadata)
+    |> Map.put(:updated_at, timestamp)
+  end
+
+  defp rejected_snapshot_attrs(existing, timestamp) do
+    existing
+    |> window_attrs()
+    |> Map.put(:metadata, clear_invalid_candidate(existing.metadata || %{}, timestamp))
+    |> Map.put(:updated_at, timestamp)
+  end
+
+  defp clear_provider_candidates_after_runtime(
+         {:ok, window},
+         %Evidence{source: source} = evidence,
+         existing,
+         identity_id
+       )
+       when source in @runtime_quota_sources do
+    if runtime_pressure_accepted?(window, existing) do
+      clear_matching_provider_candidates(evidence, identity_id)
+    end
+
+    {:ok, window}
+  end
+
+  defp clear_provider_candidates_after_runtime(result, _evidence, _existing, _identity_id),
+    do: result
+
+  defp clear_matching_provider_candidates(evidence, identity_id) do
+    {scope, family, model, upstream_model, quota_key, kind, minutes} =
+      Evidence.logical_window_key(evidence)
+
+    provider_rows =
+      Repo.all(
+        from provider in Quota.AccountQuotaWindow,
+          where: provider.upstream_identity_id == ^identity_id,
+          where: provider.source == "codex_usage_api",
+          where: provider.quota_scope == ^scope,
+          where: provider.quota_family == ^family,
+          where: fragment("COALESCE(lower(?), '')", provider.model) == ^lower_string(model),
+          where:
+            fragment("COALESCE(lower(?), '')", provider.upstream_model) ==
+              ^lower_string(upstream_model),
+          where: provider.quota_key == ^quota_key,
+          where: provider.window_kind == ^kind,
+          where: provider.window_minutes == ^minutes
+      )
+
+    Enum.each(provider_rows, fn provider ->
+      metadata = clear_candidate(provider.metadata || %{})
+
+      if metadata != provider.metadata do
+        provider
+        |> Ecto.Changeset.change(metadata: metadata, updated_at: now())
+        |> Repo.update!()
+      end
+    end)
+
+    :ok
+  end
+
+  defp runtime_pressure_accepted?(window, %Quota.AccountQuotaWindow{id: nil}),
+    do: not is_nil(window.id)
+
+  defp runtime_pressure_accepted?(window, existing) do
+    higher_used_percent?(window.used_percent, existing.used_percent) or
+      later_reset?(window.reset_at, existing.reset_at) or
+      window.source != existing.source
+  end
+
+  defp later_reset?(%DateTime{} = incoming, %DateTime{} = existing),
+    do: DateTime.compare(incoming, existing) == :gt
+
+  defp later_reset?(_incoming, _existing), do: false
+
+  defp clear_invalid_candidate(metadata, timestamp) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        if candidate_valid?(candidate, timestamp), do: metadata, else: clear_candidate(metadata)
+
+      :none ->
+        clear_candidate(metadata)
+    end
   end
 
   defp incoming_supersedes?(
@@ -539,12 +795,40 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp resetless_weekly_rate_limit_supersedes?(_evidence, _existing), do: false
 
   defp same_evidence_identity?(%Evidence{} = evidence, %Quota.AccountQuotaWindow{} = existing) do
-    evidence.quota_scope == existing.quota_scope and
-      evidence.quota_family == existing.quota_family and
-      evidence.quota_key == existing.quota_key and evidence.window_kind == existing.window_kind and
-      lower_string(evidence.model) == lower_string(existing.model) and
-      lower_string(evidence.upstream_model) == lower_string(existing.upstream_model)
+    Evidence.logical_window_key(evidence) == Evidence.logical_window_key(existing)
   end
+
+  defp canonical_decimal_string(%Decimal{} = value),
+    do: value |> Decimal.normalize() |> Decimal.to_string(:normal)
+
+  defp parse_decimal(value) when is_binary(value) do
+    case Decimal.parse(value) do
+      {%Decimal{} = decimal, ""} -> if valid_percent?(decimal), do: {:ok, decimal}, else: :error
+      _invalid -> :error
+    end
+  end
+
+  defp parse_decimal(_value), do: :error
+
+  defp valid_percent?(%Decimal{} = value) do
+    not Decimal.nan?(value) and not Decimal.inf?(value) and
+      Decimal.compare(value, Decimal.new(0)) != :lt and
+      Decimal.compare(value, Decimal.new(100)) != :gt
+  end
+
+  defp valid_percent?(_value), do: false
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, 0} -> {:ok, datetime}
+      _invalid -> :error
+    end
+  end
+
+  defp parse_datetime(_value), do: :error
+
+  defp optional_string(value) when is_binary(value), do: String.trim(value)
+  defp optional_string(_value), do: ""
 
   defp rollback_guarded_quota_identity?(%{quota_key: "account", quota_scope: "account"}),
     do: true
@@ -554,6 +838,25 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        do: true
 
   defp rollback_guarded_quota_identity?(_evidence_or_window), do: false
+
+  defp account_quota_identity?(%{quota_key: "account", quota_scope: "account"}), do: true
+  defp account_quota_identity?(_evidence_or_window), do: false
+
+  defp weak_zero_snapshot_decision(evidence, existing, timestamp) do
+    cond do
+      account_quota_identity?(evidence) -> :existing
+      evidence.quota_scope in ["model", "upstream_model"] -> :continue
+      true -> compare_confirmed_snapshot(evidence, existing, timestamp)
+    end
+  end
+
+  defp relative_snapshot_decision(evidence, existing) do
+    if account_quota_identity?(evidence) do
+      if later_reset?(evidence.reset_at, existing.reset_at), do: :incoming, else: :existing
+    else
+      :continue
+    end
+  end
 
   defp incoming_refreshes_existing?(
          %Evidence{source: "codex_usage_api"} = evidence,
@@ -596,7 +899,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp incoming_raises_usage_with_existing_reset?(
          %Evidence{
-           source_precision: "inferred",
+           source_precision: source_precision,
            used_percent: %Decimal{} = incoming_percent
          } = evidence,
          %Quota.AccountQuotaWindow{
@@ -606,11 +909,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          } = existing,
          timestamp
        )
-       when existing_precision in ["observed", "authoritative"] do
+       when source_precision in ["inferred", "observed", "authoritative"] and
+              existing_precision in ["observed", "authoritative"] do
     same_evidence_identity?(evidence, existing) and
       Evidence.current_freshness_state(existing, timestamp) == "fresh" and
       Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
-      higher_used_percent?(incoming_percent, existing_percent)
+      higher_used_percent?(incoming_percent, existing_percent) and
+      (source_precision == "inferred" or relative_reset_metadata?(evidence.metadata))
   end
 
   defp incoming_raises_usage_with_existing_reset?(_evidence, _existing, _timestamp),

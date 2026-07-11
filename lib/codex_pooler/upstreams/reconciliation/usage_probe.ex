@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   @moduledoc false
 
   alias CodexPooler.Jobs
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Auth.TokenRefresh
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.EndpointMetadata
@@ -23,15 +24,32 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
     "/backend-api/wham/usage"
   ]
 
-  @type usage_fetch_result :: {:ok, term(), String.t(), [map()]} | {:error, term()}
+  defmodule Result do
+    @moduledoc false
+
+    alias CodexPooler.Quotas.Evidence
+
+    @enforce_keys [:payload, :usage_url, :usage_path, :windows, :covered_descriptors]
+    defstruct [:payload, :usage_url, :usage_path, windows: [], covered_descriptors: MapSet.new()]
+
+    @type t :: %__MODULE__{
+            payload: term(),
+            usage_url: String.t(),
+            usage_path: String.t(),
+            windows: [map()],
+            covered_descriptors: MapSet.t(Evidence.descriptor_key())
+          }
+  end
+
+  @type usage_fetch_result :: {:ok, Result.t()} | {:error, term()}
   @type usage_probe_result ::
-          {:ok, term(), String.t(), [map()]}
+          {:ok, Result.t()}
           | :not_found
           | {:continue_error, term()}
           | {:halt_error, term()}
 
   @spec reconciliation_source(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), keyword()) ::
-          {:usage, UpstreamIdentity.t(), term(), [map()], String.t()}
+          {:usage, UpstreamIdentity.t(), Result.t()}
           | {:usage_unavailable, term()}
           | :auth_unavailable
   def reconciliation_source(%UpstreamIdentity{} = identity, assignment, opts) do
@@ -40,8 +58,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
          {:ok, access_token} <- Secrets.decrypt_active_secret(identity, "access_token"),
          observed_at <- now() do
       case fetch(identity, assignment, access_token, observed_at, opts) do
-        {:ok, payload, usage_url, windows} ->
-          {:usage, identity, payload, windows, usage_url}
+        {:ok, %Result{} = result} ->
+          {:usage, identity, result}
 
         {:error, {:upstream_status, status}} when status in [401, 403] ->
           maybe_retry_after_token_refresh(identity, assignment, observed_at, opts)
@@ -152,7 +170,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   defp fetch_after_successful_token_refresh(refreshed_identity, assignment, opts) do
     with {:ok, access_token} <- Secrets.decrypt_active_secret(refreshed_identity, "access_token"),
          observed_at <- now(),
-         {:ok, payload, usage_url, windows} <-
+         {:ok, %Result{} = result} <-
            fetch(
              refreshed_identity,
              assignment,
@@ -160,7 +178,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
              observed_at,
              opts
            ) do
-      {:usage, refreshed_identity, payload, windows, usage_url}
+      {:usage, refreshed_identity, result}
     else
       _unavailable -> :auth_unavailable
     end
@@ -356,7 +374,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
             headers
           )
 
-        {:ok, body, url, windows}
+        {:ok,
+         %Result{
+           payload: body,
+           usage_url: url,
+           usage_path: URI.parse(url).path,
+           windows: windows,
+           covered_descriptors: covered_descriptors(body, windows, observed_at)
+         }}
 
       {:error, reason} ->
         {:continue_error, reason}
@@ -367,13 +392,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
           {:cont, usage_fetch_result()} | {:halt, usage_fetch_result()}
   defp reduce_usage_probe_result(:not_found, last_result), do: {:cont, last_result}
 
+  defp reduce_usage_probe_result({:halt_error, _reason}, {:ok, %Result{}} = last_result),
+    do: {:halt, last_result}
+
   defp reduce_usage_probe_result({:halt_error, reason}, _last_result),
     do: {:halt, {:error, reason}}
 
   defp reduce_usage_probe_result({:continue_error, reason}, last_result),
     do: {:cont, accumulate_successful_usage_result(last_result, {:error, reason})}
 
-  defp reduce_usage_probe_result({:ok, _body, _url, windows} = result, last_result) do
+  defp reduce_usage_probe_result({:ok, %Result{windows: windows}} = result, last_result) do
     if account_primary_usage_window?(windows) do
       {:halt, prefer_current_usage_result(last_result, result)}
     else
@@ -382,39 +410,141 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   end
 
   defp prefer_current_usage_result(
-         {:ok, _body, _url, previous_windows},
-         {:ok, body, url, windows}
+         {:ok, %Result{} = previous},
+         {:ok, %Result{} = current}
        ) do
-    {:ok, body, url, merge_usage_windows(previous_windows, windows)}
+    {:ok, merge_results(previous, current, :current)}
   end
 
   defp prefer_current_usage_result(_last_result, result), do: result
 
   defp accumulate_successful_usage_result(
-         {:ok, body, url, previous_windows},
-         {:ok, _new_body, _new_url, windows}
+         {:ok, %Result{} = previous},
+         {:ok, %Result{} = current}
        ) do
-    {:ok, body, url, merge_usage_windows(previous_windows, windows)}
+    {:ok, merge_results(previous, current, :previous)}
   end
 
-  defp accumulate_successful_usage_result({:ok, _body, _url, _windows} = result, _new_result),
+  defp accumulate_successful_usage_result({:ok, %Result{}} = result, _new_result),
     do: result
 
   defp accumulate_successful_usage_result(_last_result, new_result), do: new_result
 
-  defp merge_usage_windows(previous_windows, current_windows) do
-    previous_windows
-    |> Enum.concat(current_windows)
+  defp merge_usage_windows(previous_windows, current_windows, preferred) do
+    windows =
+      if preferred == :current,
+        do: previous_windows ++ current_windows,
+        else: current_windows ++ previous_windows
+
+    windows
     |> Enum.reduce(%{}, fn window, acc ->
-      Map.put(acc, usage_window_identity(window), window)
+      Map.put(acc, Evidence.identity_key(window), window)
     end)
     |> Map.values()
-    |> Enum.sort_by(&usage_window_identity/1)
+    |> Enum.sort_by(&Evidence.identity_key/1)
   end
 
-  defp usage_window_identity(window) do
-    {Map.get(window, :quota_key), Map.get(window, :window_kind)}
+  defp merge_results(previous, current, preferred) do
+    %Result{} = selected = if preferred == :current, do: current, else: previous
+
+    %Result{
+      selected
+      | windows: merge_usage_windows(previous.windows, current.windows, preferred),
+        covered_descriptors:
+          MapSet.union(previous.covered_descriptors, current.covered_descriptors)
+    }
   end
+
+  defp covered_descriptors(payload, windows, observed_at) do
+    windows_by_descriptor = Enum.group_by(windows, &Evidence.descriptor_key/1)
+
+    payload
+    |> raw_descriptors()
+    |> Enum.reduce(MapSet.new(), fn {kind, descriptor}, covered ->
+      descriptor_windows = parsed_descriptor_windows(kind, descriptor, observed_at)
+
+      if safely_parsed_descriptor?(descriptor, descriptor_windows) do
+        descriptor_windows
+        |> Enum.map(&Evidence.descriptor_key/1)
+        |> Enum.filter(&Map.has_key?(windows_by_descriptor, &1))
+        |> Enum.reduce(covered, &MapSet.put(&2, &1))
+      else
+        covered
+      end
+    end)
+  end
+
+  defp raw_descriptors(%{} = payload) do
+    account_descriptors =
+      case payload["rate_limit"] do
+        %{} = rate_limit -> [{:account, rate_limit}]
+        _unsupported -> []
+      end
+
+    account_descriptors ++
+      Enum.flat_map(payload["additional_rate_limits"] || [], fn
+        %{"rate_limit" => %{} = additional_rate_limit} = limit ->
+          [{:additional, {limit, additional_rate_limit}}]
+
+        _unsupported ->
+          []
+      end)
+  end
+
+  defp raw_descriptors(_payload), do: []
+
+  defp parsed_descriptor_windows(:account, rate_limit, observed_at) do
+    parse_isolated_descriptor(%{"rate_limit" => rate_limit}, observed_at, fn window ->
+      Map.get(window, :quota_key) == @account_quota_key
+    end)
+  end
+
+  defp parsed_descriptor_windows(:additional, {limit, _rate_limit}, observed_at) do
+    payload = %{
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 0,
+          "limit_window_seconds" => 18_000,
+          "reset_after_seconds" => 60
+        }
+      },
+      "additional_rate_limits" => [limit]
+    }
+
+    parse_isolated_descriptor(payload, observed_at, fn window ->
+      Map.get(window, :quota_key) != @account_quota_key
+    end)
+  end
+
+  defp parse_isolated_descriptor(payload, observed_at, filter) do
+    case Quota.Windows.codex_usage_quota_windows_from_payload(payload, observed_at) do
+      {:ok, windows} -> Enum.filter(windows, filter)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp safely_parsed_descriptor?(descriptor, parsed_windows) do
+    supported = present_supported_windows(descriptor)
+
+    supported != [] and parsed_windows != [] and
+      Enum.all?(supported, fn {_field, window} -> valid_supported_window?(window) end)
+  end
+
+  defp present_supported_windows({limit, rate_limit}) when is_map(limit),
+    do: present_supported_windows(rate_limit)
+
+  defp present_supported_windows(rate_limit) when is_map(rate_limit) do
+    for field <- ~w(primary_window primary secondary_window secondary),
+        Map.has_key?(rate_limit, field),
+        do: {field, Map.get(rate_limit, field)}
+  end
+
+  defp valid_supported_window?(%{} = window) do
+    isolated_rate_limit = %{"primary_window" => window}
+    parsed_descriptor_windows(:account, isolated_rate_limit, now()) != []
+  end
+
+  defp valid_supported_window?(_window), do: false
 
   defp account_primary_usage_window?(windows) when is_list(windows) do
     Enum.any?(windows, fn window ->

@@ -15,6 +15,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     routing_windows =
       windows
       |> Enum.filter(&window_in_model_scope?(&1, opts))
+      |> WindowSelector.logical_windows(timestamp)
       |> select_current_account_primary_variant(timestamp)
 
     %{

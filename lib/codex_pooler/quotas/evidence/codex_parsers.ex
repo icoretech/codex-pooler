@@ -17,11 +17,11 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
           | {:error, %{required(:code) => atom(), required(:message) => String.t()}}
   def parse_codex_usage_payload(payload, observed_at \\ now())
 
-  def parse_codex_usage_payload(%{"rate_limit" => %{} = rate_limit} = payload, observed_at) do
+  def parse_codex_usage_payload(%{} = payload, observed_at) do
     credits = codex_usage_credits(payload["credits"])
 
     evidences =
-      rate_limit
+      payload
       |> account_usage_evidence(credits, observed_at)
       |> Kernel.++(additional_usage_evidence(payload, observed_at))
       |> normalize_many(observed_at)
@@ -96,7 +96,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
   def parse_rate_limit_error(_payload, _observed_at), do: []
 
-  defp account_usage_evidence(rate_limit, credits, observed_at) do
+  defp account_usage_evidence(%{"rate_limit" => %{} = rate_limit}, credits, observed_at) do
     primary_window = rate_limit["primary_window"] || rate_limit["primary"]
     secondary_window = rate_limit["secondary_window"] || rate_limit["secondary"]
     descriptor = Descriptors.account_descriptor()
@@ -111,6 +111,8 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
     end
     |> Enum.reject(&is_nil/1)
   end
+
+  defp account_usage_evidence(_payload, _credits, _observed_at), do: []
 
   defp additional_usage_evidence(%{"additional_rate_limits" => limits}, observed_at)
        when is_list(limits) do
@@ -185,6 +187,8 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
             "reset_after_seconds" => integer_or_nil(window["reset_after_seconds"])
           })
       })
+    else
+      _invalid -> nil
     end
   end
 

@@ -210,7 +210,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assignment_with_fake(fake, "/api/codex/usage", "codex_api")
 
       stale_identity = enable_saved_reset_auto_redeem!(identity)
-      upsert_weekly_exhausted_quota!(stale_identity)
+      upsert_weekly_exhausted_quota!(stale_identity, source: "codex_response_headers")
       context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
 
       update_identity!(stale_identity, %{saved_reset_auto_redeem_enabled: false})
@@ -233,7 +233,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       stale_identity =
         enable_saved_reset_auto_redeem!(identity, %{saved_reset_auto_redeem_keep_credits: 1})
 
-      upsert_weekly_exhausted_quota!(stale_identity)
+      upsert_weekly_exhausted_quota!(stale_identity, source: "codex_response_headers")
       context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
 
       update_saved_resets!(stale_identity, %{"available_count" => 1})
@@ -283,7 +283,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assignment_with_fake(fake, "/api/codex/usage", "codex_api")
 
       stale_identity = enable_saved_reset_auto_redeem!(identity)
-      upsert_weekly_exhausted_quota!(stale_identity)
+      upsert_weekly_exhausted_quota!(stale_identity, source: "codex_response_headers")
       context = gateway_auto_context(assignment, stale_identity, :blocked_weekly_exhaustion)
 
       upsert_weekly_pressure_quota!(stale_identity, Decimal.new("20"))
@@ -295,6 +295,34 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
 
       assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto selects same-source exhaustion before logical cross-source ranking" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+
+      upsert_weekly_exhausted_quota!(identity)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 weekly_quota_attrs(Decimal.new("99"), source: "codex_response_headers")
+               ])
+
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [consume_request, usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert usage_request.path == "/api/codex/usage"
     end
 
     test "gateway auto rejects mismatched context without marking redemption" do
@@ -684,9 +712,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     }
   end
 
-  defp upsert_weekly_exhausted_quota!(identity) do
+  defp upsert_weekly_exhausted_quota!(identity, overrides \\ []) do
     assert {:ok, [_window]} =
-             QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(Decimal.new("100"))])
+             QuotaWindows.upsert_quota_windows(identity, [
+               weekly_quota_attrs(Decimal.new("100"), overrides)
+             ])
   end
 
   defp upsert_weekly_pressure_quota!(identity, used_percent) do
@@ -694,23 +724,26 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(used_percent)])
   end
 
-  defp weekly_quota_attrs(used_percent) do
+  defp weekly_quota_attrs(used_percent, overrides \\ []) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    %{
-      quota_key: "account",
-      window_kind: "secondary",
-      window_minutes: 10_080,
-      used_percent: used_percent,
-      reset_at: DateTime.add(now, 2, :hour),
-      observed_at: now,
-      last_sync_at: now,
-      source: "codex_usage_api",
-      source_precision: "observed",
-      quota_scope: "account",
-      quota_family: "account",
-      freshness_state: "fresh"
-    }
+    Map.merge(
+      %{
+        quota_key: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: used_percent,
+        reset_at: DateTime.add(now, 2, :hour),
+        observed_at: now,
+        last_sync_at: now,
+        source: "codex_usage_api",
+        source_precision: "observed",
+        quota_scope: "account",
+        quota_family: "account",
+        freshness_state: "fresh"
+      },
+      Map.new(overrides)
+    )
   end
 
   defp usage_payload(available_count) do

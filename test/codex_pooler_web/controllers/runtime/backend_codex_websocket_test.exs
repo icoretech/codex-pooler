@@ -2301,8 +2301,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Decimal.equal?(window.used_percent, Decimal.new("43.0"))
     assert DateTime.compare(window.reset_at, body_reset_at) == :eq
 
-    refute Enum.any?(
-             QuotaWindows.list_quota_windows(setup.identity),
+    assert Enum.any?(
+             QuotaWindows.list_evidence(setup.identity),
              &(&1.source == "codex_response_headers" and &1.window_kind == "primary")
            )
   end
@@ -7767,7 +7767,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     deadline = deadline || System.monotonic_time(:millisecond) + 1_000
 
     identity
-    |> QuotaWindows.list_quota_windows()
+    |> QuotaWindows.list_evidence()
     |> Enum.find(&(&1.source == "codex_rate_limit_event" and &1.window_kind == window_kind))
     |> case do
       nil ->

@@ -11,7 +11,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     Quota,
     Quota.Windows.Attributes,
     Quota.Windows.EvidenceStore,
-    Quota.Windows.Routing
+    Quota.Windows.Routing,
+    Quota.WindowSelector
   }
 
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
@@ -53,23 +54,25 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
 
   defp do_upsert_quota_windows(%UpstreamIdentity{} = identity, windows, opts) do
     delete_missing? = Keyword.fetch!(opts, :delete_missing?)
-    windows = Enum.map(windows, &normalize_upsert_quota_window_attrs/1)
+    covered_descriptors = Keyword.get(opts, :covered_descriptors, MapSet.new())
 
-    window_keys =
-      Enum.map(windows, &{Map.fetch!(&1, :quota_key), Map.fetch!(&1, :window_kind)})
+    windows =
+      Enum.map(windows, fn attrs ->
+        attrs
+        |> normalize_upsert_quota_window_attrs()
+        |> put_default(:metadata, %{})
+        |> put_default(:source, "local_reconciliation")
+        |> put_default(:freshness_state, @fresh)
+      end)
+
+    window_keys = Enum.map(windows, &Evidence.identity_key/1)
 
     if Enum.uniq(window_keys) != window_keys do
-      {:error, lifecycle_error(:duplicate_quota_window_kind, "quota window keys must be unique")}
+      {:error,
+       lifecycle_error(:duplicate_quota_window_kind, "quota window identities must be unique")}
     else
       Enum.reduce(windows, Multi.new(), fn attrs, multi ->
-        Multi.run(multi, {:quota_window, attrs.quota_key, attrs.window_kind}, fn _repo,
-                                                                                 _changes ->
-          attrs =
-            attrs
-            |> put_default(:metadata, %{})
-            |> put_default(:source, "local_reconciliation")
-            |> put_default(:freshness_state, @fresh)
-
+        Multi.run(multi, {:quota_window, Evidence.identity_key(attrs)}, fn _repo, _changes ->
           # Reason: Multi callback normalizes quota evidence errors at the boundary.
           # credo:disable-for-next-line Credo.Check.Refactor.Nesting
           case EvidenceStore.record_evidence(identity, attrs, now()) do
@@ -79,7 +82,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
           end
         end)
       end)
-      |> maybe_delete_missing_quota_windows(identity, windows, delete_missing?)
+      |> maybe_delete_missing_quota_windows(
+        identity,
+        windows,
+        delete_missing?,
+        covered_descriptors
+      )
       |> Repo.transaction()
       |> case do
         {:ok, changes} ->
@@ -128,32 +136,33 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     EvidenceStore.list_evidence(identity_or_id)
   end
 
-  defp maybe_delete_missing_quota_windows(multi, _identity, _windows, false), do: multi
-  defp maybe_delete_missing_quota_windows(multi, _identity, [], true), do: multi
+  defp maybe_delete_missing_quota_windows(multi, _identity, _windows, false, _coverage),
+    do: multi
 
-  defp maybe_delete_missing_quota_windows(multi, identity, _windows, true) do
-    Multi.run(multi, :delete_missing_quota_windows, fn repo, changes ->
-      incoming_windows =
-        changes
-        |> Map.values()
-        |> Enum.filter(&match?(%Quota.AccountQuotaWindow{}, &1))
+  defp maybe_delete_missing_quota_windows(multi, _identity, [], true, _coverage), do: multi
 
-      incoming_quota_keys =
-        incoming_windows
-        |> Enum.map(& &1.quota_key)
-        |> Enum.uniq()
+  defp maybe_delete_missing_quota_windows(multi, _identity, _windows, true, coverage)
+       when not is_struct(coverage, MapSet),
+       do: multi
 
+  defp maybe_delete_missing_quota_windows(multi, _identity, _windows, true, coverage)
+       when map_size(coverage.map) == 0,
+       do: multi
+
+  defp maybe_delete_missing_quota_windows(multi, identity, windows, true, covered_descriptors) do
+    Multi.run(multi, :delete_missing_quota_windows, fn repo, _changes ->
       incoming_identities =
-        incoming_windows
-        |> Enum.map(&quota_window_evidence_identity/1)
+        windows
+        |> Enum.map(&Evidence.identity_key/1)
         |> MapSet.new()
 
       stale_ids =
         Quota.AccountQuotaWindow
         |> where([window], window.upstream_identity_id == ^identity.id)
-        |> where([window], window.quota_key in ^incoming_quota_keys)
+        |> where([window], window.source == "codex_usage_api")
         |> repo.all()
-        |> Enum.reject(&(quota_window_evidence_identity(&1) in incoming_identities))
+        |> Enum.filter(&(Evidence.descriptor_key(&1) in covered_descriptors))
+        |> Enum.reject(&(Evidence.identity_key(&1) in incoming_identities))
         |> Enum.map(& &1.id)
 
       {deleted_count, _rows} =
@@ -163,25 +172,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
       {:ok, deleted_count}
     end)
   end
-
-  defp quota_window_evidence_identity(%Quota.AccountQuotaWindow{} = window) do
-    {
-      window.quota_scope,
-      window.quota_family,
-      lower_string(window.model),
-      lower_string(window.upstream_model),
-      window.quota_key,
-      window.window_kind,
-      window.window_minutes,
-      window.source,
-      window.raw_limit_id || "",
-      window.raw_limit_name || "",
-      window.raw_metered_feature || ""
-    }
-  end
-
-  defp lower_string(value) when is_binary(value), do: String.downcase(value)
-  defp lower_string(_value), do: ""
 
   defp quota_window_error_changeset(identity, attrs, _errors) do
     timestamp = now()
@@ -198,6 +188,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
 
   @spec list_quota_windows(identity_ref()) :: [Quota.AccountQuotaWindow.t()]
   def list_quota_windows(identity_or_id) do
+    identity_or_id
+    |> list_evidence()
+    |> WindowSelector.logical_windows()
+  end
+
+  defp list_persisted_quota_windows(identity_or_id) do
     case identity_id(identity_or_id) do
       identity_id when is_binary(identity_id) ->
         Repo.all(
@@ -215,6 +211,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
           optional(Ecto.UUID.t()) => [Quota.AccountQuotaWindow.t()]
         }
   def list_quota_windows_by_identity_ids(identity_ids) when is_list(identity_ids) do
+    identity_ids
+    |> list_evidence_by_identity_ids()
+    |> Map.new(fn {identity_id, identity_windows} ->
+      {identity_id, WindowSelector.logical_windows(identity_windows)}
+    end)
+  end
+
+  @spec list_evidence_by_identity_ids([Ecto.UUID.t()]) :: %{
+          optional(Ecto.UUID.t()) => [Quota.AccountQuotaWindow.t()]
+        }
+  def list_evidence_by_identity_ids(identity_ids) when is_list(identity_ids) do
     identity_ids = Enum.filter(Enum.uniq(identity_ids), &is_binary/1)
 
     windows =
@@ -234,7 +241,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
 
     empty_snapshots = Map.new(identity_ids, &{&1, []})
 
-    Map.merge(empty_snapshots, Enum.group_by(windows, & &1.upstream_identity_id))
+    Map.merge(
+      empty_snapshots,
+      Enum.group_by(windows, & &1.upstream_identity_id)
+    )
   end
 
   @spec quota_window_selection_data(identity_ref(), keyword()) :: map()
@@ -404,7 +414,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   @spec existing_quota_window_attrs(identity_ref()) :: [map()]
   def existing_quota_window_attrs(identity) do
     identity
-    |> list_quota_windows()
+    |> list_persisted_quota_windows()
     |> Attributes.from_windows()
   end
 

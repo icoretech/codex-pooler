@@ -8,6 +8,7 @@ defmodule CodexPooler.UpstreamsTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Jobs.AccountReconciliationWorker
+  alias CodexPooler.MCP.Tools.QuotaMetadata
   alias CodexPooler.Pools
   alias CodexPooler.Quotas
   alias CodexPooler.Repo
@@ -20,6 +21,9 @@ defmodule CodexPooler.UpstreamsTest do
 
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
+  alias CodexPooler.Upstreams.Quota.ReadModel, as: QuotaReadModel
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.Reconciliation.UsageProbe
 
   alias CodexPooler.Upstreams.Schemas.{
     EncryptedSecret,
@@ -3535,7 +3539,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert secondary.window_kind == "secondary"
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                & &1.window_kind
              ) == [
                "primary",
@@ -3570,7 +3574,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert DateTime.compare(window.reset_at, reset_at) == :eq
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind, &1.window_minutes}
              ) == [{"account", "primary", 43_200}]
     end
@@ -3608,7 +3612,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert window.metadata["limit_window_seconds"] == 2_592_000
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind, &1.window_minutes}
              ) == [{"account", "primary", 43_200}]
     end
@@ -3658,7 +3662,7 @@ defmodule CodexPooler.UpstreamsTest do
              ) == :eq
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind, &1.window_minutes}
              ) == [{"account", "primary", unknown_window_minutes}]
     end
@@ -3744,15 +3748,16 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       spark = Enum.find(windows, &(&1.quota_key == "codex_spark"))
-      assert spark.id == historical_alias.id
+      refute spark.id == historical_alias.id
       assert Decimal.equal?(spark.used_percent, Decimal.new("44"))
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind}
              ) ==
                [
                  {"account", "primary"},
+                 {"codex_spark", "primary"},
                  {"codex_spark", "primary"}
                ]
     end
@@ -3984,7 +3989,7 @@ defmodule CodexPooler.UpstreamsTest do
       refute Enum.any?(windows, &(&1.window_kind == "primary"))
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind}
              ) ==
                [
@@ -4025,7 +4030,7 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       refute Enum.any?(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &(&1.window_kind == "primary")
              )
     end
@@ -4616,7 +4621,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert result.status == :succeeded
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.window_kind, &1.used_percent}
              ) ==
                [
@@ -4831,6 +4836,648 @@ defmodule CodexPooler.UpstreamsTest do
                )
     end
 
+    @tag :quota_descriptor_coverage
+    test "weekly-only coverage removes only the absent variant in its exact provider descriptor" do
+      payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [descriptor_weekly_limit("Provider limit alpha")]
+        })
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, payload},
+          "/backend-api/codex/usage" => {404, %{}}
+        })
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      stale_at = DateTime.add(observed_at, -600, :second)
+
+      alpha =
+        persist_descriptor_primary!(identity, stale_at, "Provider limit alpha", "codex_usage_api",
+          freshness_state: "stale",
+          reset_at: DateTime.add(observed_at, -60, :second)
+        )
+
+      beta =
+        persist_descriptor_primary!(
+          identity,
+          observed_at,
+          "Provider limit alpha",
+          "codex_usage_api",
+          "omitted_meter"
+        )
+
+      runtime_rows =
+        for source <- [
+              "codex_response_headers",
+              "codex_rate_limit_event",
+              "codex_rate_limit_error"
+            ] do
+          persist_descriptor_primary!(identity, observed_at, "Provider limit alpha", source)
+        end
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      persisted = QuotaWindows.list_evidence(identity)
+      refute Enum.any?(persisted, &(&1.id == alpha.id))
+      assert Enum.any?(persisted, &(&1.id == beta.id))
+
+      assert Enum.all?(runtime_rows, fn runtime ->
+               Enum.any?(persisted, &(&1.id == runtime.id))
+             end)
+
+      assert Enum.all?(persisted, &(&1.upstream_identity_id == identity.id))
+    end
+
+    @tag :quota_descriptor_coverage
+    test "a valid additional descriptor deletes its absent variant while a malformed sibling is preserved" do
+      payload = %{
+        "additional_rate_limits" => [
+          descriptor_weekly_limit("Provider limit alpha"),
+          %{
+            "limit_name" => "Provider limit beta",
+            "metered_feature" => "beta_meter",
+            "rate_limit" => %{
+              "primary_window" => %{
+                "used_percent" => "malformed",
+                "limit_window_seconds" => 18_000
+              },
+              "secondary_window" => %{
+                "used_percent" => 34,
+                "limit_window_seconds" => 604_800
+              }
+            }
+          }
+        ]
+      }
+
+      upstream = start_path_upstream(%{"/backend-api/wham/usage" => {200, payload}})
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      valid_primary =
+        persist_descriptor_primary!(identity, observed_at, "Provider limit alpha")
+
+      malformed_primary =
+        persist_descriptor_primary!(
+          identity,
+          observed_at,
+          "Provider limit beta",
+          "codex_usage_api",
+          "beta_meter"
+        )
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      persisted = QuotaWindows.list_evidence(identity)
+      refute Enum.any?(persisted, &(&1.id == valid_primary.id))
+      assert Enum.any?(persisted, &(&1.id == malformed_primary.id))
+    end
+
+    for {label, descriptor} <- [
+          {:unknown_only, %{"future_window" => %{"value" => 1}}},
+          {:empty, %{}},
+          {:no_supported_fields, %{"status" => "available", "limit" => 10}}
+        ] do
+      @tag :quota_descriptor_coverage
+      test "#{label} live descriptor contributes zero deletion coverage" do
+        upstream =
+          start_path_upstream(%{
+            "/backend-api/wham/usage" =>
+              {200,
+               %{
+                 "additional_rate_limits" => [
+                   %{
+                     "limit_name" => "Provider limit alpha",
+                     "metered_feature" => "example_meter",
+                     "rate_limit" => unquote(Macro.escape(descriptor))
+                   }
+                 ]
+               }}
+          })
+
+        %{identity: identity, pool: pool, assignment: assignment} =
+          usage_assignment_fixture(upstream)
+
+        existing =
+          persist_descriptor_primary!(
+            identity,
+            DateTime.utc_now() |> DateTime.truncate(:second),
+            "Provider limit alpha"
+          )
+
+        assert {:ok, _result} = Upstreams.reconcile_pool_account(pool, assignment)
+        assert Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
+      end
+    end
+
+    @tag :quota_descriptor_coverage
+    test "unknown future fields do not reduce otherwise valid supported descriptor coverage" do
+      descriptor =
+        descriptor_weekly_limit("Provider limit alpha")
+        |> put_in(["rate_limit", "future_window"], %{"value" => 1})
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" =>
+            {200, weekly_only_payload(%{"additional_rate_limits" => [descriptor]})}
+        })
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      existing =
+        persist_descriptor_primary!(
+          identity,
+          DateTime.utc_now() |> DateTime.truncate(:second),
+          "Provider limit alpha"
+        )
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+      refute Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
+    end
+
+    @tag :quota_descriptor_coverage
+    test "metadata option auth and empty inputs carry zero affected descriptor coverage" do
+      for mode <- [:metadata, :option, :auth, :empty] do
+        upstream =
+          start_path_upstream(%{
+            "/backend-api/wham/usage" => {200, %{}},
+            "/backend-api/codex/usage" => {200, %{}}
+          })
+
+        %{identity: identity, pool: pool, assignment: assignment} =
+          usage_assignment_fixture(upstream)
+
+        existing =
+          persist_descriptor_primary!(
+            identity,
+            DateTime.utc_now() |> DateTime.truncate(:second),
+            "Provider limit alpha"
+          )
+
+        {identity, assignment, opts} =
+          configure_descriptor_zero_coverage_mode(mode, identity, assignment, existing)
+
+        if mode == :auth do
+          Repo.delete_all(
+            from(secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity.id)
+          )
+        end
+
+        assert {:ok, _result} = Upstreams.reconcile_pool_account(pool, assignment, opts)
+        assert Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
+      end
+    end
+
+    @tag :quota_descriptor_coverage
+    test "a timed out live probe carries zero descriptor coverage" do
+      release_ref = make_ref()
+
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:sequence,
+           [
+             {:timeout_before_headers, self(), release_ref},
+             FakeUpstream.json_response(%{"error" => "unavailable"}, 503)
+           ]}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      existing =
+        persist_descriptor_primary!(
+          identity,
+          DateTime.utc_now() |> DateTime.truncate(:second),
+          "Provider limit alpha"
+        )
+
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          Upstreams.reconcile_pool_account(pool, assignment, receive_timeout: 1)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref}
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+      assert {:ok, _result} = Task.await(task)
+      assert Enum.any?(QuotaWindows.list_evidence(identity), &(&1.id == existing.id))
+    end
+
+    @tag :quota_descriptor_coverage
+    test "multi-path descriptor coverage is a union and omitted colliding descriptors survive" do
+      alpha_payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [descriptor_weekly_limit("Provider limit alpha")]
+        })
+
+      gamma_payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 12,
+            "limit_window_seconds" => 18_000,
+            "reset_after_seconds" => 900
+          }
+        },
+        "additional_rate_limits" => [descriptor_weekly_limit("Provider limit gamma")]
+      }
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, alpha_payload},
+          "/backend-api/codex/usage" => {200, gamma_payload}
+        })
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      alpha = persist_descriptor_primary!(identity, observed_at, "Provider limit alpha")
+
+      beta =
+        persist_descriptor_primary!(
+          identity,
+          observed_at,
+          "Provider limit alpha",
+          "codex_usage_api",
+          "omitted_meter"
+        )
+
+      gamma = persist_descriptor_primary!(identity, observed_at, "Provider limit gamma")
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      persisted = QuotaWindows.list_evidence(identity)
+      refute Enum.any?(persisted, &(&1.id in [alpha.id, gamma.id]))
+      assert Enum.any?(persisted, &(&1.id == beta.id))
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
+               "/backend-api/wham/usage",
+               "/backend-api/codex/usage"
+             ]
+    end
+
+    @tag :quota_probe_envelope
+    test "usage probe merges rich windows and unions safe descriptor coverage across live paths" do
+      alpha_payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [descriptor_weekly_limit("Provider limit alpha")]
+        })
+
+      beta_payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [descriptor_weekly_limit("Provider limit beta")]
+        })
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, alpha_payload},
+          "/backend-api/codex/usage" => {200, beta_payload}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert {:ok, probe} =
+               UsageProbe.fetch_from_identity(identity, assignment, observed_at, [])
+
+      assert %UsageProbe.Result{
+               usage_path: "/backend-api/wham/usage",
+               windows: windows,
+               covered_descriptors: covered_descriptors
+             } = probe
+
+      assert Enum.map(windows, &Quotas.Evidence.identity_key/1) |> Enum.uniq() |> length() ==
+               length(windows)
+
+      assert Enum.count(windows, &(&1.window_kind == "secondary")) == 3
+      assert MapSet.size(covered_descriptors) == 3
+
+      assert Enum.all?(
+               covered_descriptors,
+               &match?({_, _, _, _, _, "codex_usage_api", _, _, _}, &1)
+             )
+    end
+
+    @tag :quota_probe_envelope
+    test "rich legacy collisions survive path merging by exact evidence identity" do
+      first_payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [descriptor_weekly_limit("Provider limit")]
+        })
+
+      second_payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 12,
+            "limit_window_seconds" => 18_000,
+            "reset_after_seconds" => 900
+          }
+        },
+        "additional_rate_limits" => [
+          descriptor_weekly_limit("Provider limit")
+          |> Map.put("metered_feature", "example_meter_beta")
+        ]
+      }
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, first_payload},
+          "/backend-api/codex/usage" => {200, second_payload}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok, %UsageProbe.Result{windows: windows}} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      model_windows = Enum.filter(windows, &(&1.quota_scope == "model"))
+      assert length(model_windows) == 2
+
+      assert model_windows
+             |> MapSet.new(&{&1.quota_key, &1.window_kind, &1.window_minutes})
+             |> MapSet.size() == 1
+
+      identity_keys_by_raw_limit =
+        Map.new(model_windows, &{&1.raw_limit_id, Quotas.Evidence.identity_key(&1)})
+
+      assert MapSet.new(Map.keys(identity_keys_by_raw_limit)) ==
+               MapSet.new(["example_meter", "example_meter_beta"])
+
+      assert MapSet.size(MapSet.new(Map.values(identity_keys_by_raw_limit))) == 2
+      assert elem(identity_keys_by_raw_limit["example_meter"], 8) == "example_meter"
+      assert elem(identity_keys_by_raw_limit["example_meter_beta"], 8) == "example_meter_beta"
+
+      assert MapSet.new(model_windows, & &1.raw_limit_id) ==
+               MapSet.new(["example_meter", "example_meter_beta"])
+
+      assert Enum.all?(model_windows, &(&1.model == "Provider limit"))
+
+      assert Enum.all?(model_windows, &(&1.window_kind == "secondary"))
+      assert Enum.all?(model_windows, &(&1.window_minutes == 10_080))
+    end
+
+    @tag :quota_probe_envelope
+    test "duplicate rich identities keep preferred endpoint payload path and window coherent" do
+      previous_payload =
+        weekly_only_payload(%{
+          "rate_limit" => %{
+            "secondary_window" => %{
+              "used_percent" => 31,
+              "limit_window_seconds" => 604_800,
+              "reset_after_seconds" => 3_600
+            }
+          }
+        })
+
+      current_payload = %{
+        "plan_type" => "preferred-plan",
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 12,
+            "limit_window_seconds" => 18_000,
+            "reset_after_seconds" => 900
+          },
+          "secondary_window" => %{
+            "used_percent" => 47,
+            "limit_window_seconds" => 604_800,
+            "reset_after_seconds" => 3_600
+          }
+        }
+      }
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, previous_payload},
+          "/backend-api/codex/usage" => {200, current_payload}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok,
+              %UsageProbe.Result{
+                payload: ^current_payload,
+                usage_path: "/backend-api/codex/usage",
+                windows: windows
+              }} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      assert %{used_percent: used_percent} =
+               Enum.find(windows, &(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+      assert Decimal.equal?(used_percent, Decimal.new("47"))
+    end
+
+    @tag :quota_probe_envelope
+    test "metadata and explicit option windows bypass live probing" do
+      for mode <- [:metadata, :option] do
+        upstream = start_path_upstream(%{"/backend-api/wham/usage" => {500, %{}}})
+
+        %{identity: identity, pool: pool, assignment: assignment} =
+          usage_assignment_fixture(upstream)
+
+        window =
+          rich_identity_attrs(DateTime.utc_now() |> DateTime.truncate(:second), %{
+            source: "local_reconciliation"
+          })
+
+        {identity, opts} =
+          case mode do
+            :metadata ->
+              assert {:ok, updated_identity} =
+                       IdentityLifecycle.update_upstream_identity(identity, %{
+                         metadata: Map.put(identity.metadata, "quota_windows", [window])
+                       })
+
+              {updated_identity, []}
+
+            :option ->
+              {identity, [quota_windows: [window]]}
+          end
+
+        assert {:ok, %{quota: %{status: :succeeded}}} =
+                 Upstreams.reconcile_pool_account(pool, assignment, opts)
+
+        assert FakeUpstream.requests(upstream) == []
+        assert Enum.all?(QuotaWindows.list_evidence(identity), &(&1.source != "codex_usage_api"))
+      end
+    end
+
+    @tag :quota_probe_envelope
+    test "usable account primary halts before later paths and covers only observed descriptors" do
+      payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 12,
+            "limit_window_seconds" => 18_000,
+            "reset_after_seconds" => 900
+          }
+        }
+      }
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, payload},
+          "/backend-api/codex/usage" =>
+            {200,
+             weekly_only_payload(%{
+               "additional_rate_limits" => [descriptor_weekly_limit("Unobserved limit")]
+             })}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok, %UsageProbe.Result{covered_descriptors: covered}} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
+               "/backend-api/wham/usage"
+             ]
+
+      assert MapSet.size(covered) == 1
+      assert Enum.all?(covered, fn descriptor -> elem(descriptor, 4) == "account" end)
+    end
+
+    @tag :quota_probe_envelope
+    test "malformed present primary leaves a valid secondary descriptor uncovered" do
+      payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => "malformed",
+            "limit_window_seconds" => 18_000
+          },
+          "secondary_window" => %{
+            "used_percent" => 34,
+            "limit_window_seconds" => 604_800,
+            "reset_after_seconds" => 3_600
+          }
+        }
+      }
+
+      upstream = start_path_upstream(%{"/backend-api/wham/usage" => {200, payload}})
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok, %UsageProbe.Result{windows: [window], covered_descriptors: covered}} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      assert window.window_kind == "secondary"
+      assert MapSet.size(covered) == 0
+    end
+
+    @tag :quota_probe_envelope
+    test "unsupported live descriptors contribute no probe coverage" do
+      payload =
+        weekly_only_payload(%{
+          "additional_rate_limits" => [
+            %{
+              "limit_name" => "Provider limit alpha",
+              "metered_feature" => "alpha_meter",
+              "rate_limit" => %{"future_window" => %{"value" => 1}}
+            }
+          ]
+        })
+
+      upstream = start_path_upstream(%{"/backend-api/wham/usage" => {200, payload}})
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok, %UsageProbe.Result{covered_descriptors: covered_descriptors}} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      assert MapSet.size(covered_descriptors) == 1
+      assert Enum.all?(covered_descriptors, fn descriptor -> elem(descriptor, 4) == "account" end)
+    end
+
+    @tag :quota_probe_envelope
+    test "failed probes preserve sanitized errors without exposing request credentials or bodies" do
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {503, %{"private_payload" => "must-not-leak"}}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:error, reason} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      inspected = inspect(reason)
+      assert reason == {:upstream_status, 503}
+      refute inspected =~ "must-not-leak"
+      refute inspected =~ "authorization"
+      refute inspected =~ "cookie"
+    end
+
+    @tag :quota_descriptor_coverage
+    test "a successful live path contributes coverage while a failed sibling path contributes none" do
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" =>
+            {200,
+             weekly_only_payload(%{
+               "additional_rate_limits" => [descriptor_weekly_limit("Provider limit alpha")]
+             })},
+          "/backend-api/codex/usage" => {503, %{"error" => "unavailable"}}
+        })
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      covered = persist_descriptor_primary!(identity, observed_at, "Provider limit alpha")
+      failed_path = persist_descriptor_primary!(identity, observed_at, "Provider limit beta")
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      persisted = QuotaWindows.list_evidence(identity)
+      refute Enum.any?(persisted, &(&1.id == covered.id))
+      assert Enum.any?(persisted, &(&1.id == failed_path.id))
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
+               "/backend-api/wham/usage",
+               "/backend-api/codex/usage"
+             ]
+    end
+
     test "refreshes reset-bearing quota from backend Codex usage fallback" do
       observed_start = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -4869,7 +5516,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert result.status == :succeeded
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind}
              ) ==
                [
@@ -5314,10 +5961,10 @@ defmodule CodexPooler.UpstreamsTest do
                  DateTime.add(observed_at, 60, :second)
                )
 
-      assert [stored_weekly] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+      stored_weekly =
+        identity
+        |> QuotaWindows.quota_window_selection_data(at: DateTime.add(observed_at, 60, :second))
+        |> Map.fetch!(:secondary)
 
       assert stored_weekly.source == "codex_usage_api"
       assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("19"))
@@ -5367,10 +6014,10 @@ defmodule CodexPooler.UpstreamsTest do
                  delete_missing?: false
                )
 
-      assert [stored_weekly] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+      stored_weekly =
+        identity
+        |> QuotaWindows.quota_window_selection_data(at: DateTime.add(observed_at, 60, :second))
+        |> Map.fetch!(:secondary)
 
       assert stored_weekly.source == "codex_usage_api"
       assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("19"))
@@ -5420,10 +6067,10 @@ defmodule CodexPooler.UpstreamsTest do
                  DateTime.add(observed_at, 60, :second)
                )
 
-      assert [stored_weekly] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+      stored_weekly =
+        identity
+        |> QuotaWindows.quota_window_selection_data(at: DateTime.add(observed_at, 60, :second))
+        |> Map.fetch!(:secondary)
 
       assert stored_weekly.source == "codex_rate_limit_event"
       assert Decimal.equal?(stored_weekly.used_percent, Decimal.new("91.0"))
@@ -5492,10 +6139,10 @@ defmodule CodexPooler.UpstreamsTest do
                  delete_missing?: false
                )
 
-      assert [stored_weekly] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+      stored_weekly =
+        identity
+        |> QuotaWindows.quota_window_selection_data(at: DateTime.add(observed_at, 120, :second))
+        |> Map.fetch!(:secondary)
 
       assert stored_weekly.id == stronger_window.id
       assert stored_weekly.source == "codex_rate_limit_event"
@@ -5585,10 +6232,10 @@ defmodule CodexPooler.UpstreamsTest do
                  delete_missing?: false
                )
 
-      assert [stored_weekly] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+      stored_weekly =
+        identity
+        |> QuotaWindows.quota_window_selection_data(at: DateTime.add(observed_at, 180, :second))
+        |> Map.fetch!(:secondary)
 
       assert stored_weekly.id == stronger_window.id
       assert stored_weekly.source == "codex_usage_api"
@@ -5793,10 +6440,14 @@ defmodule CodexPooler.UpstreamsTest do
                  DateTime.add(observed_at, 60, :second)
                )
 
-      assert [stored_spark] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "codex_spark" and &1.window_kind == "primary"))
+      stored_spark =
+        identity
+        |> QuotaWindows.quota_window_selection_data(
+          at: DateTime.add(observed_at, 60, :second),
+          model: "gpt-5.3-codex-spark"
+        )
+        |> Map.fetch!(:routing_windows)
+        |> Enum.find(&(&1.quota_key == "codex_spark"))
 
       assert stored_spark.source == "codex_usage_api"
       assert Decimal.equal?(stored_spark.used_percent, Decimal.new("10"))
@@ -5853,10 +6504,14 @@ defmodule CodexPooler.UpstreamsTest do
                  delete_missing?: false
                )
 
-      assert [stored_spark] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "codex_spark" and &1.window_kind == "primary"))
+      stored_spark =
+        identity
+        |> QuotaWindows.quota_window_selection_data(
+          at: DateTime.add(observed_at, 60, :second),
+          model: "gpt-5.3-codex-spark"
+        )
+        |> Map.fetch!(:routing_windows)
+        |> Enum.find(&(&1.quota_key == "codex_spark"))
 
       assert stored_spark.source == "codex_usage_api"
       assert Decimal.equal?(stored_spark.used_percent, Decimal.new("10"))
@@ -5913,14 +6568,1392 @@ defmodule CodexPooler.UpstreamsTest do
                  DateTime.add(observed_at, 60, :second)
                )
 
-      assert [stored_spark] =
-               identity
-               |> QuotaWindows.list_quota_windows()
-               |> Enum.filter(&(&1.quota_key == "codex_spark" and &1.window_kind == "primary"))
+      stored_spark =
+        identity
+        |> QuotaWindows.quota_window_selection_data(
+          at: DateTime.add(observed_at, 60, :second),
+          model: "gpt-5.3-codex-spark"
+        )
+        |> Map.fetch!(:routing_windows)
+        |> Enum.find(&(&1.quota_key == "codex_spark"))
 
       assert stored_spark.source == "codex_rate_limit_event"
       assert Decimal.equal?(stored_spark.used_percent, Decimal.new("91.0"))
       assert DateTime.compare(stored_spark.reset_at, runtime_reset_at) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "characterizes direct reset-bearing usage evidence persistence" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 300, :second)
+      attrs = confirmed_convergence_attrs(:account, "primary", "22.000", reset_at, observed_at)
+
+      assert {:ok, stored} = QuotaWindows.record_evidence(identity, attrs, observed_at)
+      assert stored.upstream_identity_id == identity.id
+      assert stored.quota_scope == "account"
+      assert stored.quota_family == "account"
+      assert stored.quota_key == "account"
+      assert stored.window_kind == "primary"
+      assert stored.window_minutes == 300
+      assert Decimal.equal?(stored.used_percent, Decimal.new("22.000"))
+      assert DateTime.compare(stored.reset_at, reset_at) == :eq
+      assert DateTime.compare(stored.observed_at, observed_at) == :eq
+      assert DateTime.compare(stored.last_sync_at, observed_at) == :eq
+      assert stored.freshness_state == "fresh"
+      assert stored.source == "codex_usage_api"
+      assert stored.source_precision == "observed"
+      assert QuotaWindows.usable_window?(stored, observed_at)
+    end
+
+    for evidence_scope <- [:account, :model, :upstream_model, :feature],
+        window_kind <- ["primary", "secondary"] do
+      @tag :quota_confirmed_convergence
+      test "confirms two newer equivalent lower #{evidence_scope} #{window_kind} snapshots" do
+        identity = active_identity_fixture()
+        canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        candidate_at = DateTime.add(canonical_at, 10, :second)
+        confirmation_at = DateTime.add(candidate_at, 10, :second)
+        reset_at = DateTime.add(canonical_at, 2, :hour)
+        lower_percent = confirmed_convergence_lower_percent(unquote(evidence_scope))
+
+        canonical =
+          record_confirmed_convergence!(
+            identity,
+            unquote(evidence_scope),
+            unquote(window_kind),
+            "22",
+            reset_at,
+            canonical_at
+          )
+
+        first =
+          record_confirmed_convergence!(
+            identity,
+            unquote(evidence_scope),
+            unquote(window_kind),
+            lower_percent,
+            DateTime.add(reset_at, 5, :second),
+            candidate_at
+          )
+
+        assert first.id == canonical.id
+        assert_canonical_snapshot(first, canonical)
+
+        assert_confirmed_candidate(
+          first,
+          lower_percent,
+          DateTime.add(reset_at, 5, :second),
+          candidate_at
+        )
+
+        assert QuotaWindows.usable_window?(first, candidate_at)
+
+        confirmed =
+          record_confirmed_convergence!(
+            identity,
+            unquote(evidence_scope),
+            unquote(window_kind),
+            Decimal.new(lower_percent) |> Decimal.normalize() |> Decimal.to_string(),
+            DateTime.add(reset_at, 1, :second),
+            confirmation_at
+          )
+
+        assert confirmed.id == canonical.id
+        assert Decimal.equal?(confirmed.used_percent, Decimal.new(lower_percent))
+        assert DateTime.compare(confirmed.reset_at, DateTime.add(reset_at, 1, :second)) == :eq
+        assert DateTime.compare(confirmed.observed_at, confirmation_at) == :eq
+        assert DateTime.compare(confirmed.last_sync_at, confirmation_at) == :eq
+        assert confirmed.freshness_state == "fresh"
+        assert confirmed.source == "codex_usage_api"
+        assert confirmed.source_precision == "observed"
+        refute confirmed_candidate(confirmed)
+        assert QuotaWindows.usable_window?(confirmed, confirmation_at)
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "higher complete snapshots commit immediately and clear a lower candidate" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :account, "primary", "22", reset_at, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      first =
+        record_confirmed_convergence!(identity, :account, "primary", "14", reset_at, candidate_at)
+
+      assert_canonical_snapshot(first, canonical)
+      assert_confirmed_candidate(first, "14", reset_at, candidate_at)
+
+      higher_at = DateTime.add(candidate_at, 10, :second)
+
+      higher =
+        record_confirmed_convergence!(identity, :account, "primary", "23", reset_at, higher_at)
+
+      assert Decimal.equal?(higher.used_percent, Decimal.new("23"))
+      assert DateTime.compare(higher.observed_at, higher_at) == :eq
+      refute confirmed_candidate(higher)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "equal complete provider evidence independently clears a lower candidate" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :account, "primary", "22", reset_at, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      candidate =
+        record_confirmed_convergence!(identity, :account, "primary", "14", reset_at, candidate_at)
+
+      assert_canonical_snapshot(candidate, canonical)
+      assert_confirmed_candidate(candidate, "14", reset_at, candidate_at)
+
+      equal_at = DateTime.add(candidate_at, 10, :second)
+
+      equal =
+        record_confirmed_convergence!(identity, :account, "primary", "22.0", reset_at, equal_at)
+
+      assert equal.id == canonical.id
+      assert Decimal.equal?(equal.used_percent, Decimal.new("22"))
+      assert DateTime.compare(equal.reset_at, reset_at) == :eq
+      assert DateTime.compare(equal.observed_at, equal_at) == :eq
+      assert DateTime.compare(equal.last_sync_at, equal_at) == :eq
+      assert equal.freshness_state == "fresh"
+      assert equal.source == "codex_usage_api"
+      assert equal.source_precision == "observed"
+      refute confirmed_candidate(equal)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "changed lower pairs and non-increasing timestamps cannot confirm" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :model, "secondary", "22", reset_at, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      first =
+        record_confirmed_convergence!(identity, :model, "secondary", "1", reset_at, candidate_at)
+
+      assert_canonical_snapshot(first, canonical)
+      assert_confirmed_candidate(first, "1", reset_at, candidate_at)
+
+      changed_at = DateTime.add(candidate_at, 10, :second)
+
+      changed =
+        record_confirmed_convergence!(identity, :model, "secondary", "2", reset_at, changed_at)
+
+      assert_canonical_snapshot(changed, canonical)
+      assert_confirmed_candidate(changed, "2", reset_at, changed_at)
+
+      duplicate =
+        record_confirmed_convergence!(identity, :model, "secondary", "2.0", reset_at, changed_at)
+
+      assert_canonical_snapshot(duplicate, canonical)
+      assert_confirmed_candidate(duplicate, "2", reset_at, changed_at)
+
+      older =
+        record_confirmed_convergence!(
+          identity,
+          :model,
+          "secondary",
+          "2",
+          reset_at,
+          DateTime.add(changed_at, -1, :second)
+        )
+
+      assert_canonical_snapshot(older, canonical)
+      assert_confirmed_candidate(older, "2", reset_at, changed_at)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "stale candidates do not confirm and expired canonicals accept a complete lower pair" do
+      identity = active_identity_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      canonical_at = DateTime.add(now, -10, :second)
+      stale_candidate_at = DateTime.add(now, -4, :second)
+      canonical_reset_at = DateTime.add(now, 4, :second)
+      candidate_reset_at = DateTime.add(now, -1, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :upstream_model,
+          "primary",
+          "22",
+          canonical_reset_at,
+          canonical_at
+        )
+
+      first =
+        record_confirmed_convergence!(
+          identity,
+          :upstream_model,
+          "primary",
+          "14",
+          candidate_reset_at,
+          stale_candidate_at
+        )
+
+      assert_canonical_snapshot(first, canonical)
+      refute confirmed_candidate(first)
+
+      fresh_at = now
+
+      restarted =
+        record_confirmed_convergence!(
+          identity,
+          :upstream_model,
+          "primary",
+          "14",
+          canonical_reset_at,
+          fresh_at
+        )
+
+      assert_canonical_snapshot(restarted, canonical)
+      assert_confirmed_candidate(restarted, "14", canonical_reset_at, fresh_at)
+
+      expired_identity = active_identity_fixture()
+      expired_reset_at = DateTime.add(now, -1, :second)
+
+      expired =
+        record_confirmed_convergence!(
+          expired_identity,
+          :feature,
+          "secondary",
+          "22",
+          expired_reset_at,
+          DateTime.add(now, -60, :second)
+        )
+
+      next_reset_at = DateTime.add(now, 2, :hour)
+
+      accepted =
+        record_confirmed_convergence!(
+          expired_identity,
+          :feature,
+          "secondary",
+          "1",
+          next_reset_at,
+          now
+        )
+
+      assert accepted.id == expired.id
+      assert Decimal.equal?(accepted.used_percent, Decimal.new("1"))
+      assert DateTime.compare(accepted.reset_at, next_reset_at) == :eq
+      assert DateTime.compare(accepted.observed_at, now) == :eq
+      refute confirmed_candidate(accepted)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "a lower reset conflict restarts confirmation without splicing the canonical pair" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      canonical_reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "22",
+          canonical_reset_at,
+          canonical_at
+        )
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+      candidate_reset_at = DateTime.add(canonical_reset_at, 5, :second)
+
+      first =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "14",
+          candidate_reset_at,
+          candidate_at
+        )
+
+      assert_canonical_snapshot(first, canonical)
+      assert_confirmed_candidate(first, "14", candidate_reset_at, candidate_at)
+
+      conflicting_at = DateTime.add(candidate_at, 10, :second)
+      conflicting_reset_at = DateTime.add(candidate_reset_at, 6, :second)
+
+      conflicting =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "14.0",
+          conflicting_reset_at,
+          conflicting_at
+        )
+
+      assert_canonical_snapshot(conflicting, canonical)
+      assert_confirmed_candidate(conflicting, "14", conflicting_reset_at, conflicting_at)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "equivalent lower snapshots from distinct rich identities cannot confirm each other" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :model, "primary", "22", reset_at, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      candidate =
+        record_confirmed_convergence!(identity, :model, "primary", "1", reset_at, candidate_at)
+
+      assert_canonical_snapshot(candidate, canonical)
+      assert_confirmed_candidate(candidate, "1", reset_at, candidate_at)
+
+      sibling_at = DateTime.add(candidate_at, 10, :second)
+
+      sibling_attrs =
+        :model
+        |> confirmed_convergence_attrs("primary", "1.0", reset_at, sibling_at)
+        |> Map.merge(%{
+          model: "example-model-sibling",
+          raw_limit_id: "model-limit-sibling",
+          raw_limit_name: "Model sibling limit",
+          raw_metered_feature: "model-sibling-meter"
+        })
+
+      assert {:ok, sibling} = QuotaWindows.record_evidence(identity, sibling_attrs, sibling_at)
+      assert sibling.id != canonical.id
+      assert sibling.model == "example-model-sibling"
+      assert sibling.raw_limit_id == "model-limit-sibling"
+      assert Decimal.equal?(sibling.used_percent, Decimal.new("1"))
+      assert DateTime.compare(sibling.reset_at, reset_at) == :eq
+      refute confirmed_candidate(sibling)
+
+      persisted = QuotaWindows.list_evidence(identity)
+      persisted_canonical = Enum.find(persisted, &(&1.id == canonical.id))
+      persisted_sibling = Enum.find(persisted, &(&1.id == sibling.id))
+
+      assert_canonical_snapshot(persisted_canonical, canonical)
+      assert_confirmed_candidate(persisted_canonical, "1", reset_at, candidate_at)
+      assert Decimal.equal?(persisted_sibling.used_percent, Decimal.new("1"))
+      assert DateTime.compare(persisted_sibling.observed_at, sibling_at) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "a provably newer cycle accepts lower evidence while stale, resetless, and inferred samples do not" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 5, :minute)
+
+      canonical =
+        record_confirmed_convergence!(identity, :account, "primary", "22", reset_at, canonical_at)
+
+      stale_at = DateTime.add(canonical_at, 10, :second)
+
+      stale =
+        confirmed_convergence_attrs(:account, "primary", "14", reset_at, stale_at)
+        |> Map.put(:freshness_state, "stale")
+        |> then(&QuotaWindows.record_evidence(identity, &1, stale_at))
+        |> then(fn {:ok, stored} -> stored end)
+
+      assert_canonical_snapshot(stale, canonical)
+      refute confirmed_candidate(stale)
+
+      resetless_at = DateTime.add(canonical_at, 20, :second)
+
+      resetless =
+        confirmed_convergence_attrs(:account, "primary", "14", nil, resetless_at)
+        |> then(&QuotaWindows.record_evidence(identity, &1, resetless_at))
+        |> then(fn {:ok, stored} -> stored end)
+
+      assert_canonical_snapshot(resetless, canonical)
+      refute confirmed_candidate(resetless)
+
+      inferred_at = DateTime.add(canonical_at, 30, :second)
+
+      inferred =
+        confirmed_convergence_attrs(:account, "primary", "14", reset_at, inferred_at)
+        |> Map.put(:source_precision, "inferred")
+        |> then(&QuotaWindows.record_evidence(identity, &1, inferred_at))
+        |> then(fn {:ok, stored} -> stored end)
+
+      assert_canonical_snapshot(inferred, canonical)
+      refute confirmed_candidate(inferred)
+
+      next_cycle_at = DateTime.add(canonical_at, 40, :second)
+      next_reset_at = DateTime.add(reset_at, 2, :hour)
+
+      next_cycle =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "primary",
+          "14",
+          next_reset_at,
+          next_cycle_at
+        )
+
+      assert Decimal.equal?(next_cycle.used_percent, Decimal.new("14"))
+      assert DateTime.compare(next_cycle.reset_at, next_reset_at) == :eq
+      assert DateTime.compare(next_cycle.observed_at, next_cycle_at) == :eq
+      refute confirmed_candidate(next_cycle)
+    end
+
+    for boundary_percent <- ["0", "100"] do
+      @tag :quota_confirmed_convergence
+      test "confirms the #{boundary_percent}% boundary deterministically" do
+        identity = active_identity_fixture()
+        canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        reset_at = DateTime.add(canonical_at, 2, :hour)
+
+        canonical =
+          record_confirmed_convergence!(
+            identity,
+            :feature,
+            "primary",
+            "22",
+            reset_at,
+            canonical_at
+          )
+
+        observed_at = DateTime.add(canonical_at, 10, :second)
+
+        first =
+          record_confirmed_convergence!(
+            identity,
+            :feature,
+            "primary",
+            unquote(boundary_percent),
+            reset_at,
+            observed_at
+          )
+
+        if unquote(boundary_percent) == "0" do
+          assert_canonical_snapshot(first, canonical)
+          assert_confirmed_candidate(first, "0", reset_at, observed_at)
+
+          confirmed_at = DateTime.add(observed_at, 10, :second)
+
+          confirmed =
+            record_confirmed_convergence!(
+              identity,
+              :feature,
+              "primary",
+              "0.0",
+              reset_at,
+              confirmed_at
+            )
+
+          assert Decimal.equal?(confirmed.used_percent, Decimal.new("0"))
+          assert DateTime.compare(confirmed.observed_at, confirmed_at) == :eq
+          refute confirmed_candidate(confirmed)
+        else
+          assert Decimal.equal?(first.used_percent, Decimal.new("100"))
+          assert DateTime.compare(first.observed_at, observed_at) == :eq
+          refute confirmed_candidate(first)
+        end
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "first lower candidate changes only bounded private metadata and updated_at" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :model, "primary", "22", reset_at, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      candidate =
+        record_confirmed_convergence!(
+          identity,
+          :model,
+          "primary",
+          "1.000",
+          reset_at,
+          candidate_at
+        )
+
+      assert_canonical_snapshot(candidate, canonical)
+      assert candidate.metadata != canonical.metadata
+      assert DateTime.compare(candidate.updated_at, canonical.updated_at) == :gt
+      assert_confirmed_candidate(candidate, "1", reset_at, candidate_at)
+
+      assert candidate.metadata
+             |> Map.drop(Map.keys(canonical.metadata))
+             |> Map.values()
+             |> Enum.flat_map(&Map.keys/1)
+             |> Enum.sort() == ["count", "observed_at", "reset_at", "used_percent", "version"]
+
+      refute inspect(candidate.metadata) =~ "raw-provider-response"
+      refute inspect(candidate.metadata) =~ "fixture-user@example.com"
+    end
+
+    @tag :quota_candidate_contract
+    test "normalized evidence owns persistence descriptor and logical window keys" do
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      evidence =
+        :model
+        |> confirmed_convergence_attrs(
+          "primary",
+          "1",
+          DateTime.add(observed_at, 1, :hour),
+          observed_at
+        )
+        |> Map.merge(%{
+          model: " Example-Model ",
+          upstream_model: " UPSTREAM-MODEL ",
+          raw_limit_id: " limit-id ",
+          raw_limit_name: " Limit name ",
+          raw_metered_feature: " meter "
+        })
+        |> Quotas.Evidence.new!(observed_at)
+
+      assert Quotas.Evidence.identity_key(evidence) ==
+               {"model", "codex_model", "example-model", "upstream-model", "model_quota",
+                "primary", 300, "codex_usage_api", "limit-id", "Limit name", "meter"}
+
+      assert Quotas.Evidence.descriptor_key(evidence) ==
+               {"model", "codex_model", "example-model", "upstream-model", "model_quota",
+                "codex_usage_api", "limit-id", "Limit name", "meter"}
+
+      assert Quotas.Evidence.logical_window_key(evidence) ==
+               {"model", "codex_model", "example-model", "upstream-model", "model_quota",
+                "primary", 300}
+    end
+
+    @tag :quota_candidate_contract
+    test "candidate metadata round-trips losslessly and malformed values clear without confirmation" do
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      reset_at = DateTime.add(observed_at, 1, :hour)
+
+      evidence =
+        :account
+        |> confirmed_convergence_attrs(
+          "primary",
+          "14.123456789012345678901234567890",
+          reset_at,
+          observed_at
+        )
+        |> Quotas.Evidence.new!(observed_at)
+
+      metadata = EvidenceStore.put_candidate(%{"fixture" => true}, evidence)
+      assert {:ok, candidate} = EvidenceStore.parse_candidate(metadata)
+      assert Decimal.equal?(candidate.used_percent, evidence.used_percent)
+      assert candidate.reset_at == reset_at
+      assert candidate.observed_at == observed_at
+      assert EvidenceStore.candidate_equivalent?(candidate, evidence)
+
+      assert EvidenceStore.candidate_equivalent?(candidate, %{
+               evidence
+               | reset_at: DateTime.add(reset_at, 5, :second)
+             })
+
+      refute EvidenceStore.candidate_equivalent?(candidate, %{
+               evidence
+               | reset_at: DateTime.add(reset_at, 6, :second)
+             })
+
+      encoded_candidate = metadata |> Map.drop(["fixture"]) |> Map.values() |> List.first()
+      assert map_size(encoded_candidate) == 5
+      assert encoded_candidate["used_percent"] == "14.12345678901234567890123456789"
+
+      for malformed <- [
+            Map.put(encoded_candidate, "version", 2),
+            Map.put(encoded_candidate, "count", 2),
+            Map.put(encoded_candidate, "used_percent", "not-a-decimal"),
+            Map.put(encoded_candidate, "used_percent", "NaN"),
+            Map.put(encoded_candidate, "used_percent", "Infinity"),
+            Map.put(encoded_candidate, "used_percent", "Inf"),
+            Map.put(encoded_candidate, "used_percent", "-0.0001"),
+            Map.put(encoded_candidate, "used_percent", "100.0001"),
+            Map.put(encoded_candidate, "reset_at", "not-a-time"),
+            Map.put(encoded_candidate, "extra", true)
+          ] do
+        malformed_metadata =
+          metadata
+          |> EvidenceStore.clear_candidate()
+          |> Map.put(metadata |> Map.drop(["fixture"]) |> Map.keys() |> List.first(), malformed)
+
+        assert EvidenceStore.parse_candidate(malformed_metadata) == :none
+        assert EvidenceStore.clear_candidate(malformed_metadata) == %{"fixture" => true}
+      end
+
+      for candidate_percent <- [Decimal.new("NaN"), Decimal.new("Infinity")] do
+        refute EvidenceStore.candidate_equivalent?(
+                 %{candidate | used_percent: candidate_percent},
+                 evidence
+               )
+      end
+
+      for boundary <- ["0", "100"] do
+        boundary_metadata =
+          Map.put(
+            metadata,
+            metadata |> Map.drop(["fixture"]) |> Map.keys() |> List.first(),
+            Map.put(encoded_candidate, "used_percent", boundary)
+          )
+
+        assert {:ok, %{used_percent: decoded}} = EvidenceStore.parse_candidate(boundary_metadata)
+        assert Decimal.equal?(decoded, Decimal.new(boundary))
+      end
+    end
+
+    @tag :quota_candidate_contract
+    test "candidate validity honors exact freshness reset and future-skew boundaries" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      ttl = Quotas.Evidence.freshness_ttl_seconds()
+      skew = Quotas.Evidence.future_observed_skew_seconds()
+
+      assert EvidenceStore.candidate_valid?(
+               %{
+                 used_percent: Decimal.new("14"),
+                 reset_at: DateTime.add(now, 1, :second),
+                 observed_at: DateTime.add(now, -ttl, :second)
+               },
+               now
+             )
+
+      refute EvidenceStore.candidate_valid?(
+               %{
+                 used_percent: Decimal.new("14"),
+                 reset_at: DateTime.add(now, 1, :second),
+                 observed_at: DateTime.add(now, -ttl - 1, :second)
+               },
+               now
+             )
+
+      refute EvidenceStore.candidate_valid?(
+               %{used_percent: Decimal.new("14"), reset_at: now, observed_at: now},
+               now
+             )
+
+      assert EvidenceStore.candidate_valid?(
+               %{
+                 used_percent: Decimal.new("14"),
+                 reset_at: DateTime.add(now, skew + 1, :second),
+                 observed_at: DateTime.add(now, skew, :second)
+               },
+               now
+             )
+
+      refute EvidenceStore.candidate_valid?(
+               %{
+                 used_percent: Decimal.new("14"),
+                 reset_at: DateTime.add(now, skew + 2, :second),
+                 observed_at: DateTime.add(now, skew + 1, :second)
+               },
+               now
+             )
+    end
+
+    @tag :quota_confirmed_convergence
+    test "candidate validity honors exact TTL reset-expiry and future-skew cutoffs" do
+      ttl = Quotas.Evidence.freshness_ttl_seconds()
+      future_skew = Quotas.Evidence.future_observed_skew_seconds()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for {label, candidate_at, reset_at, confirmation_at, confirms?} <- [
+            {:ttl_in_budget, DateTime.add(now, -ttl + 1, :second), DateTime.add(now, 60, :second),
+             now, true},
+            {:ttl_past, DateTime.add(now, -ttl - 1, :second), DateTime.add(now, 60, :second), now,
+             false},
+            {:reset_exact, DateTime.add(now, -2, :second), now, now, false},
+            {:reset_future, DateTime.add(now, -2, :second), DateTime.add(now, 1, :second), now,
+             true},
+            {:future_skew_exact, DateTime.add(now, future_skew, :second),
+             DateTime.add(now, future_skew + 60, :second),
+             DateTime.add(now, future_skew + 1, :second), true},
+            {:future_skew_past, DateTime.add(now, future_skew + 1, :second),
+             DateTime.add(now, future_skew + 60, :second),
+             DateTime.add(now, future_skew + 2, :second), false}
+          ] do
+        identity = active_identity_fixture(%{account_label: "Candidate cutoff #{label}"})
+        canonical_at = DateTime.add(candidate_at, -1, :second)
+
+        canonical =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "primary",
+            "22",
+            DateTime.add(reset_at, -1, :second),
+            canonical_at
+          )
+
+        first =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "primary",
+            "14",
+            reset_at,
+            candidate_at
+          )
+
+        second =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "primary",
+            "14.0",
+            reset_at,
+            confirmation_at
+          )
+
+        if confirms? do
+          assert Decimal.equal?(second.used_percent, Decimal.new("14"))
+          refute confirmed_candidate(second)
+        else
+          assert_canonical_snapshot(first, canonical)
+          assert_canonical_snapshot(second, canonical)
+        end
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "accepted runtime pressure stays separate and invalidates every matching provider candidate" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      provider_rows =
+        for suffix <- ["alpha", "beta"] do
+          attrs =
+            :model
+            |> confirmed_convergence_attrs("primary", "22", reset_at, canonical_at)
+            |> Map.merge(%{
+              raw_limit_id: "provider-limit-#{suffix}",
+              raw_limit_name: "Provider limit #{suffix}",
+              raw_metered_feature: "provider-meter-#{suffix}"
+            })
+
+          assert {:ok, canonical} = QuotaWindows.record_evidence(identity, attrs, canonical_at)
+
+          lower_attrs =
+            attrs
+            |> Map.put(:used_percent, Decimal.new("1"))
+            |> Map.put(:observed_at, DateTime.add(canonical_at, 10, :second))
+            |> Map.put(:last_sync_at, DateTime.add(canonical_at, 10, :second))
+
+          assert {:ok, candidate} =
+                   QuotaWindows.record_evidence(
+                     identity,
+                     lower_attrs,
+                     DateTime.add(canonical_at, 10, :second)
+                   )
+
+          assert candidate.id == canonical.id
+          assert candidate.raw_limit_id == "provider-limit-#{suffix}"
+
+          assert_confirmed_candidate(
+            candidate,
+            "1",
+            reset_at,
+            DateTime.add(canonical_at, 10, :second)
+          )
+
+          %{canonical: canonical, candidate: candidate}
+        end
+
+      runtime_at = DateTime.add(canonical_at, 20, :second)
+
+      runtime_attrs =
+        :model
+        |> confirmed_convergence_attrs("primary", "91", reset_at, runtime_at)
+        |> Map.merge(%{
+          source: "codex_rate_limit_event",
+          raw_limit_id: nil,
+          raw_limit_name: nil,
+          raw_metered_feature: nil
+        })
+
+      assert {:ok, runtime} = QuotaWindows.record_evidence(identity, runtime_attrs, runtime_at)
+      assert runtime.source == "codex_rate_limit_event"
+      assert runtime.raw_limit_id == nil
+      assert Enum.all?(provider_rows, &(&1.candidate.id != runtime.id))
+
+      persisted = QuotaWindows.list_evidence(identity)
+      assert Enum.count(persisted, &(&1.source == "codex_usage_api")) == 2
+      assert Enum.count(persisted, &(&1.source == "codex_rate_limit_event")) == 1
+      refute Enum.any?(persisted, &confirmed_candidate/1)
+
+      for %{canonical: canonical} <- provider_rows do
+        provider = Enum.find(persisted, &(&1.id == canonical.id))
+        assert_provider_canonical_snapshot(provider, canonical)
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "rejected runtime pressure preserves every matching provider candidate" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      runtime_attrs =
+        :model
+        |> confirmed_convergence_attrs("primary", "91", reset_at, canonical_at)
+        |> Map.merge(%{
+          source: "codex_rate_limit_event",
+          raw_limit_id: nil,
+          raw_limit_name: nil,
+          raw_metered_feature: nil
+        })
+
+      assert {:ok, runtime} =
+               QuotaWindows.record_evidence(identity, runtime_attrs, canonical_at)
+
+      provider =
+        record_confirmed_convergence!(
+          identity,
+          :model,
+          "primary",
+          "22",
+          reset_at,
+          canonical_at
+        )
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      candidate =
+        record_confirmed_convergence!(
+          identity,
+          :model,
+          "primary",
+          "14",
+          reset_at,
+          candidate_at
+        )
+
+      assert_confirmed_candidate(candidate, "14", reset_at, candidate_at)
+
+      runtime_at = DateTime.add(candidate_at, 10, :second)
+
+      rejected_runtime_attrs =
+        runtime_attrs
+        |> Map.put(:used_percent, Decimal.new("1"))
+        |> Map.put(:observed_at, runtime_at)
+        |> Map.put(:last_sync_at, runtime_at)
+
+      assert {:ok, rejected_runtime} =
+               QuotaWindows.record_evidence(identity, rejected_runtime_attrs, runtime_at)
+
+      assert rejected_runtime.id == runtime.id
+      assert Decimal.equal?(rejected_runtime.used_percent, Decimal.new("91"))
+
+      persisted_provider =
+        identity
+        |> QuotaWindows.list_evidence()
+        |> Enum.find(&(&1.id == provider.id))
+
+      assert_canonical_snapshot(persisted_provider, candidate)
+      assert_confirmed_candidate(persisted_provider, "14", reset_at, candidate_at)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "failed and absent live probes preserve the original candidate" do
+      for routes <- [
+            %{
+              "/backend-api/wham/usage" => {503, %{"error" => "unavailable"}},
+              "/backend-api/codex/usage" => {503, %{"error" => "unavailable"}}
+            },
+            %{
+              "/backend-api/wham/usage" => {200, %{}},
+              "/backend-api/codex/usage" => {200, %{}}
+            }
+          ] do
+        upstream = start_path_upstream(routes)
+
+        %{identity: identity, pool: pool, assignment: assignment} =
+          usage_assignment_fixture(upstream)
+
+        canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        reset_at = DateTime.add(canonical_at, 2, :hour)
+
+        canonical =
+          record_confirmed_convergence!(
+            identity,
+            :feature,
+            "secondary",
+            "22",
+            reset_at,
+            canonical_at
+          )
+
+        candidate_at = DateTime.add(canonical_at, 10, :second)
+
+        candidate =
+          record_confirmed_convergence!(
+            identity,
+            :feature,
+            "secondary",
+            "1",
+            reset_at,
+            candidate_at
+          )
+
+        assert {:ok, _result} = Upstreams.reconcile_pool_account(pool, assignment)
+
+        original =
+          identity
+          |> QuotaWindows.list_evidence()
+          |> Enum.find(&(&1.id == canonical.id))
+
+        assert original.id == candidate.id
+        assert_canonical_snapshot(original, canonical)
+        assert_confirmed_candidate(original, "1", reset_at, candidate_at)
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "same-account advisory lock serializes equivalent lower writes into one canonical pair" do
+      {identity, canonical, canonical_at, reset_at} =
+        Sandbox.unboxed_run(Repo, fn ->
+          identity = active_identity_fixture()
+          canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+          reset_at = DateTime.add(canonical_at, 2, :hour)
+
+          canonical =
+            record_confirmed_convergence!(
+              identity,
+              :account,
+              "primary",
+              "22",
+              reset_at,
+              canonical_at
+            )
+
+          {identity, canonical, canonical_at, reset_at}
+        end)
+
+      on_exit(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.delete_all(
+            from(window in Quota.AccountQuotaWindow,
+              where: window.upstream_identity_id == ^identity.id
+            )
+          )
+
+          Repo.delete_all(from(identity in UpstreamIdentity, where: identity.id == ^identity.id))
+        end)
+      end)
+
+      parent = self()
+      first_at = DateTime.add(canonical_at, 10, :second)
+      second_at = DateTime.add(first_at, 10, :second)
+
+      first =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              backend_pid = Repo.query!("SELECT pg_backend_pid()").rows |> hd() |> hd()
+              Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [identity.id])
+              send(parent, {:first_lock_acquired, backend_pid})
+
+              receive do
+                :persist_first -> :ok
+              end
+
+              record_confirmed_convergence!(
+                identity,
+                :account,
+                "primary",
+                "14",
+                reset_at,
+                first_at
+              )
+            end)
+          end)
+        end)
+
+      assert_receive {:first_lock_acquired, first_backend_pid}
+
+      second =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            backend_pid = Repo.query!("SELECT pg_backend_pid()").rows |> hd() |> hd()
+            send(parent, {:second_connection_ready, backend_pid})
+
+            record_confirmed_convergence!(
+              identity,
+              :account,
+              "primary",
+              "14.0",
+              DateTime.add(reset_at, 1, :second),
+              second_at
+            )
+          end)
+        end)
+
+      assert_receive {:second_connection_ready, second_backend_pid}
+      refute second_backend_pid == first_backend_pid
+      assert_backend_waiting_on_lock!(second_backend_pid)
+      send(first.pid, :persist_first)
+
+      assert {:ok, first_result} = Task.await(first)
+      second_result = Task.await(second)
+      assert first_result.id == canonical.id
+      assert second_result.id == canonical.id
+      assert Decimal.equal?(second_result.used_percent, Decimal.new("14"))
+      assert DateTime.compare(second_result.reset_at, DateTime.add(reset_at, 1, :second)) == :eq
+      assert DateTime.compare(second_result.observed_at, second_at) == :eq
+      refute confirmed_candidate(second_result)
+
+      assert [persisted] =
+               Sandbox.unboxed_run(Repo, fn -> QuotaWindows.list_evidence(identity) end)
+
+      assert persisted.id == canonical.id
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("14"))
+      assert DateTime.compare(persisted.reset_at, DateTime.add(reset_at, 1, :second)) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    @tag :quota_candidate_contract
+    test "admin quota read model and MCP quota output never project private candidates" do
+      owner_scope = fixture_owner_scope()
+      pool = pool_fixture()
+      identity = active_identity_fixture()
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, _assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(canonical_at, 2, :hour)
+
+      canonical =
+        record_confirmed_convergence!(identity, :account, "primary", "22", reset_at, canonical_at)
+
+      candidate_evidence =
+        :account
+        |> confirmed_convergence_attrs(
+          "primary",
+          "14",
+          reset_at,
+          DateTime.add(canonical_at, 10, :second)
+        )
+        |> Quotas.Evidence.new!(DateTime.add(canonical_at, 10, :second))
+
+      candidate_metadata = EvidenceStore.put_candidate(canonical.metadata, candidate_evidence)
+      assert {:ok, candidate} = EvidenceStore.parse_candidate(candidate_metadata)
+      assert Decimal.equal?(candidate.used_percent, Decimal.new("14"))
+
+      assert {:ok, _canonical} =
+               canonical
+               |> Ecto.Changeset.change(metadata: candidate_metadata)
+               |> Repo.update()
+
+      admin_projection = QuotaReadModel.account_summaries_for_pool_ids([pool.id], canonical_at)
+
+      assert {:ok, mcp_projection, mcp_text} =
+               QuotaMetadata.list_upstream_quotas(%{}, %{auth: %{scope: owner_scope}})
+
+      refute contains_confirmed_candidate?(admin_projection)
+      refute contains_confirmed_candidate?(mcp_projection)
+      refute contains_confirmed_candidate?(mcp_text)
+      refute inspect(admin_projection) =~ "fixture"
+      refute inspect(mcp_projection) =~ "fixture"
+    end
+
+    @tag :quota_rich_identity
+    test "characterizes true duplicate rich identities as an atomic batch error" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      existing_attrs = rich_identity_attrs(observed_at, %{raw_limit_id: "existing-limit"})
+
+      assert {:ok, [existing]} =
+               QuotaWindows.upsert_quota_windows(identity, [existing_attrs],
+                 delete_missing?: false
+               )
+
+      valid_sibling =
+        rich_identity_attrs(observed_at, %{
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          raw_limit_id: "valid-sibling-limit"
+        })
+
+      duplicate_attrs = rich_identity_attrs(observed_at, %{raw_limit_id: "duplicate-limit"})
+
+      assert {:error, %{code: :duplicate_quota_window_kind}} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [valid_sibling, duplicate_attrs, duplicate_attrs],
+                 delete_missing?: false
+               )
+
+      assert [persisted] = QuotaWindows.list_evidence(identity)
+      assert persisted.id == existing.id
+      assert persisted.raw_limit_id == "existing-limit"
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("22"))
+    end
+
+    @tag :quota_rich_identity
+    test "retains rich siblings merged from separate successful usage probe paths" do
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" =>
+            {200,
+             weekly_only_payload(%{
+               "additional_rate_limits" => [
+                 %{
+                   "limit_name" => "GPT-5.3-Codex-Spark",
+                   "metered_feature" => "codex_bengalfox",
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 31,
+                       "limit_window_seconds" => 604_800
+                     }
+                   }
+                 }
+               ]
+             })},
+          "/backend-api/codex/usage" =>
+            {200,
+             %{
+               "rate_limit" => %{
+                 "primary_window" => %{
+                   "used_percent" => 22,
+                   "limit_window_seconds" => 18_000,
+                   "reset_after_seconds" => 900
+                 }
+               },
+               "additional_rate_limits" => [
+                 %{
+                   "limit_name" => "Codex Spark",
+                   "metered_feature" => "codex_bengalfox",
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 41,
+                       "limit_window_seconds" => 604_800
+                     }
+                   }
+                 }
+               ]
+             }}
+        })
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      first_rows =
+        identity
+        |> QuotaWindows.list_evidence()
+        |> Enum.filter(&(&1.quota_scope == "model" and &1.window_kind == "secondary"))
+
+      assert length(first_rows) == 2
+
+      assert MapSet.new(first_rows, & &1.raw_limit_name) ==
+               MapSet.new(["GPT-5.3-Codex-Spark", "Codex Spark"])
+
+      assert MapSet.size(MapSet.new(first_rows, &{&1.quota_key, &1.window_kind})) == 1
+      assert MapSet.size(MapSet.new(first_rows, & &1.id)) == 2
+
+      first_ids = Map.new(first_rows, &{&1.raw_limit_name, &1.id})
+
+      assert {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+
+      repeated_rows =
+        identity
+        |> QuotaWindows.list_evidence()
+        |> Enum.filter(&(&1.quota_scope == "model" and &1.window_kind == "secondary"))
+
+      assert length(repeated_rows) == 2
+      assert Map.new(repeated_rows, &{&1.raw_limit_name, &1.id}) == first_ids
+    end
+
+    for {dimension, variant} <- [
+          {:scope, %{quota_scope: "feature"}},
+          {:family, %{quota_family: "additional_limit"}},
+          {:model, %{model: "example-model-beta"}},
+          {:upstream_model, %{upstream_model: "provider-example-model-beta"}},
+          {:duration, %{window_minutes: 600}},
+          {:source, %{source: "codex_response_headers"}},
+          {:raw_limit_id, %{raw_limit_id: "provider-limit-beta"}},
+          {:raw_limit_name, %{raw_limit_name: "Provider limit beta"}},
+          {:raw_metered_feature, %{raw_metered_feature: "provider-meter-beta"}}
+        ] do
+      @tag :quota_rich_identity
+      test "retains stable sibling rows when rich identity differs by #{dimension}" do
+        identity = active_identity_fixture()
+        observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        base = rich_identity_attrs(observed_at)
+        sibling = Map.merge(base, unquote(Macro.escape(variant)))
+
+        assert {:ok, stored} =
+                 QuotaWindows.upsert_quota_windows(
+                   identity,
+                   [base, sibling],
+                   delete_missing?: false
+                 )
+
+        assert length(stored) == 2
+        assert MapSet.size(MapSet.new(stored, & &1.id)) == 2
+        original_ids = MapSet.new(stored, & &1.id)
+
+        assert {:ok, repeated} =
+                 QuotaWindows.upsert_quota_windows(
+                   identity,
+                   [base, sibling],
+                   delete_missing?: false
+                 )
+
+        assert MapSet.new(repeated, & &1.id) == original_ids
+
+        persisted = QuotaWindows.list_evidence(identity)
+        assert length(persisted) == 2
+        assert MapSet.new(persisted, & &1.id) == original_ids
+      end
+    end
+
+    for {dimension, initial, normalized} <- [
+          {:model, "Example-Model", "example-model"},
+          {:upstream_model, "Provider-Example-Model", "provider-example-model"}
+        ] do
+      @tag :quota_rich_identity
+      test "normalizes #{dimension} identity case while preserving the canonical row id" do
+        identity = active_identity_fixture()
+        observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        dimension = unquote(dimension)
+
+        assert {:ok, first} =
+                 QuotaWindows.record_evidence(
+                   identity,
+                   rich_identity_attrs(observed_at, %{dimension => unquote(initial)}),
+                   observed_at
+                 )
+
+        later_at = DateTime.add(observed_at, 10, :second)
+
+        assert {:ok, normalized_row} =
+                 QuotaWindows.record_evidence(
+                   identity,
+                   rich_identity_attrs(later_at, %{
+                     dimension => unquote(normalized),
+                     used_percent: Decimal.new("23")
+                   }),
+                   later_at
+                 )
+
+        assert normalized_row.id == first.id
+        assert [persisted] = QuotaWindows.list_evidence(identity)
+        assert persisted.id == first.id
+        assert Decimal.equal?(persisted.used_percent, Decimal.new("23"))
+      end
+    end
+
+    @tag :quota_rich_identity
+    test "migrates one unambiguous historical Spark alias onto the canonical key" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert {:ok, historical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 rich_identity_attrs(observed_at, %{
+                   quota_key: "codex_bengalfox",
+                   model: "gpt-5.3-codex-spark",
+                   upstream_model: nil,
+                   raw_limit_id: "codex_bengalfox",
+                   raw_limit_name: "GPT-5.3-Codex-Spark",
+                   raw_metered_feature: "codex_bengalfox"
+                 }),
+                 observed_at
+               )
+
+      later_at = DateTime.add(observed_at, 10, :second)
+
+      assert {:ok, canonical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 rich_identity_attrs(later_at, %{
+                   quota_key: "codex_spark",
+                   model: "GPT-5.3-CODEX-SPARK",
+                   upstream_model: nil,
+                   raw_limit_id: "codex_bengalfox",
+                   raw_limit_name: "GPT-5.3-Codex-Spark",
+                   raw_metered_feature: "codex_bengalfox",
+                   used_percent: Decimal.new("23")
+                 }),
+                 later_at
+               )
+
+      assert canonical.id == historical.id
+      assert canonical.quota_key == "codex_spark"
+      assert [persisted] = QuotaWindows.list_evidence(identity)
+      assert persisted.id == historical.id
+    end
+
+    @tag :quota_rich_identity
+    test "refuses ambiguous Spark alias migration without changing either row" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      aliases =
+        for {quota_key, raw_limit_id} <- [
+              {"codex_bengalfox", "provider-limit-alpha"},
+              {"gpt_5_3_codex_spark", "provider-limit-beta"}
+            ] do
+          assert {:ok, alias_row} =
+                   QuotaWindows.record_evidence(
+                     identity,
+                     rich_identity_attrs(observed_at, %{
+                       quota_key: quota_key,
+                       model: "gpt-5.3-codex-spark",
+                       upstream_model: nil,
+                       raw_limit_id: raw_limit_id
+                     }),
+                     observed_at
+                   )
+
+          alias_row
+        end
+
+      before =
+        Map.new(aliases, &{&1.id, Map.take(&1, [:quota_key, :raw_limit_id, :used_percent])})
+
+      later_at = DateTime.add(observed_at, 10, :second)
+
+      assert {:error, %{code: :ambiguous_quota_window_alias}} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 rich_identity_attrs(later_at, %{
+                   quota_key: "codex_spark",
+                   model: "gpt-5.3-codex-spark",
+                   upstream_model: nil,
+                   raw_limit_id: "canonical-provider-limit"
+                 }),
+                 later_at
+               )
+
+      persisted = QuotaWindows.list_evidence(identity)
+      assert length(persisted) == 2
+
+      assert Map.new(persisted, &{&1.id, Map.take(&1, [:quota_key, :raw_limit_id])}) ==
+               Map.new(before, fn {id, attrs} ->
+                 {id, Map.take(attrs, [:quota_key, :raw_limit_id])}
+               end)
+
+      assert Enum.all?(persisted, fn row ->
+               Decimal.equal?(row.used_percent, before[row.id].used_percent)
+             end)
     end
 
     test "stores Spark rate-limit events without deriving rolling weekly resets" do
@@ -6066,7 +8099,7 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind, Decimal.to_integer(&1.used_percent), &1.source}
              ) == [
                {"account", "primary", 12, "codex_response_headers"},
@@ -6085,11 +8118,12 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       assert Enum.map(
-               QuotaWindows.list_quota_windows(identity),
+               QuotaWindows.quota_window_selection_data(identity).routing_windows,
                &{&1.quota_key, &1.window_kind, Decimal.to_integer(&1.used_percent), &1.source}
              ) == [
                {"account", "primary", 12, "codex_response_headers"},
                {"account", "secondary", 20, "codex_usage_api"},
+               {"codex_spark", "primary", 55, "codex_usage_api"},
                {"codex_spark", "primary", 44, "codex_response_headers"}
              ]
     end
@@ -6451,7 +8485,7 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == header_window.id
+      refute merged_window.id == header_window.id
       assert merged_window.source == "codex_usage_api"
       assert DateTime.compare(merged_window.reset_at, new_reset_at) == :eq
       assert Decimal.equal?(merged_window.used_percent, Decimal.new("0"))
@@ -6496,10 +8530,10 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == header_window.id
-      assert merged_window.source == "codex_response_headers"
-      assert DateTime.compare(merged_window.reset_at, header_reset_at) == :eq
-      assert Decimal.equal?(merged_window.used_percent, Decimal.new("20.000"))
+      refute merged_window.id == header_window.id
+      assert merged_window.source == "codex_usage_api"
+      assert DateTime.compare(merged_window.reset_at, usage_reset_at) == :eq
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("0"))
     end
 
     @tag :upstream_quota_dashboard_regression
@@ -6548,10 +8582,10 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == event_window.id
-      assert merged_window.source == "codex_rate_limit_event"
-      assert DateTime.compare(merged_window.reset_at, event_reset_at) == :eq
-      assert Decimal.equal?(merged_window.used_percent, Decimal.new("100.0"))
+      refute merged_window.id == event_window.id
+      assert merged_window.source == "codex_usage_api"
+      assert DateTime.compare(merged_window.reset_at, usage_reset_at) == :eq
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("0"))
     end
 
     test "usage evidence replaces zero percent-only rate-limit event evidence" do
@@ -6601,7 +8635,7 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert usage_window.id == event_window.id
+      refute usage_window.id == event_window.id
       assert usage_window.source == "codex_usage_api"
       assert DateTime.compare(usage_window.reset_at, usage_reset_at) == :eq
       assert Decimal.equal?(usage_window.used_percent, Decimal.new("12"))
@@ -6623,9 +8657,9 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       assert merged_window.id == event_window.id
-      assert merged_window.source == "codex_usage_api"
-      assert DateTime.compare(merged_window.reset_at, usage_reset_at) == :eq
-      assert Decimal.equal?(merged_window.used_percent, Decimal.new("12"))
+      assert merged_window.source == "codex_rate_limit_event"
+      assert DateTime.to_unix(merged_window.reset_at) == DateTime.to_unix(later_event_reset_at)
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("0"))
     end
 
     @tag :upstream_quota_evidence_stability
@@ -7011,7 +9045,7 @@ defmodule CodexPooler.UpstreamsTest do
     @tag :upstream_quota_evidence_stability
     test "later nonzero usage refresh replaces weak zero usage evidence" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-07-09 10:19:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       weak_reset_at = DateTime.add(observed_at, 4, :hour)
       improved_observed_at = DateTime.add(observed_at, 60, :second)
       improved_reset_at = DateTime.add(improved_observed_at, 2, :hour)
@@ -7215,11 +9249,11 @@ defmodule CodexPooler.UpstreamsTest do
                  header_observed_at
                )
 
-      assert merged_window.id == usage_window.id
-      assert merged_window.source == "codex_usage_api"
-      assert DateTime.compare(merged_window.reset_at, usage_reset_at) == :eq
-      assert Decimal.equal?(merged_window.used_percent, Decimal.new("0"))
-      assert QuotaWindows.usable_window?(merged_window, header_observed_at)
+      refute merged_window.id == usage_window.id
+      assert merged_window.source == "codex_response_headers"
+      assert DateTime.compare(merged_window.reset_at, old_reset_at) == :eq
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("100"))
+      refute QuotaWindows.usable_window?(merged_window, header_observed_at)
     end
 
     test "resetless usage evidence cannot downgrade reset-bearing header evidence" do
@@ -7276,19 +9310,21 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == header_window.id
-      assert merged_window.source == "codex_response_headers"
-      assert merged_window.source_precision == "observed"
+      refute merged_window.id == header_window.id
+      assert merged_window.source == "codex_usage_api"
+      assert merged_window.source_precision == "inferred"
       assert merged_window.model == "gpt-5.3-codex-spark"
       assert merged_window.upstream_model == nil
-      assert merged_window.raw_limit_id == "codex_bengalfox"
-      assert merged_window.raw_limit_name == "gpt-5.3-codex-spark"
-      assert merged_window.raw_metered_feature == "codex_bengalfox"
-      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
-      assert Decimal.equal?(merged_window.used_percent, Decimal.new("44.000"))
-      assert QuotaWindows.usable_window?(merged_window, observed_at)
+      assert merged_window.raw_limit_id == nil
+      assert merged_window.raw_limit_name == nil
+      assert merged_window.raw_metered_feature == nil
+      assert merged_window.reset_at == nil
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("12"))
+      refute QuotaWindows.usable_window?(merged_window, observed_at)
 
-      assert [persisted] = QuotaWindows.list_quota_windows(identity)
+      assert [persisted] =
+               QuotaWindows.quota_window_selection_data(identity, at: observed_at).routing_windows
+
       assert persisted.id == header_window.id
     end
 
@@ -7333,7 +9369,7 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == stale_reset_window.id
+      refute merged_window.id == stale_reset_window.id
       assert merged_window.source == "codex_usage_api"
       assert merged_window.source_precision == "inferred"
       assert merged_window.raw_limit_id == nil
@@ -7385,7 +9421,7 @@ defmodule CodexPooler.UpstreamsTest do
                  ]
                )
 
-      assert merged_window.id == expired_reset_window.id
+      refute merged_window.id == expired_reset_window.id
       assert merged_window.source == "codex_usage_api"
       assert merged_window.source_precision == "inferred"
       assert merged_window.raw_limit_id == nil
@@ -7665,7 +9701,9 @@ defmodule CodexPooler.UpstreamsTest do
       assert %{eligible?: true, routing_state: :precise, exclusions: []} =
                QuotaWindows.routing_quota_eligibility(identity, at: weak_observed_at)
 
-      assert [persisted] = QuotaWindows.list_quota_windows(identity)
+      assert [persisted] =
+               QuotaWindows.quota_window_selection_data(identity, at: weak_observed_at).routing_windows
+
       assert DateTime.compare(persisted.reset_at, reset_at) == :eq
       assert Decimal.equal?(persisted.used_percent, Decimal.new("11"))
     end
@@ -7716,10 +9754,12 @@ defmodule CodexPooler.UpstreamsTest do
                  }
                ])
 
-      assert [persisted] = QuotaWindows.list_quota_windows(identity)
+      assert [persisted] =
+               QuotaWindows.quota_window_selection_data(identity, at: weak_observed_at).routing_windows
+
       assert Decimal.equal?(persisted.used_percent, Decimal.new("1"))
-      assert DateTime.compare(persisted.reset_at, weak_reset_at) == :eq
-      assert DateTime.compare(persisted.observed_at, weak_observed_at) == :eq
+      assert DateTime.compare(persisted.reset_at, reset_at) == :eq
+      assert DateTime.compare(persisted.observed_at, observed_at) == :eq
     end
 
     test "routing quota eligibility rejects usable model evidence without account primary baseline" do
@@ -8358,6 +10398,107 @@ defmodule CodexPooler.UpstreamsTest do
     )
   end
 
+  defp descriptor_weekly_limit(limit_name) do
+    %{
+      "limit_name" => limit_name,
+      "metered_feature" => "example_meter",
+      "rate_limit" => %{
+        "secondary_window" => %{
+          "used_percent" => 42,
+          "limit_window_seconds" => 604_800,
+          "reset_after_seconds" => 3_600
+        }
+      }
+    }
+  end
+
+  defp persist_descriptor_primary!(
+         identity,
+         observed_at,
+         limit_name,
+         source,
+         overrides
+       )
+       when is_list(overrides) do
+    persist_descriptor_primary!(
+      identity,
+      observed_at,
+      limit_name,
+      source,
+      "example_meter",
+      overrides
+    )
+  end
+
+  defp persist_descriptor_primary!(
+         identity,
+         observed_at,
+         limit_name,
+         source \\ "codex_usage_api",
+         raw_metered_feature \\ "example_meter",
+         overrides \\ []
+       ) do
+    raw_limit_id = limit_name |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "_")
+
+    attrs =
+      rich_identity_attrs(
+        observed_at,
+        Map.merge(
+          %{
+            quota_key: raw_limit_id,
+            model: limit_name,
+            upstream_model: nil,
+            raw_limit_id: raw_metered_feature,
+            raw_limit_name: limit_name,
+            raw_metered_feature: raw_metered_feature,
+            source: source
+          },
+          Map.new(overrides)
+        )
+      )
+
+    assert {:ok, stored} = QuotaWindows.record_evidence(identity, attrs, observed_at)
+    stored
+  end
+
+  defp configure_descriptor_zero_coverage_mode(:metadata, identity, assignment, existing) do
+    metadata_window =
+      rich_identity_attrs(existing.observed_at, %{
+        quota_key: existing.quota_key,
+        raw_limit_id: existing.raw_limit_id,
+        raw_limit_name: existing.raw_limit_name,
+        raw_metered_feature: existing.raw_metered_feature,
+        source: "local_reconciliation"
+      })
+
+    assert {:ok, identity} =
+             IdentityLifecycle.update_upstream_identity(identity, %{
+               metadata: Map.put(identity.metadata, "quota_windows", [metadata_window])
+             })
+
+    {identity, assignment, []}
+  end
+
+  defp configure_descriptor_zero_coverage_mode(:option, identity, assignment, existing) do
+    opts =
+      [
+        quota_windows: [
+          rich_identity_attrs(existing.observed_at, %{
+            quota_key: existing.quota_key,
+            raw_limit_id: existing.raw_limit_id,
+            raw_limit_name: existing.raw_limit_name,
+            raw_metered_feature: existing.raw_metered_feature,
+            source: "local_reconciliation"
+          })
+        ]
+      ]
+
+    {identity, assignment, opts}
+  end
+
+  defp configure_descriptor_zero_coverage_mode(_mode, identity, assignment, _existing),
+    do: {identity, assignment, []}
+
   defp usage_assignment_fixture(upstream) do
     pool = pool_fixture()
 
@@ -8478,6 +10619,259 @@ defmodule CodexPooler.UpstreamsTest do
   defp generated_secret(label) do
     "fixture-secret-#{label}-#{System.unique_integer([:positive])}"
   end
+
+  defp rich_identity_attrs(observed_at, overrides \\ %{}) do
+    Map.merge(
+      %{
+        quota_key: "example-quota",
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("22"),
+        reset_at: DateTime.add(observed_at, 2, :hour),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        quota_scope: "model",
+        quota_family: "codex_model",
+        model: "example-model-alpha",
+        upstream_model: "provider-example-model-alpha",
+        raw_limit_id: "provider-limit-alpha",
+        raw_limit_name: "Provider limit alpha",
+        raw_metered_feature: "provider-meter-alpha",
+        freshness_state: "fresh",
+        last_sync_at: observed_at,
+        observed_at: observed_at,
+        metadata: %{"fixture" => "rich-identity"}
+      },
+      overrides
+    )
+  end
+
+  defp record_confirmed_convergence!(
+         identity,
+         evidence_scope,
+         window_kind,
+         used_percent,
+         reset_at,
+         observed_at
+       ) do
+    attrs =
+      confirmed_convergence_attrs(
+        evidence_scope,
+        window_kind,
+        used_percent,
+        reset_at,
+        observed_at
+      )
+
+    assert {:ok, stored} = QuotaWindows.record_evidence(identity, attrs, observed_at)
+    stored
+  end
+
+  defp confirmed_convergence_attrs(
+         evidence_scope,
+         window_kind,
+         used_percent,
+         reset_at,
+         observed_at
+       ) do
+    evidence_scope
+    |> confirmed_convergence_identity_attrs()
+    |> Map.merge(%{
+      window_kind: window_kind,
+      window_minutes: if(window_kind == "primary", do: 300, else: 10_080),
+      used_percent: Decimal.new(used_percent),
+      reset_at: reset_at,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      last_sync_at: observed_at,
+      observed_at: observed_at,
+      metadata: %{"fixture" => "confirmed-convergence"}
+    })
+  end
+
+  defp confirmed_convergence_identity_attrs(:account) do
+    %{quota_key: "account", quota_scope: "account", quota_family: "account"}
+  end
+
+  defp confirmed_convergence_identity_attrs(:model) do
+    %{
+      quota_key: "model-quota",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: "example-model",
+      raw_limit_id: "model-limit",
+      raw_limit_name: "Model limit",
+      raw_metered_feature: "model-meter"
+    }
+  end
+
+  defp confirmed_convergence_identity_attrs(:upstream_model) do
+    %{
+      quota_key: "upstream-model-quota",
+      quota_scope: "upstream_model",
+      quota_family: "codex_model",
+      upstream_model: "provider-example-model",
+      raw_limit_id: "upstream-model-limit",
+      raw_limit_name: "Upstream model limit",
+      raw_metered_feature: "upstream-model-meter"
+    }
+  end
+
+  defp confirmed_convergence_identity_attrs(:feature) do
+    %{
+      quota_key: "example-feature",
+      quota_scope: "feature",
+      quota_family: "additional_limit",
+      raw_limit_id: "feature-limit",
+      raw_limit_name: "Feature limit",
+      raw_metered_feature: "feature-meter"
+    }
+  end
+
+  defp confirmed_convergence_lower_percent(:account), do: "14"
+  defp confirmed_convergence_lower_percent(_evidence_scope), do: "1"
+
+  defp assert_backend_waiting_on_lock!(backend_pid) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    assert_backend_waiting_on_lock!(backend_pid, deadline)
+  end
+
+  defp assert_backend_waiting_on_lock!(backend_pid, deadline) do
+    rows =
+      Repo.query!(
+        """
+        SELECT wait_event_type, wait_event
+        FROM pg_stat_activity
+        WHERE pid = $1
+          AND wait_event_type = 'Lock'
+          AND wait_event = 'advisory'
+        """,
+        [backend_pid]
+      ).rows
+
+    cond do
+      rows == [["Lock", "advisory"]] ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        receive do
+        after
+          0 -> assert_backend_waiting_on_lock!(backend_pid, deadline)
+        end
+
+      true ->
+        flunk("backend did not enter an advisory lock wait")
+    end
+  end
+
+  defp assert_canonical_snapshot(stored, canonical) do
+    canonical_fields =
+      Quota.AccountQuotaWindow.__schema__(:fields) -- [:metadata, :updated_at, :used_percent]
+
+    assert Map.take(stored, canonical_fields) == Map.take(canonical, canonical_fields)
+    assert Decimal.equal?(stored.used_percent, canonical.used_percent)
+  end
+
+  defp assert_provider_canonical_snapshot(stored, canonical) do
+    canonical_fields = [
+      :id,
+      :upstream_identity_id,
+      :quota_key,
+      :window_kind,
+      :window_minutes,
+      :active_limit,
+      :credits,
+      :reset_at,
+      :display_label,
+      :limit_name,
+      :metered_feature,
+      :source,
+      :source_precision,
+      :quota_scope,
+      :quota_family,
+      :model,
+      :upstream_model,
+      :raw_limit_id,
+      :raw_limit_name,
+      :raw_metered_feature,
+      :freshness_state,
+      :last_sync_at,
+      :observed_at,
+      :merge_precedence,
+      :created_at
+    ]
+
+    assert Map.take(stored, canonical_fields) == Map.take(canonical, canonical_fields)
+    assert Decimal.equal?(stored.used_percent, canonical.used_percent)
+    assert stored.metadata == canonical.metadata
+  end
+
+  defp assert_confirmed_candidate(stored, used_percent, reset_at, observed_at) do
+    candidate = confirmed_candidate(stored)
+
+    assert candidate == %{
+             "version" => 1,
+             "used_percent" =>
+               used_percent |> Decimal.new() |> Decimal.normalize() |> Decimal.to_string(),
+             "reset_at" => DateTime.to_iso8601(reset_at),
+             "observed_at" => DateTime.to_iso8601(observed_at),
+             "count" => 1
+           }
+  end
+
+  defp confirmed_candidate(stored) do
+    stored.metadata
+    |> Map.drop(["fixture"])
+    |> Map.values()
+    |> Enum.find(fn
+      %{
+        "version" => 1,
+        "used_percent" => used_percent,
+        "reset_at" => reset_at,
+        "observed_at" => observed_at,
+        "count" => 1
+      }
+      when is_binary(used_percent) and is_binary(reset_at) and is_binary(observed_at) ->
+        true
+
+      _other ->
+        false
+    end)
+  end
+
+  defp contains_confirmed_candidate?(value) when is_struct(value), do: false
+
+  defp contains_confirmed_candidate?(value) when is_map(value) do
+    confirmed_candidate_value?(value) or
+      Enum.any?(value, fn {key, nested_value} ->
+        contains_confirmed_candidate?(key) or contains_confirmed_candidate?(nested_value)
+      end)
+  end
+
+  defp contains_confirmed_candidate?(value) when is_list(value),
+    do: Enum.any?(value, &contains_confirmed_candidate?/1)
+
+  defp contains_confirmed_candidate?(value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.any?(&contains_confirmed_candidate?/1)
+
+  defp contains_confirmed_candidate?(value) when is_binary(value) do
+    String.contains?(value, ["\"count\" => 1", "\"version\" => 1", "used_percent\""])
+  end
+
+  defp contains_confirmed_candidate?(_value), do: false
+
+  defp confirmed_candidate_value?(%{
+         "version" => 1,
+         "used_percent" => used_percent,
+         "reset_at" => reset_at,
+         "observed_at" => observed_at,
+         "count" => 1
+       })
+       when is_binary(used_percent) and is_binary(reset_at) and is_binary(observed_at),
+       do: true
+
+  defp confirmed_candidate_value?(_value), do: false
 
   defp audit_events(action, target_id) do
     Repo.all(

@@ -29,6 +29,44 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> best_by_score(as_of, &primary_variant_rank/1)
   end
 
+  @spec logical_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
+          [Quota.AccountQuotaWindow.t()]
+  def logical_windows(windows, as_of \\ DateTime.utc_now())
+
+  def logical_windows(windows, %DateTime{} = as_of) when is_list(windows) do
+    windows
+    |> Enum.group_by(&logical_key/1)
+    |> Enum.map(fn {_logical_key, candidates} -> best_by_score(candidates, as_of) end)
+    |> Enum.sort_by(&logical_sort_key/1)
+  end
+
+  @spec logical_key(Quota.AccountQuotaWindow.t()) :: tuple()
+  def logical_key(%Quota.AccountQuotaWindow{} = window) do
+    window
+    |> Evidence.logical_window_key()
+    |> normalize_scope_dimensions()
+    |> normalize_spark_alias()
+  end
+
+  defp normalize_scope_dimensions(
+         {"model", family, model, _upstream_model, quota_key, kind, minutes}
+       ),
+       do: {"model", family, model, nil, quota_key, kind, minutes}
+
+  defp normalize_scope_dimensions(
+         {"upstream_model", family, _model, upstream_model, quota_key, kind, minutes}
+       ),
+       do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
+
+  defp normalize_scope_dimensions(logical_key), do: logical_key
+
+  defp normalize_spark_alias({scope, family, model, upstream_model, quota_key, kind, minutes})
+       when quota_key in ["codex_bengalfox", "gpt_5_3_codex_spark"] do
+    {scope, family, model, upstream_model, "codex_spark", kind, minutes}
+  end
+
+  defp normalize_spark_alias(logical_key), do: logical_key
+
   defp best_by_score(windows, as_of, extra_rank \\ fn _window -> 0 end) do
     Enum.max_by(
       windows,
@@ -42,6 +80,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       usable_rank(window, as_of),
       extra_rank.(window),
       measurement_rank(window),
+      pressure_rank(window),
       fresh_rank(window, as_of),
       reset_rank(window),
       source_precision_rank(window.source_precision),
@@ -52,6 +91,16 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       timestamp_rank(window.reset_at),
       to_string(window.id || "")
     }
+  end
+
+  defp pressure_rank(%Quota.AccountQuotaWindow{used_percent: %Decimal{} = used_percent}),
+    do: used_percent
+
+  defp pressure_rank(%Quota.AccountQuotaWindow{}), do: Decimal.new(-1)
+
+  defp logical_sort_key(%Quota.AccountQuotaWindow{} = window) do
+    {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope,
+     window.quota_family, window.model || "", window.upstream_model || ""}
   end
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do

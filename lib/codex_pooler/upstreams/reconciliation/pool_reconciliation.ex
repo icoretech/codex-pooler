@@ -130,15 +130,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         })
 
       {:windows, windows, identity_attrs} ->
-        upsert_reconciliation_quota(identity, windows, identity_attrs, nil, nil)
+        upsert_reconciliation_quota(identity, windows, identity_attrs, nil, nil, MapSet.new())
 
-      {:usage, %UpstreamIdentity{} = usage_identity, payload, windows, usage_url} ->
+      {:usage, %UpstreamIdentity{} = usage_identity, %UsageProbe.Result{} = probe} ->
         upsert_reconciliation_quota(
           usage_identity,
-          windows,
-          identity_attrs_from_codex_usage_payload(payload),
-          payload,
-          usage_url
+          probe.windows,
+          identity_attrs_from_codex_usage_payload(probe.payload),
+          probe.payload,
+          probe.usage_url,
+          probe.covered_descriptors
         )
     end
   end
@@ -158,7 +159,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
-  defp upsert_reconciliation_quota(identity, windows, identity_attrs, payload, usage_url)
+  defp upsert_reconciliation_quota(
+         identity,
+         windows,
+         identity_attrs,
+         payload,
+         usage_url,
+         covered_descriptors
+       )
        when is_list(windows) do
     observed_at = now()
 
@@ -168,7 +176,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
            identity_attrs,
            payload,
            observed_at,
-           usage_url
+           usage_url,
+           covered_descriptors
          ) do
       {:ok, %{windows: refreshed, identity: updated_identity}} ->
         step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
@@ -184,8 +193,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
-  defp upsert_reconciliation_quota(_identity, _windows, _identity_attrs, _payload, _usage_url),
-    do: step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
+  defp upsert_reconciliation_quota(
+         _identity,
+         _windows,
+         _identity_attrs,
+         _payload,
+         _usage_url,
+         _covered_descriptors
+       ),
+       do: step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
 
   @doc false
   @spec refresh_quota_from_usage(UpstreamIdentity.t(), PoolUpstreamAssignment.t(), keyword()) ::
@@ -196,16 +212,17 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         opts \\ []
       ) do
     with observed_at <- now(),
-         {:ok, payload, usage_url, windows} <-
+         {:ok, %UsageProbe.Result{} = probe} <-
            UsageProbe.fetch_from_identity(identity, assignment, observed_at, opts),
          {:ok, %{identity: updated_identity}} <-
            persist_reconciliation_quota(
              identity,
-             windows,
-             identity_attrs_from_codex_usage_payload(payload),
-             payload,
+             probe.windows,
+             identity_attrs_from_codex_usage_payload(probe.payload),
+             probe.payload,
              observed_at,
-             usage_url
+             probe.usage_url,
+             probe.covered_descriptors
            ) do
       {:ok, updated_identity}
     end
@@ -217,10 +234,12 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          identity_attrs,
          payload,
          observed_at,
-         usage_url
+         usage_url,
+         covered_descriptors
        ) do
     case Quota.Windows.upsert_quota_windows(identity, windows,
            delete_missing?: true,
+           covered_descriptors: covered_descriptors,
            identity_attrs: identity_attrs
          ) do
       {:ok, refreshed} ->
