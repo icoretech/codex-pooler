@@ -5,18 +5,26 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 image=""
 mode=""
 receipt=""
+source_sha=""
 
 while (($#)); do
   case "$1" in
     --image) image="${2:-}"; shift 2 ;;
     --mode) mode="${2:-}"; shift 2 ;;
     --receipt) receipt="${2:-}"; shift 2 ;;
+    --source-sha) source_sha="${2:-}"; shift 2 ;;
     *) printf 'unsupported argument\n' >&2; exit 2 ;;
   esac
 done
 
 [[ "$image" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]+$ ]] || { printf 'invalid image reference\n' >&2; exit 2; }
 [[ "$mode" == "equivalent" || "$mode" == "changed-second" ]] || { printf 'invalid mode\n' >&2; exit 2; }
+[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { printf 'invalid source sha\n' >&2; exit 2; }
+
+image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'invalid local image digest\n' >&2; exit 1; }
+image_sha="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
+[[ "$image_sha" == "$source_sha" ]] || { printf 'image revision label does not match source sha\n' >&2; exit 1; }
 
 if [[ -z "$receipt" ]]; then
   receipt="$root_dir/.omo/evidence/task-11-local-${mode}.tsv"
@@ -79,6 +87,7 @@ docker run --rm --name "$proof" --network "$network" \
   >"$raw_output"
 
 grep -E '^(transition|row|projection|cleanup)\t' "$raw_output" >"$temp_receipt"
+printf 'provenance\t%s\t%s\tpassed\n' "$source_sha" "$image_id" >>"$temp_receipt"
 rm -f "$raw_output"
 
 "$root_dir/scripts/verification/quota-convergence/check-receipts.sh" \

@@ -1,6 +1,11 @@
+alias CodexPooler.Pools.Pool
 alias CodexPooler.Repo
+alias CodexPooler.Upstreams
+alias CodexPooler.Upstreams.Assignments.PoolAssignments
+alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
-alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+alias CodexPooler.Upstreams.Schemas.EncryptedSecret
+alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
 import Ecto.Query
 
@@ -12,76 +17,146 @@ end
 
 {:ok, _started} = Application.ensure_all_started(:codex_pooler)
 
-current_at = DateTime.utc_now() |> DateTime.truncate(:second)
-now = DateTime.add(current_at, -30, :second)
-reset_at = DateTime.add(current_at, 7_200, :second)
+account_values = if mode == "equivalent", do: [22, 14, 14], else: [22, 14, 13]
+model_values = if mode == "equivalent", do: [22, 1, 1], else: [22, 1, 2]
+reset_at = DateTime.utc_now() |> DateTime.add(7_200, :second) |> DateTime.to_unix()
+{:ok, responses} = Agent.start_link(fn -> Enum.zip(account_values, model_values) end)
 
-identity =
-  %UpstreamIdentity{}
-  |> UpstreamIdentity.changeset(%{
-    account_label: "quota-proof",
-    onboarding_method: "import",
+{:ok, listener} =
+  :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true, ip: {0, 0, 0, 0}])
+
+{:ok, port} = :inet.port(listener)
+
+server =
+  spawn_link(fn ->
+    Stream.repeatedly(fn -> :gen_tcp.accept(listener) end)
+    |> Enum.reduce_while(:ok, fn
+      {:ok, socket}, :ok ->
+        {:ok, request} = :gen_tcp.recv(socket, 0, 5_000)
+        [request_line | _headers] = String.split(request, "\r\n")
+        [_method, path, _version] = String.split(request_line, " ")
+
+        result =
+          Agent.get_and_update(responses, fn
+            [{account, model} | remaining] -> {{account, model}, remaining}
+            [] -> {:exhausted, []}
+          end)
+
+        case {path, result} do
+          {"/backend-api/wham/usage", {account, model}} ->
+            payload = %{
+              "rate_limit" => %{
+                "primary_window" => %{
+                  "used_percent" => account,
+                  "limit_window_seconds" => 18_000,
+                  "reset_at" => reset_at
+                }
+              },
+              "additional_rate_limits" => [
+                %{
+                  "limit_name" => "Example Model",
+                  "metered_feature" => "example_model",
+                  "rate_limit" => %{
+                    "primary_window" => %{
+                      "used_percent" => model,
+                      "limit_window_seconds" => 18_000,
+                      "reset_at" => reset_at
+                    }
+                  }
+                }
+              ]
+            }
+
+            body = Jason.encode!(payload)
+
+            :ok =
+              :gen_tcp.send(
+                socket,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n" <>
+                  "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n#{body}"
+              )
+
+            :gen_tcp.close(socket)
+            {:cont, :ok}
+
+          {_path, _result} ->
+            body = Jason.encode!(%{"error" => "unexpected proof request"})
+
+            :ok =
+              :gen_tcp.send(
+                socket,
+                "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\n" <>
+                  "content-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n#{body}"
+              )
+
+            :gen_tcp.close(socket)
+            {:halt, :unexpected_request}
+        end
+
+      {:error, :closed}, :ok ->
+        {:halt, :ok}
+    end)
+  end)
+
+now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+suffix = System.unique_integer([:positive])
+
+pool =
+  %Pool{}
+  |> Pool.changeset(%{
+    slug: "quota-proof-#{suffix}",
+    name: "Quota proof",
     status: "active",
-    headers_profile_version: 1,
     created_at: now,
-    updated_at: now,
-    metadata: %{"fixture" => "quota-proof"}
+    updated_at: now
   })
   |> Repo.insert!()
+
+{:ok, identity} =
+  IdentityLifecycle.create_upstream_identity(%{
+    chatgpt_account_id: "quota-proof-#{suffix}",
+    account_label: "Quota proof",
+    onboarding_method: "import",
+    metadata: %{"base_url" => "http://127.0.0.1:#{port}"}
+  })
+
+{:ok, identity} = IdentityLifecycle.activate_upstream_identity(identity)
+{:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity)
+{:ok, assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+{:ok, _secret} =
+  Upstreams.store_encrypted_secret(identity, %{
+    secret_kind: "access_token",
+    plaintext: "quota-proof-synthetic-credential"
+  })
 
 metadata_fields =
   "quota_scope,quota_family,quota_key,window_kind,source,source_precision," <>
     "freshness_state,observed_at,reset_at,used_percent"
 
-record = fn scope, percent, observed_at ->
-  attrs =
-    case scope do
-      :account ->
-        %{quota_scope: "account", quota_family: "account", quota_key: "account"}
-
-      :model ->
-        %{
-          quota_scope: "model",
-          quota_family: "codex_model",
-          quota_key: "model-quota",
-          model: "example-model",
-          raw_limit_id: "model-limit",
-          raw_limit_name: "Model limit",
-          raw_metered_feature: "model-meter"
-        }
-    end
-    |> Map.merge(%{
-      window_kind: "primary",
-      window_minutes: 300,
-      used_percent: Decimal.new(percent),
-      reset_at: reset_at,
-      source: "codex_usage_api",
-      source_precision: "observed",
-      freshness_state: "fresh",
-      last_sync_at: observed_at,
-      observed_at: observed_at,
-      metadata: %{"fixture" => "quota-proof"}
-    })
-
-  {:ok, window} = QuotaWindows.record_evidence(identity, attrs, observed_at)
-  Decimal.to_string(window.used_percent, :normal)
+window_percent = fn scope ->
+  identity
+  |> QuotaWindows.list_quota_windows()
+  |> Enum.find(&(&1.quota_scope == scope))
+  |> Map.fetch!(:used_percent)
+  |> Decimal.to_string(:normal)
 end
 
 try do
-  account_second = if mode == "equivalent", do: "14", else: "13"
-  model_second = if mode == "equivalent", do: "1", else: "2"
+  snapshots =
+    Enum.map(1..3, fn _index ->
+      {:ok, %{status: :succeeded}} = Upstreams.reconcile_pool_account(pool, assignment)
+      {window_percent.("account"), window_percent.("model")}
+    end)
 
-  transitions = [
-    {:account, "22", "14", account_second},
-    {:model, "22", "1", model_second}
-  ]
+  Enum.each([{"account", 0}, {"model", 1}], fn {scope, index} ->
+    values = Enum.map(snapshots, &(&1 |> elem(index)))
+    initial = if scope == "account", do: "22", else: "22"
 
-  Enum.each(transitions, fn {scope, initial, first_lower, second_lower} ->
-    first = record.(scope, initial, now)
-    second = record.(scope, first_lower, DateTime.add(now, 10, :second))
-    third = record.(scope, second_lower, DateTime.add(now, 20, :second))
+    expected =
+      if mode == "equivalent", do: if(scope == "account", do: "14", else: "1"), else: initial
 
-    expected = if mode == "equivalent", do: first_lower, else: initial
+    [first, second, third] = values
 
     passed =
       Decimal.equal?(Decimal.new(first), Decimal.new(initial)) and
@@ -93,7 +168,7 @@ try do
         [
           "transition",
           mode,
-          Atom.to_string(scope),
+          scope,
           first,
           second,
           third,
@@ -116,13 +191,20 @@ try do
       [identity.id]
     ).rows
 
-  unless length(rows) == 2 do
-    raise "metadata projection row count mismatch"
-  end
+  unless length(rows) == 2, do: raise("metadata projection row count mismatch")
 
-  Enum.each(rows, fn row ->
-    [scope, family, key, kind, source, precision, freshness, observed, reset, percent] = row
-
+  Enum.each(rows, fn [
+                       scope,
+                       family,
+                       key,
+                       kind,
+                       source,
+                       precision,
+                       freshness,
+                       observed,
+                       reset,
+                       percent
+                     ] ->
     IO.puts(
       Enum.join(
         [
@@ -143,13 +225,29 @@ try do
     )
   end)
 
+  unless Agent.get(responses, & &1) == [],
+    do: raise("synthetic provider responses were not exhausted")
+
   IO.puts("projection\t#{metadata_fields}\tpassed")
 after
+  :gen_tcp.close(listener)
+  Process.exit(server, :normal)
+  Agent.stop(responses)
+
+  Repo.delete_all(
+    from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity.id
+  )
+
+  Repo.delete_all(
+    from assignment in PoolUpstreamAssignment, where: assignment.id == ^assignment.id
+  )
+
   Repo.delete_all(
     from window in CodexPooler.Upstreams.Quota.AccountQuotaWindow,
       where: window.upstream_identity_id == ^identity.id
   )
 
   Repo.delete!(identity)
-  IO.puts("cleanup\tproof-identity\tpassed")
+  Repo.delete!(pool)
+  IO.puts("cleanup\tproof-fixture\tpassed")
 end
