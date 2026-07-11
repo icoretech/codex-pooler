@@ -12,7 +12,10 @@ For Docker Compose, `scripts/self-host/generate-env.sh` writes a local `.env` fi
 The local web URL is `http://localhost:4000`.
 
 The generator writes `CODEX_POOLER_IMAGE_TAG=latest` unless you set a tag first.
-Replace `<release-tag>` with the release you want before running the command:
+For self-hosted installs, set it to a tagged stable release from
+[GitHub Releases](https://github.com/icoretech/codex-pooler/releases) before
+running the generator. The `latest` tag follows the most recently published
+release, but a version tag keeps the selected installation reproducible:
 
 ```bash
 export CODEX_POOLER_IMAGE_TAG=<release-tag>

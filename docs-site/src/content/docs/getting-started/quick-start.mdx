@@ -27,14 +27,15 @@ To start Codex Pooler locally, generate a private `.env`, start the Docker Compo
 ## 1. Start Codex Pooler
 
 Clone the repository, generate local secrets, and start the app with Postgres.
+For normal use, select a versioned, tagged stable release from [GitHub Releases](https://github.com/icoretech/codex-pooler/releases). The `latest` image tag follows the most recently published release, but a version tag keeps the installation reproducible. Run from source only for local development.
 
 ```bash
 git clone https://github.com/icoretech/codex-pooler.git
 cd codex-pooler
 
-# Optional: pin a release tag before generating .env.
-# Omit this for a quick trial that follows the latest tag.
-# export CODEX_POOLER_IMAGE_TAG=<release-tag>
+# Run the latest tagged stable release. Find its version at
+# https://github.com/icoretech/codex-pooler/releases, then substitute it here.
+export CODEX_POOLER_IMAGE_TAG=<release-tag>
 
 scripts/self-host/generate-env.sh
 docker compose pull

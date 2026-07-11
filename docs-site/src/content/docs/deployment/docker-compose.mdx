@@ -23,9 +23,8 @@ cd codex-pooler
 
 ## Generate the local environment
 
-For a reproducible install, choose the release image before creating `.env`.
-The generator defaults to `latest`, which is convenient for a quick trial but
-less explicit for a real install.
+For every self-hosted install, choose a tagged stable release before creating
+`.env`. Find the latest tagged stable release on [GitHub Releases](https://github.com/icoretech/codex-pooler/releases). The `latest` tag follows the most recently published release, but a version tag keeps the installation reproducible.
 
 {/* x-release-please-start-version */}
 
@@ -39,9 +38,10 @@ scripts/self-host/generate-env.sh
 
 The generated `.env` contains release secrets, encryption roots, database settings, and image settings such as `CODEX_POOLER_IMAGE` and `CODEX_POOLER_IMAGE_TAG`. Keep it private. Don't commit it, paste it into tickets, or reuse values between public installs.
 
-If you already generated `.env`, edit `CODEX_POOLER_IMAGE_TAG` before
-`docker compose pull` when you want a specific release instead of the floating
-`latest` tag. If port `4000` is already in use, set `CODEX_POOLER_HTTP_PORT`
+If you already generated `.env`, set `CODEX_POOLER_IMAGE_TAG` to the target
+tagged stable release before `docker compose pull`. The `latest` tag follows the
+most recently published release, but pinning a version tag makes the install
+reproducible. If port `4000` is already in use, set `CODEX_POOLER_HTTP_PORT`
 before generation or edit it in `.env` before starting the stack.
 
 ## Start Codex Pooler
@@ -122,9 +122,10 @@ docker compose logs -f app
 
 ## Upgrade and run migrations
 
-For an existing Compose install, update the release image first. If you pin
-releases, edit `CODEX_POOLER_IMAGE_TAG` in `.env` to the target release tag.
-Then pull and restart the stack:
+For an existing Compose install, update the release image first: set
+`CODEX_POOLER_IMAGE_TAG` in `.env` to the target tagged stable release. Keep a
+versioned tag to make the selected upgrade reproducible. Then pull and restart
+the stack:
 
 ```bash
 docker compose pull

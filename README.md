@@ -1669,6 +1669,7 @@ compaction as a Codex Pooler feature.
 
 This runs the published release image with a local Postgres database. It is the
 fastest way to try Codex Pooler on a laptop or small server.
+For normal use, run a versioned, tagged stable release from [GitHub Releases](https://github.com/icoretech/codex-pooler/releases). The `latest` image tag follows the most recently published release, but a version tag keeps the installation reproducible; run from source only in [Local Development](#local-development).
 
 Prerequisites:
 
@@ -1682,9 +1683,9 @@ Start Codex Pooler:
 git clone https://github.com/icoretech/codex-pooler.git
 cd codex-pooler
 
-# Optional: pin a release tag before generating .env.
-# Omit this for a quick trial that follows the latest tag.
-# export CODEX_POOLER_IMAGE_TAG=<release-tag>
+# Run the latest tagged stable release. Find its version at
+# https://github.com/icoretech/codex-pooler/releases, then substitute it here.
+export CODEX_POOLER_IMAGE_TAG=<release-tag>
 
 scripts/self-host/generate-env.sh
 docker compose pull
@@ -1715,8 +1716,8 @@ docker compose logs -f app
 docker compose down
 ```
 
-To upgrade an existing Compose install, update `CODEX_POOLER_IMAGE_TAG` in
-`.env` when you pin releases, then run:
+To upgrade an existing Compose install, set `CODEX_POOLER_IMAGE_TAG` in `.env`
+to the target tagged stable release, then run:
 
 ```bash
 docker compose pull

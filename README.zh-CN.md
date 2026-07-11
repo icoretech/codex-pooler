@@ -1548,6 +1548,7 @@ console.log(text);
 
 这会使用本地 Postgres 数据库运行已发布的 release image。这是在笔记本或小型
 服务器上试用 Codex Pooler 的最快方式。
+正常使用时，请运行 [GitHub Releases](https://github.com/icoretech/codex-pooler/releases) 中带版本号的已标记稳定 release。`latest` image tag 会跟随最新发布的 release，但使用版本 tag 可保持安装可复现；仅在[本地开发](#本地开发)时从源码运行。
 
 前置条件：
 
@@ -1561,9 +1562,9 @@ console.log(text);
 git clone https://github.com/icoretech/codex-pooler.git
 cd codex-pooler
 
-# Optional: pin a release tag before generating .env.
-# Omit this for a quick trial that follows the latest tag.
-# export CODEX_POOLER_IMAGE_TAG=<release-tag>
+# 运行最新的已标记稳定 release。请在
+# https://github.com/icoretech/codex-pooler/releases 查找版本并替换此处。
+export CODEX_POOLER_IMAGE_TAG=<release-tag>
 
 scripts/self-host/generate-env.sh
 docker compose pull
@@ -1594,8 +1595,8 @@ docker compose logs -f app
 docker compose down
 ```
 
-升级已有 Compose 安装时，如果你固定 release，请在 `.env` 中更新
-`CODEX_POOLER_IMAGE_TAG`，然后运行：
+升级已有 Compose 安装时，将 `.env` 中的 `CODEX_POOLER_IMAGE_TAG` 设为目标已标记稳定
+release，然后运行：
 
 ```bash
 docker compose pull
