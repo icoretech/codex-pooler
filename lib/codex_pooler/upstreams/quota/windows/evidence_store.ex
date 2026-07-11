@@ -305,11 +305,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp merge_attrs_by_quality(existing, attrs, evidence, timestamp) do
     cond do
-      incoming_raises_usage_with_existing_reset?(evidence, existing, timestamp) ->
-        merge_usage_with_existing_reset_attrs(existing, attrs, timestamp)
-
       incoming_updates_usage_with_existing_capacity?(evidence, existing) ->
         merge_usage_with_existing_capacity_attrs(existing, attrs, timestamp)
+
+      incoming_raises_usage_with_existing_reset?(evidence, existing, timestamp) ->
+        merge_usage_with_existing_reset_attrs(existing, attrs, timestamp)
 
       incoming_usage_advances_runtime_reset?(evidence, existing, timestamp) ->
         merge_usage_reset_with_existing_percent_attrs(existing, attrs, timestamp)

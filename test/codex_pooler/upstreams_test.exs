@@ -9501,6 +9501,62 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
+    test "incomplete free-plan usage cannot split percent from preserved credit capacity" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 28, :day)
+      incomplete_observed_at = DateTime.add(observed_at, 60, :second)
+      incomplete_reset_at = DateTime.add(observed_at, 12, :day)
+
+      payload = fn used_percent, sample_at, sample_reset_at ->
+        %{
+          "credits" => %{"balance" => 3_521},
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => used_percent,
+              "limit_window_seconds" => 2_592_000,
+              "reset_after_seconds" => DateTime.diff(sample_reset_at, sample_at, :second),
+              "reset_at" => DateTime.to_unix(sample_reset_at)
+            }
+          }
+        }
+      end
+
+      assert {:ok, [complete_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(16.007, observed_at, reset_at),
+                 observed_at
+               )
+
+      assert complete_window.active_limit == 4_192
+      assert complete_window.credits == 3_521
+
+      assert Decimal.equal?(
+               complete_window.used_percent,
+               Decimal.new("16.007")
+             )
+
+      assert {:ok, [after_incomplete]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(100, incomplete_observed_at, incomplete_reset_at),
+                 incomplete_observed_at
+               )
+
+      assert after_incomplete.id == complete_window.id
+      assert after_incomplete.active_limit == 4_192
+      assert after_incomplete.credits == 3_521
+
+      assert Decimal.equal?(
+               after_incomplete.used_percent,
+               Decimal.new("16.00667938931297709923664122137405")
+             )
+
+      assert DateTime.compare(after_incomplete.reset_at, reset_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
     test "stronger account usage snapshot replaces the earlier snapshot atomically" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
