@@ -4372,9 +4372,68 @@ defmodule CodexPooler.UpstreamsTest do
       assert corrected.source_precision == "observed"
       assert Decimal.equal?(corrected.used_percent, Decimal.new("96.000"))
       assert DateTime.compare(corrected.reset_at, explicit_reset_at) == :eq
+      refute Map.has_key?(corrected.metadata, "reset_after_seconds")
 
       assert [stored] = QuotaWindows.list_quota_windows(identity)
       assert DateTime.compare(stored.reset_at, explicit_reset_at) == :eq
+      refute Map.has_key?(stored.metadata, "reset_after_seconds")
+    end
+
+    test "explicit usage reset corrects capacity-bearing rows derived from relative countdowns" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      bad_relative_reset_at = DateTime.add(observed_at, 28, :day)
+      explicit_reset_at = DateTime.add(observed_at, 12, :day)
+
+      assert {:ok, [_bad_primary]} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   %{
+                     quota_key: "account",
+                     quota_scope: "account",
+                     quota_family: "account",
+                     window_kind: "primary",
+                     window_minutes: 43_200,
+                     active_limit: 4_192,
+                     credits: 3_521,
+                     used_percent: Decimal.new("16.007"),
+                     reset_at: bad_relative_reset_at,
+                     source: "codex_usage_api",
+                     source_precision: "inferred",
+                     freshness_state: "fresh",
+                     metadata: %{
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_after_seconds" => 2_592_000
+                     },
+                     last_sync_at: observed_at,
+                     observed_at: observed_at
+                   }
+                 ],
+                 delete_missing?: false
+               )
+
+      assert {:ok, [corrected]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 100,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_iso8601(explicit_reset_at)
+                     }
+                   }
+                 },
+                 DateTime.add(observed_at, 60, :second)
+               )
+
+      assert corrected.active_limit == 4_192
+      assert corrected.credits == 3_521
+      assert corrected.source_precision == "observed"
+      assert_in_delta Decimal.to_float(corrected.used_percent), 16.006_679, 0.000_001
+      assert DateTime.compare(corrected.reset_at, explicit_reset_at) == :eq
+      refute Map.has_key?(corrected.metadata, "reset_after_seconds")
     end
 
     test "does not treat non-5h account primary evidence as precise routing evidence" do
@@ -9531,11 +9590,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert complete_window.active_limit == 4_192
       assert complete_window.credits == 3_521
-
-      assert Decimal.equal?(
-               complete_window.used_percent,
-               Decimal.new("16.007")
-             )
+      assert Decimal.equal?(complete_window.used_percent, Decimal.new("16.007"))
 
       assert {:ok, [after_incomplete]} =
                QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
@@ -9547,13 +9602,291 @@ defmodule CodexPooler.UpstreamsTest do
       assert after_incomplete.id == complete_window.id
       assert after_incomplete.active_limit == 4_192
       assert after_incomplete.credits == 3_521
-
-      assert Decimal.equal?(
-               after_incomplete.used_percent,
-               Decimal.new("16.00667938931297709923664122137405")
-             )
+      assert_in_delta Decimal.to_float(after_incomplete.used_percent), 16.006_679, 0.000_001
 
       assert DateTime.compare(after_incomplete.reset_at, reset_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "relative free-plan usage cannot replace an explicit reset or its metadata" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 28, :day)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      assert {:ok, [complete_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 3_521},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 16.007,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at),
+                       "reset_after_seconds" => DateTime.diff(reset_at, observed_at, :second)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert {:ok, [merged_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 3_521},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 100,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_after_seconds" => 2_592_000
+                     }
+                   }
+                 },
+                 incoming_at
+               )
+
+      assert merged_window.id == complete_window.id
+      assert merged_window.source_precision == "observed"
+      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
+
+      assert merged_window.metadata["reset_after_seconds"] ==
+               complete_window.metadata["reset_after_seconds"]
+
+      assert merged_window.active_limit == 4_192
+      assert merged_window.credits == 3_521
+      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+    end
+
+    for incoming_percent <- [16.007, 8] do
+      @tag :upstream_quota_evidence_stability
+      test "relative free-plan #{incoming_percent} percent usage keeps explicit reset provenance" do
+        identity = active_identity_fixture()
+        observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+        reset_at = DateTime.add(observed_at, 28, :day)
+        incoming_at = DateTime.add(observed_at, 60, :second)
+
+        assert {:ok, [complete_window]} =
+                 QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                   identity,
+                   %{
+                     "credits" => %{"balance" => 3_521},
+                     "rate_limit" => %{
+                       "primary_window" => %{
+                         "used_percent" => 16.007,
+                         "limit_window_seconds" => 2_592_000,
+                         "reset_at" => DateTime.to_unix(reset_at),
+                         "reset_after_seconds" => DateTime.diff(reset_at, observed_at, :second)
+                       }
+                     }
+                   },
+                   observed_at
+                 )
+
+        assert {:ok, [merged_window]} =
+                 QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                   identity,
+                   %{
+                     "credits" => %{"balance" => 3_521},
+                     "rate_limit" => %{
+                       "primary_window" => %{
+                         "used_percent" => unquote(incoming_percent),
+                         "limit_window_seconds" => 2_592_000,
+                         "reset_after_seconds" => 2_592_000
+                       }
+                     }
+                   },
+                   incoming_at
+                 )
+
+        assert merged_window.id == complete_window.id
+        assert merged_window.source_precision == "observed"
+        assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
+
+        assert merged_window.metadata["reset_after_seconds"] ==
+                 complete_window.metadata["reset_after_seconds"]
+
+        assert merged_window.active_limit == 4_192
+        assert merged_window.credits == 3_521
+        assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      end
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "zero free-plan credit balance replaces stale positive credits atomically" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 28, :day)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      complete_payload = %{
+        "credits" => %{"balance" => 3_521},
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 16.007,
+            "limit_window_seconds" => 2_592_000,
+            "reset_at" => DateTime.to_unix(reset_at)
+          }
+        }
+      }
+
+      assert {:ok, [_complete_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 complete_payload,
+                 observed_at
+               )
+
+      exhausted_payload =
+        put_in(complete_payload, ["credits", "balance"], 0)
+        |> put_in(["rate_limit", "primary_window", "used_percent"], 100)
+
+      assert {:ok, [exhausted_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 exhausted_payload,
+                 incoming_at
+               )
+
+      assert exhausted_window.active_limit == 4_192
+      assert exhausted_window.credits == 0
+      assert Decimal.equal?(exhausted_window.used_percent, Decimal.new(100))
+      assert DateTime.compare(exhausted_window.reset_at, reset_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "missing free-plan credit balance preserves the last known balance" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 28, :day)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      assert {:ok, [_complete_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 3_521},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 16.007,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert {:ok, [merged_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 100,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 incoming_at
+               )
+
+      assert merged_window.active_limit == 4_192
+      assert merged_window.credits == 3_521
+      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "free-plan credit balance above known capacity preserves the last known balance" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 28, :day)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      payload = fn credits, used_percent ->
+        %{
+          "credits" => %{"balance" => credits},
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => used_percent,
+              "limit_window_seconds" => 2_592_000,
+              "reset_at" => DateTime.to_unix(reset_at)
+            }
+          }
+        }
+      end
+
+      assert {:ok, [_complete_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(3_521, 16.007),
+                 observed_at
+               )
+
+      assert {:ok, [merged_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 payload.(5_000, 100),
+                 incoming_at
+               )
+
+      assert merged_window.active_limit == 4_192
+      assert merged_window.credits == 3_521
+      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "runtime usage without credits preserves a known credit balance" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 2, :hour)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      assert {:ok, [known_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   active_limit: 4_192,
+                   credits: 3_521,
+                   used_percent: Decimal.new("16.007"),
+                   reset_at: reset_at,
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert {:ok, [merged_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("43"),
+                   reset_at: reset_at,
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: incoming_at
+                 }
+               ])
+
+      assert merged_window.id == known_window.id
+      assert merged_window.active_limit == 4_192
+      assert merged_window.credits == 3_521
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new("43"))
+      assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
     end
 
     @tag :upstream_quota_evidence_stability
