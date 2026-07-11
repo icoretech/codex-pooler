@@ -7824,6 +7824,63 @@ defmodule CodexPooler.UpstreamsTest do
       end
     end
 
+    @tag :quota_rich_identity
+    test "refreshes source-distinct rich evidence without selecting the other source row" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      header_attrs =
+        rich_identity_attrs(observed_at, %{source: "codex_response_headers"})
+
+      usage_attrs = rich_identity_attrs(DateTime.add(observed_at, 10, :second))
+
+      assert {:ok, [header]} =
+               QuotaWindows.upsert_quota_windows(identity, [header_attrs], delete_missing?: false)
+
+      assert {:ok, [usage]} =
+               QuotaWindows.upsert_quota_windows(identity, [usage_attrs], delete_missing?: false)
+
+      refute usage.id == header.id
+      assert header.source == "codex_response_headers"
+      assert usage.source == "codex_usage_api"
+
+      assert {:ok, [refreshed_header]} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   rich_identity_attrs(DateTime.add(observed_at, 20, :second), %{
+                     source: "codex_response_headers",
+                     used_percent: Decimal.new("24")
+                   })
+                 ],
+                 delete_missing?: false
+               )
+
+      assert {:ok, [refreshed_usage]} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 [
+                   rich_identity_attrs(DateTime.add(observed_at, 30, :second), %{
+                     used_percent: Decimal.new("25")
+                   })
+                 ],
+                 delete_missing?: false
+               )
+
+      assert refreshed_header.id == header.id
+      assert refreshed_usage.id == usage.id
+      assert refreshed_header.source == "codex_response_headers"
+      assert refreshed_usage.source == "codex_usage_api"
+
+      persisted = QuotaWindows.list_evidence(identity)
+      assert length(persisted) == 2
+
+      assert Map.new(persisted, &{&1.source, &1.id}) == %{
+               "codex_response_headers" => header.id,
+               "codex_usage_api" => usage.id
+             }
+    end
+
     for {dimension, initial, normalized} <- [
           {:model, "Example-Model", "example-model"},
           {:upstream_model, "Provider-Example-Model", "provider-example-model"}
