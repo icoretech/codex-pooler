@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.4.25](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.24...codex-pooler-v0.4.25) (2026-07-11)
+
+
+### Features
+
+* add fail-closed OpenAI pricing preflight ([85a78a1](https://github.com/icoretech/codex-pooler/commit/85a78a1124b44ea3935ad5c83a96fbee8014246c))
+* **admin:** focus API keys on credential lifecycle ([cec65b9](https://github.com/icoretech/codex-pooler/commit/cec65b9139fb184592911b6a08606eeebdf122cd))
+* **events:** add topic-scoped Pool subscriptions ([4e9f28d](https://github.com/icoretech/codex-pooler/commit/4e9f28d5f208b829d71e701b1a8dee50d3d24ddc))
+
+
+### Bug Fixes
+
+* **admin:** distinguish colliding quota cards ([e2979ef](https://github.com/icoretech/codex-pooler/commit/e2979efd085d1a4d9a7ffcbf4202749f6f7cbe37))
+* **admin:** validate API key expiry before review ([d0fcdc7](https://github.com/icoretech/codex-pooler/commit/d0fcdc7411479d3d5f10e7359b1fbc71cd4079f8))
+* **auth:** normalize Codex OAuth issuer URLs ([bb22bf8](https://github.com/icoretech/codex-pooler/commit/bb22bf8565ad22947a907178b6fb0c2095957d2c))
+* **catalog:** remove unreachable pricing error fallback ([413d27d](https://github.com/icoretech/codex-pooler/commit/413d27da4659820ea6fa8fb37208ec01aab4f87a))
+* **deploy:** start verifier release dependencies ([abbb3b2](https://github.com/icoretech/codex-pooler/commit/abbb3b26b2c3ab5e4fca96f60274c44153e1490b))
+* **gateway:** retain concurrent quota events ([dd3f35e](https://github.com/icoretech/codex-pooler/commit/dd3f35edec7af90439cb2a8a7c6ea289d9c57ddd))
+* **gateway:** sanitize backend response item ids ([019cca7](https://github.com/icoretech/codex-pooler/commit/019cca7dcf761a04da506a98a535edaa9e3a033d))
+* **quota:** converge repeated provider snapshots ([99f383e](https://github.com/icoretech/codex-pooler/commit/99f383e194a73a2582edda9f3cb2554026c67d4d))
+* **quota:** guard stale reset snapshots ([957a34a](https://github.com/icoretech/codex-pooler/commit/957a34a8456342f286528f4eb92875ddee383744))
+* **quota:** keep free-plan usage consistent with credits ([6a73abf](https://github.com/icoretech/codex-pooler/commit/6a73abfd428d0b96cf61fdc4e08192096d5c7662))
+* **quota:** merge same-window usage claims across backward reset drift ([79e0888](https://github.com/icoretech/codex-pooler/commit/79e0888e1482cd77911a93797a21ddf48bc38a0d))
+* **quota:** purge implausible and expired quota evidence rows ([c6ad82e](https://github.com/icoretech/codex-pooler/commit/c6ad82e3356485a64ca0e674dc8db5df9e3b3a63))
+* **quota:** reconcile usage evidence atomically ([e4e78a2](https://github.com/icoretech/codex-pooler/commit/e4e78a2512d19b4b208063f91a4ba39de397048f))
+* **quota:** refresh dynamically stale evidence ([79a6846](https://github.com/icoretech/codex-pooler/commit/79a68461fd070e552fd0b898e120ceb43c1e4371))
+* **quota:** refresh evidence after reset cycles ([28e17b8](https://github.com/icoretech/codex-pooler/commit/28e17b8c8466befaa3964e3a3a62e6180d51c632))
+* **quota:** refresh stale relative evidence ([e7133a9](https://github.com/icoretech/codex-pooler/commit/e7133a9269e1e47319aead17bb8a233bb0943365))
+* **quota:** refresh window liveness on rejected same-cycle usage snapshots ([e7bcb43](https://github.com/icoretech/codex-pooler/commit/e7bcb43d6c84ef131ae48c9f14109f718a93ae46))
+* **quota:** reject relative weak-zero reset outliers ([10cead1](https://github.com/icoretech/codex-pooler/commit/10cead1b46b0bcabe6925e4219f8537768d47931))
+* **quota:** remove unreachable reset fallback ([d722cb1](https://github.com/icoretech/codex-pooler/commit/d722cb1aff57b8180c45aa2fc0e4bfac59586d7a))
+* remove auth JSON handoff banner ([2e95ab3](https://github.com/icoretech/codex-pooler/commit/2e95ab33b0d641e3e59499a3edaec8e30fd416c3))
+* **upstreams:** require reauth after definitive usage rejection ([b8cc828](https://github.com/icoretech/codex-pooler/commit/b8cc828be0db739bd3098b706dc6e305741229a4))
+
+
+### Performance Improvements
+
+* **accounting:** aggregate Pool usage buckets in SQL ([9b9554b](https://github.com/icoretech/codex-pooler/commit/9b9554b1a2a7a45e086802a63c0bbebd3eff0299))
+* **admin:** coalesce Pool usage refreshes ([90f3124](https://github.com/icoretech/codex-pooler/commit/90f31241faf4fd9ba52d871fb59881da076c5a0a))
+* **dev:** speed up deterministic seed cleanup ([72125b1](https://github.com/icoretech/codex-pooler/commit/72125b1fea8da5b391195ec8dec45b930f537639))
+
 ## [0.4.24](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.23...codex-pooler-v0.4.24) (2026-07-10)
 
 
