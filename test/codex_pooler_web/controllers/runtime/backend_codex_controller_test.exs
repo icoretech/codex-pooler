@@ -3155,12 +3155,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["input"] == input
   end
 
-  test "POST /backend-api/codex/responses rejects input_image.file_id before dispatch", %{
-    conn: conn
-  } do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+  test "POST /backend-api/codex/responses preserves input_image.file_id", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_file_id"}))
     setup = gateway_setup(upstream)
-    sentinel_file_id = "file_backend_upload_reference_do_not_log"
+    file_id = "file_backend_upload_reference"
 
     conn =
       conn
@@ -3173,33 +3171,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "role" => "user",
             "content" => [
               %{"type" => "input_text", "text" => "describe this image"},
-              %{"type" => "input_image", "file_id" => sentinel_file_id}
+              %{"type" => "input_image", "file_id" => file_id}
             ]
           }
         ]
       })
 
-    assert %{
-             "error" => %{
-               "code" => "unsupported_input_image_format",
-               "type" => "invalid_request_error",
-               "param" => "input",
-               "message" => message
+    assert %{"id" => "resp_file_id"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert [
+             %{
+               "content" => [
+                 %{"type" => "input_text"},
+                 %{"type" => "input_image", "file_id" => ^file_id}
+               ]
              }
-           } = json_response(conn, 400)
-
-    assert message =~
-             "Responses input_image values must use https image URLs or supported image data URLs"
-
-    refute conn.resp_body =~ sentinel_file_id
-    assert FakeUpstream.requests(upstream) == []
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.status == "rejected"
-    assert request.last_error_code == "unsupported_input_image_format"
-    assert request.request_metadata["gateway_denial"]["param"] == "input"
-    refute inspect(request.request_metadata) =~ sentinel_file_id
-    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+           ] = captured.json["input"]
   end
 
   test "POST /backend-api/codex/responses rejects sediment input_image URLs before dispatch", %{

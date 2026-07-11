@@ -46,6 +46,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          :ok <- validate_stream_options(payload),
          :ok <- validate_token_limits(payload),
          :ok <- validate_verbosity(payload),
+         :ok <- validate_translatable_prompt_cache_breakpoints(payload),
          {:ok, response_payload} <- response_payload(payload) do
       {:ok, %{chat_payload: payload, response_payload: response_payload}}
     end
@@ -176,6 +177,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       valid_assistant_tool_calls?(tool_calls)
   end
 
+  defp valid_message?(%{"role" => "tool", "content" => content}),
+    do: valid_tool_content?(content)
+
   defp valid_message?(%{"role" => role, "content" => content})
        when role in ["system", "user", "assistant", "developer", "tool"] do
     valid_content?(content)
@@ -232,6 +236,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
       |> maybe_put(payload, "metadata")
       |> maybe_put(payload, "moderation")
       |> maybe_put(payload, "prompt_cache_key")
+      |> maybe_put(payload, "prompt_cache_options")
       |> maybe_put(payload, "prompt_cache_retention")
       |> maybe_put(payload, "safety_identifier")
       |> maybe_put(payload, "service_tier")
@@ -304,22 +309,53 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp normalize_content_part(text, _role) when is_binary(text),
     do: %{"type" => "input_text", "text" => text}
 
-  defp normalize_content_part(%{"type" => "text", "text" => text}, "assistant"),
-    do: %{"type" => "output_text", "text" => text}
+  defp normalize_content_part(%{"type" => "text", "text" => text} = part, "assistant"),
+    do:
+      %{"type" => "output_text", "text" => text}
+      |> maybe_put_prompt_cache_breakpoint(part)
 
-  defp normalize_content_part(%{"type" => "text", "text" => text}, _role),
-    do: %{"type" => "input_text", "text" => text}
+  defp normalize_content_part(%{"type" => "text", "text" => text} = part, _role),
+    do:
+      %{"type" => "input_text", "text" => text}
+      |> maybe_put_prompt_cache_breakpoint(part)
 
-  defp normalize_content_part(%{"type" => "image_url", "image_url" => image_url}, _role)
+  defp normalize_content_part(%{"type" => "input_text", "text" => text} = part, _role),
+    do:
+      %{"type" => "input_text", "text" => text}
+      |> maybe_put_prompt_cache_breakpoint(part)
+
+  defp normalize_content_part(%{"type" => "image_url", "image_url" => image_url} = part, _role)
        when is_binary(image_url),
-       do: %{"type" => "input_image", "image_url" => image_url}
+       do:
+         %{"type" => "input_image", "image_url" => image_url}
+         |> maybe_put_prompt_cache_breakpoint(part)
 
   defp normalize_content_part(
-         %{"type" => "image_url", "image_url" => %{"url" => image_url}},
+         %{"type" => "image_url", "image_url" => %{"url" => image_url}} = part,
          _role
        )
        when is_binary(image_url),
-       do: %{"type" => "input_image", "image_url" => image_url}
+       do:
+         %{"type" => "input_image", "image_url" => image_url}
+         |> maybe_put_prompt_cache_breakpoint(part)
+
+  defp normalize_content_part(
+         %{"type" => "file", "file" => %{"file_id" => file_id}} = part,
+         _role
+       )
+       when is_binary(file_id) and file_id != "",
+       do:
+         %{"type" => "input_file", "file_id" => file_id}
+         |> maybe_put_prompt_cache_breakpoint(part)
+
+  defp normalize_content_part(
+         %{"type" => "file", "file" => %{"filename" => filename, "file_data" => file_data}} = part,
+         _role
+       )
+       when is_binary(filename) and filename != "" and is_binary(file_data),
+       do:
+         %{"type" => "input_file", "filename" => filename, "file_data" => file_data}
+         |> maybe_put_prompt_cache_breakpoint(part)
 
   defp normalize_content_part(%{"type" => "input_audio"} = part, _role), do: part
   defp normalize_content_part(%{} = part, _role), do: part
@@ -422,6 +458,71 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp normalize_cline_tool_result_output_part(part), do: part
 
+  defp valid_tool_content?(content) when is_binary(content), do: true
+
+  defp valid_tool_content?(content) when is_list(content) do
+    content != [] and Enum.all?(content, &valid_tool_content_part?/1)
+  end
+
+  defp valid_tool_content?(_content), do: false
+
+  defp valid_tool_content_part?(%{"type" => type, "text" => text})
+       when type in ["text", "input_text"] and is_binary(text),
+       do: true
+
+  defp valid_tool_content_part?(_part), do: false
+
+  defp validate_translatable_prompt_cache_breakpoints(%{"messages" => messages})
+       when is_list(messages) do
+    messages
+    |> Enum.find_value(:ok, &prompt_cache_breakpoint_translation_error/1)
+  end
+
+  defp validate_translatable_prompt_cache_breakpoints(_payload), do: :ok
+
+  defp prompt_cache_breakpoint_translation_error(%{"role" => "assistant", "content" => content}) do
+    if content
+       |> content_parts()
+       |> Enum.any?(&marked_text_content_part?/1) do
+      {:error,
+       Error.invalid_request("assistant prompt_cache_breakpoint is not translatable", "input")}
+    end
+  end
+
+  defp prompt_cache_breakpoint_translation_error(%{"role" => "user", "content" => content}) do
+    if content
+       |> content_parts()
+       |> Enum.any?(&marked_input_audio_content_part?/1) do
+      {:error,
+       Error.invalid_request("input_audio prompt_cache_breakpoint is not translatable", "input")}
+    end
+  end
+
+  defp prompt_cache_breakpoint_translation_error(_message), do: false
+
+  defp marked_text_content_part?(%{
+         "type" => type,
+         "text" => _text,
+         "prompt_cache_breakpoint" => _breakpoint
+       })
+       when type in ["text", "input_text"],
+       do: true
+
+  defp marked_text_content_part?(_part), do: false
+
+  defp marked_input_audio_content_part?(%{
+         "type" => "input_audio",
+         "prompt_cache_breakpoint" => _breakpoint
+       }),
+       do: true
+
+  defp marked_input_audio_content_part?(_part), do: false
+
+  defp maybe_put_prompt_cache_breakpoint(acc, %{"prompt_cache_breakpoint" => breakpoint}),
+    do: Map.put(acc, "prompt_cache_breakpoint", breakpoint)
+
+  defp maybe_put_prompt_cache_breakpoint(acc, _part), do: acc
+
   defp valid_content?(content) when is_binary(content), do: true
 
   defp valid_content?(content) when is_list(content),
@@ -466,6 +567,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          "input_audio" => %{"data" => data, "format" => format}
        })
        when is_binary(data) and is_binary(format),
+       do: true
+
+  defp valid_content_part?(%{"type" => "file", "file" => %{"file_id" => file_id}})
+       when is_binary(file_id) and file_id != "",
+       do: true
+
+  defp valid_content_part?(%{
+         "type" => "file",
+         "file" => %{"filename" => filename, "file_data" => file_data}
+       })
+       when is_binary(filename) and filename != "" and is_binary(file_data),
        do: true
 
   defp valid_content_part?(%{

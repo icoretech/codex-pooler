@@ -6,7 +6,7 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
 
   @supported_input_image_data_mimes ~w(image/gif image/jpeg image/png image/webp)
   @supported_input_file_data_mimes ~w(application/pdf text/plain)
-  @unsupported_input_image_message "Responses input_image values must use https image URLs or supported image data URLs; file_id and Codex sediment:// references are unsupported"
+  @unsupported_input_image_message "Responses input_image values must use https image URLs or supported image data URLs, or nonblank file_id references; Codex sediment:// references are unsupported"
 
   @spec validate(term()) :: :ok | {:error, Error.reason()}
   def validate(payload) when is_map(payload) do
@@ -47,9 +47,12 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
 
   defp find_unsupported_media(_value), do: nil
 
-  defp unsupported_input_image_file_id?(%{"type" => "input_image"} = value) do
-    Map.has_key?(value, "file_id")
-  end
+  defp unsupported_input_image_file_id?(%{"type" => "input_image", "file_id" => file_id})
+       when is_binary(file_id),
+       do: String.trim(file_id) == ""
+
+  defp unsupported_input_image_file_id?(%{"type" => "input_image"} = value),
+    do: Map.has_key?(value, "file_id")
 
   defp unsupported_input_image_file_id?(_value), do: false
 

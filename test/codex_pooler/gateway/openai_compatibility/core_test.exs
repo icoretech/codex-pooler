@@ -25,10 +25,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   test "supported field matrix tracks current SDK top-level request fields" do
     openai_chat_fields =
-      ~w(audio frequency_penalty function_call functions logit_bias logprobs max_completion_tokens max_tokens messages metadata modalities model moderation n parallel_tool_calls prediction presence_penalty prompt_cache_key prompt_cache_retention reasoning_effort response_format safety_identifier seed service_tier stop store stream stream_options temperature tool_choice tools top_logprobs top_p user verbosity web_search_options)
+      ~w(audio frequency_penalty function_call functions logit_bias logprobs max_completion_tokens max_tokens messages metadata modalities model moderation n parallel_tool_calls prediction presence_penalty prompt_cache_key prompt_cache_options prompt_cache_retention reasoning_effort response_format safety_identifier seed service_tier stop store stream stream_options temperature tool_choice tools top_logprobs top_p user verbosity web_search_options)
 
     openai_responses_fields =
-      ~w(background context_management conversation include input instructions max_output_tokens metadata model moderation parallel_tool_calls previous_response_id prompt prompt_cache_key prompt_cache_retention reasoning safety_identifier service_tier store stream stream_options temperature text tool_choice tools top_logprobs top_p truncation user)
+      ~w(background context_management conversation include input instructions max_output_tokens metadata model moderation parallel_tool_calls previous_response_id prompt prompt_cache_key prompt_cache_options prompt_cache_retention reasoning safety_identifier service_tier store stream stream_options temperature text tool_choice tools top_logprobs top_p truncation user)
 
     assert MapSet.subset?(
              MapSet.new(openai_chat_fields),
@@ -142,7 +142,40 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "Responses system and developer message input text lifts into instructions" do
+  test "Responses rejects non-text system and developer content before instruction lifting" do
+    for {role, part} <- [
+          {"developer",
+           %{"type" => "input_image", "image_url" => "https://example.com/image.png"}},
+          {"system", %{"type" => "input_file", "file_id" => "file_fixture"}}
+        ] do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "message content part is not translatable",
+                param: "input"
+              }} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "instructions" => "Base synthetic instruction",
+                 "input" => [
+                   %{
+                     "type" => "message",
+                     "role" => role,
+                     "content" => [
+                       %{"type" => "input_text", "text" => "synthetic instruction"},
+                       part
+                     ]
+                   }
+                 ]
+               })
+    end
+  end
+
+  @tag :responses_coercion
+  test "Responses lifts unmarked instruction text and preserves marked instruction text" do
+    breakpoint = %{"mode" => "explicit"}
+
     assert {:ok, result} =
              Responses.coerce(%{
                "model" => "gpt-fixture-text",
@@ -151,51 +184,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                  %{
                    "type" => "message",
                    "role" => "system",
-                   "content" => [%{"type" => "input_text", "text" => " synthetic system "}]
-                 },
-                 %{
-                   "type" => "message",
-                   "role" => "developer",
                    "content" => [
-                     %{"type" => "input_text", "text" => "synthetic developer"},
-                     %{"type" => "text", "text" => " "},
-                     %{"type" => "input_image", "image_url" => "https://example.com/image.png"}
-                   ]
-                 },
-                 %{
-                   "type" => "message",
-                   "role" => "system",
-                   "content" => [
-                     %{"type" => "text", "text" => "synthetic second system"},
-                     %{"type" => "input_file", "file_id" => "file_fixture"}
+                     %{"type" => "input_text", "text" => " synthetic system "},
+                     %{
+                       "type" => "input_text",
+                       "text" => "preserved boundary",
+                       "prompt_cache_breakpoint" => breakpoint
+                     }
                    ]
                  },
                  %{"role" => "user", "content" => "synthetic input"}
                ]
              })
 
-    assert result.payload["instructions"] ==
-             "Base synthetic instruction\nsynthetic system\nsynthetic developer\nsynthetic second system"
+    assert result.payload["instructions"] == "Base synthetic instruction\nsynthetic system"
 
-    assert result.payload["input"] == [
+    assert [
              %{
                "type" => "message",
-               "role" => "user",
+               "role" => "developer",
                "content" => [
-                 %{"type" => "input_image", "image_url" => "https://example.com/image.png"}
+                 %{
+                   "type" => "input_text",
+                   "text" => "preserved boundary",
+                   "prompt_cache_breakpoint" => ^breakpoint
+                 }
                ]
              },
-             %{
-               "type" => "message",
-               "role" => "user",
-               "content" => [%{"type" => "input_file", "file_id" => "file_fixture"}]
-             },
-             %{
-               "type" => "message",
-               "role" => "user",
-               "content" => [%{"type" => "input_text", "text" => "synthetic input"}]
-             }
-           ]
+             %{"type" => "message", "role" => "user"}
+           ] = result.payload["input"]
   end
 
   @tag :responses_coercion
@@ -3359,9 +3376,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
 
     test "Responses rejects unsupported image/file media references deterministically" do
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "role" => "user",
+                     "content" => [%{"type" => "input_image", "file_id" => "file_fixture"}]
+                   }
+                 ]
+               })
+
+      assert get_in(result.payload, ["input", Access.at(0), "content", Access.at(0), "file_id"]) ==
+               "file_fixture"
+
       invalid_payloads = [
-        {%{"type" => "input_image", "file_id" => "file_fixture"},
-         "unsupported_input_image_format"},
         {%{"type" => "input_image", "image_url" => "sediment://file_fixture"},
          "unsupported_input_image_format"},
         {%{"type" => "input_image", "image_url" => "http://example.com/sample.png"},
@@ -3643,6 +3672,512 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       "$defs" => %{definition_name => definition_schema}
     }
   end
+
+  @tag :prompt_cache_controls
+  test "Responses preserves request options and cacheable content breakpoints" do
+    breakpoint = prompt_cache_breakpoint()
+    options = %{"mode" => "explicit", "ttl" => "30m"}
+
+    payload = %{
+      "model" => "gpt-5.6",
+      "prompt_cache_options" => options,
+      "input" => [
+        %{
+          "role" => "system",
+          "content" => [
+            %{"type" => "input_text", "text" => "lift this"},
+            %{
+              "type" => "input_text",
+              "text" => "keep this",
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        },
+        %{
+          "role" => "developer",
+          "content" => [
+            %{
+              "type" => "input_text",
+              "text" => "keep developer",
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        },
+        %{
+          "role" => "user",
+          "content" => [
+            %{
+              "type" => "input_text",
+              "text" => "question",
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "input_image",
+              "image_url" => "https://example.com/user-image.png",
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "input_file",
+              "filename" => "fixture.txt",
+              "file_data" => "data:text/plain;base64,Zml4dHVyZQ==",
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_function",
+          "output" => [
+            %{
+              "type" => "input_text",
+              "text" => "function text",
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "input_image",
+              "image_url" => "https://example.com/image.png",
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "input_file",
+              "file_url" => "https://example.com/file.txt",
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        },
+        %{
+          "type" => "custom_tool_call_output",
+          "call_id" => "call_custom",
+          "output" => [
+            %{
+              "type" => "input_text",
+              "text" => "custom text",
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "input_file",
+              "filename" => "custom.txt",
+              "file_data" => "data:text/plain;base64,Y3VzdG9t",
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload)
+    assert result.payload["prompt_cache_options"] == options
+    assert result.payload["instructions"] == "lift this"
+    assert [%{"role" => "developer"}, %{"role" => "developer"} | _rest] = result.payload["input"]
+
+    assert get_in(result.payload, [
+             "input",
+             Access.at(0),
+             "content",
+             Access.at(0),
+             "prompt_cache_breakpoint"
+           ]) == breakpoint
+
+    assert get_in(result.payload, [
+             "input",
+             Access.at(1),
+             "content",
+             Access.at(0),
+             "prompt_cache_breakpoint"
+           ]) == breakpoint
+
+    assert result.request_options.routing.prompt_cache_key == nil
+  end
+
+  @tag :prompt_cache_controls
+  test "Responses accepts every request prompt cache options variant unchanged" do
+    for options <- [
+          %{},
+          %{"mode" => "implicit"},
+          %{"ttl" => "30m"},
+          %{"mode" => "explicit", "ttl" => "30m"}
+        ] do
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-5.6",
+                 "input" => "fixture",
+                 "prompt_cache_options" => options
+               })
+
+      assert result.payload["prompt_cache_options"] == options
+      assert result.request_options.routing.prompt_cache_key == nil
+    end
+  end
+
+  @tag :prompt_cache_controls
+  test "Chat preserves cache options and supported marked content during conversion" do
+    breakpoint = prompt_cache_breakpoint()
+
+    payload = %{
+      "model" => "gpt-5.6",
+      "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+      "messages" => [
+        %{
+          "role" => "system",
+          "content" => [
+            %{"type" => "text", "text" => "system", "prompt_cache_breakpoint" => breakpoint}
+          ]
+        },
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "text", "text" => "user", "prompt_cache_breakpoint" => breakpoint},
+            %{
+              "type" => "image_url",
+              "image_url" => %{"url" => "https://example.com/image.png"},
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "file",
+              "file" => %{"file_id" => "file_fixture"},
+              "prompt_cache_breakpoint" => breakpoint
+            },
+            %{
+              "type" => "file",
+              "file" => %{
+                "filename" => "fixture.txt",
+                "file_data" => "data:text/plain;base64,Zml4dHVyZQ=="
+              },
+              "prompt_cache_breakpoint" => breakpoint
+            }
+          ]
+        },
+        %{
+          "role" => "tool",
+          "tool_call_id" => "call_fixture",
+          "content" => [
+            %{"type" => "text", "text" => "tool", "prompt_cache_breakpoint" => breakpoint}
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, result} = Chat.coerce(payload)
+    assert result.payload["prompt_cache_options"] == payload["prompt_cache_options"]
+
+    assert [%{"role" => "developer"} = instruction, %{"role" => "user"} = user, tool_output] =
+             result.payload["input"]
+
+    assert get_in(instruction, ["content", Access.at(0), "prompt_cache_breakpoint"]) == breakpoint
+    assert Enum.all?(user["content"], &(&1["prompt_cache_breakpoint"] == breakpoint))
+    assert get_in(tool_output, ["output", Access.at(0), "prompt_cache_breakpoint"]) == breakpoint
+    assert result.request_options.routing.prompt_cache_key == nil
+  end
+
+  @tag :prompt_cache_controls
+  test "Chat rejects marked assistant text and input audio instead of dropping breakpoints" do
+    breakpoint = prompt_cache_breakpoint()
+
+    cases = [
+      {%{
+         "role" => "assistant",
+         "content" => [
+           %{"type" => "text", "text" => "answer", "prompt_cache_breakpoint" => breakpoint}
+         ]
+       },
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "assistant prompt_cache_breakpoint is not translatable",
+         param: "input"
+       }},
+      {%{
+         "role" => "user",
+         "content" => [
+           %{
+             "type" => "input_audio",
+             "input_audio" => %{"data" => "Zml4dHVyZQ==", "format" => "wav"},
+             "prompt_cache_breakpoint" => breakpoint
+           }
+         ]
+       },
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "input_audio prompt_cache_breakpoint is not translatable",
+         param: "input"
+       }}
+    ]
+
+    for {message, expected} <- cases do
+      assert {:error, ^expected} = Chat.coerce(%{"model" => "gpt-5.6", "messages" => [message]})
+    end
+  end
+
+  @tag :prompt_cache_controls
+  test "Chat rejects image and file parts in tool messages" do
+    breakpoint = prompt_cache_breakpoint()
+
+    for part <- [
+          %{
+            "type" => "image_url",
+            "image_url" => "https://example.com/image.png",
+            "prompt_cache_breakpoint" => breakpoint
+          },
+          %{
+            "type" => "file",
+            "file" => %{"file_id" => "file_fixture"},
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ] do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "messages must contain role/content objects",
+                param: "messages"
+              }} =
+               Chat.coerce(%{
+                 "model" => "gpt-5.6",
+                 "messages" => [
+                   %{"role" => "tool", "tool_call_id" => "call_fixture", "content" => [part]}
+                 ]
+               })
+    end
+  end
+
+  @tag :prompt_cache_controls
+  test "prompt cache options validation returns stable deterministic errors" do
+    cases = [
+      {[],
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options must be an object",
+         param: "prompt_cache_options"
+       }},
+      {%{"zeta" => true, "alpha" => true},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options field is not supported",
+         param: "prompt_cache_options.alpha"
+       }},
+      {%{"mode" => nil},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options mode is not supported",
+         param: "prompt_cache_options.mode"
+       }},
+      {%{"mode" => "automatic"},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options mode is not supported",
+         param: "prompt_cache_options.mode"
+       }},
+      {%{"ttl" => nil},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options ttl is not supported",
+         param: "prompt_cache_options.ttl"
+       }},
+      {%{"ttl" => "1h"},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_options ttl is not supported",
+         param: "prompt_cache_options.ttl"
+       }}
+    ]
+
+    for {options, expected} <- cases do
+      assert {:error, ^expected} =
+               Responses.coerce(%{
+                 "model" => "gpt-5.6",
+                 "input" => "fixture",
+                 "prompt_cache_options" => options
+               })
+    end
+  end
+
+  @tag :prompt_cache_controls
+  test "prompt cache breakpoint validation returns stable deterministic errors" do
+    invalid_breakpoints = [
+      {"explicit",
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_breakpoint must be an explicit mode object",
+         param: "input.prompt_cache_breakpoint"
+       }},
+      {%{},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_breakpoint must be an explicit mode object",
+         param: "input.prompt_cache_breakpoint"
+       }},
+      {%{"mode" => "implicit"},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_breakpoint must be an explicit mode object",
+         param: "input.prompt_cache_breakpoint"
+       }},
+      {%{"mode" => "explicit", "zeta" => true, "alpha" => true},
+       %{
+         status: 400,
+         code: "invalid_request",
+         message: "prompt_cache_breakpoint field is not supported",
+         param: "input.prompt_cache_breakpoint.alpha"
+       }}
+    ]
+
+    for {breakpoint, expected} <- invalid_breakpoints do
+      assert {:error, ^expected} =
+               Responses.coerce(%{
+                 "model" => "gpt-5.6",
+                 "input" => [
+                   %{
+                     "role" => "user",
+                     "content" => [
+                       %{
+                         "type" => "input_text",
+                         "text" => "fixture",
+                         "prompt_cache_breakpoint" => breakpoint
+                       }
+                     ]
+                   }
+                 ]
+               })
+    end
+  end
+
+  @tag :prompt_cache_controls
+  test "marked content enforces role and tool-output allowlists" do
+    breakpoint = prompt_cache_breakpoint()
+
+    disallowed_messages = [
+      %{
+        "role" => "system",
+        "content" => [
+          %{
+            "type" => "input_image",
+            "image_url" => "https://example.com/image.png",
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ]
+      },
+      %{
+        "role" => "developer",
+        "content" => [
+          %{
+            "type" => "input_file",
+            "file_url" => "https://example.com/file.txt",
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "text",
+            "text" => "direct Responses text",
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "input_audio",
+            "input_audio" => %{"data" => "Zml4dHVyZQ==", "format" => "wav"},
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ]
+      },
+      %{
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "input_file",
+            "file_data" => "Zml4dHVyZQ==",
+            "prompt_cache_breakpoint" => breakpoint
+          }
+        ]
+      }
+    ]
+
+    for message <- disallowed_messages do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "message content part is not translatable",
+                param: "input"
+              }} =
+               Responses.coerce(%{"model" => "gpt-5.6", "input" => [message]})
+    end
+
+    for item <- [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_function",
+            "output" => [
+              %{
+                "type" => "input_audio",
+                "input_audio" => %{"data" => "Zml4dHVyZQ==", "format" => "wav"},
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_function_text",
+            "output" => [
+              %{
+                "type" => "text",
+                "text" => "direct function text",
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_custom",
+            "name" => "custom_fixture",
+            "output" => [
+              %{
+                "type" => "input_audio",
+                "input_audio" => %{"data" => "Zml4dHVyZQ==", "format" => "wav"},
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          },
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_custom_text",
+            "name" => "custom_text_fixture",
+            "output" => [
+              %{
+                "type" => "text",
+                "text" => "direct custom text",
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          }
+        ] do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "message content part is not translatable",
+                param: "input"
+              }} = Responses.coerce(%{"model" => "gpt-5.6", "input" => [item]})
+    end
+  end
+
+  defp prompt_cache_breakpoint, do: %{"mode" => "explicit"}
 
   defp prompt_cache_key_hash(value) do
     :crypto.hash(:sha256, value)

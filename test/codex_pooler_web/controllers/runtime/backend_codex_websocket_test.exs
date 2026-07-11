@@ -1714,8 +1714,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert captured.json["input"] == input
   end
 
-  test "websocket response.create rejects unsupported input_image references before dispatch" do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+  test "websocket response.create preserves input_image file_id references" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_file_id"}))
 
     setup =
       gateway_setup(upstream,
@@ -1726,15 +1726,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    sentinel_file_id = "file_ws_reference_do_not_log"
+    file_id = "file_ws_reference"
 
-    assert {:error,
-            %{
-              status: 400,
-              code: "unsupported_input_image_format",
-              param: "input",
-              message: message
-            }} =
+    assert :ok =
              execute_websocket_response(
                auth,
                Jason.encode!(%{
@@ -1746,30 +1740,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                      "role" => "user",
                      "content" => [
                        %{"type" => "input_text", "text" => "describe this image"},
-                       %{"type" => "input_image", "file_id" => sentinel_file_id}
+                       %{"type" => "input_image", "file_id" => file_id}
                      ]
                    }
                  ],
                  "stream" => true,
                  "generate" => true
                }),
-               %{request_id: "ws-unsupported-image"},
+               %{request_id: "ws-file-id"},
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    assert message =~
-             "Responses input_image values must use https image URLs or supported image data URLs"
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
 
-    refute_received {:websocket_frame, _frame}
-    assert FakeUpstream.requests(upstream) == []
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.transport == "websocket"
-    assert request.status == "rejected"
-    assert request.last_error_code == "unsupported_input_image_format"
-    assert request.request_metadata["gateway_denial"]["param"] == "input"
-    refute inspect(request.request_metadata) =~ sentinel_file_id
-    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+    assert [
+             %{
+               "content" => [
+                 %{"type" => "input_text"},
+                 %{"type" => "input_image", "file_id" => ^file_id}
+               ]
+             }
+           ] = captured.json["input"]
   end
 
   @tag :websocket_large_completion_frame

@@ -122,6 +122,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "strips backend-only upstream-unsupported controls"
     end
 
+    test "documents upstream prompt cache controls separately from Pool affinity" do
+      feature = CompatibilityMatrix.by_slug!(:responses_chat)
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert feature.contract =~ "validate and preserve prompt_cache_options"
+      assert feature.contract =~ "prompt_cache_breakpoint"
+      assert feature.contract =~ "Pool affinity remains exclusively keyed by prompt_cache_key"
+
+      assert fixture.upstream_prompt_cache_controls == %{
+               request_options_field: "prompt_cache_options",
+               content_breakpoint_field: "prompt_cache_breakpoint",
+               breakpoint_mode: "explicit",
+               routing_input: false,
+               preserved_surfaces: ["/v1/responses", "/v1/chat/completions"]
+             }
+
+      assert fixture.prompt_cache_routing.typed_input == "prompt_cache_key"
+    end
+
     test "documents OpenAI reasoning context literal support" do
       feature = CompatibilityMatrix.by_slug!(:reasoning_context)
       fixture = CompatibilityMatrix.fixture!(:reasoning_context)

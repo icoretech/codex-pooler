@@ -102,11 +102,30 @@ const pooler = createOpenAI({
 
 const { text } = await generateText({
   model: pooler.responses("gpt-5.6-terra"),
-  prompt: "Write a short setup confirmation.",
+  providerOptions: {
+    openai: {
+      promptCacheOptions: { mode: "explicit", ttl: "30m" },
+    },
+  },
+  messages: [
+    {
+      role: "system",
+      content: "Keep setup guidance concise.",
+      providerOptions: {
+        openai: { promptCacheBreakpoint: { mode: "explicit" } },
+      },
+    },
+    { role: "user", content: "Write a short setup confirmation." },
+  ],
 });
 
 console.log(text);
 ```
+
+Codex Pooler validates and forwards these OpenAI cache controls independently
+from Pool routing affinity. GPT-5.6 model ids are passed through to the Pool
+catalog and assignment policy; naming one here does not guarantee that every
+Pool has an eligible account for that model.
 
 `GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` currently rejects `context_management`, and public `/v1/responses/compact` is routed but unsupported, so do not document SDK-side compaction as a Codex Pooler feature.
 

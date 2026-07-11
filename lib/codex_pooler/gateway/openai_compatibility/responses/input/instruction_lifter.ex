@@ -30,7 +30,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.InstructionLif
     residual_item =
       case preserved_content do
         [] -> nil
-        content -> item |> Map.put("role", "user") |> Map.put("content", content)
+        content -> item |> Map.put("role", "developer") |> Map.put("content", content)
       end
 
     {:ok, texts, residual_item}
@@ -60,6 +60,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.InstructionLif
   end
 
   defp lift_instruction_content(content), do: {[], [content]}
+
+  defp instruction_content_text(%{"prompt_cache_breakpoint" => _breakpoint}), do: :error
 
   defp instruction_content_text(%{"type" => type, "text" => text})
        when type in ["input_text", "text"] and is_binary(text) do

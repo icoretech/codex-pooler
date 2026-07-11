@@ -419,7 +419,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     end
   end
 
+  defp validate_function_call_output(output) when is_list(output),
+    do: validate_each(output, &validate_function_call_output_value/1)
+
   defp validate_function_call_output(output), do: validate_json_value(output)
+
+  defp validate_function_call_output_value(%{"type" => type} = part)
+       when type in ["input_text", "text", "input_image", "input_file", "input_audio"],
+       do: validate_cacheable_content_part(part, :tool_output)
+
+  defp validate_function_call_output_value(value), do: validate_json_value(value)
 
   defp validate_json_value(value)
        when is_binary(value) or is_integer(value) or is_float(value) or is_boolean(value) or
@@ -523,55 +532,183 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_message_item(%{"role" => role, "content" => content})
        when role in ["system", "user", "assistant", "developer", "tool"] do
-    validate_message_content(content)
+    validate_message_content(content, role)
   end
 
-  defp validate_message_item(%{"content" => content}), do: validate_message_content(content)
+  defp validate_message_item(%{"content" => content}),
+    do: validate_message_content(content, "user")
 
   defp validate_message_item(_item),
     do: {:error, Error.invalid_request("message input items require role and content", "input")}
 
-  defp validate_message_content(content) when is_binary(content), do: :ok
+  defp validate_message_content(content, _role) when is_binary(content), do: :ok
 
-  defp validate_message_content(content) when is_list(content) and content != [] do
-    validate_each(content, &validate_message_content_part/1)
+  defp validate_message_content(content, role) when is_list(content) and content != [] do
+    validate_each(content, &validate_message_content_part(&1, role))
   end
 
-  defp validate_message_content(content) when is_list(content),
+  defp validate_message_content(content, _role) when is_list(content),
     do: {:error, Error.invalid_request("message content must not be empty", "input")}
 
-  defp validate_message_content(_content),
+  defp validate_message_content(_content, _role),
     do: {:error, Error.invalid_request("message content shape is not translatable", "input")}
 
-  defp validate_message_content_part(%{"type" => type, "text" => text})
+  defp validate_message_content_part(part, role) when role in ["system", "developer"] do
+    validate_cacheable_content_part(part, :instruction)
+  end
+
+  defp validate_message_content_part(%{"prompt_cache_breakpoint" => _breakpoint} = part, "user"),
+    do: validate_cacheable_content_part(part, :user)
+
+  defp validate_message_content_part(%{"prompt_cache_breakpoint" => _breakpoint} = part, "tool"),
+    do: validate_cacheable_content_part(part, :tool)
+
+  defp validate_message_content_part(part, _role),
+    do: validate_unmarked_message_content_part(part)
+
+  defp validate_unmarked_message_content_part(%{"type" => type, "text" => text})
        when type in ["text", "input_text"] and is_binary(text),
        do: :ok
 
-  defp validate_message_content_part(%{"type" => "input_image", "image_url" => image_url})
+  defp validate_unmarked_message_content_part(%{
+         "type" => "input_image",
+         "image_url" => image_url
+       })
        when is_binary(image_url),
        do: :ok
 
-  defp validate_message_content_part(%{"type" => "input_image", "file_id" => file_id})
+  defp validate_unmarked_message_content_part(%{"type" => "input_image", "file_id" => file_id})
        when is_binary(file_id),
        do: :ok
 
-  defp validate_message_content_part(%{"type" => "input_file", "file_id" => file_id})
+  defp validate_unmarked_message_content_part(%{"type" => "input_file", "file_url" => file_url})
+       when is_binary(file_url) and file_url != "",
+       do: :ok
+
+  defp validate_unmarked_message_content_part(%{"type" => "input_file", "file_id" => file_id})
        when is_binary(file_id) and file_id != "",
        do: :ok
 
-  defp validate_message_content_part(%{"type" => "input_file", "file_data" => file_data})
-       when is_binary(file_data),
+  defp validate_unmarked_message_content_part(%{
+         "type" => "input_file",
+         "filename" => filename,
+         "file_data" => file_data
+       })
+       when is_binary(filename) and filename != "" and is_binary(file_data),
        do: :ok
 
-  defp validate_message_content_part(%{
+  defp validate_unmarked_message_content_part(%{
          "type" => "input_audio",
          "input_audio" => %{"data" => data, "format" => format}
        })
        when is_binary(data) and format in @input_audio_formats,
        do: validate_base64_audio(data)
 
-  defp validate_message_content_part(_part),
+  defp validate_unmarked_message_content_part(_part),
     do: {:error, Error.invalid_request("message content part is not translatable", "input")}
+
+  defp validate_cacheable_content_part(%{"type" => "input_text", "text" => text} = part, context)
+       when is_binary(text) and context in [:instruction, :user, :tool, :tool_output] do
+    with :ok <- validate_content_part_keys(part, ["type", "text", "prompt_cache_breakpoint"]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(
+         %{"type" => "input_image", "image_url" => image_url} = part,
+         context
+       )
+       when is_binary(image_url) and context in [:user, :tool_output] do
+    with :ok <- validate_content_part_keys(part, ["type", "image_url", "prompt_cache_breakpoint"]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(
+         %{"type" => "input_image", "file_id" => file_id} = part,
+         :user
+       )
+       when is_binary(file_id) and file_id != "" do
+    with :ok <- validate_content_part_keys(part, ["type", "file_id", "prompt_cache_breakpoint"]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(
+         %{"type" => "input_file", "file_url" => file_url} = part,
+         context
+       )
+       when is_binary(file_url) and file_url != "" and context in [:user, :tool_output] do
+    with :ok <- validate_content_part_keys(part, ["type", "file_url", "prompt_cache_breakpoint"]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(
+         %{"type" => "input_file", "file_id" => file_id} = part,
+         :user
+       )
+       when is_binary(file_id) and file_id != "" do
+    with :ok <- validate_content_part_keys(part, ["type", "file_id", "prompt_cache_breakpoint"]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(
+         %{"type" => "input_file", "filename" => filename, "file_data" => file_data} = part,
+         context
+       )
+       when is_binary(filename) and filename != "" and is_binary(file_data) and
+              context in [:user, :tool_output] do
+    with :ok <-
+           validate_content_part_keys(part, [
+             "type",
+             "filename",
+             "file_data",
+             "prompt_cache_breakpoint"
+           ]) do
+      validate_prompt_cache_breakpoint(part)
+    end
+  end
+
+  defp validate_cacheable_content_part(_part, _context),
+    do: {:error, Error.invalid_request("message content part is not translatable", "input")}
+
+  defp validate_content_part_keys(part, allowed_keys) do
+    case part |> Map.keys() |> Enum.reject(&(&1 in allowed_keys)) |> Enum.sort() do
+      [] ->
+        :ok
+
+      [_key | _rest] ->
+        {:error, Error.invalid_request("message content part is not translatable", "input")}
+    end
+  end
+
+  defp validate_prompt_cache_breakpoint(%{
+         "prompt_cache_breakpoint" => %{"mode" => "explicit"} = breakpoint
+       }) do
+    case breakpoint |> Map.keys() |> Enum.reject(&(&1 == "mode")) |> Enum.sort() do
+      [] ->
+        :ok
+
+      [key | _rest] ->
+        {:error,
+         Error.invalid_request(
+           "prompt_cache_breakpoint field is not supported",
+           "input.prompt_cache_breakpoint." <> key
+         )}
+    end
+  end
+
+  defp validate_prompt_cache_breakpoint(%{"prompt_cache_breakpoint" => _breakpoint}),
+    do:
+      {:error,
+       Error.invalid_request(
+         "prompt_cache_breakpoint must be an explicit mode object",
+         "input.prompt_cache_breakpoint"
+       )}
+
+  defp validate_prompt_cache_breakpoint(_part), do: :ok
 
   defp validate_base64_audio(data) do
     case Base.decode64(data, ignore: :whitespace) do

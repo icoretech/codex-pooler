@@ -90,7 +90,7 @@ Bearer 令牌或原始 Codex 密钥。实例所有者保留全局管理界面，
   并通过分配的账号保持响应、压缩、用量、文件、音频、图片和后端 websocket
   流正常工作
 - 🔌 **OpenAI 兼容 SDK 接口：** 让只支持 `/v1` 的应用和 Agent 工具
-  通过同一个 Pool 边界使用 Codex 容量，并翻译、路由受支持的请求以帮助控制
+  通过同一个 Pool 边界使用 Codex 容量，翻译、路由受支持的请求以帮助控制
   API 支出
 - 🔁 **感知会话的 websockets：** 保持可恢复 Codex 会话和 websocket 重连绑定到
   正确的上游账号，而不是通过 HTTP 兼容层翻译后端 websocket 流量

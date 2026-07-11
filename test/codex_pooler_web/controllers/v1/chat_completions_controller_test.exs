@@ -93,6 +93,65 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert attempt.status == "succeeded"
   end
 
+  @tag :prompt_cache_controls
+  test "POST /v1/chat/completions preserves prompt cache controls", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_chat_prompt_cache_controls",
+               "status" => "completed",
+               "model" => "provider-gpt-test-model",
+               "output" => [],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    breakpoint = %{"mode" => "explicit"}
+    options = %{"mode" => "explicit", "ttl" => "30m"}
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => "fixture-chat-cache-key",
+        "prompt_cache_options" => options,
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "text",
+                "text" => "fixture chat cache content",
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_chat_prompt_cache_controls"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["prompt_cache_key"] == "fixture-chat-cache-key"
+    assert captured.json["prompt_cache_options"] == options
+
+    assert [
+             %{
+               "content" => [
+                 %{"prompt_cache_breakpoint" => ^breakpoint}
+               ]
+             }
+           ] = captured.json["input"]
+  end
+
   test "POST /v1/chat/completions keeps x-session-id local without forwarding it", %{
     conn: conn
   } do

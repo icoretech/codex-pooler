@@ -1043,6 +1043,73 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
+  @tag :prompt_cache_controls
+  test "POST /v1/responses preserves prompt cache controls without metadata leakage", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_prompt_cache_controls",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    raw_cache_key = "fixture-raw-cache-key"
+    raw_prompt = "fixture raw prompt cache content"
+    breakpoint = %{"mode" => "explicit"}
+    options = %{"mode" => "explicit", "ttl" => "30m"}
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => raw_cache_key,
+        "prompt_cache_options" => options,
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => raw_prompt,
+                "prompt_cache_breakpoint" => breakpoint
+              }
+            ]
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_prompt_cache_controls"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["prompt_cache_key"] == raw_cache_key
+    assert captured.json["prompt_cache_options"] == options
+
+    assert [
+             %{
+               "content" => [
+                 %{"prompt_cache_breakpoint" => ^breakpoint}
+               ]
+             }
+           ] = captured.json["input"]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    persistence_text = inspect({request.request_metadata, RequestLogs.list(setup.pool)})
+    refute persistence_text =~ raw_prompt
+    refute persistence_text =~ raw_cache_key
+  end
+
   test "POST /v1/responses forwards normalized reasoning context", %{conn: conn} do
     upstream =
       start_upstream(
@@ -5533,8 +5600,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     setup = gateway_setup(upstream)
 
     invalid_parts = [
-      {%{"type" => "input_image", "file_id" => "file_image_fixture"},
-       "unsupported_input_image_format"},
       {%{"type" => "input_image", "image_url" => "file:///tmp/private.png"},
        "unsupported_input_image_format"},
       {%{"type" => "input_image", "image_url" => "http://example.com/private.png"},

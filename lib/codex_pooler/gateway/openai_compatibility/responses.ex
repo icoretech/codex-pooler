@@ -26,6 +26,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Validation.reject_unsupported_fields(payload, :responses),
          :ok <- Validation.require_model(payload),
          :ok <- reject_locally_unsupported_fields(payload),
+         :ok <- validate_prompt_cache_options(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
          {:ok, payload} <- Input.normalize_list_input(payload),
          payload = ToolSchemaLowering.lower_non_strict_function_tools(payload),
@@ -96,6 +97,59 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     do: backend_streaming_required?(Map.new(opts))
 
   defp backend_streaming_required?(_opts), do: false
+
+  defp validate_prompt_cache_options(%{"prompt_cache_options" => options})
+       when is_map(options) do
+    options = Map.new(options, fn {key, value} -> {to_string(key), value} end)
+
+    with :ok <- validate_prompt_cache_option_keys(options),
+         :ok <- validate_prompt_cache_mode(Map.fetch(options, "mode")) do
+      validate_prompt_cache_ttl(Map.fetch(options, "ttl"))
+    end
+  end
+
+  defp validate_prompt_cache_options(%{"prompt_cache_options" => _options}),
+    do:
+      {:error,
+       Error.invalid_request("prompt_cache_options must be an object", "prompt_cache_options")}
+
+  defp validate_prompt_cache_options(_payload), do: :ok
+
+  defp validate_prompt_cache_option_keys(options) do
+    case options |> Map.keys() |> Enum.reject(&(&1 in ["mode", "ttl"])) |> Enum.sort() do
+      [] ->
+        :ok
+
+      [key | _rest] ->
+        {:error,
+         Error.invalid_request(
+           "prompt_cache_options field is not supported",
+           "prompt_cache_options." <> key
+         )}
+    end
+  end
+
+  defp validate_prompt_cache_mode(:error), do: :ok
+  defp validate_prompt_cache_mode({:ok, mode}) when mode in ["implicit", "explicit"], do: :ok
+
+  defp validate_prompt_cache_mode(_mode),
+    do:
+      {:error,
+       Error.invalid_request(
+         "prompt_cache_options mode is not supported",
+         "prompt_cache_options.mode"
+       )}
+
+  defp validate_prompt_cache_ttl(:error), do: :ok
+  defp validate_prompt_cache_ttl({:ok, "30m"}), do: :ok
+
+  defp validate_prompt_cache_ttl(_ttl),
+    do:
+      {:error,
+       Error.invalid_request(
+         "prompt_cache_options ttl is not supported",
+         "prompt_cache_options.ttl"
+       )}
 
   defp reject_locally_unsupported_fields(payload) do
     payload

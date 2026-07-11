@@ -377,9 +377,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     {:ok, %{"type" => "input_text", "text" => part}}
   end
 
-  defp normalize_tool_output_part(%{"type" => type, "text" => text})
+  defp normalize_tool_output_part(%{"type" => type, "text" => text} = part)
        when type in ["text", "input_text"] and is_binary(text) do
-    {:ok, %{"type" => "input_text", "text" => text}}
+    {:ok,
+     %{"type" => "input_text", "text" => text}
+     |> maybe_put_prompt_cache_breakpoint(part)}
   end
 
   defp normalize_tool_output_part(%{"type" => "input_image", "image_url" => image_url})
@@ -402,6 +404,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_tool_output_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp maybe_put_prompt_cache_breakpoint(acc, %{
+         "prompt_cache_breakpoint" => breakpoint
+       }),
+       do: Map.put(acc, "prompt_cache_breakpoint", breakpoint)
+
+  defp maybe_put_prompt_cache_breakpoint(acc, _part), do: acc
 
   defp normalize_message_role(%{"type" => "message", "role" => "system"} = item),
     do: Map.put(item, "role", "developer")
