@@ -358,6 +358,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       Evidence.current_freshness_state(evidence, timestamp) != "fresh" ->
         :existing
 
+      Evidence.current_freshness_state(existing, timestamp) != "fresh" ->
+        :incoming
+
       relative_reset_metadata?(evidence.metadata) and
           relative_reset_metadata?(existing.metadata) ->
         relative_snapshot_decision(evidence, existing)
@@ -368,9 +371,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           else: :existing
 
       Evidence.expired?(existing, timestamp) ->
-        :incoming
-
-      Evidence.current_freshness_state(existing, timestamp) != "fresh" ->
         :incoming
 
       weak_zero_percent_evidence?(evidence) ->

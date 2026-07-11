@@ -6969,29 +6969,34 @@ defmodule CodexPooler.UpstreamsTest do
       canonical_reset_at = DateTime.add(evaluation_at, 10, :minute)
 
       canonical =
-        record_confirmed_convergence!(
-          identity,
-          :account,
+        :account
+        |> confirmed_convergence_attrs(
           "primary",
           "22",
           canonical_reset_at,
           canonical_at
         )
+        |> Map.put(:metadata, %{
+          "fixture" => "confirmed-convergence",
+          "reset_after_seconds" => 600
+        })
+        |> then(&QuotaWindows.record_evidence(identity, &1, canonical_at))
+        |> then(fn {:ok, stored} -> stored end)
 
       assert Quotas.Evidence.current_freshness_state(canonical, evaluation_at) == "stale"
 
       incoming_at = DateTime.add(evaluation_at, -1, :second)
-      incoming_reset_at = DateTime.add(canonical_reset_at, 3, :second)
+      incoming_reset_at = DateTime.add(canonical_reset_at, -3, :second)
 
       refreshed =
-        record_confirmed_convergence!(
-          identity,
-          :account,
-          "primary",
-          "0",
-          incoming_reset_at,
-          incoming_at
-        )
+        :account
+        |> confirmed_convergence_attrs("primary", "0", incoming_reset_at, incoming_at)
+        |> Map.put(:metadata, %{
+          "fixture" => "confirmed-convergence",
+          "reset_after_seconds" => 597
+        })
+        |> then(&QuotaWindows.record_evidence(identity, &1, incoming_at))
+        |> then(fn {:ok, stored} -> stored end)
 
       assert refreshed.id == canonical.id
       assert Decimal.equal?(refreshed.used_percent, Decimal.new("0"))
