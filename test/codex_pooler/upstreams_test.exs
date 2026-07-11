@@ -6954,6 +6954,72 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :quota_confirmed_convergence
+    @tag :quota_reset_cycle_regression
+    test "fresh account primary evidence starts a newer reset cycle from a stale canonical row" do
+      identity = active_identity_fixture()
+      evaluation_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      canonical_at =
+        DateTime.add(
+          evaluation_at,
+          -Quotas.Evidence.freshness_ttl_seconds() - 60,
+          :second
+        )
+
+      canonical_reset_at = DateTime.add(evaluation_at, 10, :minute)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "primary",
+          "22",
+          canonical_reset_at,
+          canonical_at
+        )
+
+      assert Quotas.Evidence.current_freshness_state(canonical, evaluation_at) == "stale"
+
+      candidate_at = DateTime.add(evaluation_at, -2, :second)
+
+      candidate =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "primary",
+          "14",
+          canonical_reset_at,
+          candidate_at
+        )
+
+      assert_canonical_snapshot(candidate, canonical)
+      assert_confirmed_candidate(candidate, "14", canonical_reset_at, candidate_at)
+      assert Quotas.Evidence.current_freshness_state(candidate, evaluation_at) == "stale"
+
+      incoming_at = DateTime.add(evaluation_at, -1, :second)
+      incoming_reset_at = DateTime.add(canonical_reset_at, 2, :hour)
+
+      refreshed =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "primary",
+          "0",
+          incoming_reset_at,
+          incoming_at
+        )
+
+      assert refreshed.id == canonical.id
+      assert Decimal.equal?(refreshed.used_percent, Decimal.new("0"))
+      assert DateTime.compare(refreshed.reset_at, incoming_reset_at) == :eq
+      assert DateTime.compare(refreshed.observed_at, incoming_at) == :eq
+      assert DateTime.compare(refreshed.last_sync_at, incoming_at) == :eq
+      assert refreshed.freshness_state == "fresh"
+      assert Quotas.Evidence.current_freshness_state(refreshed, evaluation_at) == "fresh"
+      refute confirmed_candidate(refreshed)
+    end
+
+    @tag :quota_confirmed_convergence
     test "a provably newer cycle accepts lower evidence while stale, resetless, and inferred samples do not" do
       identity = active_identity_fixture()
       canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
