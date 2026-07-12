@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.26](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.25...codex-pooler-v0.4.26) (2026-07-12)
+
+
+### Features
+
+* **accounting:** price cache write usage ([a307828](https://github.com/icoretech/codex-pooler/commit/a307828e413d4d2eed486ef36cd794e894fd49e3))
+* **gateway:** pass through OpenAI prompt cache controls ([6ba169c](https://github.com/icoretech/codex-pooler/commit/6ba169c63528c133a7829ec082d68260201d1cb6))
+
+
+### Bug Fixes
+
+* **deps:** update dependency daisyui to ^5.6.17 ([#145](https://github.com/icoretech/codex-pooler/issues/145)) ([71f09c7](https://github.com/icoretech/codex-pooler/commit/71f09c7bcc7f2b37504b2d23265e9f95e4341412))
+* **quotas:** enforce the effective window view on every quota surface ([e487d18](https://github.com/icoretech/codex-pooler/commit/e487d18fe5d3530a0bafd3c39efb6785b4a77e67))
+* **quotas:** survive provider weekly-primary quota toggles read-side ([9db3aaf](https://github.com/icoretech/codex-pooler/commit/9db3aaf5b00317fdcaabc9692f043172b58fc807))
+
 ## [0.4.25](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.24...codex-pooler-v0.4.25) (2026-07-11)
 
 
