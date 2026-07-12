@@ -2,7 +2,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
   @moduledoc false
 
   alias CodexPooler.Quotas.Evidence
-  alias CodexPooler.Quotas.Evidence.CodexParsers.{RateLimitReachedType, ResetTimes}
+  alias CodexPooler.Quotas.Evidence.CodexParsers.{RateLimitReachedType, ResetTimes, WindowKinds}
   alias CodexPooler.Quotas.Evidence.Descriptors
 
   @window_kinds ~w(primary secondary)
@@ -66,7 +66,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.ResponseHeaders do
       %{}
       |> Map.merge(descriptor)
       |> Map.merge(%{
-        window_kind: kind,
+        window_kind: WindowKinds.normalize_window_kind(kind, window_minutes),
         window_minutes: window_minutes,
         reset_at: reset_at,
         used_percent: Decimal.from_float(used_percent),

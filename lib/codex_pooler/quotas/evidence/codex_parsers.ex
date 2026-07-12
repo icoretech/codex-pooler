@@ -7,7 +7,14 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   """
 
   alias CodexPooler.Quotas.Evidence
-  alias CodexPooler.Quotas.Evidence.CodexParsers.{RateLimitEvents, ResetTimes, ResponseHeaders}
+
+  alias CodexPooler.Quotas.Evidence.CodexParsers.{
+    RateLimitEvents,
+    ResetTimes,
+    ResponseHeaders,
+    WindowKinds
+  }
+
   alias CodexPooler.Quotas.Evidence.Descriptors
 
   @window_kinds ~w(primary secondary)
@@ -75,11 +82,12 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       []
     else
       kind = normalize_token(payload["window_kind"] || payload["kind"] || "primary")
+      kind = if(kind in @window_kinds, do: kind, else: "primary")
 
       %{}
       |> Map.merge(descriptor)
       |> Map.merge(%{
-        window_kind: if(kind in @window_kinds, do: kind, else: "primary"),
+        window_kind: WindowKinds.normalize_window_kind(kind, window_minutes),
         window_minutes: window_minutes,
         reset_at: reset_at,
         used_percent: used_percent,

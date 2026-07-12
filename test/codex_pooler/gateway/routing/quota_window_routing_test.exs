@@ -365,6 +365,187 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
       end
     end
 
+    test "frozen 5h primary superseded by later-synced weekly evidence recovers as weekly-only probe" do
+      frozen_observed_at = DateTime.add(@observed_at, -3_600, :second)
+
+      assert %{
+               eligible?: true,
+               routing_state: :weekly_only_probe,
+               exclusions: [],
+               warnings: [%{code: "quota_account_primary_unknown"}],
+               selection: %{
+                 primary: nil,
+                 secondary: %AccountQuotaWindow{window_kind: "secondary"},
+                 routing_windows: [%AccountQuotaWindow{window_kind: "secondary"}]
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(
+                     observed_at: frozen_observed_at,
+                     reset_at: DateTime.add(@observed_at, -900, :second)
+                   ),
+                   account_secondary_window(observed_at: @observed_at)
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "stale 5h primary without a full freshness-TTL sync gap keeps routing blocked" do
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   code: "quota_window_unusable",
+                   quota_key: "account",
+                   window_kind: "primary",
+                   reason_codes: ["not_fresh"]
+                 }
+               ]
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(
+                     observed_at: DateTime.add(@observed_at, -1_200, :second)
+                   ),
+                   account_secondary_window(
+                     observed_at: DateTime.add(@observed_at, -400, :second)
+                   )
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "superseded 5h primary does not fabricate eligibility when weekly evidence is stale and imprecise" do
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   code: "quota_account_primary_missing",
+                   message: "account primary quota evidence is required for routing"
+                 }
+               ],
+               selection: %{primary: nil}
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(
+                     observed_at: DateTime.add(@observed_at, -4_000, :second)
+                   ),
+                   account_secondary_window(
+                     observed_at: DateTime.add(@observed_at, -3_000, :second),
+                     source_precision: "inferred"
+                   )
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "legacy frozen weekly-duration primary rows are superseded by fresh weekly evidence" do
+      assert %{
+               eligible?: true,
+               routing_state: :weekly_only_probe,
+               exclusions: [],
+               selection: %{
+                 primary: nil,
+                 secondary: %AccountQuotaWindow{window_kind: "secondary"},
+                 routing_windows: [%AccountQuotaWindow{window_kind: "secondary"}]
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_secondary_window(
+                     window_kind: "primary",
+                     source: "codex_response_headers",
+                     observed_at: DateTime.add(@observed_at, -3_600, :second)
+                   ),
+                   account_secondary_window(observed_at: @observed_at)
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
+    test "exhausted Spark weekly evidence blocks the weekly-only probe for Spark models" do
+      assert %{
+               eligible?: false,
+               routing_state: :blocked
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_secondary_window(observed_at: @observed_at),
+                   model_window(
+                     window_kind: "secondary",
+                     window_minutes: 10_080,
+                     used_percent: Decimal.new("100"),
+                     reset_at: DateTime.add(@observed_at, 6, :day)
+                   )
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+    end
+
+    test "usable Spark weekly evidence keeps the weekly-only probe eligible for Spark models" do
+      assert %{
+               eligible?: true,
+               routing_state: :weekly_only_probe,
+               exclusions: []
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_secondary_window(observed_at: @observed_at),
+                   model_window(
+                     window_kind: "secondary",
+                     window_minutes: 10_080,
+                     used_percent: Decimal.new("12"),
+                     reset_at: DateTime.add(@observed_at, 6, :day)
+                   )
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+    end
+
+    test "fresh 5h primary beside fresh weekly evidence stays precise" do
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{
+                 primary: %AccountQuotaWindow{window_kind: "primary", window_minutes: 300},
+                 blocked_windows: []
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(),
+                   account_secondary_window(observed_at: @observed_at)
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-standard",
+                 requested_model: "sample-codex-standard",
+                 upstream_model: "sample-codex-standard-upstream"
+               )
+    end
+
     test "positive credits do not revive primary model upstream-model or additional exhaustion" do
       scenarios = [
         [account_primary_window(used_percent: Decimal.new("100"), credits: 42)],

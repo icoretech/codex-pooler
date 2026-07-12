@@ -626,6 +626,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
 
   defp valid_supported_window?(_window), do: false
 
+  # Only a reset-bearing 5h account primary window halts multi-path probing.
+  # A weekly-primary result must NOT halt: paths can diverge, and a later path
+  # may still report the 5h window when an earlier one has gone weekly-only,
+  # so the probe keeps walking every path and merges the results.
   defp account_primary_usage_window?(windows) when is_list(windows) do
     Enum.any?(windows, fn window ->
       Map.get(window, :quota_key) == @account_quota_key and

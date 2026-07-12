@@ -11,6 +11,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   @runtime_quota_sources ~w(codex_rate_limit_event codex_response_headers codex_rate_limit_error)
   @usage_reset_forward_tolerance_seconds 5 * 60
+  @weekly_restart_anchor_margin_seconds 60 * 60
+  @usage_reset_reanchor_min_shift_seconds 60 * 60
+  @restart_corroboration_reset_tolerance_seconds 5 * 60
   @relative_reset_refresh_tolerance_seconds 5
   @account_snapshot_reset_tolerance_seconds 5
   @candidate_metadata_key "__quota_confirmed_candidate_v1"
@@ -313,6 +316,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp merge_attrs_by_remaining_quality(existing, attrs, evidence, timestamp) do
     cond do
+      usage_reset_reanchor?(evidence, existing, timestamp) ->
+        reanchor_attrs_by_shape(existing, attrs, evidence, timestamp)
+
       incoming_updates_usage_with_existing_reset?(evidence, existing, timestamp) ->
         merge_usage_with_existing_reset_attrs(existing, attrs, evidence, timestamp)
 
@@ -331,13 +337,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       incoming_refreshes_existing?(evidence, existing, timestamp) ->
         refresh_existing_attrs(existing, attrs, timestamp)
 
-      incoming_supersedes?(evidence, existing, timestamp) ->
-        put_timestamps(attrs, existing)
-
       true ->
-        existing
-        |> window_attrs()
-        |> Map.put(:updated_at, timestamp)
+        supersede_or_keep_attrs(existing, attrs, evidence, timestamp)
+    end
+  end
+
+  defp supersede_or_keep_attrs(existing, attrs, evidence, timestamp) do
+    if incoming_supersedes?(evidence, existing, timestamp) do
+      put_timestamps(attrs, existing)
+    else
+      existing
+      |> window_attrs()
+      |> Map.put(:updated_at, timestamp)
     end
   end
 
@@ -493,6 +504,164 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
        do: DateTime.diff(incoming, existing, :second) > @usage_reset_forward_tolerance_seconds
 
   defp forward_reset_cycle?(_evidence, _existing), do: false
+
+  # The provider can re-anchor a window's reset earlier than the canonical
+  # snapshot mid-cycle (observed with the 2026-07 provider usage reset: the
+  # free-plan monthly window jumped from ~19% used / reset in 27 days to 100%
+  # used / reset in 11 days). The reset-rollback guard rightly rejects a
+  # single such observation — an old cached decaying-window snapshot has the
+  # same shape (higher percent, earlier reset) — but each rejected same-cycle
+  # refresh keeps the canonical row fresh, so the guard alone deadlocks on
+  # the stale values forever. Route the divergent complete usage pair through
+  # the two-observation candidate confirmation instead: two consecutive
+  # matching snapshots (equal percent, resets within seconds) re-anchor the
+  # window; inconsistent or one-off observations keep being rejected. The
+  # shift must exceed one hour so ordinary same-cycle countdown drift never
+  # qualifies.
+  defp usage_reset_reanchor?(
+         %Evidence{
+           source: "codex_usage_api",
+           source_precision: precision,
+           reset_at: %DateTime{} = incoming_reset,
+           used_percent: %Decimal{}
+         } = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           reset_at: %DateTime{} = existing_reset,
+           used_percent: %Decimal{}
+         } = existing,
+         timestamp
+       )
+       when precision in ["observed", "authoritative"] do
+    same_evidence_identity?(evidence, existing) and
+      newer_observation?(evidence.observed_at, existing.observed_at) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      DateTime.diff(existing_reset, incoming_reset, :second) >
+        @usage_reset_reanchor_min_shift_seconds
+  end
+
+  defp usage_reset_reanchor?(_evidence, _existing, _timestamp), do: false
+
+  # Credit-only incomplete snapshots (exhausted percent beside a positive
+  # credit balance with no capacity — the degenerate free-plan shape) keep the
+  # capacity-preserving credit flow for their values: the known capacity is
+  # preserved and the percent is derived from the incoming credit balance.
+  # Complete pairs take the plain candidate re-anchor instead.
+  defp reanchor_attrs_by_shape(existing, attrs, evidence, timestamp) do
+    if credit_only_incomplete_usage?(evidence) do
+      credit_only_reanchor_attrs(existing, attrs, evidence, timestamp)
+    else
+      reanchor_snapshot_attrs(existing, attrs, evidence, timestamp)
+    end
+  end
+
+  # The credit flow alone would keep the later stored reset forever
+  # (`latest_reset_at`), freezing a reset the provider stopped asserting. Run
+  # the capacity-preserving merge on every observation, and track the
+  # divergent earlier reset as a candidate: two consecutive observations
+  # carrying the same earlier reset (within seconds) adopt it, while the
+  # percent stays credit-derived and the capacity stays preserved. The
+  # standard candidate confirmation cannot be reused verbatim here because
+  # the credit merge advances the canonical observed_at on every tick.
+  defp credit_only_reanchor_attrs(existing, attrs, evidence, timestamp) do
+    merged = merge_usage_with_existing_capacity_attrs(existing, attrs, evidence, timestamp)
+    merged_metadata = Map.get(merged, :metadata) || %{}
+
+    case parse_candidate(existing.metadata || %{}) do
+      {:ok, candidate} ->
+        if candidate_valid?(candidate, timestamp) and
+             newer_observation?(evidence.observed_at, candidate.observed_at) and
+             candidate_equivalent?(candidate, evidence) do
+          merged
+          |> Map.put(:reset_at, evidence.reset_at)
+          |> Map.put(:metadata, clear_candidate(merged_metadata))
+        else
+          Map.put(merged, :metadata, put_candidate(clear_candidate(merged_metadata), evidence))
+        end
+
+      :none ->
+        Map.put(merged, :metadata, put_candidate(clear_candidate(merged_metadata), evidence))
+    end
+  end
+
+  defp reanchor_snapshot_attrs(existing, attrs, evidence, timestamp) do
+    case lower_snapshot_decision(evidence, existing, timestamp) do
+      :incoming ->
+        put_timestamps(attrs, existing)
+
+      {:candidate, metadata} ->
+        existing
+        |> window_attrs()
+        |> Map.put(:metadata, metadata)
+        |> Map.put(:updated_at, timestamp)
+    end
+  end
+
+  defp credit_only_incomplete_usage?(evidence) do
+    positive_credits?(evidence) and missing_active_limit?(evidence) and
+      exhausted_by_used_percent?(evidence)
+  end
+
+  # The provider can restart the weekly cycle in place (observed as a
+  # zero-usage snapshot whose reset anchors one window ahead of the restart
+  # instant, stable across samples and paths). A genuine restart is
+  # distinguishable from the idle-rolling usage artifact (zero percent with a
+  # reset floating a full window ahead of every observation): the restarted
+  # window's reset sits well inside the window duration. The anchor margin is
+  # deliberately wide — a rolling value that a provider cache keeps serving
+  # for minutes would otherwise drift inside the window and start looking
+  # anchored — so only resets at least one hour inside the window qualify.
+  # Even then the shape is only admitted into the two-observation candidate
+  # confirmation flow (matching percent, resets within seconds); a single
+  # observation never demotes the canonical weekly snapshot.
+  defp anchored_forward_weekly_cycle?(
+         %Evidence{
+           window_minutes: 10_080,
+           reset_at: %DateTime{} = incoming_reset,
+           observed_at: %DateTime{} = observed_at
+         },
+         %Quota.AccountQuotaWindow{reset_at: %DateTime{} = existing_reset}
+       ) do
+    window_seconds = 10_080 * 60
+    remaining_seconds = DateTime.diff(incoming_reset, observed_at, :second)
+
+    DateTime.diff(incoming_reset, existing_reset, :second) >
+      @usage_reset_forward_tolerance_seconds and
+      remaining_seconds > 0 and
+      remaining_seconds <= window_seconds - @weekly_restart_anchor_margin_seconds
+  end
+
+  defp anchored_forward_weekly_cycle?(_evidence, _existing), do: false
+
+  # Two coherent samples of the same cached usage response are not enough to
+  # zero out an exhausted weekly: the restart must also be corroborated by an
+  # independent provider surface. Runtime evidence (response headers,
+  # rate-limit events, rate-limit errors) comes from real dispatched traffic
+  # rather than the usage endpoint, so a persisted runtime weekly row whose
+  # reset matches the claimed restart anchor proves the provider asserted the
+  # new cycle on a second surface. Without it the zero snapshot stays
+  # quarantined — which also fails closed: while quota is genuinely
+  # exhausted, requests fail and no fresh runtime weekly with the restarted
+  # reset can appear.
+  defp runtime_weekly_restart_corroborated?(
+         %Evidence{reset_at: %DateTime{} = anchored_reset} = evidence,
+         %Quota.AccountQuotaWindow{upstream_identity_id: identity_id}
+       )
+       when is_binary(identity_id) do
+    window_start = DateTime.add(anchored_reset, -@restart_corroboration_reset_tolerance_seconds)
+    window_end = DateTime.add(anchored_reset, @restart_corroboration_reset_tolerance_seconds)
+
+    Repo.exists?(
+      from window in Quota.AccountQuotaWindow,
+        where: window.upstream_identity_id == ^identity_id,
+        where: window.source in ^@runtime_quota_sources,
+        where: window.quota_key == ^evidence.quota_key,
+        where: window.window_minutes == ^evidence.window_minutes,
+        where: window.reset_at >= ^window_start and window.reset_at <= ^window_end
+    )
+  end
+
+  defp runtime_weekly_restart_corroborated?(_evidence, _existing), do: false
 
   defp stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) do
     Evidence.current_freshness_state(existing, timestamp) != "fresh" and
@@ -984,9 +1153,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp weak_zero_snapshot_decision(evidence, existing, timestamp) do
     cond do
-      account_quota_identity?(evidence) -> :existing
-      evidence.quota_scope in ["model", "upstream_model"] -> :continue
-      true -> compare_confirmed_snapshot(evidence, existing, timestamp)
+      account_quota_identity?(evidence) and anchored_forward_weekly_cycle?(evidence, existing) and
+          runtime_weekly_restart_corroborated?(evidence, existing) ->
+        lower_snapshot_decision(evidence, existing, timestamp)
+
+      account_quota_identity?(evidence) ->
+        :existing
+
+      evidence.quota_scope in ["model", "upstream_model"] ->
+        :continue
+
+      true ->
+        compare_confirmed_snapshot(evidence, existing, timestamp)
     end
   end
 

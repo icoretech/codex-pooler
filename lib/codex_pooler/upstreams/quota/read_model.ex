@@ -19,7 +19,7 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
     windows_by_identity_id =
       assignments
       |> Enum.map(& &1.upstream_identity_id)
-      |> quota_windows_by_identity_id()
+      |> quota_windows_by_identity_id(as_of)
 
     Enum.map(assignments, fn assignment ->
       windows = Map.get(windows_by_identity_id, assignment.upstream_identity_id, [])
@@ -92,14 +92,15 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
     )
   end
 
-  defp quota_windows_by_identity_id([]), do: %{}
+  defp quota_windows_by_identity_id([], _as_of), do: %{}
 
-  defp quota_windows_by_identity_id(identity_ids) do
-    Quota.AccountQuotaWindow
-    |> where([window], window.upstream_identity_id in ^identity_ids)
-    |> order_by([window], asc: window.quota_key, asc: window.window_kind)
-    |> Repo.all()
-    |> Enum.group_by(& &1.upstream_identity_id)
+  # Effective windows (logical fold plus superseded-primary rejection) keep
+  # bulk stats consistent with routing and admin cards: a frozen 5h primary
+  # whose group kept syncing must classify as weekly-only evidence, not as a
+  # stale primary summary. The caller's as_of drives the effective view so
+  # stats and routing agree at the same instant.
+  defp quota_windows_by_identity_id(identity_ids, as_of) do
+    Quota.Windows.list_quota_windows_by_identity_ids(identity_ids, as_of)
   end
 
   defp find_primary_5h_window(windows, as_of) do

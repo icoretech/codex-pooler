@@ -186,11 +186,24 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     )
   end
 
-  @spec list_quota_windows(identity_ref()) :: [Quota.AccountQuotaWindow.t()]
-  def list_quota_windows(identity_or_id) do
+  @spec list_quota_windows(identity_ref(), DateTime.t() | nil) :: [Quota.AccountQuotaWindow.t()]
+  def list_quota_windows(identity_or_id, as_of \\ nil) do
     identity_or_id
     |> list_evidence()
-    |> WindowSelector.logical_windows()
+    |> effective_windows(as_of || now())
+  end
+
+  # Effective read-side view of persisted evidence: one row per logical window
+  # with superseded primary shapes rejected, so operator projections, bulk
+  # stats, and metadata surfaces agree with routing about which windows exist.
+  # A frozen 5h (or monthly) primary whose quota group kept syncing must not
+  # render a stale card or timer after the provider stops reporting the shape.
+  # Callers that evaluate at an explicit timestamp must pass it through so the
+  # effective view is computed against the same clock as their own checks.
+  defp effective_windows(windows, %DateTime{} = as_of) do
+    windows
+    |> WindowSelector.logical_windows(as_of)
+    |> Routing.reject_superseded_primary_windows(as_of)
   end
 
   defp list_persisted_quota_windows(identity_or_id) do
@@ -207,14 +220,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     end
   end
 
-  @spec list_quota_windows_by_identity_ids([Ecto.UUID.t()]) :: %{
+  @spec list_quota_windows_by_identity_ids([Ecto.UUID.t()], DateTime.t() | nil) :: %{
           optional(Ecto.UUID.t()) => [Quota.AccountQuotaWindow.t()]
         }
-  def list_quota_windows_by_identity_ids(identity_ids) when is_list(identity_ids) do
+  def list_quota_windows_by_identity_ids(identity_ids, as_of \\ nil)
+      when is_list(identity_ids) do
+    as_of = as_of || now()
+
     identity_ids
     |> list_evidence_by_identity_ids()
     |> Map.new(fn {identity_id, identity_windows} ->
-      {identity_id, WindowSelector.logical_windows(identity_windows)}
+      {identity_id, effective_windows(identity_windows, as_of)}
     end)
   end
 
@@ -249,7 +265,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
 
   @spec quota_window_selection_data(identity_ref(), keyword()) :: map()
   def quota_window_selection_data(identity_or_id, opts \\ []) do
-    windows = list_quota_windows(identity_or_id)
+    # Selection applies `WindowSelector.logical_windows/2` itself with the
+    # caller's `:at` timestamp, so it must receive raw evidence: pre-collapsing
+    # through `list_quota_windows/1` would dedupe logical windows against the
+    # wall clock and can pick a different representative than the timestamp
+    # the caller is evaluating.
+    windows = list_evidence(identity_or_id)
 
     quota_window_selection_data_from_windows(windows, opts)
   end
@@ -270,6 +291,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   @spec routing_quota_eligibility_from_windows([Quota.AccountQuotaWindow.t()], keyword()) :: map()
   def routing_quota_eligibility_from_windows(windows, opts \\ []) when is_list(windows) do
     Routing.eligibility_from_windows(windows, opts)
+  end
+
+  @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
+          [Quota.AccountQuotaWindow.t()]
+  def reject_superseded_primary_windows(windows, timestamp \\ now()) when is_list(windows) do
+    Routing.reject_superseded_primary_windows(windows, timestamp)
   end
 
   @spec fresh_window?(Quota.AccountQuotaWindow.t(), DateTime.t()) :: boolean()

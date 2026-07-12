@@ -16,6 +16,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
       windows
       |> Enum.filter(&window_in_model_scope?(&1, opts))
       |> WindowSelector.logical_windows(timestamp)
+      |> reject_superseded_primary_windows(timestamp)
       |> select_current_account_primary_variant(timestamp)
 
     %{
@@ -52,6 +53,76 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
       exclusions: quota_routing_exclusions(selection, timestamp, eligible?)
     }
   end
+
+  @doc """
+  Rejects primary windows whose shape the provider stopped reporting.
+
+  A primary window is superseded when it is no longer fresh (or already
+  expired) while another window in the same quota group kept syncing for at
+  least one full freshness TTL after the primary froze. That evidence gap
+  proves the provider still reports quota for the group but dropped this
+  primary shape (for example replacing the 5h account window with a weekly
+  primary slot), so the frozen row must stop blocking selection, routing, and
+  weekly-only probing. If the provider reintroduces the shape, new evidence
+  refreshes the row and it becomes selectable again.
+  """
+  @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
+          [Quota.AccountQuotaWindow.t()]
+  def reject_superseded_primary_windows(windows, timestamp \\ now()) when is_list(windows) do
+    Enum.reject(windows, &superseded_primary_window?(&1, windows, timestamp))
+  end
+
+  defp superseded_primary_window?(
+         %Quota.AccountQuotaWindow{window_kind: "primary"} = window,
+         windows,
+         timestamp
+       ) do
+    (not fresh_window?(window, timestamp) or Evidence.expired?(window, timestamp)) and
+      Enum.any?(windows, &newer_quota_group_sibling?(&1, window))
+  end
+
+  defp superseded_primary_window?(_window, _windows, _timestamp), do: false
+
+  defp newer_quota_group_sibling?(sibling, window) do
+    sibling != window and quota_group_key(sibling) == quota_group_key(window) and
+      sync_gap_at_least_freshness_ttl?(sibling, window)
+  end
+
+  defp quota_group_key(%Quota.AccountQuotaWindow{} = window) do
+    {scope, family, model, upstream_model, quota_key, _window_kind, _window_minutes} =
+      WindowSelector.logical_key(window)
+
+    {scope, family, model, upstream_model, quota_key}
+  end
+
+  defp sync_gap_at_least_freshness_ttl?(sibling, window) do
+    with %DateTime{} = sibling_synced_at <- window_latest_evidence_at(sibling),
+         %DateTime{} = window_synced_at <- window_latest_evidence_at(window) do
+      DateTime.diff(sibling_synced_at, window_synced_at, :second) >=
+        Evidence.freshness_ttl_seconds()
+    else
+      _missing_timestamps -> false
+    end
+  end
+
+  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
+         observed_at: %DateTime{} = observed_at,
+         last_sync_at: %DateTime{} = last_sync_at
+       }) do
+    if DateTime.compare(last_sync_at, observed_at) == :gt, do: last_sync_at, else: observed_at
+  end
+
+  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
+         observed_at: %DateTime{} = observed_at
+       }),
+       do: observed_at
+
+  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
+         last_sync_at: %DateTime{} = last_sync_at
+       }),
+       do: last_sync_at
+
+  defp window_latest_evidence_at(_window), do: nil
 
   @spec fresh_window?(Quota.AccountQuotaWindow.t(), DateTime.t()) :: boolean()
   def fresh_window?(%Quota.AccountQuotaWindow{} = window, timestamp \\ now()) do
@@ -146,9 +217,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
 
   defp weekly_only_probe_selection?(_selection, _timestamp), do: false
 
+  # Model-scoped exhaustion must block the weekly probe for that model even
+  # after the weekly-primary remap: the provider now reports model limits
+  # (for example Spark) as weekly windows in the primary slot, normalized to
+  # `secondary`, so an exhausted model weekly is the model's own quota being
+  # spent — kind alone no longer identifies it.
   defp weekly_probe_blocking_window?(%Quota.AccountQuotaWindow{quota_scope: scope} = window)
        when scope in ["model", "upstream_model"] do
-    window.window_kind == "primary"
+    window.window_kind == "primary" or
+      (window.window_kind == "secondary" and window.window_minutes == 10_080 and
+         exhausted?(window))
   end
 
   defp weekly_probe_blocking_window?(%Quota.AccountQuotaWindow{} = window),

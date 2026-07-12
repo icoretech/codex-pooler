@@ -3185,6 +3185,109 @@ defmodule CodexPooler.UpstreamsTest do
       assert chart.used_percent == nil
     end
 
+    test "bulk account summaries evaluate the effective windows at the caller's as_of" do
+      as_of = DateTime.utc_now() |> DateTime.add(-2 * 3600, :second) |> DateTime.truncate(:second)
+      pool = pool_fixture(%{name: "Example As Of Pool"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-as-of",
+          account_label: "Example As Of Account",
+          assignment_label: "Example As Of Account"
+        })
+
+      # fresh 5h at as_of; by wall-clock now it is stale and out-synced by the
+      # weekly sibling, so only an as_of-aware effective view still sees it
+      assert {:ok, _primary} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("20"),
+                   reset_at: DateTime.add(as_of, 10_800, :second),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: as_of
+                 }
+               ])
+
+      assert {:ok, _weekly} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("1"),
+                   reset_at: DateTime.add(as_of, 6, :day),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: DateTime.add(as_of, 2 * 3600, :second)
+                 }
+               ])
+
+      assert [summary] = Quota.ReadModel.account_summaries_for_pool_ids([pool.id], as_of)
+      assert summary.state == :available
+      assert summary.primary_5h != nil
+      assert summary.primary_5h.window_minutes == 300
+    end
+
+    test "frozen 5h evidence superseded by fresh weekly stays out of charts and capacity summaries" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      frozen_observed_at = DateTime.add(now, -2 * 3600, :second)
+      pool = pool_fixture(%{name: "Example Superseded Chart Pool"})
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          chatgpt_account_id: "acct-example-superseded-chart",
+          account_label: "Example Superseded Chart Account",
+          assignment_label: "Example Superseded Chart Account"
+        })
+
+      assert {:ok, _frozen} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("58"),
+                   reset_at: DateTime.add(frozen_observed_at, 10_800, :second),
+                   source: "codex_response_headers",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   last_sync_at: frozen_observed_at,
+                   observed_at: frozen_observed_at
+                 }
+               ])
+
+      assert {:ok, _weekly} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "secondary",
+                   window_minutes: 10_080,
+                   used_percent: Decimal.new("1"),
+                   reset_at: DateTime.add(now, 6, :day),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: now
+                 }
+               ])
+
+      charts = Quota.Charts.quota_remaining_charts_by_pool_ids([pool.id], at: now)[pool.id]
+
+      assert charts.primary_5h.evidence_count == 0
+      assert charts.primary_5h.excluded_count == 0
+      assert charts.primary_5h.items == []
+      refute charts.primary_5h.state == "blocked"
+
+      assert charts.weekly.usable_count == 1
+      assert charts.weekly.excluded_count == 0
+
+      capacity = Quota.Charts.quota_capacity_summary_by_pool_ids([pool.id])[pool.id]
+      assert capacity.window_count == 1
+      assert capacity.fresh_window_count == 1
+    end
+
     test "quota remaining charts expose token-backed remaining and preserve exhausted zero" do
       now = ~U[2026-05-06 12:00:00Z]
       reset_at = DateTime.add(now, 900, :second)
@@ -4436,7 +4539,7 @@ defmodule CodexPooler.UpstreamsTest do
       refute Map.has_key?(corrected.metadata, "reset_after_seconds")
     end
 
-    test "does not treat non-5h account primary evidence as precise routing evidence" do
+    test "weekly-duration account primary evidence folds to the weekly window instead of precise routing" do
       identity = active_identity_fixture()
       observed_at = ~U[2026-04-27 13:00:00Z]
 
@@ -4461,11 +4564,13 @@ defmodule CodexPooler.UpstreamsTest do
         QuotaWindows.quota_window_selection_data(identity, at: observed_at)
 
       assert selection.primary == nil
+      assert %{window_kind: "secondary", window_minutes: 10_080} = selection.secondary
 
       assert %{
-               eligible?: false,
-               routing_state: :blocked,
-               exclusions: [%{code: "quota_account_primary_missing"}]
+               eligible?: true,
+               routing_state: :weekly_only_probe,
+               exclusions: [],
+               warnings: [%{code: "quota_account_primary_unknown"}]
              } =
                QuotaWindows.routing_quota_eligibility(identity,
                  at: observed_at
@@ -5500,6 +5605,113 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert MapSet.size(covered) == 1
       assert Enum.all?(covered, fn descriptor -> elem(descriptor, 4) == "account" end)
+    end
+
+    @tag :quota_probe_envelope
+    test "weekly-primary first path still falls through to a later path carrying the 5h window" do
+      weekly_reset_at = DateTime.utc_now() |> DateTime.add(3, :day) |> DateTime.truncate(:second)
+
+      weekly_primary_payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 42,
+            "limit_window_seconds" => 604_800,
+            "reset_at" => DateTime.to_unix(weekly_reset_at)
+          }
+        }
+      }
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" => {200, weekly_primary_payload},
+          "/backend-api/codex/usage" => {200, reset_bearing_account_primary_payload()}
+        })
+
+      %{identity: identity, assignment: assignment} = usage_assignment_fixture(upstream)
+
+      assert {:ok, %UsageProbe.Result{windows: windows}} =
+               UsageProbe.fetch_from_identity(
+                 identity,
+                 assignment,
+                 DateTime.utc_now() |> DateTime.truncate(:second),
+                 []
+               )
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == [
+               "/backend-api/wham/usage",
+               "/backend-api/codex/usage"
+             ]
+
+      assert Enum.any?(
+               windows,
+               &(&1.quota_key == "account" and &1.window_kind == "primary" and
+                   &1.window_minutes == 300 and match?(%DateTime{}, &1.reset_at))
+             )
+
+      assert Enum.any?(
+               windows,
+               &(&1.quota_key == "account" and &1.window_kind == "secondary" and
+                   &1.window_minutes == 10_080)
+             )
+    end
+
+    @tag :quota_probe_envelope
+    test "weekly-primary reconciliation deletes the vanished usage-sourced 5h primary row" do
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      reset_at = DateTime.add(observed_at, 3, :day)
+
+      payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 42,
+            "limit_window_seconds" => 604_800,
+            "reset_at" => DateTime.to_unix(reset_at)
+          }
+        }
+      }
+
+      upstream = start_path_upstream(%{"/backend-api/wham/usage" => {200, payload}})
+
+      %{identity: identity, pool: pool, assignment: assignment} =
+        usage_assignment_fixture(upstream)
+
+      stale_observed_at = DateTime.add(observed_at, -2 * 3600, :second)
+
+      assert {:ok, [_stale_primary]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("55"),
+                   reset_at: DateTime.add(stale_observed_at, -900, :second),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   freshness_state: "fresh",
+                   observed_at: stale_observed_at
+                 }
+               ])
+
+      assert {:ok, %{quota: %{status: :succeeded}}} =
+               Upstreams.reconcile_pool_account(pool, assignment, [])
+
+      # assert on raw persistence: the read-side effective view would hide a
+      # superseded 5h row whether or not delete-missing actually removed it
+      raw_windows = QuotaWindows.list_evidence(identity)
+
+      refute Enum.any?(
+               raw_windows,
+               &(&1.window_kind == "primary" and &1.window_minutes == 300 and
+                   &1.source == "codex_usage_api")
+             )
+
+      assert Enum.any?(
+               raw_windows,
+               &(&1.quota_key == "account" and &1.window_kind == "secondary" and
+                   &1.window_minutes == 10_080)
+             )
     end
 
     @tag :quota_probe_envelope
@@ -6807,6 +7019,453 @@ defmodule CodexPooler.UpstreamsTest do
         assert confirmed.source_precision == "observed"
         refute confirmed_candidate(confirmed)
         assert QuotaWindows.usable_window?(confirmed, confirmation_at)
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "anchored forward weekly restart converges after two matching observations" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      restart_at = DateTime.add(canonical_at, 60, :second)
+      confirm_at = DateTime.add(canonical_at, 120, :second)
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+      anchored_reset = DateTime.add(restart_at, 604_800 - 2 * 3600, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "35",
+          canonical_reset,
+          canonical_at
+        )
+
+      corroborate_weekly_restart!(identity, anchored_reset, restart_at)
+
+      quarantined =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          anchored_reset,
+          restart_at
+        )
+
+      assert quarantined.id == canonical.id
+      assert Decimal.equal?(quarantined.used_percent, Decimal.new("35"))
+      assert DateTime.compare(quarantined.reset_at, canonical_reset) == :eq
+
+      confirmed =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          anchored_reset,
+          confirm_at
+        )
+
+      assert confirmed.id == canonical.id
+      assert Decimal.equal?(confirmed.used_percent, Decimal.new("0"))
+      assert DateTime.compare(confirmed.reset_at, anchored_reset) == :eq
+      assert DateTime.compare(confirmed.observed_at, confirm_at) == :eq
+      assert confirmed.freshness_state == "fresh"
+    end
+
+    @tag :quota_confirmed_convergence
+    test "idle-rolling zero weekly usage cannot demote the canonical weekly snapshot" do
+      identity = active_identity_fixture()
+      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      rolling_at = DateTime.add(canonical_at, 60, :second)
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+      rolling_reset = DateTime.add(rolling_at, 604_800, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "35",
+          canonical_reset,
+          canonical_at
+        )
+
+      retained =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          rolling_reset,
+          rolling_at
+        )
+
+      assert retained.id == canonical.id
+      assert Decimal.equal?(retained.used_percent, Decimal.new("35"))
+      assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "anchored weekly restart without independent runtime corroboration stays quarantined" do
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-4_000, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+      restart_at = DateTime.add(canonical_at, 60, :second)
+      anchored_reset = DateTime.add(restart_at, 604_800 - 2 * 3600, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "100",
+          canonical_reset,
+          canonical_at
+        )
+
+      # two coherent zero snapshots from the usage endpoint alone (for example
+      # one cached response replayed) must never re-enable exhausted quota
+      for observed_offset <- [60, 120] do
+        retained =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "secondary",
+            "0",
+            anchored_reset,
+            DateTime.add(canonical_at, observed_offset, :second)
+          )
+
+        assert retained.id == canonical.id
+        assert Decimal.equal?(retained.used_percent, Decimal.new("100"))
+        assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "cached rolling zero weekly usage stays rejected up to the one-hour anchor boundary" do
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-4_000, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+
+      # a provider cache computed reset = observation + full window once, then
+      # keeps serving that same value; later samples see it drift inside the
+      # window and it must still not look like an anchored restart while the
+      # cache is younger than the one-hour anchor margin (3599s boundary).
+      # all observation instants stay in the past so freshness skew does not
+      # interfere with the decision under test
+      cache_at = DateTime.add(canonical_at, 60, :second)
+      cached_rolling_reset = DateTime.add(cache_at, 604_800, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "35",
+          canonical_reset,
+          canonical_at
+        )
+
+      for cache_age_seconds <- [5, 300, 1_800, 3_599] do
+        retained =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "secondary",
+            "0",
+            cached_rolling_reset,
+            DateTime.add(cache_at, cache_age_seconds, :second)
+          )
+
+        assert retained.id == canonical.id
+
+        assert Decimal.equal?(retained.used_percent, Decimal.new("35")),
+               "age #{cache_age_seconds}"
+
+        assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
+      end
+    end
+
+    @tag :quota_confirmed_convergence
+    test "a fixed weekly reset older than one hour converges after two matching observations" do
+      # intentional trust boundary: a zero-usage snapshot whose fixed reset sits
+      # at least one hour (3600s) inside the window is indistinguishable from a
+      # genuine restart, so two matching observations are allowed to accept it.
+      # observation instants stay in the past so freshness skew does not
+      # interfere with the decision under test
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-4_000, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+      anchor_at = DateTime.add(canonical_at, 60, :second)
+      fixed_reset = DateTime.add(anchor_at, 604_800, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "35",
+          canonical_reset,
+          canonical_at
+        )
+
+      corroborate_weekly_restart!(identity, fixed_reset, anchor_at)
+
+      quarantined =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          fixed_reset,
+          DateTime.add(anchor_at, 3_600, :second)
+        )
+
+      assert quarantined.id == canonical.id
+      assert Decimal.equal?(quarantined.used_percent, Decimal.new("35"))
+      assert DateTime.compare(quarantined.reset_at, canonical_reset) == :eq
+
+      confirmed =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          fixed_reset,
+          DateTime.add(anchor_at, 3_660, :second)
+        )
+
+      assert confirmed.id == canonical.id
+      assert Decimal.equal?(confirmed.used_percent, Decimal.new("0"))
+      assert DateTime.compare(confirmed.reset_at, fixed_reset) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "a backward usage reset re-anchor converges after two matching observations" do
+      # provider-side usage reset: the reset moves earlier mid-cycle with new
+      # values (observed 2026-07-12 on the free-plan monthly window). a single
+      # observation must stay rejected — an old cached decaying snapshot has
+      # the same higher-percent/earlier-reset shape — but two consecutive
+      # matching snapshots must re-anchor the canonical row
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 27, :day)
+      reanchored_reset = DateTime.add(canonical_at, 11, :day)
+
+      monthly = fn percent, reset, observed, extra ->
+        Map.merge(
+          %{
+            quota_key: "account",
+            quota_scope: "account",
+            quota_family: "account",
+            window_kind: "primary",
+            window_minutes: 43_200,
+            used_percent: Decimal.new(percent),
+            reset_at: reset,
+            source: "codex_usage_api",
+            source_precision: "observed",
+            freshness_state: "fresh",
+            last_sync_at: observed,
+            observed_at: observed
+          },
+          extra
+        )
+      end
+
+      assert {:ok, canonical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("18.5", canonical_reset, canonical_at, %{
+                   credits: 3_416,
+                   active_limit: 4_192
+                 }),
+                 canonical_at
+               )
+
+      first_at = DateTime.add(canonical_at, 60, :second)
+
+      assert {:ok, quarantined} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("100", reanchored_reset, first_at, %{}),
+                 first_at
+               )
+
+      assert quarantined.id == canonical.id
+      assert Decimal.equal?(quarantined.used_percent, Decimal.new("18.5"))
+      assert DateTime.compare(quarantined.reset_at, canonical_reset) == :eq
+
+      confirm_at = DateTime.add(canonical_at, 120, :second)
+
+      assert {:ok, confirmed} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("100", reanchored_reset, confirm_at, %{}),
+                 confirm_at
+               )
+
+      assert confirmed.id == canonical.id
+      assert Decimal.equal?(confirmed.used_percent, Decimal.new("100"))
+      assert DateTime.compare(confirmed.reset_at, reanchored_reset) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "credit-only backward re-anchor adopts the reset while keeping credit-derived percent" do
+      # the free-plan shape observed live: canonical capacity-bearing monthly
+      # (18.5% = credits/capacity, reset in 27d) while the provider reports
+      # 100% used with the reset re-anchored 16 days earlier and only a credit
+      # balance. values must stay credit-derived on every observation; the
+      # earlier reset is adopted only after two matching observations
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 27, :day)
+      reanchored_reset = DateTime.add(canonical_at, 11, :day)
+
+      monthly = fn percent, reset, observed, extra ->
+        Map.merge(
+          %{
+            quota_key: "account",
+            quota_scope: "account",
+            quota_family: "account",
+            window_kind: "primary",
+            window_minutes: 43_200,
+            used_percent: Decimal.new(percent),
+            reset_at: reset,
+            source: "codex_usage_api",
+            source_precision: "observed",
+            freshness_state: "fresh",
+            last_sync_at: observed,
+            observed_at: observed
+          },
+          extra
+        )
+      end
+
+      assert {:ok, canonical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("18.5", canonical_reset, canonical_at, %{
+                   credits: 3_416,
+                   active_limit: 4_192
+                 }),
+                 canonical_at
+               )
+
+      expected_percent =
+        Decimal.new(4_192)
+        |> Decimal.sub(Decimal.new(3_416))
+        |> Decimal.mult(Decimal.new(100))
+        |> Decimal.div(Decimal.new(4_192))
+
+      first_at = DateTime.add(canonical_at, 60, :second)
+
+      assert {:ok, first} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("100", reanchored_reset, first_at, %{credits: 3_416}),
+                 first_at
+               )
+
+      assert first.id == canonical.id
+      assert first.active_limit == 4_192
+      assert first.credits == 3_416
+      assert DateTime.compare(first.reset_at, canonical_reset) == :eq
+
+      assert Decimal.equal?(
+               Decimal.round(first.used_percent, 6),
+               Decimal.round(expected_percent, 6)
+             )
+
+      confirm_at = DateTime.add(canonical_at, 120, :second)
+
+      assert {:ok, confirmed} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("100", reanchored_reset, confirm_at, %{credits: 3_416}),
+                 confirm_at
+               )
+
+      assert confirmed.id == canonical.id
+      assert confirmed.active_limit == 4_192
+      assert confirmed.credits == 3_416
+      assert DateTime.compare(confirmed.reset_at, reanchored_reset) == :eq
+
+      assert Decimal.equal?(
+               Decimal.round(confirmed.used_percent, 6),
+               Decimal.round(expected_percent, 6)
+             )
+    end
+
+    @tag :quota_confirmed_convergence
+    test "inconsistent backward re-anchor observations keep the canonical snapshot" do
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 27, :day)
+
+      monthly = fn percent, reset, observed ->
+        %{
+          quota_key: "account",
+          quota_scope: "account",
+          quota_family: "account",
+          window_kind: "primary",
+          window_minutes: 43_200,
+          used_percent: Decimal.new(percent),
+          reset_at: reset,
+          source: "codex_usage_api",
+          source_precision: "observed",
+          freshness_state: "fresh",
+          last_sync_at: observed,
+          observed_at: observed,
+          credits: 3_416,
+          active_limit: 4_192
+        }
+      end
+
+      assert {:ok, canonical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 monthly.("18.5", canonical_reset, canonical_at),
+                 canonical_at
+               )
+
+      # two earlier-reset observations whose resets disagree by minutes never
+      # confirm each other, so the canonical values survive
+      for {drift_seconds, observed_offset} <- [{0, 60}, {180, 120}] do
+        assert {:ok, retained} =
+                 QuotaWindows.record_evidence(
+                   identity,
+                   monthly.(
+                     "100",
+                     DateTime.add(canonical_at, 11 * 24 * 3600 + drift_seconds, :second),
+                     DateTime.add(canonical_at, observed_offset, :second)
+                   ),
+                   DateTime.add(canonical_at, observed_offset, :second)
+                 )
+
+        assert retained.id == canonical.id
+        assert Decimal.equal?(retained.used_percent, Decimal.new("18.5"))
+        assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
       end
     end
 
@@ -9102,6 +9761,98 @@ defmodule CodexPooler.UpstreamsTest do
       refute Quotas.Evidence.routing_usable?(evidence, observed_at)
     end
 
+    test "remaps weekly-duration primary header slot to the weekly secondary window" do
+      observed_at = ~U[2026-04-27 12:00:00Z]
+      reset_at = DateTime.add(observed_at, 3 * 24 * 3600, :second)
+
+      assert [evidence] =
+               Quotas.parse_codex_headers(
+                 [
+                   {"x-codex-primary-used-percent", ["42"]},
+                   {"x-codex-primary-window-minutes", ["10080"]},
+                   {"x-codex-primary-reset-at", [DateTime.to_iso8601(reset_at)]}
+                 ],
+                 observed_at
+               )
+
+      assert evidence.quota_key == "account"
+      assert evidence.window_kind == "secondary"
+      assert evidence.window_minutes == 10_080
+      assert evidence.source == "codex_response_headers"
+      assert DateTime.compare(evidence.reset_at, reset_at) == :eq
+    end
+
+    test "weekly-duration primary header slot merges into one weekly identity beside secondary headers" do
+      observed_at = ~U[2026-04-27 12:00:00Z]
+      reset_at = DateTime.add(observed_at, 3 * 24 * 3600, :second)
+
+      assert [evidence] =
+               Quotas.parse_codex_headers(
+                 [
+                   {"x-codex-primary-used-percent", ["42"]},
+                   {"x-codex-primary-window-minutes", ["10080"]},
+                   {"x-codex-primary-reset-at", [DateTime.to_iso8601(reset_at)]},
+                   {"x-codex-secondary-used-percent", ["67"]},
+                   {"x-codex-secondary-window-minutes", ["10080"]},
+                   {"x-codex-secondary-reset-at", [DateTime.to_iso8601(reset_at)]}
+                 ],
+                 observed_at
+               )
+
+      assert evidence.window_kind == "secondary"
+      assert evidence.window_minutes == 10_080
+      assert Decimal.equal?(evidence.used_percent, Decimal.new("67"))
+    end
+
+    test "remaps weekly-duration primary rate limit event slot to the weekly secondary window" do
+      identity = active_identity_fixture()
+      observed_at = ~U[2026-04-27 12:00:00Z]
+      reset_at = DateTime.add(observed_at, 3 * 24 * 3600, :second)
+
+      assert {:ok, [window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_rate_limit_event(
+                 identity,
+                 %{
+                   "type" => "codex.rate_limits",
+                   "rate_limits" => %{
+                     "primary" => %{
+                       "used_percent" => "42",
+                       "window_minutes" => "10080",
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert window.quota_key == "account"
+      assert window.window_kind == "secondary"
+      assert window.window_minutes == 10_080
+      assert window.source == "codex_rate_limit_event"
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+    end
+
+    test "remaps weekly-duration primary rate-limit error payloads to the weekly secondary window" do
+      observed_at = ~U[2026-04-27 12:00:00Z]
+      reset_at = DateTime.add(observed_at, 3 * 24 * 3600, :second)
+
+      assert [evidence] =
+               Quotas.parse_rate_limit_error(
+                 %{
+                   "window_kind" => "primary",
+                   "window_minutes" => "10080",
+                   "used_percent" => "100",
+                   "reset_at" => DateTime.to_unix(reset_at)
+                 },
+                 observed_at
+               )
+
+      assert evidence.quota_key == "account"
+      assert evidence.window_kind == "secondary"
+      assert evidence.window_minutes == 10_080
+      assert evidence.source == "codex_rate_limit_error"
+    end
+
     test "resetless evidence persists for display but is not routing usable" do
       identity = active_identity_fixture()
       observed_at = ~U[2026-04-27 12:00:00Z]
@@ -11019,8 +11770,11 @@ defmodule CodexPooler.UpstreamsTest do
         QuotaWindows.quota_window_selection_data(identity, at: now)
 
       assert selection.primary == nil
-      assert %{window_kind: "secondary", window_minutes: 10_080} = selection.secondary
-      assert Enum.map(selection.blocked_windows, & &1.window_kind) == ["primary"]
+
+      assert %{window_kind: "secondary", window_minutes: 10_080, source: "codex_usage_api"} =
+               selection.secondary
+
+      assert selection.blocked_windows == []
 
       assert %{eligible?: true, routing_state: :weekly_only_probe, exclusions: []} =
                QuotaWindows.routing_quota_eligibility(identity, at: now)
@@ -11833,6 +12587,31 @@ defmodule CodexPooler.UpstreamsTest do
       },
       overrides
     )
+  end
+
+  # persists an independent runtime-sourced weekly row whose reset matches
+  # the claimed restart anchor, corroborating the usage-endpoint restart on a
+  # second provider surface
+  defp corroborate_weekly_restart!(identity, anchored_reset, observed_at) do
+    assert {:ok, _window} =
+             QuotaWindows.record_evidence(
+               identity,
+               %{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("0"),
+                 reset_at: anchored_reset,
+                 source: "codex_response_headers",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: observed_at,
+                 observed_at: observed_at
+               },
+               observed_at
+             )
   end
 
   defp record_confirmed_convergence!(

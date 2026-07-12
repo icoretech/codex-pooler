@@ -35,10 +35,25 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   def logical_windows(windows, %DateTime{} = as_of) when is_list(windows) do
     windows
+    |> Enum.map(&normalize_legacy_weekly_primary/1)
     |> Enum.group_by(&logical_key/1)
     |> Enum.map(fn {_logical_key, candidates} -> best_by_score(candidates, as_of) end)
     |> Enum.sort_by(&logical_sort_key/1)
   end
+
+  # Rows persisted before the parsers remapped the provider's weekly-duration
+  # primary slot — or recreated by a not-yet-upgraded replica during a rolling
+  # update — carry the weekly limit under a `primary`/10080 identity. They are
+  # the same logical weekly window as the normalized `secondary`/10080 rows,
+  # so fold them read-side: selection, routing, and operator projections then
+  # see a single weekly window regardless of whether the one-shot purge
+  # migration has run or been raced by an old writer.
+  defp normalize_legacy_weekly_primary(
+         %Quota.AccountQuotaWindow{window_kind: "primary", window_minutes: 10_080} = window
+       ),
+       do: %{window | window_kind: "secondary"}
+
+  defp normalize_legacy_weekly_primary(window), do: window
 
   @spec logical_key(Quota.AccountQuotaWindow.t()) :: tuple()
   def logical_key(%Quota.AccountQuotaWindow{} = window) do

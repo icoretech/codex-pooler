@@ -2,7 +2,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.RateLimitEvents do
   @moduledoc false
 
   alias CodexPooler.Quotas.Evidence
-  alias CodexPooler.Quotas.Evidence.CodexParsers.ResetTimes
+  alias CodexPooler.Quotas.Evidence.CodexParsers.{ResetTimes, WindowKinds}
   alias CodexPooler.Quotas.Evidence.Descriptors
 
   @spec parse(term(), DateTime.t()) :: [Evidence.t()]
@@ -50,7 +50,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers.RateLimitEvents do
       %{}
       |> Map.merge(descriptor)
       |> Map.merge(%{
-        window_kind: kind,
+        window_kind: WindowKinds.normalize_window_kind(kind, window_minutes),
         window_minutes: window_minutes,
         reset_at: reset_at,
         used_percent: Decimal.from_float(used_percent),

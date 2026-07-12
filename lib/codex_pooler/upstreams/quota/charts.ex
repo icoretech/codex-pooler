@@ -27,7 +27,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
   def quota_capacity_summary_by_pool_ids(pool_ids) when is_list(pool_ids) do
     pool_ids = pool_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
 
-    rows =
+    memberships =
       case pool_ids do
         [] ->
           []
@@ -35,16 +35,20 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
         _ ->
           Repo.all(
             from assignment in PoolUpstreamAssignment,
-              join: window in Quota.AccountQuotaWindow,
-              on: window.upstream_identity_id == assignment.upstream_identity_id,
               where: assignment.pool_id in ^pool_ids and assignment.status != ^@deleted,
-              select: {
-                assignment.pool_id,
-                window.used_percent,
-                window.reset_at,
-                window.freshness_state
-              }
+              select: {assignment.pool_id, assignment.upstream_identity_id}
           )
+      end
+
+    windows_by_identity =
+      memberships
+      |> Enum.map(fn {_pool_id, identity_id} -> identity_id end)
+      |> QuotaWindows.list_quota_windows_by_identity_ids()
+
+    rows =
+      for {pool_id, identity_id} <- memberships,
+          window <- Map.get(windows_by_identity, identity_id, []) do
+        {pool_id, window.used_percent, window.reset_at, window.freshness_state}
       end
 
     summaries =
@@ -67,7 +71,7 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
     pool_ids = pool_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
     timestamp = Keyword.get(opts, :at, now())
 
-    rows = quota_remaining_chart_rows(pool_ids)
+    rows = quota_remaining_chart_rows(pool_ids, timestamp)
 
     charts_by_pool_id =
       rows
@@ -88,23 +92,44 @@ defmodule CodexPooler.Upstreams.Quota.Charts do
 
   def quota_remaining_charts_by_pool_ids(_pool_ids, _opts), do: %{}
 
-  defp quota_remaining_chart_rows([]), do: []
+  defp quota_remaining_chart_rows([], _timestamp), do: []
 
-  defp quota_remaining_chart_rows(pool_ids) do
-    Repo.all(
-      from assignment in PoolUpstreamAssignment,
-        join: identity in UpstreamIdentity,
-        on: identity.id == assignment.upstream_identity_id,
-        left_join: window in Quota.AccountQuotaWindow,
-        on:
-          window.upstream_identity_id == identity.id and window.quota_scope == "account" and
-            window.quota_key == @account_quota_key and
-            ((window.window_kind == "primary" and window.window_minutes in [300, 43_200]) or
-               window.window_kind == "secondary"),
-        where: assignment.pool_id in ^pool_ids and assignment.status != ^@deleted,
-        order_by: [asc: assignment.pool_id, asc: assignment.created_at, asc: assignment.id],
-        select: {assignment, identity, window}
-    )
+  # Charts consume effective windows (logical fold plus superseded-primary
+  # rejection at the chart timestamp) instead of raw persisted rows, so a
+  # frozen 5h primary whose quota group kept syncing cannot resurface as a
+  # blocked chart entry or a "quota refresh needed" cockpit state that
+  # routing itself no longer sees.
+  defp quota_remaining_chart_rows(pool_ids, timestamp) do
+    membership_rows =
+      Repo.all(
+        from assignment in PoolUpstreamAssignment,
+          join: identity in UpstreamIdentity,
+          on: identity.id == assignment.upstream_identity_id,
+          where: assignment.pool_id in ^pool_ids and assignment.status != ^@deleted,
+          order_by: [asc: assignment.pool_id, asc: assignment.created_at, asc: assignment.id],
+          select: {assignment, identity}
+      )
+
+    windows_by_identity =
+      membership_rows
+      |> Enum.map(fn {_assignment, identity} -> identity.id end)
+      |> QuotaWindows.list_quota_windows_by_identity_ids(timestamp)
+
+    Enum.flat_map(membership_rows, fn {assignment, identity} ->
+      windows_by_identity
+      |> Map.get(identity.id, [])
+      |> Enum.filter(&account_chart_window?/1)
+      |> case do
+        [] -> [{assignment, identity, nil}]
+        windows -> Enum.map(windows, &{assignment, identity, &1})
+      end
+    end)
+  end
+
+  defp account_chart_window?(%Quota.AccountQuotaWindow{} = window) do
+    window.quota_scope == "account" and window.quota_key == @account_quota_key and
+      ((window.window_kind == "primary" and window.window_minutes in [300, 43_200]) or
+         window.window_kind == "secondary")
   end
 
   defp quota_remaining_chart_row(
