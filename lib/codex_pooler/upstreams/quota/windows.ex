@@ -193,13 +193,25 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
     |> effective_windows(as_of || now())
   end
 
-  # Effective read-side view of persisted evidence: one row per logical window
-  # with superseded primary shapes rejected, so operator projections, bulk
-  # stats, and metadata surfaces agree with routing about which windows exist.
+  @doc """
+  Effective read-side view of a persisted evidence list: rows observed after
+  `as_of` are excluded, logical windows are folded, and superseded primary
+  shapes are rejected. Every read surface (operator projections, bulk stats,
+  charts, alerts, usage compatibility responses) must consume this view so it
+  agrees with routing about which windows exist at that instant.
+  """
+  @spec effective_quota_windows([Quota.AccountQuotaWindow.t()], DateTime.t() | nil) ::
+          [Quota.AccountQuotaWindow.t()]
+  def effective_quota_windows(windows, as_of \\ nil) when is_list(windows) do
+    effective_windows(windows, as_of || now())
+  end
+
   # A frozen 5h (or monthly) primary whose quota group kept syncing must not
   # render a stale card or timer after the provider stops reporting the shape.
   # Callers that evaluate at an explicit timestamp must pass it through so the
-  # effective view is computed against the same clock as their own checks.
+  # effective view is computed against the same clock as their own checks;
+  # `WindowSelector.logical_windows/2` also drops evidence observed after that
+  # timestamp so historical evaluations never rank against future rows.
   defp effective_windows(windows, %DateTime{} = as_of) do
     windows
     |> WindowSelector.logical_windows(as_of)

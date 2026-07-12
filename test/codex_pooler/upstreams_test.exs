@@ -4268,7 +4268,10 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "relative usage countdowns do not replace explicit usage reset timestamps" do
       identity = active_identity_fixture()
-      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
       explicit_reset_at = DateTime.add(observed_at, 3 * 60 * 60, :second)
 
       assert {:ok, [primary]} =
@@ -4358,7 +4361,10 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "relative model usage reset refreshes do not keep sliding an existing 5h reset" do
       identity = active_identity_fixture()
-      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
       first_reset_at = DateTime.add(observed_at, 18_000, :second)
 
       payload = fn used_percent, reset_at ->
@@ -4427,7 +4433,10 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "explicit usage reset corrects older rows derived from relative countdowns" do
       identity = active_identity_fixture()
-      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
       bad_relative_reset_at = DateTime.add(observed_at, 5 * 60 * 60, :second)
       explicit_reset_at = DateTime.add(observed_at, 3 * 60 * 60, :second)
 
@@ -6596,7 +6605,10 @@ defmodule CodexPooler.UpstreamsTest do
     @tag :weekly_account_snapshot_refresh
     test "equal runtime evidence refreshes a fresh weekly snapshot without changing its reset" do
       identity = active_identity_fixture()
-      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
       refreshed_at = DateTime.add(observed_at, 60, :second)
       stronger_reset_at = DateTime.add(observed_at, 4, :day)
       weaker_reset_at = DateTime.add(observed_at, 6, :day)
@@ -7025,7 +7037,10 @@ defmodule CodexPooler.UpstreamsTest do
     @tag :quota_confirmed_convergence
     test "anchored forward weekly restart converges after two matching observations" do
       identity = active_identity_fixture()
-      canonical_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
       restart_at = DateTime.add(canonical_at, 60, :second)
       confirm_at = DateTime.add(canonical_at, 120, :second)
       canonical_reset = DateTime.add(canonical_at, 5, :day)
@@ -7105,6 +7120,215 @@ defmodule CodexPooler.UpstreamsTest do
       assert retained.id == canonical.id
       assert Decimal.equal?(retained.used_percent, Decimal.new("35"))
       assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "a single usage zero cannot re-enable an expired exhausted weekly without corroboration" do
+      # adversarial P0 repro: canonical 100% with the reset already passed
+      # used to take the expired fast path and accept a lone usage zero
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-4_000, :second) |> DateTime.truncate(:second)
+
+      expired_reset = DateTime.add(canonical_at, 600, :second)
+
+      canonical =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "100",
+          expired_reset,
+          canonical_at
+        )
+
+      zero_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      rolling_zero_reset = DateTime.add(zero_at, 604_800 - 2 * 3600, :second)
+
+      retained =
+        record_confirmed_convergence!(
+          identity,
+          :account,
+          "secondary",
+          "0",
+          rolling_zero_reset,
+          zero_at
+        )
+
+      assert retained.id == canonical.id
+      assert Decimal.equal?(retained.used_percent, Decimal.new("100"))
+      assert DateTime.compare(retained.reset_at, expired_reset) == :eq
+
+      assert %{eligible?: false} =
+               QuotaWindows.routing_quota_eligibility(identity, at: zero_at)
+    end
+
+    @tag :quota_confirmed_convergence
+    test "capacity-bearing usage zero cannot re-enable an exhausted weekly without corroboration" do
+      # adversarial P0 repro: credit/capacity shapes exit the weak-capacity
+      # quarantine as :continue and used to reach the generic merge
+      identity = active_identity_fixture()
+
+      canonical_at =
+        DateTime.utc_now() |> DateTime.add(-4_000, :second) |> DateTime.truncate(:second)
+
+      canonical_reset = DateTime.add(canonical_at, 5, :day)
+
+      weekly = fn percent, reset, observed, extra ->
+        Map.merge(
+          %{
+            quota_key: "account",
+            quota_scope: "account",
+            quota_family: "account",
+            window_kind: "secondary",
+            window_minutes: 10_080,
+            used_percent: Decimal.new(percent),
+            reset_at: reset,
+            source: "codex_usage_api",
+            source_precision: "observed",
+            freshness_state: "fresh",
+            last_sync_at: observed,
+            observed_at: observed
+          },
+          extra
+        )
+      end
+
+      assert {:ok, canonical} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 weekly.("100", canonical_reset, canonical_at, %{}),
+                 canonical_at
+               )
+
+      zero_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert {:ok, retained} =
+               QuotaWindows.record_evidence(
+                 identity,
+                 weekly.("0", DateTime.add(zero_at, 604_800 - 2 * 3600, :second), zero_at, %{
+                   credits: 500,
+                   active_limit: 1_000
+                 }),
+                 zero_at
+               )
+
+      assert retained.id == canonical.id
+      assert Decimal.equal?(retained.used_percent, Decimal.new("100"))
+      assert DateTime.compare(retained.reset_at, canonical_reset) == :eq
+    end
+
+    @tag :quota_confirmed_convergence
+    test "stale or exhausted runtime rows cannot corroborate a weekly restart" do
+      # adversarial P1 repro: a runtime row observed long ago, one carrying an
+      # exhausted percent, one persisted with an explicitly non-fresh state,
+      # or one observed after the merge instant (even within the clock-skew
+      # band) must not vouch for a usage zero
+      scenarios = [
+        # stale corroboration: runtime row observed well past the freshness TTL
+        fn identity, anchored_reset, canonical_at ->
+          corroborate_weekly_restart!(
+            identity,
+            anchored_reset,
+            DateTime.add(canonical_at, -7_200, :second)
+          )
+        end,
+        # contradictory corroboration: runtime row at 100 percent
+        fn identity, anchored_reset, canonical_at ->
+          assert {:ok, _window} =
+                   QuotaWindows.record_evidence(
+                     identity,
+                     %{
+                       quota_key: "account",
+                       quota_scope: "account",
+                       quota_family: "account",
+                       window_kind: "secondary",
+                       window_minutes: 10_080,
+                       used_percent: Decimal.new("100"),
+                       reset_at: anchored_reset,
+                       source: "codex_response_headers",
+                       source_precision: "observed",
+                       freshness_state: "fresh",
+                       last_sync_at: DateTime.add(canonical_at, 30, :second),
+                       observed_at: DateTime.add(canonical_at, 30, :second)
+                     },
+                     DateTime.add(canonical_at, 30, :second)
+                   )
+        end,
+        # explicitly non-fresh persisted state, even when recently observed
+        fn identity, anchored_reset, canonical_at ->
+          assert {:ok, _window} =
+                   QuotaWindows.record_evidence(
+                     identity,
+                     %{
+                       quota_key: "account",
+                       quota_scope: "account",
+                       quota_family: "account",
+                       window_kind: "secondary",
+                       window_minutes: 10_080,
+                       used_percent: Decimal.new("0"),
+                       reset_at: anchored_reset,
+                       source: "codex_response_headers",
+                       source_precision: "observed",
+                       freshness_state: "stale",
+                       last_sync_at: DateTime.add(canonical_at, 30, :second),
+                       observed_at: DateTime.add(canonical_at, 30, :second)
+                     },
+                     DateTime.add(canonical_at, 30, :second)
+                   )
+        end,
+        # future corroboration inside the clock-skew band: the store merges at
+        # wall clock, so the row must be observed ahead of the real merge
+        # instant (a skewed-ahead node) to exercise the strict ceiling
+        fn identity, anchored_reset, _canonical_at ->
+          corroborate_weekly_restart!(
+            identity,
+            anchored_reset,
+            DateTime.utc_now() |> DateTime.add(120, :second) |> DateTime.truncate(:second)
+          )
+        end
+      ]
+
+      for {corroborate, scenario_index} <- Enum.with_index(scenarios) do
+        identity = active_identity_fixture()
+
+        canonical_at =
+          DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+
+        canonical_reset = DateTime.add(canonical_at, 5, :day)
+        restart_at = DateTime.add(canonical_at, 60, :second)
+        anchored_reset = DateTime.add(restart_at, 604_800 - 2 * 3600, :second)
+
+        canonical =
+          record_confirmed_convergence!(
+            identity,
+            :account,
+            "secondary",
+            "100",
+            canonical_reset,
+            canonical_at
+          )
+
+        corroborate.(identity, anchored_reset, canonical_at)
+
+        for observed_offset <- [60, 120] do
+          retained =
+            record_confirmed_convergence!(
+              identity,
+              :account,
+              "secondary",
+              "0",
+              anchored_reset,
+              DateTime.add(canonical_at, observed_offset, :second)
+            )
+
+          assert retained.id == canonical.id
+
+          assert Decimal.equal?(retained.used_percent, Decimal.new("100")),
+                 "scenario #{scenario_index} offset #{observed_offset}"
+        end
+      end
     end
 
     @tag :quota_confirmed_convergence
@@ -7221,7 +7445,8 @@ defmodule CodexPooler.UpstreamsTest do
           canonical_at
         )
 
-      corroborate_weekly_restart!(identity, fixed_reset, anchor_at)
+      # corroboration must itself be fresh at the observations that rely on it
+      corroborate_weekly_restart!(identity, fixed_reset, DateTime.add(anchor_at, 3_300, :second))
 
       quarantined =
         record_confirmed_convergence!(

@@ -101,6 +101,128 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert request.request_metadata["operation"] == "usage"
   end
 
+  test "GET /backend-api/wham/usage does not report a superseded frozen 5h window", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "usage-superseded-account",
+        plan_family: "pro"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    frozen_observed_at = DateTime.add(now, -2 * 3600, :second)
+
+    assert {:ok, _frozen} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("58"),
+                 reset_at: DateTime.add(frozen_observed_at, 10_800, :second),
+                 source: "codex_response_headers",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: frozen_observed_at,
+                 observed_at: frozen_observed_at
+               }
+             ])
+
+    assert {:ok, _weekly} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("1"),
+                 reset_at: DateTime.add(now, 6, :day),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: now,
+                 observed_at: now
+               }
+             ])
+
+    conn =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("chatgpt-account-id", "usage-superseded-account")
+      |> get("/backend-api/wham/usage")
+
+    assert %{"rate_limit" => rate_limit} = json_response(conn, 200)
+    assert rate_limit["primary_window"] == nil
+    assert %{"used_percent" => 1} = rate_limit["secondary_window"]
+  end
+
+  test "GET /backend-api/wham/usage does not let effectively quota-less identities outrank exhausted ones",
+       %{conn: conn} do
+    pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
+
+    # ghost identity: raw account rows exist but none survive the effective
+    # view — it must not win candidacy with an allowed-looking empty payload
+    %{identity: ghost_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "usage-ghost-account",
+        plan_family: "pro"
+      })
+
+    %{identity: exhausted_identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: "usage-exhausted-account",
+        plan_family: "pro"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # the ghost's only account evidence is future-dated: raw rows exist, the
+    # effective view at request time is empty
+    assert {:ok, _future_primary} =
+             QuotaWindows.upsert_quota_windows(ghost_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("1"),
+                 reset_at: DateTime.add(now, 10_800, :second),
+                 source: "codex_response_headers",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: DateTime.add(now, 120, :second),
+                 observed_at: DateTime.add(now, 120, :second)
+               }
+             ])
+
+    assert {:ok, _exhausted_weekly} =
+             QuotaWindows.upsert_quota_windows(exhausted_identity, [
+               %{
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("100"),
+                 credits: 0,
+                 reset_at: DateTime.add(now, 6, :day),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: now,
+                 observed_at: now
+               }
+             ])
+
+    conn =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("chatgpt-account-id", "usage-exhausted-account")
+      |> get("/backend-api/wham/usage")
+
+    assert %{"rate_limit" => rate_limit} = json_response(conn, 200)
+    assert rate_limit["allowed"] == false
+    assert rate_limit["limit_reached"] == true
+    assert %{"used_percent" => 100} = rate_limit["secondary_window"]
+  end
+
   test "GET /api/codex/usage supports ChatGPT account usage branch", %{conn: conn} do
     pool = pool_fixture()
 

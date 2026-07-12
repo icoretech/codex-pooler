@@ -2533,7 +2533,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         assignment_label: "Spark source transition assignment"
       })
 
-    now = DateTime.utc_now()
+    now = DateTime.utc_now() |> DateTime.add(-300, :second)
     usage_reset_at = DateTime.add(now, 5, :hour)
 
     zero_use_spark = %{
@@ -3862,7 +3862,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         assignment_label: "Realtime weak zero model assignment"
       })
 
-    now = DateTime.utc_now()
+    now = DateTime.utc_now() |> DateTime.add(-300, :second)
     primary_reset_at = DateTime.add(now, 2, :hour)
     weekly_reset_at = DateTime.add(now, 5, :day)
     weak_observed_at = DateTime.add(now, 60, :second)

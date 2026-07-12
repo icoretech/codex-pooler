@@ -35,11 +35,26 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   def logical_windows(windows, %DateTime{} = as_of) when is_list(windows) do
     windows
+    |> Enum.reject(&future_observation?(&1, as_of))
     |> Enum.map(&normalize_legacy_weekly_primary/1)
     |> Enum.group_by(&logical_key/1)
     |> Enum.map(fn {_logical_key, candidates} -> best_by_score(candidates, as_of) end)
     |> Enum.sort_by(&logical_sort_key/1)
   end
+
+  # Evidence observed after the evaluation instant did not exist in that form
+  # yet: a historical `as_of` must never rank, select, or supersede against
+  # rows from its future. This is strictly non-future — the clock-skew
+  # tolerance applies to freshness classification, not to existence, so even
+  # a row observed one second past `as_of` is excluded.
+  defp future_observation?(
+         %Quota.AccountQuotaWindow{observed_at: %DateTime{} = observed_at},
+         %DateTime{} = as_of
+       ) do
+    DateTime.compare(observed_at, as_of) == :gt
+  end
+
+  defp future_observation?(_window, _as_of), do: false
 
   # Rows persisted before the parsers remapped the provider's weekly-duration
   # primary slot — or recreated by a not-yet-upgraded replica during a rolling

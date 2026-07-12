@@ -52,6 +52,30 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluatorPredicatesTest do
     )
   end
 
+  test "superseded frozen 5h evidence evaluates as weekly-only instead of stale or exhausted" do
+    timestamp = now()
+    frozen_observed_at = DateTime.add(timestamp, -2 * 3600, :second)
+
+    assert_quota_state_candidate(
+      "weekly_only",
+      [
+        primary_quota_window_attrs(%{
+          used_percent: Decimal.new("58"),
+          reset_at: DateTime.add(frozen_observed_at, 3, :hour),
+          last_sync_at: frozen_observed_at,
+          observed_at: frozen_observed_at
+        }),
+        weekly_quota_window_attrs(%{
+          source: "codex_usage_api",
+          reset_at: DateTime.add(timestamp, 7, :day),
+          last_sync_at: timestamp,
+          observed_at: timestamp
+        })
+      ],
+      timestamp
+    )
+  end
+
   test "fresh usable quota clears missing stale weekly-only and exhausted target predicates" do
     timestamp = now()
     pool = pool_fixture()

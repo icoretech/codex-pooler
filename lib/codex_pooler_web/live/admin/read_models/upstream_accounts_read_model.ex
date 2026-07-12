@@ -176,7 +176,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   end
 
   defp account_snapshot(identity, assignments, token_burns, datetime_preferences) do
-    quota_windows = QuotaWindows.list_quota_windows(identity)
+    # one explicit snapshot instant for the effective window load so the
+    # readiness and card projections below reason about the same view
+    snapshot_at = DateTime.utc_now()
+    quota_windows = QuotaWindows.list_quota_windows(identity, snapshot_at)
     quota_readiness = QuotaProjection.readiness(quota_windows)
     identity_assignments = identity_assignments(identity, assignments, quota_readiness)
 

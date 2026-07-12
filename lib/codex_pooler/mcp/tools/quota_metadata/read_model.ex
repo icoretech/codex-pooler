@@ -87,9 +87,13 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
   end
 
   defp account_summary(%UpstreamIdentity{} = identity, timestamp, visible_pool_ids) do
+    # the effective window view must be computed at the same timestamp the
+    # serialization and usability checks below use: a historical `at` must
+    # neither see future evidence nor select rows that only became effective
+    # after that instant
     all_windows =
       identity
-      |> Quota.Windows.list_quota_windows()
+      |> Quota.Windows.list_quota_windows(timestamp)
       |> Enum.map(&quota_window(&1, timestamp))
       |> Enum.sort_by(&window_sort_key/1)
 

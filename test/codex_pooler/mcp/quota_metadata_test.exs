@@ -166,6 +166,56 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     refute inspect(account) =~ "metadata"
   end
 
+  test "read model historical at excludes evidence observed after that instant", %{scope: scope} do
+    pool = pool_fixture(%{name: "Quota Historical Pool"})
+
+    %{identity: _identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Historical account",
+        chatgpt_account_id: "acct-quota-historical"
+      })
+
+    as_of = DateTime.utc_now() |> DateTime.add(-2 * 3600, :second) |> DateTime.truncate(:second)
+
+    identity =
+      Repo.get_by!(CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+        chatgpt_account_id: "acct-quota-historical"
+      )
+
+    # fresh 5h at as_of; a weekly synced two hours later (now) would supersede
+    # it at the current clock, but must not exist for the historical view
+    assert {:ok, _primary} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               primary_quota_window_attrs(%{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 used_percent: Decimal.new("20"),
+                 reset_at: DateTime.add(as_of, 10_800, :second),
+                 last_sync_at: as_of,
+                 observed_at: as_of
+               })
+             ])
+
+    assert {:ok, _weekly} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               weekly_quota_window_attrs(%{
+                 source: "codex_usage_api",
+                 used_percent: Decimal.new("1"),
+                 reset_at: DateTime.add(as_of, 6, :day),
+                 last_sync_at: DateTime.add(as_of, 2 * 3600, :second),
+                 observed_at: DateTime.add(as_of, 2 * 3600, :second)
+               })
+             ])
+
+    %{items: [account]} = ReadModel.list_accounts(scope, at: as_of)
+
+    assert [window] = account.quota_windows
+    assert window.quota_kind == "account_primary"
+    assert window.window_minutes == 300
+    refute Enum.any?(account.quota_windows, &(&1.window_minutes == 10_080))
+  end
+
   test "read model reports unknown when no quota windows exist", %{scope: scope} do
     pool = pool_fixture()
 

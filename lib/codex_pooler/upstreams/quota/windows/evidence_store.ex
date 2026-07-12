@@ -297,6 +297,40 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{} = evidence,
          timestamp
        ) do
+    if uncorroborated_zero_reenable_attempt?(evidence, existing, timestamp) do
+      rejected_snapshot_attrs(existing, evidence, timestamp)
+    else
+      merge_attrs_by_decision(existing, attrs, evidence, timestamp)
+    end
+  end
+
+  # A usage-endpoint zero must never re-enable exhausted weekly quota on its
+  # own: without this chokepoint guard, an expired or stale canonical takes
+  # the `:incoming` fast paths, and capacity- or credit-bearing shapes exit
+  # the weak-capacity quarantine as `:continue` into the generic merge — all
+  # single-observation routes around the corroboration requirement. Any
+  # account-weekly zero replacing an exhausted canonical needs independent
+  # runtime corroboration first, regardless of freshness or capacity shape.
+  defp uncorroborated_zero_reenable_attempt?(
+         %Evidence{source: "codex_usage_api", used_percent: %Decimal{}} = evidence,
+         %Quota.AccountQuotaWindow{used_percent: %Decimal{}} = existing,
+         timestamp
+       ) do
+    account_weekly_evidence?(evidence) and
+      zero_percent?(evidence.used_percent) and
+      exhausted_by_used_percent?(existing) and
+      same_evidence_identity?(evidence, existing) and
+      not runtime_weekly_restart_corroborated?(evidence, existing, timestamp)
+  end
+
+  defp uncorroborated_zero_reenable_attempt?(_evidence, _existing, _timestamp), do: false
+
+  defp account_weekly_evidence?(evidence) do
+    account_quota_identity?(evidence) and Map.get(evidence, :window_kind) == "secondary" and
+      Map.get(evidence, :window_minutes) == 10_080
+  end
+
+  defp merge_attrs_by_decision(existing, attrs, evidence, timestamp) do
     case confirmed_snapshot_decision(evidence, existing, timestamp) do
       :incoming -> accepted_snapshot_attrs(existing, attrs, timestamp)
       :same_cycle -> same_cycle_snapshot_attrs(existing, attrs, evidence, timestamp)
@@ -637,31 +671,50 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   # zero out an exhausted weekly: the restart must also be corroborated by an
   # independent provider surface. Runtime evidence (response headers,
   # rate-limit events, rate-limit errors) comes from real dispatched traffic
-  # rather than the usage endpoint, so a persisted runtime weekly row whose
-  # reset matches the claimed restart anchor proves the provider asserted the
-  # new cycle on a second surface. Without it the zero snapshot stays
-  # quarantined — which also fails closed: while quota is genuinely
-  # exhausted, requests fail and no fresh runtime weekly with the restarted
-  # reset can appear.
+  # rather than the usage endpoint, so a persisted runtime row proves the
+  # provider asserted the new cycle on a second surface — but only when it
+  # carries the same logical identity (key, scope, family, model, upstream
+  # model, kind, minutes), is fresh and not from the future at the merge
+  # timestamp, reports a non-exhausted percent compatible with a restart, and
+  # its reset matches the claimed anchor. Stale, contradictory (100 percent),
+  # or partial-identity runtime rows corroborate nothing. Without
+  # corroboration the zero snapshot stays quarantined — which also fails
+  # closed: while quota is genuinely exhausted, requests fail and no fresh
+  # runtime weekly with the restarted reset can appear.
   defp runtime_weekly_restart_corroborated?(
          %Evidence{reset_at: %DateTime{} = anchored_reset} = evidence,
-         %Quota.AccountQuotaWindow{upstream_identity_id: identity_id}
+         %Quota.AccountQuotaWindow{upstream_identity_id: identity_id},
+         %DateTime{} = timestamp
        )
        when is_binary(identity_id) do
-    window_start = DateTime.add(anchored_reset, -@restart_corroboration_reset_tolerance_seconds)
-    window_end = DateTime.add(anchored_reset, @restart_corroboration_reset_tolerance_seconds)
+    reset_floor = DateTime.add(anchored_reset, -@restart_corroboration_reset_tolerance_seconds)
+    reset_ceiling = DateTime.add(anchored_reset, @restart_corroboration_reset_tolerance_seconds)
+    observed_floor = DateTime.add(timestamp, -Evidence.freshness_ttl_seconds(), :second)
+    # strictly non-future: a corroborating runtime row must have been observed
+    # at or before the merge instant
+    observed_ceiling = timestamp
 
     Repo.exists?(
       from window in Quota.AccountQuotaWindow,
         where: window.upstream_identity_id == ^identity_id,
         where: window.source in ^@runtime_quota_sources,
         where: window.quota_key == ^evidence.quota_key,
+        where: fragment("COALESCE(?, 'account')", window.quota_scope) == ^evidence.quota_scope,
+        where: fragment("COALESCE(?, 'account')", window.quota_family) == ^evidence.quota_family,
+        where: fragment("COALESCE(lower(?), '')", window.model) == ^lower_string(evidence.model),
+        where:
+          fragment("COALESCE(lower(?), '')", window.upstream_model) ==
+            ^lower_string(evidence.upstream_model),
+        where: window.window_kind == ^evidence.window_kind,
         where: window.window_minutes == ^evidence.window_minutes,
-        where: window.reset_at >= ^window_start and window.reset_at <= ^window_end
+        where: window.used_percent < 100,
+        where: window.freshness_state == "fresh",
+        where: window.observed_at >= ^observed_floor and window.observed_at <= ^observed_ceiling,
+        where: window.reset_at >= ^reset_floor and window.reset_at <= ^reset_ceiling
     )
   end
 
-  defp runtime_weekly_restart_corroborated?(_evidence, _existing), do: false
+  defp runtime_weekly_restart_corroborated?(_evidence, _existing, _timestamp), do: false
 
   defp stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) do
     Evidence.current_freshness_state(existing, timestamp) != "fresh" and
@@ -1154,7 +1207,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp weak_zero_snapshot_decision(evidence, existing, timestamp) do
     cond do
       account_quota_identity?(evidence) and anchored_forward_weekly_cycle?(evidence, existing) and
-          runtime_weekly_restart_corroborated?(evidence, existing) ->
+          runtime_weekly_restart_corroborated?(evidence, existing, timestamp) ->
         lower_snapshot_decision(evidence, existing, timestamp)
 
       account_quota_identity?(evidence) ->

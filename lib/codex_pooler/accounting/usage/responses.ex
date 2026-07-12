@@ -59,6 +59,13 @@ defmodule CodexPooler.Accounting.UsageResponses do
   @spec account_usage_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
           {map() | nil, map() | nil}
   def account_usage_windows(windows, as_of) do
+    # usage compatibility responses must consume the effective window view:
+    # raw persisted rows can still carry a frozen 5h primary (or a legacy
+    # weekly-primary duplicate) that routing, cards, and charts already
+    # reject, and this surface is what clients see on /api/codex/usage and
+    # /wham/usage
+    windows = Quota.Windows.effective_quota_windows(windows, as_of)
+
     primary =
       windows
       |> Enum.find(&(&1.quota_key == "account" and &1.window_kind == "primary"))
@@ -111,6 +118,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
   @spec additional_codex_rate_limits([Quota.AccountQuotaWindow.t()], DateTime.t()) :: [map()]
   def additional_codex_rate_limits(windows, as_of) do
     windows
+    |> Quota.Windows.effective_quota_windows(as_of)
     |> Enum.reject(&(&1.quota_key in [nil, "account"]))
     |> Enum.group_by(& &1.quota_key)
     |> Enum.map(fn {quota_key, quota_windows} ->

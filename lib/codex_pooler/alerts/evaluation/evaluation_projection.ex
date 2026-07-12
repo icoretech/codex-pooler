@@ -76,7 +76,9 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     assignments = assignment_rows(pool_id)
 
     windows_by_identity_id =
-      windows_by_identity_id(Enum.map(assignments, & &1.upstream_identity_id))
+      assignments
+      |> Enum.map(& &1.upstream_identity_id)
+      |> windows_by_identity_id(timestamp)
 
     Enum.map(assignments, fn row ->
       windows = Map.get(windows_by_identity_id, row.upstream_identity_id, [])
@@ -112,18 +114,14 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     )
   end
 
-  defp windows_by_identity_id([]), do: %{}
+  defp windows_by_identity_id([], _timestamp), do: %{}
 
-  defp windows_by_identity_id(identity_ids) do
-    Quota.AccountQuotaWindow
-    |> where([window], window.upstream_identity_id in ^identity_ids)
-    |> order_by([window],
-      asc: window.quota_key,
-      asc: window.window_kind,
-      asc: window.window_minutes
-    )
-    |> Repo.all()
-    |> Enum.group_by(& &1.upstream_identity_id)
+  # Alert thresholds must evaluate the effective window view at the
+  # evaluation timestamp: raw rows can still carry superseded 5h primaries or
+  # legacy weekly duplicates that routing and operator surfaces already
+  # reject, and alerts firing on those would contradict every other surface.
+  defp windows_by_identity_id(identity_ids, timestamp) do
+    Quota.Windows.list_quota_windows_by_identity_ids(identity_ids, timestamp)
   end
 
   defp quota_projection(windows, model, timestamp) do

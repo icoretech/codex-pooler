@@ -176,7 +176,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
 
   defp quota_readiness_for_identity(identity_id, as_of) when is_binary(identity_id) do
     identity_id
-    |> QuotaWindows.list_quota_windows()
+    |> QuotaWindows.list_quota_windows(as_of)
     |> UpstreamQuotaReadiness.from_windows(as_of)
   end
 

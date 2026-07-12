@@ -7,7 +7,6 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
 
   alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -104,9 +103,10 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   def v1_upstream_limits_for_pool(_pool_id, _as_of, _opts), do: []
 
   defp build_codex_usage_for_identity(%UpstreamIdentity{} = identity, opts) do
-    windows = quota_windows_for_identity(identity.id)
+    as_of = Keyword.get(opts, :as_of, now())
+    windows = quota_windows_for_identity(identity.id, as_of)
 
-    build_codex_usage_for_identity(identity, windows, opts)
+    build_codex_usage_for_identity(identity, windows, Keyword.put(opts, :as_of, as_of))
   end
 
   defp build_codex_usage_for_identity(%UpstreamIdentity{} = identity, windows, opts) do
@@ -135,8 +135,11 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   defp active_assigned_identity?(%UpstreamIdentity{}), do: false
 
   defp best_codex_usage_identity_for_pool(pool_id, opts) when is_binary(pool_id) do
+    as_of = Keyword.get(opts, :as_of, now())
     candidates = codex_usage_candidates(pool_id)
-    windows_by_identity_id = quota_windows_by_identity_id(Enum.map(candidates, &elem(&1, 0).id))
+
+    windows_by_identity_id =
+      quota_windows_by_identity_id(Enum.map(candidates, &elem(&1, 0).id), as_of)
 
     candidates
     |> Enum.map(fn {%UpstreamIdentity{} = identity, assignment} ->
@@ -184,22 +187,18 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     Enum.any?(windows, &(&1.quota_key == "account"))
   end
 
-  defp quota_windows_by_identity_id([]), do: %{}
+  defp quota_windows_by_identity_id([], _as_of), do: %{}
 
-  defp quota_windows_by_identity_id(identity_ids) do
-    Quota.AccountQuotaWindow
-    |> where([w], w.upstream_identity_id in ^Enum.uniq(identity_ids))
-    |> order_by([w], asc: w.upstream_identity_id, asc: w.quota_key, asc: w.window_kind)
-    |> Repo.all()
-    |> Enum.group_by(& &1.upstream_identity_id)
+  # candidate selection must reason about the effective window view: an
+  # identity whose only rows are superseded or future-dated has no usable
+  # quota knowledge, and must neither pass the has-quota filter nor outrank
+  # a genuinely exhausted identity with an empty (allowed-looking) payload
+  defp quota_windows_by_identity_id(identity_ids, as_of) do
+    QuotaWindows.list_quota_windows_by_identity_ids(identity_ids, as_of)
   end
 
-  defp quota_windows_for_identity(identity_id) do
-    Repo.all(
-      from w in Quota.AccountQuotaWindow,
-        where: w.upstream_identity_id == ^identity_id,
-        order_by: [asc: w.quota_key, asc: w.window_kind]
-    )
+  defp quota_windows_for_identity(identity_id, as_of) do
+    QuotaWindows.list_quota_windows(identity_id, as_of)
   end
 
   defp usage_routing_state_rank(windows, as_of) do

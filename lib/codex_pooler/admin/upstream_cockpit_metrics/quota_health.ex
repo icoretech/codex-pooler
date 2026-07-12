@@ -21,7 +21,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
     pool_ids = Common.visible_pool_ids(scope)
     visible_assignments = Common.filter_assignments_by_pool_ids(assignments, pool_ids)
 
-    windows = quota_windows(identity_or_id, visible_assignments)
+    windows = quota_windows(identity_or_id, visible_assignments, as_of)
 
     from_windows(identity_or_id, visible_assignments, windows, as_of)
   end
@@ -32,12 +32,12 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
     from_windows(nil, assignments, [], as_of)
   end
 
-  defp quota_windows(_identity_or_id, []), do: []
+  defp quota_windows(_identity_or_id, [], _as_of), do: []
 
-  defp quota_windows(identity_or_id, _visible_assignments) do
+  defp quota_windows(identity_or_id, _visible_assignments, as_of) do
     identity_or_id
     |> Common.identity_id()
-    |> QuotaWindows.list_quota_windows()
+    |> QuotaWindows.list_quota_windows(as_of)
   end
 
   defp from_windows(identity_or_status, assignments, windows, as_of) do

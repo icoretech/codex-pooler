@@ -524,6 +524,35 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                )
     end
 
+    test "evidence observed after as_of cannot supersede the primary selected at that instant" do
+      # adversarial: strictly non-future — evidence one second past as_of is
+      # already excluded, so both the sub-skew band (1..300s) and a two-hour
+      # gap behave identically
+      for future_offset_seconds <- [1, 60, 299, 2 * 3600] do
+        assert %{
+                 eligible?: true,
+                 routing_state: :precise,
+                 selection: %{
+                   primary: %AccountQuotaWindow{window_kind: "primary", window_minutes: 300},
+                   secondary: nil
+                 }
+               } =
+                 Windows.routing_quota_eligibility_from_windows(
+                   [
+                     account_primary_window(),
+                     account_secondary_window(
+                       observed_at: DateTime.add(@observed_at, future_offset_seconds, :second)
+                     )
+                   ],
+                   at: @observed_at,
+                   model: "sample-codex-standard",
+                   requested_model: "sample-codex-standard",
+                   upstream_model: "sample-codex-standard-upstream"
+                 ),
+               "future offset #{future_offset_seconds}s"
+      end
+    end
+
     test "fresh 5h primary beside fresh weekly evidence stays precise" do
       assert %{
                eligible?: true,
