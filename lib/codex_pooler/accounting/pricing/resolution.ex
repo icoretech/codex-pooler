@@ -83,8 +83,8 @@ defmodule CodexPooler.Accounting.PricingResolution do
           metadata_service_tier(attempt.response_metadata) ||
           request |> metadata_pricing_value("actual_service_tier")
 
-      lookup_for_tier(
-        model,
+      model
+      |> lookup_for_tier(
         request.requested_model,
         requested_tier,
         actual_tier,
@@ -92,6 +92,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
         timestamp,
         details_value(reservation, "batch_usage") == true
       )
+      |> require_cache_write_rate(usage)
     else
       unpriced_snapshot("unpriced_missing_model", nil, nil, nil, false)
     end
@@ -713,6 +714,16 @@ defmodule CodexPooler.Accounting.PricingResolution do
     not unavailable_pricing_snapshot_marker?(snapshot) and
       not is_nil(snapshot.input_token_micros) and not is_nil(snapshot.output_token_micros)
   end
+
+  defp require_cache_write_rate(
+         %{status: "priced", snapshot: %PricingSnapshot{cache_write_token_micros: nil}} = pricing,
+         %{cache_write_tokens: cache_write_tokens}
+       )
+       when is_integer(cache_write_tokens) and cache_write_tokens > 0 do
+    %{pricing | status: "unpriced_missing_cache_write_rate"}
+  end
+
+  defp require_cache_write_rate(pricing, _usage), do: pricing
 
   @spec unavailable_pricing_snapshot_marker?(PricingSnapshot.t()) :: boolean()
   defp unavailable_pricing_snapshot_marker?(%PricingSnapshot{config: config}) do

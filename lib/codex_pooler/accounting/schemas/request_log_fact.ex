@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.RequestLogFact do
     field :latest_settlement_pricing_status, :string
     field :latest_input_tokens, :integer
     field :latest_cached_input_tokens, :integer
+    field :latest_cache_write_tokens, :integer
     field :latest_output_tokens, :integer
     field :latest_reasoning_tokens, :integer
     field :latest_total_tokens, :integer

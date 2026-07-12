@@ -5,8 +5,10 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   alias CodexPooler.Repo
 
   @source "openai-json-pricing"
+  @importer_format_revision 1
   @pricing_type "per_1m_tokens"
   @supported_price_buckets ~w(default short_context long_context)
+  @supported_price_dimensions ~w(input cached_input cache_write output reasoning available)
   @unavailable "unavailable"
   @currency_code "USD"
   @billing_unit "token"
@@ -41,7 +43,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   defp import_payload(payload, source_url) do
     with {:ok, generated_at, generated_at_raw, models} <- validate_payload(payload),
          {:ok, rows, skipped} <- build_rows(models, generated_at, generated_at_raw, source_url) do
-      replace_rows(generated_at_raw, rows, skipped)
+      replace_rows(price_version(generated_at_raw), rows, skipped)
     end
   end
 
@@ -278,16 +280,19 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
          price_bucket,
          default_prices
        ) do
+    default_prices = Map.take(default_prices, @supported_price_dimensions)
+
     cond do
       unavailable_price_bucket?(default_prices) ->
         {:ok,
          %{
            model_identifier: model_identifier,
-           price_version: generated_at_raw,
+           price_version: price_version(generated_at_raw),
            currency_code: @currency_code,
            billing_unit: @billing_unit,
            input_token_micros: nil,
            cached_input_token_micros: nil,
+           cache_write_token_micros: nil,
            output_token_micros: nil,
            reasoning_token_micros: nil,
            request_base_micros: nil,
@@ -307,15 +312,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
                required_decimal(default_prices, "output", model_identifier, service_tier),
              {:ok, cached_input} <-
                optional_decimal(default_prices, "cached_input", Decimal.new(0)),
+             {:ok, cache_write} <- cache_write_price(default_prices),
              {:ok, reasoning, reasoning_source} <- reasoning_price(default_prices, output) do
           {:ok,
            %{
              model_identifier: model_identifier,
-             price_version: generated_at_raw,
+             price_version: price_version(generated_at_raw),
              currency_code: @currency_code,
              billing_unit: @billing_unit,
              input_token_micros: usd_per_1m_to_token_micros(input),
              cached_input_token_micros: usd_per_1m_to_token_micros(cached_input),
+             cache_write_token_micros: optional_token_micros(cache_write),
              output_token_micros: usd_per_1m_to_token_micros(output),
              reasoning_token_micros: usd_per_1m_to_token_micros(reasoning),
              request_base_micros: Decimal.new(0),
@@ -348,6 +355,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
     Map.merge(
       %{
         "source" => @source,
+        "importer_format_revision" => @importer_format_revision,
         "source_generated_at" => generated_at_raw,
         "source_path" => path,
         "service_tier" => service_tier,
@@ -421,6 +429,23 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
     end
   end
 
+  defp cache_write_price(prices) do
+    case optional_decimal(prices, "cache_write", nil) do
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, %Decimal{} = cache_write} ->
+        if Decimal.negative?(cache_write) do
+          {:error, importer_error(:invalid_price_row, "default.cache_write must be nonnegative")}
+        else
+          {:ok, cache_write}
+        end
+
+      {:error, _reason} ->
+        {:error, importer_error(:invalid_price_row, "default.cache_write must be numeric")}
+    end
+  end
+
   defp replace_rows(price_version, rows, skipped) do
     Repo.transaction(fn ->
       inserted_count = insert_rows(rows)
@@ -448,6 +473,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   end
 
   defp usd_per_1m_to_token_micros(%Decimal{} = usd_per_1m), do: usd_per_1m
+
+  defp optional_token_micros(nil), do: nil
+  defp optional_token_micros(%Decimal{} = value), do: usd_per_1m_to_token_micros(value)
+
+  defp price_version(generated_at_raw),
+    do: "#{generated_at_raw}:importer-format-#{@importer_format_revision}"
 
   defp string_or_nil(value) when is_binary(value), do: value
   defp string_or_nil(_value), do: nil

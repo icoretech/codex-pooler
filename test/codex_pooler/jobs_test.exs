@@ -236,7 +236,7 @@ defmodule CodexPooler.JobsTest do
                from snapshot in CodexPooler.Catalog.PricingSnapshot,
                  where:
                    snapshot.model_identifier == "gpt-job-pricing" and
-                     snapshot.price_version == "2026-05-23T12:00:00Z" and
+                     snapshot.price_version == "2026-05-23T12:00:00Z:importer-format-1" and
                      snapshot.source_url == ^source_url
              )
 

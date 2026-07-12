@@ -11,6 +11,7 @@ defmodule CodexPooler.Catalog.PricingSnapshot do
     field :billing_unit, :string
     field :input_token_micros, :decimal
     field :cached_input_token_micros, :decimal
+    field :cache_write_token_micros, :decimal
     field :output_token_micros, :decimal
     field :reasoning_token_micros, :decimal
     field :request_base_micros, :decimal

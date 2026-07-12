@@ -43,6 +43,7 @@ defmodule CodexPooler.AccountingTestSupport do
         input_token_micros: Map.get(pricing_attrs, :input_token_micros, Decimal.new(10)),
         cached_input_token_micros:
           Map.get(pricing_attrs, :cached_input_token_micros, Decimal.new(1)),
+        cache_write_token_micros: Map.get(pricing_attrs, :cache_write_token_micros),
         output_token_micros: Map.get(pricing_attrs, :output_token_micros, Decimal.new(20)),
         reasoning_token_micros: Map.get(pricing_attrs, :reasoning_token_micros, Decimal.new(30)),
         request_base_micros: Map.get(pricing_attrs, :request_base_micros, Decimal.new(0)),
@@ -72,6 +73,8 @@ defmodule CodexPooler.AccountingTestSupport do
       input_token_micros: Map.get(attrs, :input_token_micros, base.input_token_micros),
       cached_input_token_micros:
         Map.get(attrs, :cached_input_token_micros, base.cached_input_token_micros),
+      cache_write_token_micros:
+        Map.get(attrs, :cache_write_token_micros, base.cache_write_token_micros),
       output_token_micros: Map.get(attrs, :output_token_micros, base.output_token_micros),
       reasoning_token_micros:
         Map.get(attrs, :reasoning_token_micros, base.reasoning_token_micros),

@@ -29,6 +29,53 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
              }
     end
 
+    test "preserves absent, zero, and positive Responses cache-write counters" do
+      for {reported, expected} <- [{:absent, nil}, {0, 0}, {9, 9}] do
+        details = %{"cached_tokens" => 4}
+
+        details =
+          if reported == :absent,
+            do: details,
+            else: Map.put(details, "cache_write_tokens", reported)
+
+        body =
+          Jason.encode!(%{
+            "usage" => %{
+              "input_tokens" => 10,
+              "input_tokens_details" => details,
+              "output_tokens" => 7,
+              "total_tokens" => 17
+            }
+          })
+
+        assert Map.get(ResponseUsage.from_json(body), :cache_write_tokens) == expected
+      end
+    end
+
+    test "preserves absent, zero, and positive Chat cache-write counters" do
+      for {reported, expected} <- [{:absent, nil}, {0, 0}, {6, 6}] do
+        body = chat_usage_body(reported)
+        assert Map.get(ResponseUsage.from_json(body), :cache_write_tokens) == expected
+      end
+    end
+
+    test "preserves current absent cache-write behavior" do
+      body =
+        Jason.encode!(%{
+          "usage" => %{
+            "input_tokens" => 10,
+            "input_tokens_details" => %{"cached_tokens" => 4},
+            "output_tokens" => 7,
+            "total_tokens" => 17
+          }
+        })
+
+      usage = ResponseUsage.from_json(body)
+
+      assert usage.cached_input_tokens == 4
+      refute Map.has_key?(usage, :cache_write_tokens)
+    end
+
     test "extracts nested response usage from output items" do
       body =
         Jason.encode!(%{
@@ -82,10 +129,37 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
                status: "usage_unknown",
                source: "invalid_usage_tokens"
              }
+
+      for invalid <- [-1, 1.5, "9", "not-an-integer", nil] do
+        body =
+          Jason.encode!(%{
+            "usage" => %{
+              "input_tokens" => 10,
+              "input_tokens_details" => %{
+                "cached_tokens" => 4,
+                "cache_write_tokens" => invalid
+              },
+              "output_tokens" => 2,
+              "total_tokens" => 12
+            }
+          })
+
+        assert ResponseUsage.from_json(body) == %{
+                 status: "usage_unknown",
+                 source: "invalid_usage_tokens"
+               }
+      end
     end
   end
 
   describe "from_sse/1" do
+    test "preserves absent, zero, and positive terminal SSE cache-write counters" do
+      for {reported, expected} <- [{:absent, nil}, {0, 0}, {8, 8}] do
+        body = terminal_sse_usage(reported)
+        assert Map.get(ResponseUsage.from_sse(body), :cache_write_tokens) == expected
+      end
+    end
+
     test "extracts latest valid usage payload from SSE data frames" do
       body = """
       event: ping
@@ -145,7 +219,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
     test "extracts usage from a retained SSE suffix that starts inside a large data frame" do
       body =
         ~s(output_text":"truncated prefix) <>
-          ~s(","usage":{"input_tokens":214407,"input_tokens_details":{"cached_tokens":206848},"output_tokens":512,"reasoning_tokens":0,"total_tokens":214919},"status":"completed"}}\n\n) <>
+          ~s(","usage":{"input_tokens":214407,"input_tokens_details":{"cached_tokens":206848,"cache_write_tokens":1024},"output_tokens":512,"reasoning_tokens":0,"total_tokens":214919},"status":"completed"}}\n\n) <>
           "data: [DONE]\n\n"
 
       assert ResponseUsage.from_sse(body) == %{
@@ -153,10 +227,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
                source: "upstream_usage",
                input_tokens: 214_407,
                cached_input_tokens: 206_848,
+               cache_write_tokens: 1_024,
                output_tokens: 512,
                reasoning_tokens: 0,
                total_tokens: 214_919,
                service_tier: nil
+             }
+    end
+
+    test "rejects malformed cache-write counters in retained SSE usage" do
+      for invalid <- ["-1", "1.5", ~s("1"), "null"] do
+        body = retained_usage_with_cache_write(invalid) <> "data: [DONE]\n\n"
+
+        assert ResponseUsage.from_sse(body) == %{
+                 status: "usage_unknown",
+                 source: "invalid_usage_tokens"
+               }
+      end
+    end
+
+    test "malformed retained terminal usage overrides earlier known SSE usage" do
+      body =
+        terminal_sse_usage(0) <>
+          retained_usage_with_cache_write(~s("9")) <>
+          "data: [DONE]\n\n"
+
+      assert ResponseUsage.from_sse(body) == %{
+               status: "usage_unknown",
+               source: "invalid_usage_tokens"
              }
     end
 
@@ -309,6 +407,31 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
   end
 
   describe "from_websocket_body/1" do
+    test "preserves absent, zero, and positive terminal websocket cache-write counters" do
+      for {reported, expected} <- [{:absent, nil}, {0, 0}, {5, 5}] do
+        body = terminal_websocket_usage(reported)
+        assert Map.get(ResponseUsage.from_websocket_body(body), :cache_write_tokens) == expected
+      end
+    end
+
+    test "rejects malformed cache-write counters in retained websocket usage" do
+      for invalid <- ["-1", "1.5", ~s("1"), "null"] do
+        assert ResponseUsage.from_websocket_body(retained_usage_with_cache_write(invalid)) == %{
+                 status: "usage_unknown",
+                 source: "invalid_usage_tokens"
+               }
+      end
+    end
+
+    test "malformed retained terminal usage overrides earlier known websocket usage" do
+      body = terminal_websocket_usage(0) <> "\n" <> retained_usage_with_cache_write("null")
+
+      assert ResponseUsage.from_websocket_body(body) == %{
+               status: "usage_unknown",
+               source: "invalid_usage_tokens"
+             }
+    end
+
     test "extracts usage from SSE-style collected websocket data chunks" do
       body = """
       data: {"type":"response.created"}
@@ -468,5 +591,47 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+  end
+
+  defp chat_usage_body(reported) do
+    details = cache_write_details(reported)
+
+    Jason.encode!(%{
+      "usage" => %{
+        "prompt_tokens" => 10,
+        "prompt_tokens_details" => details,
+        "completion_tokens" => 7,
+        "total_tokens" => 17
+      }
+    })
+  end
+
+  defp terminal_sse_usage(reported) do
+    sse_event("response.completed", terminal_usage_payload(reported))
+  end
+
+  defp terminal_websocket_usage(reported), do: Jason.encode!(terminal_usage_payload(reported))
+
+  defp terminal_usage_payload(reported) do
+    %{
+      "type" => "response.completed",
+      "response" => %{
+        "usage" => %{
+          "input_tokens" => 10,
+          "input_tokens_details" => cache_write_details(reported),
+          "output_tokens" => 7,
+          "total_tokens" => 17
+        }
+      }
+    }
+  end
+
+  defp cache_write_details(:absent), do: %{"cached_tokens" => 4}
+
+  defp cache_write_details(reported),
+    do: %{"cached_tokens" => 4, "cache_write_tokens" => reported}
+
+  defp retained_usage_with_cache_write(cache_write_tokens) do
+    ~s|"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":#{cache_write_tokens}},"output_tokens":2,"total_tokens":12}}|
   end
 end

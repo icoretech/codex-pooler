@@ -122,6 +122,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         token_field(log.token_counts, :cached_input_tokens)
       ),
       detail(
+        "request-log-detail-cache-write-tokens",
+        "Cache write tokens",
+        cache_write_token_count(log.token_counts),
+        role: "cache-write-tokens"
+      ),
+      detail(
+        "request-log-detail-cache-write-cost",
+        "Cache write cost",
+        format_cache_write_cost(log.token_counts),
+        role: "cache-write-cost"
+      ),
+      detail(
         "request-log-detail-reasoning-tokens",
         "Reasoning tokens",
         token_field(log.token_counts, :reasoning_tokens)
@@ -129,6 +141,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     ]
     |> present_rows()
   end
+
+  defp cache_write_token_count(%{cache_write_tokens: value}) when is_integer(value),
+    do: "#{value} cache write"
+
+  defp cache_write_token_count(_counts), do: nil
+
+  defp format_cache_write_cost(%{cache_write_cost_usd: %Decimal{} = value}),
+    do: "$#{Decimal.to_string(Decimal.round(value, 2), :normal)}"
+
+  defp format_cache_write_cost(_counts), do: nil
 
   @spec continuity_rows(map(), map()) :: [detail_row()]
   def continuity_rows(log, datetime_preferences) do
@@ -225,7 +247,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
   defp metadata_section(_log, _key), do: %{}
 
   defp detail(id, label, value, opts \\ []) do
-    %{id: id, label: label, value: value, mono: Keyword.get(opts, :mono, false)}
+    %{
+      id: id,
+      label: label,
+      value: value,
+      mono: Keyword.get(opts, :mono, false),
+      role: Keyword.get(opts, :role, "request-log-detail-field")
+    }
   end
 
   defp present_rows(rows), do: Enum.reject(rows, &(blank?(&1.value) or &1.value == "-"))

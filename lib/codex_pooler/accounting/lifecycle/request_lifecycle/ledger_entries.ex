@@ -241,6 +241,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       currency_code: (snapshot && snapshot.currency_code) || "USD",
       input_tokens: positive_or_nil(estimate.input_tokens),
       cached_input_tokens: positive_or_nil(estimate.cached_input_tokens),
+      cache_write_tokens: nil,
       output_tokens: positive_or_nil(estimate.output_tokens),
       reasoning_tokens: positive_or_nil(estimate.reasoning_tokens),
       total_tokens: positive_or_nil(estimate.total_tokens),
@@ -281,6 +282,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       currency_code: (snapshot && snapshot.currency_code) || reservation.currency_code,
       input_tokens: positive_or_nil(state.usage.input_tokens),
       cached_input_tokens: positive_or_nil(state.usage.cached_input_tokens),
+      cache_write_tokens: known_cache_write_tokens(state.usage),
       output_tokens: positive_or_nil(state.usage.output_tokens),
       reasoning_tokens: positive_or_nil(state.usage.reasoning_tokens),
       total_tokens: positive_or_nil(state.usage.total_tokens),
@@ -387,7 +389,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       "retry_count" => Map.fetch!(context, :retry_count),
       "estimated_from_reserve" => usage.status != "usage_known",
       "settled_cost_micros" => context |> Map.fetch!(:settled_cost) |> decimal_string_or_nil(),
-      "cached_input_cost_micros" => cached_input_cost_micros(usage, pricing)
+      "cached_input_cost_micros" => cached_input_cost_micros(usage, pricing),
+      "cache_write_rate_status" => cache_write_rate_status(usage, pricing),
+      "cache_write_token_micros" => cache_write_token_micros(usage, pricing),
+      "cache_write_cost_micros" => cache_write_cost_micros(usage, pricing),
+      "pricing_importer_revision" => pricing_importer_revision(pricing)
     }
     |> Map.merge(PricingResolution.details(pricing))
   end
@@ -409,6 +415,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   end
 
   defp positive_or_nil(value), do: if(value && value > 0, do: value, else: nil)
+  defp nonnegative_or_nil(value) when is_integer(value) and value >= 0, do: value
+  defp nonnegative_or_nil(_value), do: nil
+
+  defp known_cache_write_tokens(%{status: "usage_known", cache_write_tokens: value}),
+    do: nonnegative_or_nil(value)
+
+  defp known_cache_write_tokens(_usage), do: nil
   defp ledger_cost_value(nil), do: Decimal.new(0)
   defp ledger_cost_value(%Decimal{} = value), do: value
   defp decimal_string_or_nil(nil), do: nil
@@ -429,6 +442,41 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   end
 
   defp cached_input_cost_micros(_usage, _pricing), do: nil
+
+  defp cache_write_rate_status(%{cache_write_tokens: tokens}, %{snapshot: snapshot})
+       when is_integer(tokens) and tokens >= 0 do
+    if match?(%{cache_write_token_micros: %Decimal{}}, snapshot),
+      do: "available",
+      else: "unavailable"
+  end
+
+  defp cache_write_rate_status(_usage, _pricing), do: "not_reported"
+
+  defp cache_write_token_micros(
+         %{cache_write_tokens: tokens},
+         %{snapshot: %{cache_write_token_micros: %Decimal{} = rate}}
+       )
+       when is_integer(tokens) and tokens >= 0,
+       do: decimal_string_or_nil(rate)
+
+  defp cache_write_token_micros(_usage, _pricing), do: nil
+
+  defp cache_write_cost_micros(
+         %{cache_write_tokens: tokens},
+         %{status: "priced", snapshot: %{cache_write_token_micros: %Decimal{} = rate}}
+       )
+       when is_integer(tokens) and tokens >= 0 do
+    tokens |> Decimal.new() |> Decimal.mult(rate) |> decimal_string_or_nil()
+  end
+
+  defp cache_write_cost_micros(%{cache_write_tokens: 0}, _pricing), do: "0"
+
+  defp cache_write_cost_micros(_usage, _pricing), do: nil
+
+  defp pricing_importer_revision(%{snapshot: %{config: config}}) when is_map(config),
+    do: Map.get(config, "importer_format_revision")
+
+  defp pricing_importer_revision(_pricing), do: nil
 
   defp normalize_windows(windows) when is_list(windows), do: Map.new(windows)
   defp normalize_windows(windows) when is_map(windows), do: windows

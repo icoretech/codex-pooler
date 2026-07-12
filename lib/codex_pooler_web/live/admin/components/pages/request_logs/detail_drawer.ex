@@ -170,7 +170,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
     ~H"""
     <div
       id={@row.id}
-      data-role="request-log-detail-field"
+      data-role={@row[:role] || "request-log-detail-field"}
       class="grid gap-1 rounded-box bg-base-200/60 px-3 py-2"
     >
       <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/45">

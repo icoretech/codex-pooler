@@ -3,6 +3,7 @@ defmodule CodexPooler.Accounting.PricingTest do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.DailyRollup
+  alias CodexPooler.Accounting.{LedgerEntry, RequestLogFact}
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.Repo
 
@@ -961,6 +962,284 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert Decimal.equal?(log.cost.usd, Decimal.new("0.000910"))
     end
 
+    test "cache-write usage preserves nil, zero, and positive counters in ledger and request facts" do
+      setup = accounting_setup()
+
+      for {suffix, cache_write_tokens} <- [{"absent", nil}, {"zero", 0}, {"positive", 6}] do
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+                   %{correlation_id: "corr-cache-write-#{suffix}"}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        usage = %{
+          status: "usage_known",
+          input_tokens: 10,
+          cached_input_tokens: 4,
+          output_tokens: 2,
+          total_tokens: 12
+        }
+
+        usage =
+          if is_nil(cache_write_tokens),
+            do: usage,
+            else: Map.put(usage, :cache_write_tokens, cache_write_tokens)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   usage,
+                   %{response_status_code: 200}
+                 )
+
+        persisted_entry = Repo.get!(LedgerEntry, result.settlement.id)
+        persisted_fact = Repo.get!(RequestLogFact, reserved.request.id)
+
+        assert Map.get(persisted_entry, :cache_write_tokens) == cache_write_tokens
+        assert Map.get(persisted_fact, :latest_cache_write_tokens) == cache_write_tokens
+      end
+    end
+
+    test "invalid cache-write usage becomes unknown and never persists billable counters" do
+      setup = accounting_setup()
+
+      for {suffix, invalid_usage} <- [
+            {"negative", %{cache_write_tokens: -1}},
+            {"noninteger", %{cache_write_tokens: "1.5"}},
+            {"over-total", %{cached_input_tokens: 8, cache_write_tokens: 3}}
+          ] do
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id},
+                   %{correlation_id: "corr-invalid-cache-write-#{suffix}"}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        usage =
+          Map.merge(
+            %{
+              status: "usage_known",
+              input_tokens: 10,
+              cached_input_tokens: 4,
+              output_tokens: 2,
+              total_tokens: 12
+            },
+            invalid_usage
+          )
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   usage,
+                   %{response_status_code: 200}
+                 )
+
+        assert result.settlement.usage_status == "usage_unknown"
+        assert is_nil(result.settlement.cache_write_tokens)
+        assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
+        assert Repo.get!(RequestLogFact, reserved.request.id).latest_cache_write_tokens == nil
+      end
+    end
+
+    test "cache-write settlement uses the selected tier and bucket local rate" do
+      setup = accounting_setup()
+      Repo.delete!(setup.pricing)
+
+      generated_at =
+        DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:microsecond)
+
+      path =
+        write_tmp_pricing_json!(generated_at, setup.model.upstream_model_id, %{
+          "input" => Decimal.new(10),
+          "cached_input" => Decimal.new(2),
+          "cache_write" => Decimal.new(7),
+          "output" => Decimal.new(20),
+          "reasoning" => Decimal.new(20)
+        })
+
+      assert {:ok, _result} = OpenAIPricingImporter.import_file(path)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{
+                   correlation_id: "corr-cache-write-local-rate",
+                   now: DateTime.add(generated_at, 1)
+                 }
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 10,
+                   cached_input_tokens: 4,
+                   cache_write_tokens: 3,
+                   output_tokens: 2,
+                   total_tokens: 12
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.pricing_snapshot_id == reserved.pricing_snapshot.id
+      assert result.settlement.details["service_tier"] == "standard"
+      assert result.settlement.details["price_bucket"] == "default"
+
+      assert result.settlement.details["price_version"] ==
+               "#{DateTime.to_iso8601(generated_at)}:importer-format-1"
+
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(99))
+      assert result.settlement.details["cache_write_rate_status"] == "available"
+      assert result.settlement.details["cache_write_token_micros"] == "7"
+      assert result.settlement.details["cache_write_cost_micros"] == "21"
+      assert result.settlement.details["pricing_importer_revision"] == 1
+    end
+
+    test "explicit zero cache writes remain priced without a cache-write rate" do
+      setup = accounting_setup(%{cache_write_token_micros: nil})
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id},
+                 %{correlation_id: "corr-cache-write-zero-missing-rate"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 10,
+                   cached_input_tokens: 4,
+                   cache_write_tokens: 0,
+                   output_tokens: 0,
+                   total_tokens: 10
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.cache_write_tokens == 0
+      assert result.settlement.details["pricing_status"] == "priced"
+      assert result.settlement.details["cache_write_rate_status"] == "unavailable"
+      assert result.settlement.details["cache_write_cost_micros"] == "0"
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(64))
+    end
+
+    test "reported cache writes replace ordinary input while absent and zero preserve their semantics" do
+      setup =
+        accounting_setup(%{
+          input_token_micros: Decimal.new(10),
+          cached_input_token_micros: Decimal.new(2),
+          cache_write_token_micros: Decimal.new(7),
+          output_token_micros: Decimal.new(0),
+          reasoning_token_micros: Decimal.new(0)
+        })
+
+      for {suffix, cache_write, expected_cost, rate_status} <- [
+            {"absent", :absent, 68, "not_reported"},
+            {"zero", 0, 68, "available"},
+            {"all-write", 6, 50, "available"}
+          ] do
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+                   %{correlation_id: "corr-cache-write-partition-#{suffix}"}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        usage = %{
+          status: "usage_known",
+          input_tokens: 10,
+          cached_input_tokens: 4,
+          output_tokens: 0,
+          total_tokens: 10
+        }
+
+        usage =
+          if cache_write == :absent,
+            do: usage,
+            else: Map.put(usage, :cache_write_tokens, cache_write)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   usage,
+                   %{response_status_code: 200}
+                 )
+
+        assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(expected_cost))
+        assert result.settlement.details["cache_write_rate_status"] == rate_status
+      end
+    end
+
+    test "positive cache writes without an available selected-snapshot rate are unpriced" do
+      setup = accounting_setup(%{cache_write_token_micros: nil})
+
+      for availability <- [:missing, :unavailable] do
+        if availability == :unavailable do
+          setup.pricing
+          |> Ecto.Changeset.change(%{
+            config: Map.put(setup.pricing.config, "availability", "unavailable")
+          })
+          |> Repo.update!()
+        end
+
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id},
+                   %{correlation_id: "corr-cache-write-rate-#{availability}"}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   %{
+                     status: "usage_known",
+                     input_tokens: 10,
+                     cached_input_tokens: 4,
+                     cache_write_tokens: 3,
+                     output_tokens: 2,
+                     total_tokens: 12
+                   },
+                   %{response_status_code: 200}
+                 )
+
+        assert String.starts_with?(result.settlement.details["pricing_status"], "unpriced")
+        assert result.settlement.details["cache_write_rate_status"] == "unavailable"
+        assert is_nil(result.settlement.details["cache_write_cost_micros"])
+        assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(0))
+      end
+    end
+
     test "websocket final usage can reselect the long-context price bucket" do
       setup = accounting_setup()
 
@@ -1012,6 +1291,55 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert result.settlement.details["price_bucket"] == "long_context"
       assert result.settlement.details["estimated_from_reserve"] == false
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(5_440_080))
+    end
+
+    test "cache-write settlement uses priority short-context and standard long-context rates" do
+      setup = accounting_setup(%{cache_write_token_micros: Decimal.new(7)})
+
+      priority_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          config: pricing_config(%{"service_tier" => "priority"}),
+          cache_write_token_micros: Decimal.new(11)
+        })
+
+      long_context_pricing =
+        pricing_snapshot_fixture(setup.pricing, %{
+          config: pricing_config(%{"price_bucket" => "long_context"}),
+          cache_write_token_micros: Decimal.new(13)
+        })
+
+      for {suffix, payload, usage, expected_snapshot, expected_rate} <- [
+            {"priority-short", %{"service_tier" => "priority"}, %{input_tokens: 10},
+             priority_pricing, "11"},
+            {"standard-long", %{}, %{input_tokens: 272_001}, long_context_pricing, "13"}
+          ] do
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   Map.merge(%{"model" => setup.model.exposed_model_id}, payload),
+                   %{correlation_id: "corr-cache-write-dimension-#{suffix}"}
+                 )
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   Map.merge(usage, %{
+                     status: "usage_known",
+                     cached_input_tokens: 4,
+                     cache_write_tokens: 3,
+                     output_tokens: 0,
+                     total_tokens: usage.input_tokens
+                   }),
+                   %{response_status_code: 200}
+                 )
+
+        assert result.settlement.pricing_snapshot_id == expected_snapshot.id
+        assert result.settlement.details["cache_write_token_micros"] == expected_rate
+      end
     end
 
     test "websocket usage_unknown fallback rows keep reservation tokens but no priced cost" do

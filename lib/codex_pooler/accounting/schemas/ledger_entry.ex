@@ -20,6 +20,7 @@ defmodule CodexPooler.Accounting.LedgerEntry do
     field :currency_code, :string
     field :input_tokens, :integer
     field :cached_input_tokens, :integer
+    field :cache_write_tokens, :integer
     field :output_tokens, :integer
     field :reasoning_tokens, :integer
     field :total_tokens, :integer

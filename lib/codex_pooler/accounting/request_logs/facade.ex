@@ -13,7 +13,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   import Ecto.Query
 
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFact}
 
   alias CodexPooler.Accounting.RequestLogs.{
     DebugProjection,
@@ -48,12 +48,15 @@ defmodule CodexPooler.Accounting.RequestLogs do
       when is_binary(request_id) do
     visible_pool_ids = scope |> Pools.list_log_filter_pools() |> Enum.map(& &1.id)
 
-    request_log_query()
-    |> maybe_filter_request_log_visible_pools(visible_pool_ids)
-    |> where([request, ...], request.id == ^request_id)
-    |> request_log_rows(1, 0)
-    |> request_log_items()
-    |> List.first()
+    item =
+      request_log_query()
+      |> maybe_filter_request_log_visible_pools(visible_pool_ids)
+      |> where([request, ...], request.id == ^request_id)
+      |> request_log_rows(1, 0)
+      |> request_log_items()
+      |> List.first()
+
+    enrich_detail_settlement(item)
   end
 
   @spec list_models(term(), keyword()) :: [String.t()]
@@ -189,6 +192,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       retry_count: request.retry_count,
       denial_reason: request.last_error_code || maybe_field(latest, :network_error_code),
       latency_ms: maybe_field(latest, :latency_ms),
+      settlement_entry_id: maybe_field(settlement, :settlement_entry_id),
       token_counts: SettlementPresentation.token_counts(settlement),
       cost: SettlementPresentation.cost(settlement),
       payload_compression: PayloadCompressionProjection.build(metadata),
@@ -262,6 +266,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       where: not is_nil(fact.latest_settlement_entry_id),
       select: %{
         request_id: fact.request_id,
+        settlement_entry_id: fact.latest_settlement_entry_id,
         usage_status: fact.latest_settlement_usage_status,
         pricing_status: fact.latest_settlement_pricing_status,
         input_tokens:
@@ -281,6 +286,16 @@ defmodule CodexPooler.Accounting.RequestLogs do
               fact.latest_settlement_usage_status,
               ^@usage_known,
               fact.latest_cached_input_tokens
+            ),
+            :integer
+          ),
+        cache_write_tokens:
+          type(
+            fragment(
+              "CASE WHEN ? = ? THEN ? ELSE NULL END",
+              fact.latest_settlement_usage_status,
+              ^@usage_known,
+              fact.latest_cache_write_tokens
             ),
             :integer
           ),
@@ -352,6 +367,26 @@ defmodule CodexPooler.Accounting.RequestLogs do
             :map
           )
       }
+  end
+
+  defp enrich_detail_settlement(nil), do: nil
+
+  defp enrich_detail_settlement(%{settlement_entry_id: nil} = item) do
+    item
+    |> Map.update!(:token_counts, &SettlementPresentation.with_component_cost(&1, nil))
+    |> Map.delete(:settlement_entry_id)
+  end
+
+  defp enrich_detail_settlement(item) do
+    details =
+      LedgerEntry
+      |> where([entry], entry.id == ^item.settlement_entry_id)
+      |> select([entry], entry.details)
+      |> Repo.one()
+
+    item
+    |> Map.update!(:token_counts, &SettlementPresentation.with_component_cost(&1, details))
+    |> Map.delete(:settlement_entry_id)
   end
 
   defp apply_request_log_filters(query, filters) do

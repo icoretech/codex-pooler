@@ -1256,7 +1256,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         cached_input_tokens: 40,
         output_tokens: 50,
         total_tokens: 150,
-        settled_cost_micros: 1_000,
+        settled_cost_micros: 500_000,
         settlement_details: %{
           "pricing_status" => "priced",
           "settled_cost_micros" => "1000",
@@ -1282,6 +1282,74 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     html = render(view)
     assert html =~ "data-role=\"cached-tokens\""
     refute has_element?(view, "#request-log-#{cached_request.id}-cached-tokens", "total: 150")
+  end
+
+  test "detail drawer conditionally renders reported cache-write tokens and component cost", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "cache-write-tokens", name: "Cache Writes"})
+
+    %{request: positive_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-cache-write-positive",
+        requested_model: "cache-write-model",
+        input_tokens: 100,
+        cached_input_tokens: 40,
+        cache_write_tokens: 6,
+        output_tokens: 50,
+        total_tokens: 150,
+        settled_cost_micros: 500_000,
+        settlement_details: %{
+          "pricing_status" => "priced",
+          "cache_write_cost_micros" => "250000",
+          "settled_cost_micros" => "500000"
+        },
+        status: "succeeded"
+      })
+
+    persisted_entry =
+      Repo.get_by!(CodexPooler.Accounting.LedgerEntry, request_id: positive_request.id)
+
+    assert Map.get(persisted_entry, :cache_write_tokens) == 6
+
+    %{request: absent_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-cache-write-absent",
+        requested_model: "legacy-model",
+        input_tokens: 10,
+        output_tokens: 5,
+        total_tokens: 15,
+        settled_cost_micros: 100,
+        settlement_details: %{"pricing_status" => "priced", "settled_cost_micros" => "100"},
+        status: "succeeded"
+      })
+
+    {:ok, view, _html} =
+      live(
+        conn,
+        ~p"/admin/request-logs?pool_id=#{pool.id}&selected_request_id=#{positive_request.id}"
+      )
+
+    assert has_element?(
+             view,
+             "#request-log-detail-cache-write-tokens[data-role='cache-write-tokens']",
+             "6 cache write"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-detail-cache-write-cost[data-role='cache-write-cost']",
+             "$0.25"
+           )
+
+    assert has_element?(view, "#request-log-detail-cost", "$0.50")
+
+    render_click(element(view, "#request-log-#{absent_request.id}-open-details"))
+    assert_patch(view)
+
+    refute has_element?(view, "#request-log-detail-cache-write-tokens")
+    refute has_element?(view, "#request-log-detail-cache-write-cost")
   end
 
   test "renders compression savings from safe metadata with token-first and byte fallback",
@@ -2758,6 +2826,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       upstream_identity_id: identity.id,
       input_tokens: Map.get(attrs, :input_tokens, 1),
       cached_input_tokens: Map.get(attrs, :cached_input_tokens, 0),
+      cache_write_tokens: Map.get(attrs, :cache_write_tokens),
       output_tokens: Map.get(attrs, :output_tokens, 1),
       total_tokens: Map.get(attrs, :total_tokens, 2),
       settled_cost_micros: Map.get(attrs, :settled_cost_micros, 0),

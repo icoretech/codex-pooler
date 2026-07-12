@@ -369,7 +369,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     snapshot = pricing.snapshot
 
     settled_cost =
-      if usage.status == @usage_known,
+      if usage.status == @usage_known and pricing.status == "priced",
         do: PricingResolution.cost_micros(snapshot, usage),
         else: nil
 
@@ -474,6 +474,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
     input_tokens = get_int(usage, [:input_tokens, "input_tokens"])
     cached_input_tokens = get_int(usage, [:cached_input_tokens, "cached_input_tokens"]) || 0
+    cache_write_tokens = optional_usage_counter(usage, :cache_write_tokens)
     output_tokens = get_int(usage, [:output_tokens, "output_tokens"])
     reasoning_tokens = get_int(usage, [:reasoning_tokens, "reasoning_tokens"]) || 0
 
@@ -481,22 +482,84 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       get_int(usage, [:total_tokens, "total_tokens"]) ||
         (input_tokens || 0) + (output_tokens || 0)
 
+    valid_usage? =
+      status != @usage_known or
+        valid_reported_usage?(
+          input_tokens,
+          cached_input_tokens,
+          cache_write_tokens,
+          output_tokens,
+          total_tokens
+        )
+
+    normalized_status =
+      if status in [@usage_known, @usage_pending, @usage_unknown, @usage_not_applicable] and
+           valid_usage?,
+         do: status,
+         else: @usage_unknown
+
     %{
-      status:
-        if(status in [@usage_known, @usage_pending, @usage_unknown, @usage_not_applicable],
-          do: status,
-          else: @usage_unknown
-        ),
+      status: normalized_status,
       input_tokens: input_tokens || 0,
       cached_input_tokens: cached_input_tokens,
+      cache_write_tokens: reported_counter_value(cache_write_tokens),
       output_tokens: output_tokens || 0,
       reasoning_tokens: reasoning_tokens,
       total_tokens: total_tokens,
-      source: attr(usage, :source) || default_usage_source(status),
+      source:
+        if(valid_usage?,
+          do: attr(usage, :source) || default_usage_source(normalized_status),
+          else: "invalid_usage_tokens"
+        ),
       service_tier: attr(usage, :service_tier),
       recorded_at: attr(usage, :recorded_at) || now()
     }
   end
+
+  defp optional_usage_counter(usage, key) do
+    case Map.fetch(usage, key) do
+      {:ok, value} ->
+        normalize_reported_counter(value)
+
+      :error ->
+        case Map.fetch(usage, Atom.to_string(key)) do
+          {:ok, value} -> normalize_reported_counter(value)
+          :error -> :unreported
+        end
+    end
+  end
+
+  defp normalize_reported_counter(value) when is_integer(value) and value >= 0, do: {:ok, value}
+  defp normalize_reported_counter(_value), do: :invalid
+
+  defp reported_counter_value({:ok, value}), do: value
+  defp reported_counter_value(_unreported_or_invalid), do: nil
+
+  defp valid_reported_usage?(
+         input_tokens,
+         cached_input_tokens,
+         cache_write_tokens,
+         output_tokens,
+         total_tokens
+       ) do
+    with true <- nonnegative_integer?(input_tokens),
+         true <- nonnegative_integer?(cached_input_tokens),
+         true <- valid_optional_counter?(cache_write_tokens),
+         true <- nonnegative_integer?(output_tokens),
+         true <- nonnegative_integer?(total_tokens),
+         {:ok, writes} <- optional_counter_for_sum(cache_write_tokens) do
+      cached_input_tokens + writes <= input_tokens
+    else
+      _invalid -> false
+    end
+  end
+
+  defp nonnegative_integer?(value), do: is_integer(value) and value >= 0
+  defp valid_optional_counter?(:unreported), do: true
+  defp valid_optional_counter?({:ok, _value}), do: true
+  defp valid_optional_counter?(:invalid), do: false
+  defp optional_counter_for_sum(:unreported), do: {:ok, 0}
+  defp optional_counter_for_sum({:ok, value}), do: {:ok, value}
 
   defp fill_unknown_usage_from_reservation(
          %{status: @usage_known} = usage,

@@ -42,10 +42,15 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
   def cost_micros(%PricingSnapshot{} = snapshot, usage) do
     input_tokens = usage_value(usage, :input_tokens)
     cached_input_tokens = usage_value(usage, :cached_input_tokens)
+    cache_write_tokens = reported_usage_value(usage, :cache_write_tokens)
     output_tokens = usage_value(usage, :output_tokens)
     reasoning_tokens = usage_value(usage, :reasoning_tokens)
     billable_cached_input = min(cached_input_tokens, input_tokens)
-    billable_standard_input = max(input_tokens - billable_cached_input, 0)
+    billable_cache_write = cache_write_tokens || 0
+
+    billable_standard_input =
+      max(input_tokens - billable_cached_input - billable_cache_write, 0)
+
     billable_reasoning = min(reasoning_tokens, output_tokens)
     billable_standard_output = max(output_tokens - billable_reasoning, 0)
 
@@ -55,6 +60,12 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
       Decimal.mult(
         Decimal.new(billable_cached_input),
         snapshot.cached_input_token_micros || Decimal.new(0)
+      )
+    )
+    |> Decimal.add(
+      Decimal.mult(
+        Decimal.new(billable_cache_write),
+        snapshot.cache_write_token_micros || Decimal.new(0)
       )
     )
     |> Decimal.add(
@@ -204,6 +215,13 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
 
   defp int_value(_value), do: nil
   defp usage_value(usage, key), do: Map.get(usage, key) || Map.get(usage, to_string(key)) || 0
+
+  defp reported_usage_value(usage, key) do
+    case Map.fetch(usage, key) do
+      {:ok, value} -> value
+      :error -> Map.get(usage, to_string(key))
+    end
+  end
 
   defp decimal_to_integer(%Decimal{} = value),
     do: value |> Decimal.round(0) |> Decimal.to_integer()

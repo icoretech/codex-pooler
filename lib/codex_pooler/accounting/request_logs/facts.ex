@@ -111,6 +111,7 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
       latest_settlement_pricing_status: pricing_status(entry),
       latest_input_tokens: known_usage_value(entry, :input_tokens),
       latest_cached_input_tokens: known_usage_value(entry, :cached_input_tokens),
+      latest_cache_write_tokens: known_usage_value(entry, :cache_write_tokens),
       latest_output_tokens: known_usage_value(entry, :output_tokens),
       latest_reasoning_tokens: known_usage_value(entry, :reasoning_tokens),
       latest_total_tokens: known_usage_value(entry, :total_tokens),

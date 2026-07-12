@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
           required(:source) => String.t(),
           optional(:input_tokens) => non_neg_integer(),
           optional(:cached_input_tokens) => non_neg_integer(),
+          optional(:cache_write_tokens) => non_neg_integer() | nil,
           optional(:output_tokens) => non_neg_integer(),
           optional(:reasoning_tokens) => non_neg_integer(),
           optional(:total_tokens) => non_neg_integer(),
@@ -36,6 +37,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
     case best_usage(line_or_message_usage, usage_from_retained_usage_fragment(body)) do
       %{status: "usage_known"} = usage -> usage
+      %{status: "usage_unknown"} = usage -> usage
       _missing -> %{status: "usage_unknown", source: "websocket_usage_missing"}
     end
   end
@@ -61,7 +63,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     |> Enum.reduce(nil, fn candidate, acc ->
       case usage_from_retained_usage_candidate(candidate) do
         %{status: "usage_known"} = usage -> usage
-        _missing -> acc
+        %{status: "usage_unknown"} = usage -> usage
+        nil -> acc
       end
     end)
   end
@@ -97,7 +100,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
        }) do
     with {:ok, input_tokens} <- retained_int(usage_fragment, ~r/"input_tokens"\s*:\s*(\d+)/),
          {:ok, output_tokens} <- retained_int(usage_fragment, ~r/"output_tokens"\s*:\s*(\d+)/),
-         {:ok, total_tokens} <- retained_int(usage_fragment, ~r/"total_tokens"\s*:\s*(\d+)/) do
+         {:ok, total_tokens} <- retained_int(usage_fragment, ~r/"total_tokens"\s*:\s*(\d+)/),
+         {:ok, cache_write_tokens} <- retained_optional_cache_write_tokens(usage_fragment) do
       %{
         "input_tokens" => input_tokens,
         "cached_input_tokens" => retained_cached_input_tokens(usage_fragment),
@@ -106,10 +110,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
           retained_int_or_zero(usage_fragment, ~r/"reasoning_tokens"\s*:\s*(\d+)/),
         "total_tokens" => total_tokens
       }
+      |> maybe_put_retained_cache_write_tokens(cache_write_tokens)
       |> normalize_usage(%{
         "service_tier" => retained_service_tier(context_prefix, usage_fragment)
       })
     else
+      :invalid -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
       :error -> nil
     end
   end
@@ -202,6 +208,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     end
   end
 
+  defp retained_optional_cache_write_tokens(body) do
+    case Regex.run(~r/"cache_write_tokens"\s*:\s*([^,}\s]+)/, body, capture: :all_but_first) do
+      nil -> {:ok, nil}
+      [scalar] -> normalize_retained_cache_write_scalar(scalar)
+    end
+  end
+
+  defp normalize_retained_cache_write_scalar(scalar) do
+    case int_value(scalar) do
+      {:ok, value} -> {:ok, value}
+      :error -> :invalid
+    end
+  end
+
+  defp maybe_put_retained_cache_write_tokens(usage, nil), do: usage
+
+  defp maybe_put_retained_cache_write_tokens(usage, value),
+    do: Map.put(usage, "cache_write_tokens", value)
+
   defp retained_int_or_zero(body, pattern) do
     case retained_int(body, pattern) do
       {:ok, value} -> value
@@ -251,7 +276,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     Enum.reduce(items, nil, fn item, acc ->
       case usage_from_decoded(item, false) do
         %{status: "usage_known"} = usage -> usage
-        %{status: "usage_unknown"} = usage -> acc || usage
+        %{status: "usage_unknown"} = usage -> usage
         nil -> acc
       end
     end)
@@ -260,7 +285,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   defp latest_usage_candidate(decoded, acc) do
     case usage_from_decoded(decoded, false) do
       %{status: "usage_known"} = usage -> usage
-      %{status: "usage_unknown"} = usage -> acc || usage
+      %{status: "usage_unknown"} = usage -> usage
       nil -> acc
     end
   end
@@ -280,7 +305,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   end
 
   defp best_usage(%{status: "usage_unknown"}, %{status: "usage_known"} = usage), do: usage
-  defp best_usage(%{status: "usage_known"} = usage, %{status: "usage_unknown"}), do: usage
+  defp best_usage(%{status: "usage_known"}, %{status: "usage_unknown"} = usage), do: usage
   defp best_usage(%{status: "usage_unknown"} = usage, nil), do: usage
   defp best_usage(nil, %{status: "usage_unknown"} = usage), do: usage
   defp best_usage(%{status: "usage_unknown"} = usage, _fragment_usage), do: usage
@@ -302,6 +327,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     with {:ok, input_tokens} <-
            required_int_value(usage["input_tokens"] || usage["prompt_tokens"]),
          {:ok, cached_input_tokens} <- optional_int_value(cached_input_tokens(usage)),
+         {:ok, cache_write_tokens} <- cache_write_tokens_value(usage),
          {:ok, output_tokens} <-
            required_int_value(usage["output_tokens"] || usage["completion_tokens"]),
          {:ok, reasoning_tokens} <- optional_int_value(usage["reasoning_tokens"]),
@@ -317,6 +343,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
         total_tokens: total_tokens,
         service_tier: service_tier(envelope)
       }
+      |> maybe_put_cache_write_tokens(cache_write_tokens)
     else
       :error -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
     end
@@ -336,6 +363,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
   defp cached_input_tokens(_usage), do: nil
 
+  defp cache_write_tokens_value(usage) do
+    case fetch_cache_write_tokens(usage) do
+      :absent -> {:ok, nil}
+      {:present, value} when is_integer(value) and value >= 0 -> {:ok, value}
+      {:present, _value} -> :error
+    end
+  end
+
+  defp fetch_cache_write_tokens(usage) do
+    with :error <- Map.fetch(usage, "cache_write_tokens"),
+         :error <- fetch_nested(usage, "input_tokens_details", "cache_write_tokens"),
+         :error <- fetch_nested(usage, "prompt_tokens_details", "cache_write_tokens") do
+      :absent
+    else
+      {:ok, value} -> {:present, value}
+    end
+  end
+
+  defp fetch_nested(map, parent_key, key) do
+    case Map.fetch(map, parent_key) do
+      {:ok, nested} when is_map(nested) -> Map.fetch(nested, key)
+      _missing -> :error
+    end
+  end
+
+  defp maybe_put_cache_write_tokens(usage, nil), do: usage
+  defp maybe_put_cache_write_tokens(usage, value), do: Map.put(usage, :cache_write_tokens, value)
+
   defp maybe_default_usage(true), do: %{status: "usage_unknown", source: "usage_missing"}
   defp maybe_default_usage(false), do: nil
 
@@ -351,12 +406,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   defp optional_int_value(value), do: int_value(value)
 
   defp int_value(nil), do: :error
-  defp int_value(value) when is_integer(value), do: {:ok, value}
+  defp int_value(value) when is_integer(value) and value >= 0, do: {:ok, value}
   defp int_value(value) when is_float(value), do: :error
 
   defp int_value(value) when is_binary(value) do
     case Integer.parse(value) do
-      {int, ""} -> {:ok, int}
+      {int, ""} when int >= 0 -> {:ok, int}
       _other -> :error
     end
   end

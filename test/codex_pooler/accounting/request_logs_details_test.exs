@@ -2,10 +2,13 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.{LedgerEntry, RequestLogFact}
+  alias CodexPooler.Accounts.Scope
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Repo
 
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
   test "request log rows expose snapshots model settings route and cached token counts" do
@@ -105,6 +108,7 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert log.transport == "http_json"
     assert log.token_counts.input_tokens == 11
     assert log.token_counts.cached_input_tokens == 4
+    assert is_nil(Map.get(log.token_counts, :cache_write_tokens))
     assert Decimal.equal?(log.token_counts.cached_input_cost_usd, Decimal.new("0.000012"))
     assert log.token_counts.output_tokens == 7
     assert log.token_counts.reasoning_tokens == 3
@@ -112,6 +116,143 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert log.cost.status == "priced"
     assert Decimal.equal?(log.cost.usd, Decimal.new("0.042000"))
     assert log.errors == []
+  end
+
+  test "request log facts preserve positive cache-write usage while legacy NULL remains nil" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    positive_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "cache-write-positive",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "cache-write-positive"
+      })
+
+    positive_attempt = attempt_fixture(positive_request, assignment)
+
+    positive_entry =
+      ledger_entry_fixture(positive_request, %{
+        attempt_id: positive_attempt.id,
+        input_tokens: 11,
+        cached_input_tokens: 4,
+        cache_write_tokens: 3,
+        output_tokens: 7,
+        total_tokens: 18,
+        details: %{
+          "pricing_status" => "priced",
+          "settled_cost_micros" => "42"
+        }
+      })
+
+    legacy_request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "cache-write-legacy-null",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "cache-write-legacy-null"
+      })
+
+    legacy_attempt = attempt_fixture(legacy_request, assignment)
+
+    legacy_entry =
+      ledger_entry_fixture(legacy_request, %{
+        attempt_id: legacy_attempt.id,
+        input_tokens: 5,
+        output_tokens: 2,
+        total_tokens: 7,
+        details: %{"pricing_status" => "priced", "settled_cost_micros" => "12"}
+      })
+
+    persisted_positive_entry = Repo.get!(LedgerEntry, positive_entry.id)
+    persisted_legacy_entry = Repo.get!(LedgerEntry, legacy_entry.id)
+    positive_fact = Repo.get!(RequestLogFact, positive_request.id)
+    legacy_fact = Repo.get!(RequestLogFact, legacy_request.id)
+
+    assert is_nil(Map.get(persisted_legacy_entry, :cache_write_tokens))
+    assert Map.get(persisted_positive_entry, :cache_write_tokens) == 3
+    assert Map.get(positive_fact, :latest_cache_write_tokens) == 3
+    assert is_nil(Map.get(legacy_fact, :latest_cache_write_tokens))
+
+    assert %{items: logs, total: 2} = Accounting.list_request_logs(pool)
+    logs_by_id = Map.new(logs, &{&1.id, &1})
+
+    assert Map.get(logs_by_id[positive_request.id].token_counts, :cache_write_tokens) == 3
+    assert is_nil(Map.get(logs_by_id[legacy_request.id].token_counts, :cache_write_tokens))
+  end
+
+  test "request detail component cost follows the fact settlement entry exactly" do
+    reset_bootstrap_state_fixture!()
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner, [])
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "cache-write-settlement-authority",
+        status: "succeeded",
+        usage_status: "usage_known"
+      })
+
+    attempt = attempt_fixture(request, assignment)
+    earlier = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+    authoritative_entry =
+      ledger_entry_fixture(request, %{
+        attempt_id: attempt.id,
+        input_tokens: 11,
+        cached_input_tokens: 4,
+        cache_write_tokens: 3,
+        output_tokens: 7,
+        total_tokens: 18,
+        occurred_at: earlier,
+        created_at: earlier,
+        details: %{
+          "pricing_status" => "priced",
+          "settled_cost_micros" => "42",
+          "cache_write_cost_micros" => "250000"
+        }
+      })
+
+    authoritative_entry
+    |> Ecto.Changeset.change(entry_kind: "correction")
+    |> Repo.update!()
+
+    _chronologically_newer_entry =
+      ledger_entry_fixture(request, %{
+        attempt_id: attempt.id,
+        input_tokens: 99,
+        cached_input_tokens: 0,
+        cache_write_tokens: 90,
+        output_tokens: 1,
+        total_tokens: 100,
+        details: %{
+          "pricing_status" => "priced",
+          "settled_cost_micros" => "999",
+          "cache_write_cost_micros" => "900000"
+        }
+      })
+
+    RequestLogFact
+    |> where([fact], fact.request_id == ^request.id)
+    |> Repo.update_all(
+      set: [
+        latest_settlement_entry_id: authoritative_entry.id,
+        latest_input_tokens: 11,
+        latest_cached_input_tokens: 4,
+        latest_cache_write_tokens: 3,
+        latest_output_tokens: 7,
+        latest_total_tokens: 18,
+        latest_settled_cost_micros: 42
+      ]
+    )
+
+    detail = Accounting.get_request_log_for_scope(owner_scope, request.id)
+
+    assert detail.token_counts.cache_write_tokens == 3
+    assert Decimal.equal?(detail.token_counts.cache_write_cost_usd, Decimal.new("0.250000"))
   end
 
   test "request log rows expose sanitized compression summary without raw candidate strings" do

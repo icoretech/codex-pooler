@@ -443,6 +443,7 @@ defmodule CodexPooler.PoolerFixtures do
         currency_code: Map.get(attrs, :currency_code, "USD"),
         input_tokens: Map.get(attrs, :input_tokens, 10),
         cached_input_tokens: Map.get(attrs, :cached_input_tokens, 0),
+        cache_write_tokens: Map.get(attrs, :cache_write_tokens),
         output_tokens: Map.get(attrs, :output_tokens, 4),
         reasoning_tokens: Map.get(attrs, :reasoning_tokens, 0),
         total_tokens: Map.get(attrs, :total_tokens, 14),
