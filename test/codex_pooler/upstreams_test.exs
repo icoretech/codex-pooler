@@ -1238,6 +1238,9 @@ defmodule CodexPooler.UpstreamsTest do
       assert identity.onboarding_method == "import"
       assert identity.plan_label == "team"
       assert identity.metadata["auth_json_imported"] == true
+      assert identity.metadata["credential_epoch"] == 1
+      assert identity.metadata["usage_probe_sequence"] == 0
+      assert identity.metadata["usage_probe_applied_sequence"] == 0
       assert identity.metadata["token_refresh"]["status"] == "imported"
       assert identity.metadata["token_refresh"]["trigger_kind"] == "auth_json_import"
 
@@ -1297,6 +1300,7 @@ defmodule CodexPooler.UpstreamsTest do
                Upstreams.import_codex_auth_json(scope, pool, auth_json)
 
       assert identity.account_label == account_email
+      initial_epoch = identity.metadata["credential_epoch"]
 
       assert {:ok, renamed_identity} =
                IdentityLifecycle.update_upstream_identity(identity, %{account_label: "codex01"})
@@ -1312,6 +1316,7 @@ defmodule CodexPooler.UpstreamsTest do
                Upstreams.import_codex_auth_json(scope, pool, auth_json)
 
       assert reimported_identity.id == identity.id
+      assert reimported_identity.metadata["credential_epoch"] == initial_epoch + 1
       assert reimported_identity.account_label == "codex01"
       assert reimported_identity.account_email == account_email
       assert reimported_identity.metadata["account_email"] == account_email
@@ -1980,7 +1985,7 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert imported_assignment.status == "active"
       assert imported_assignment.health_status == "active"
-      assert imported_assignment.eligibility_status == "eligible"
+      assert imported_assignment.eligibility_status == "ineligible"
       assert imported_assignment.disabled_at == nil
 
       assert {:ok, ^second_access} = Secrets.decrypt_active_secret(imported, "access_token")
@@ -4100,6 +4105,71 @@ defmodule CodexPooler.UpstreamsTest do
                  {"account", "secondary"},
                  {"codex_spark", "secondary"}
                ]
+    end
+
+    @tag :quota_reversible_provider_shape
+    test "provider 5h weekly-only and restored 5h evidence remains unique and reversible" do
+      identity = active_identity_fixture()
+
+      restored_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      weekly_at = DateTime.add(restored_at, -60, :second)
+      initial_at = DateTime.add(weekly_at, -3_600, :second)
+
+      assert {:ok, initial_windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 provider_shape_window_attrs(initial_at, :full)
+               )
+
+      assert quota_window_shape(initial_windows) == [
+               {"account", "primary", 300},
+               {"account", "secondary", 10_080},
+               {"codex_spark", "primary", 300},
+               {"codex_spark", "secondary", 10_080}
+             ]
+
+      assert {:ok, weekly_windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 provider_shape_window_attrs(weekly_at, :weekly_only)
+               )
+
+      assert quota_window_shape(weekly_windows) == [
+               {"account", "secondary", 10_080},
+               {"codex_spark", "secondary", 10_080}
+             ]
+
+      assert %{routing_state: :weekly_only_probe, selection: weekly_selection} =
+               QuotaWindows.routing_quota_eligibility(identity,
+                 at: weekly_at,
+                 model: "gpt-5.3-codex-spark",
+                 requested_model: "gpt-5.3-codex-spark"
+               )
+
+      assert quota_window_shape(weekly_selection.routing_windows) == [
+               {"account", "secondary", 10_080},
+               {"codex_spark", "secondary", 10_080}
+             ]
+
+      assert {:ok, _restored_primary_windows} =
+               QuotaWindows.upsert_quota_windows(
+                 identity,
+                 provider_shape_window_attrs(restored_at, :primary_only, used_percent: "13")
+               )
+
+      restored_windows = QuotaWindows.list_quota_windows(identity)
+
+      assert quota_window_shape(restored_windows) == quota_window_shape(initial_windows)
+
+      assert %{routing_state: :precise, selection: restored_selection} =
+               QuotaWindows.routing_quota_eligibility(identity,
+                 at: restored_at,
+                 model: "gpt-5.3-codex-spark",
+                 requested_model: "gpt-5.3-codex-spark"
+               )
+
+      assert quota_window_shape(restored_selection.routing_windows) ==
+               quota_window_shape(initial_windows)
     end
 
     test "classifies reset-bearing weekly-only account evidence as probe-routable" do
@@ -12552,6 +12622,62 @@ defmodule CodexPooler.UpstreamsTest do
       },
       overrides
     )
+  end
+
+  defp provider_shape_window_attrs(observed_at, shape, opts \\ []) do
+    used_percent = Decimal.new(Keyword.get(opts, :used_percent, "12"))
+
+    primary = [
+      provider_shape_window("account", "primary", 300, observed_at, used_percent),
+      provider_shape_window("codex_spark", "primary", 300, observed_at, used_percent)
+    ]
+
+    weekly = [
+      provider_shape_window("account", "secondary", 10_080, observed_at, used_percent),
+      provider_shape_window("codex_spark", "secondary", 10_080, observed_at, used_percent)
+    ]
+
+    case shape do
+      :full -> primary ++ weekly
+      :primary_only -> primary
+      :weekly_only -> weekly
+    end
+  end
+
+  defp provider_shape_window(quota_key, window_kind, window_minutes, observed_at, used_percent) do
+    scope_attrs =
+      if quota_key == "account" do
+        %{quota_scope: "account", quota_family: "account"}
+      else
+        %{
+          quota_scope: "model",
+          quota_family: "codex_model",
+          model: "gpt-5.3-codex-spark",
+          display_label: "GPT-5.3-Codex-Spark",
+          limit_name: "GPT-5.3-Codex-Spark",
+          metered_feature: "codex_bengalfox"
+        }
+      end
+
+    Map.merge(scope_attrs, %{
+      quota_key: quota_key,
+      window_kind: window_kind,
+      window_minutes: window_minutes,
+      used_percent: used_percent,
+      reset_at: DateTime.add(observed_at, window_minutes, :minute),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      last_sync_at: observed_at,
+      observed_at: observed_at,
+      metadata: %{"limit_window_seconds" => window_minutes * 60}
+    })
+  end
+
+  defp quota_window_shape(windows) do
+    windows
+    |> Enum.map(&{&1.quota_key, &1.window_kind, &1.window_minutes})
+    |> Enum.sort()
   end
 
   defp reset_bearing_account_primary_payload do

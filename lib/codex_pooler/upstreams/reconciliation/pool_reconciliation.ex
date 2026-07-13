@@ -6,7 +6,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Auth.TokenRefresh
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.SavedResets
@@ -16,6 +16,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   @active UpstreamIdentity.active_status()
   @assignment_active PoolUpstreamAssignment.active_status()
   @eligible PoolUpstreamAssignment.eligible_status()
+  @assignment_ineligible PoolUpstreamAssignment.ineligible_status()
   @health_active PoolUpstreamAssignment.active_health_status()
   @fallback_denied_usage_statuses [401, 403, 429, :auth_rejected]
 
@@ -59,7 +60,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
           assignment =
             assignment
             |> Repo.reload!()
-            |> record_reconciliation_summary!(status, [health_step, quota_step])
+            |> maybe_record_reconciliation_summary(status, [health_step, quota_step], opts)
 
           {:ok,
            %{
@@ -96,6 +97,18 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp load_active_assignment_with_identity(_pool_id, _assignment_id), do: nil
 
+  defp maybe_record_reconciliation_summary(assignment, status, steps, opts) do
+    if Keyword.get(opts, :record_summary?, true) and not superseded_quota_step?(steps) do
+      record_reconciliation_summary!(assignment, status, steps)
+    else
+      assignment
+    end
+  end
+
+  defp superseded_quota_step?(steps) do
+    Enum.any?(steps, &(&1.code == "quota_refresh_superseded"))
+  end
+
   defp record_reconciliation_health!(
          %PoolUpstreamAssignment{},
          %{
@@ -107,6 +120,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       :succeeded,
       "health_preserved",
       "assignment health was preserved for reauthentication"
+    )
+  end
+
+  defp record_reconciliation_health!(%PoolUpstreamAssignment{}, %{
+         code: "quota_refresh_superseded"
+       }) do
+    step_result(
+      :succeeded,
+      "health_preserved",
+      "assignment health was preserved for a superseded quota refresh"
     )
   end
 
@@ -127,9 +150,12 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp eligibility_after_reconciliation(_assignment, %{
          status: :succeeded,
-         code: "quota_refreshed"
+         code: "quota_refreshed",
+         identity: %UpstreamIdentity{} = identity
        }) do
-    @eligible
+    if CredentialFencing.awaiting_provider_auth_recovery?(identity),
+      do: @assignment_ineligible,
+      else: @eligible
   end
 
   defp eligibility_after_reconciliation(assignment, _quota_step),
@@ -146,8 +172,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
           "quota refresh requires account reauthentication"
         )
 
-      :definitive_provider_auth_rejected ->
-        promote_definitive_provider_auth_rejection(identity)
+      {:definitive_provider_auth_rejected, fence} ->
+        promote_definitive_provider_auth_rejection(identity, fence)
 
       :usage_unavailable ->
         step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
@@ -167,7 +193,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
           identity_attrs_from_codex_usage_payload(probe.payload),
           probe.payload,
           probe.usage_url,
-          probe.covered_descriptors
+          probe.covered_descriptors,
+          probe.credential_fence
         )
     end
   end
@@ -187,25 +214,22 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
-  defp promote_definitive_provider_auth_rejection(%UpstreamIdentity{} = identity) do
-    windows = Quota.Windows.list_quota_windows(identity)
-    eligibility = Quota.Windows.routing_quota_eligibility_from_windows(windows)
+  defp promote_definitive_provider_auth_rejection(%UpstreamIdentity{} = identity, fence) do
+    case CredentialFencing.mark_definitive_rejection(identity, fence) do
+      {:ok, :applied, reauth_identity} ->
+        step_result(
+          :failed,
+          "quota_refresh_auth_unavailable",
+          "quota refresh requires account reauthentication"
+        )
+        |> Map.put(:identity, reauth_identity)
 
-    if eligibility.eligible? do
-      step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
-    else
-      case TokenRefresh.mark_provider_auth_reauth_required(identity) do
-        {:ok, reauth_identity} ->
-          step_result(
-            :failed,
-            "quota_refresh_auth_unavailable",
-            "quota refresh requires account reauthentication"
-          )
-          |> Map.put(:identity, reauth_identity)
+      {:ok, :superseded, current_identity} ->
+        step_result(:skipped, "quota_refresh_superseded", "quota refresh was superseded")
+        |> Map.put(:identity, current_identity)
 
-        {:error, reason} ->
-          step_result(:failed, "quota_refresh_failed", safe_error_message(reason))
-      end
+      {:error, reason} ->
+        step_result(:failed, "quota_refresh_failed", safe_error_message(reason))
     end
   end
 
@@ -215,20 +239,60 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          identity_attrs,
          payload,
          usage_url,
-         covered_descriptors
+         covered_descriptors,
+         credential_fence \\ nil
+       )
+
+  defp upsert_reconciliation_quota(
+         identity,
+         windows,
+         identity_attrs,
+         payload,
+         usage_url,
+         covered_descriptors,
+         credential_fence
        )
        when is_list(windows) do
     observed_at = now()
 
-    case persist_reconciliation_quota(
-           identity,
-           windows,
-           identity_attrs,
-           payload,
-           observed_at,
-           usage_url,
-           covered_descriptors
-         ) do
+    result =
+      if credential_fence do
+        CredentialFencing.apply_usage_success(identity, credential_fence, fn locked_identity ->
+          persist_reconciliation_quota(
+            locked_identity,
+            windows,
+            identity_attrs,
+            payload,
+            observed_at,
+            usage_url,
+            covered_descriptors,
+            false
+          )
+        end)
+        |> case do
+          {:ok, :applied, updated_identity, persisted} ->
+            {:ok, %{persisted | identity: updated_identity}}
+
+          {:ok, :superseded, current_identity, nil} ->
+            {:superseded, current_identity}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      else
+        persist_reconciliation_quota(
+          identity,
+          windows,
+          identity_attrs,
+          payload,
+          observed_at,
+          usage_url,
+          covered_descriptors,
+          true
+        )
+      end
+
+    case result do
       {:ok, %{windows: refreshed, identity: updated_identity}} ->
         step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
           "window_count" => length(refreshed)
@@ -240,6 +304,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
       {:error, reason} ->
         step_result(:failed, "quota_refresh_failed", safe_error_message(reason))
+
+      {:superseded, current_identity} ->
+        step_result(:skipped, "quota_refresh_superseded", "quota refresh was superseded")
+        |> Map.put(:identity, current_identity)
     end
   end
 
@@ -249,7 +317,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          _identity_attrs,
          _payload,
          _usage_url,
-         _covered_descriptors
+         _covered_descriptors,
+         _credential_fence
        ),
        do: step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
 
@@ -261,20 +330,45 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         %PoolUpstreamAssignment{} = assignment,
         opts \\ []
       ) do
-    with observed_at <- now(),
-         {:ok, %UsageProbe.Result{} = probe} <-
-           UsageProbe.fetch_from_identity(identity, assignment, observed_at, opts),
-         {:ok, %{identity: updated_identity}} <-
-           persist_reconciliation_quota(
-             identity,
-             probe.windows,
-             identity_attrs_from_codex_usage_payload(probe.payload),
-             probe.payload,
-             observed_at,
-             probe.usage_url,
-             probe.covered_descriptors
-           ) do
-      {:ok, updated_identity}
+    observed_at = now()
+
+    case UsageProbe.fetch_from_identity(identity, assignment, observed_at, opts) do
+      {:ok, %UsageProbe.Result{credential_fence: fence} = probe} when not is_nil(fence) ->
+        apply_refresh_usage_success(identity, probe, observed_at, fence)
+
+      {:error, {:definitive_provider_auth_rejected, fence}} ->
+        apply_refresh_usage_rejection(identity, fence)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp apply_refresh_usage_success(identity, probe, observed_at, fence) do
+    CredentialFencing.apply_usage_success(identity, fence, fn locked_identity ->
+      persist_reconciliation_quota(
+        locked_identity,
+        probe.windows,
+        identity_attrs_from_codex_usage_payload(probe.payload),
+        probe.payload,
+        observed_at,
+        probe.usage_url,
+        probe.covered_descriptors,
+        false
+      )
+    end)
+    |> case do
+      {:ok, :applied, updated_identity, _persisted} -> {:ok, updated_identity}
+      {:ok, :superseded, _current_identity, nil} -> {:error, :quota_refresh_superseded}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp apply_refresh_usage_rejection(identity, fence) do
+    case CredentialFencing.mark_definitive_rejection(identity, fence) do
+      {:ok, :applied, _reauth_identity} -> {:error, :definitive_provider_auth_rejected}
+      {:ok, :superseded, _current_identity} -> {:error, :quota_refresh_superseded}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -285,12 +379,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
          payload,
          observed_at,
          usage_url,
-         covered_descriptors
+         covered_descriptors,
+         broadcast?
        ) do
     case Quota.Windows.upsert_quota_windows(identity, windows,
            delete_missing?: true,
            covered_descriptors: covered_descriptors,
-           identity_attrs: identity_attrs
+           identity_attrs: identity_attrs,
+           broadcast?: broadcast?
          ) do
       {:ok, refreshed} ->
         if is_map(payload), do: maybe_update_identity_plan(identity, payload)
@@ -339,8 +435,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp codex_usage_quota_windows(%UpstreamIdentity{} = identity, assignment, opts) do
     case UsageProbe.reconciliation_source(identity, assignment, opts) do
-      {:usage_unavailable, :definitive_provider_auth_rejected} ->
-        :definitive_provider_auth_rejected
+      {:usage_rejected, _identity, fence} ->
+        {:definitive_provider_auth_rejected, fence}
 
       result ->
         result

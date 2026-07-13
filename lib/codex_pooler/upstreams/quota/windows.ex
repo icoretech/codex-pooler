@@ -55,6 +55,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   defp do_upsert_quota_windows(%UpstreamIdentity{} = identity, windows, opts) do
     delete_missing? = Keyword.fetch!(opts, :delete_missing?)
     covered_descriptors = Keyword.get(opts, :covered_descriptors, MapSet.new())
+    broadcast? = Keyword.get(opts, :broadcast?, true)
 
     windows =
       Enum.map(windows, fn attrs ->
@@ -97,7 +98,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
             |> Enum.filter(&match?(%Quota.AccountQuotaWindow{}, &1))
             |> Enum.sort_by(&{&1.quota_key, &1.window_kind})
 
-          broadcast_upstream_change(%{identity: identity}, "upstream_quota_windows_updated")
+          if broadcast? do
+            broadcast_upstream_change(%{identity: identity}, "upstream_quota_windows_updated")
+          end
 
           {:ok, quota_windows}
 

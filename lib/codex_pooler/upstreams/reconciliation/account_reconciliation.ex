@@ -45,7 +45,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   defp run_reconciliation(pool_id, assignment_id, trigger_kind) do
     mark_refreshing(pool_id, assignment_id, trigger_kind)
 
-    case PoolReconciliation.reconcile_pool_account(pool_id, assignment_id) do
+    case PoolReconciliation.reconcile_pool_account(pool_id, assignment_id, record_summary?: false) do
       {:ok, result} ->
         catalog_step = reconcile_catalog(pool_id, trigger_kind)
         status = summarize_status([result.health, result.quota, catalog_step])
@@ -70,7 +70,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
             catalog: catalog_step
           }
 
-        result = record_result!(result)
+        result = maybe_record_result!(result)
         broadcast_job_result(pool_id, "account_reconciliation", {:ok, result})
         {:ok, result}
 
@@ -142,7 +142,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     |> Repo.update_all(set: [state: "discarded", discarded_at: now])
   end
 
-  defp record_result!(result) do
+  defp maybe_record_result!(%{quota: %{code: "quota_refresh_superseded"}} = result) do
+    %{result | assignment: Repo.reload!(result.assignment)}
+  end
+
+  defp maybe_record_result!(result) do
     timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     assignment = result.assignment
     metadata = assignment.metadata || %{}

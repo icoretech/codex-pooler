@@ -17,6 +17,7 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
       period: {7, :days}
     ]
 
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
 
   @dev_features_build_enabled Application.compile_env(
@@ -58,12 +59,27 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
   end
 
   defp run_account_reconciliation(pool_id, assignment_id, args) do
-    trigger_kind = Map.get(args, "trigger_kind", "manual")
+    if recovery_probe_required?(args) do
+      trigger_kind = Map.get(args, "trigger_kind", "manual")
 
-    with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind) do
-      reconciliation_outcome(result)
+      with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind) do
+        reconciliation_outcome(result)
+      end
+    else
+      :ok
     end
   end
+
+  defp recovery_probe_required?(%{
+         "recovery_required" => true,
+         "upstream_identity_id" => identity_id,
+         "credential_epoch" => credential_epoch
+       }) do
+    CredentialFencing.current_credential_epoch?(identity_id, credential_epoch) and
+      CredentialFencing.awaiting_provider_auth_recovery?(identity_id)
+  end
+
+  defp recovery_probe_required?(_args), do: true
 
   @impl Oban.Worker
   def backoff(%Oban.Job{attempt: attempt}) do

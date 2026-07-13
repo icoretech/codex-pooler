@@ -11,6 +11,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   }
 
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -64,11 +65,9 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   def enqueue_account_reconciliation(pool_or_id, assignment_or_id, opts \\ []) do
     with {:ok, pool_id} <- pool_id(pool_or_id),
          {:ok, assignment_id} <- assignment_id(assignment_or_id) do
-      %{
-        "pool_id" => pool_id,
-        "pool_upstream_assignment_id" => assignment_id,
-        "trigger_kind" => Keyword.get(opts, :trigger_kind, "manual")
-      }
+      pool_id
+      |> account_reconciliation_args(assignment_id, opts)
+      |> maybe_put_recovery_fence(assignment_or_id)
       |> AccountReconciliationWorker.new(
         Options.job_options(opts, unique_keys: [:pool_id, :pool_upstream_assignment_id])
       )
@@ -98,13 +97,13 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         %PoolUpstreamAssignment{} = assignment,
         opts \\ []
       ) do
-    %{
-      "pool_id" => assignment.pool_id,
-      "pool_upstream_assignment_id" => assignment.id,
+    assignment.pool_id
+    |> account_reconciliation_args(assignment.id, opts)
+    |> Map.merge(%{
       "upstream_identity_id" => assignment.upstream_identity_id,
-      "trigger_kind" => Keyword.get(opts, :trigger_kind, "scheduled"),
       "target_kind" => "upstream_identity"
-    }
+    })
+    |> maybe_put_recovery_fence(assignment)
     |> AccountReconciliationWorker.new(
       Options.job_options(opts, unique_keys: [:upstream_identity_id, :trigger_kind])
     )
@@ -179,6 +178,30 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
 
   defp timestamp_iso,
     do: DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+  defp account_reconciliation_args(pool_id, assignment_id, opts) do
+    %{
+      "pool_id" => pool_id,
+      "pool_upstream_assignment_id" => assignment_id,
+      "trigger_kind" => Keyword.get(opts, :trigger_kind, "manual")
+    }
+  end
+
+  defp maybe_put_recovery_fence(args, %PoolUpstreamAssignment{} = assignment) do
+    if CredentialFencing.awaiting_provider_auth_recovery?(assignment.upstream_identity_id) do
+      args
+      |> Map.put("upstream_identity_id", assignment.upstream_identity_id)
+      |> Map.put(
+        "credential_epoch",
+        CredentialFencing.credential_epoch(assignment.upstream_identity_id)
+      )
+      |> Map.put("recovery_required", true)
+    else
+      args
+    end
+  end
+
+  defp maybe_put_recovery_fence(args, _assignment), do: args
 
   defp pool_id(%{id: id}) when is_binary(id), do: {:ok, id}
   defp pool_id(id) when is_binary(id), do: {:ok, id}
