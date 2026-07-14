@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.28](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.27...codex-pooler-v0.4.28) (2026-07-14)
+
+
+### Bug Fixes
+
+* **gateway:** converge pending resets from runtime evidence ([cc78776](https://github.com/icoretech/codex-pooler/commit/cc78776af61ef9bae1772b678ee9d335261494d0))
+* **saved-resets:** bound lifecycle grants and recover expired records ([43dc2f8](https://github.com/icoretech/codex-pooler/commit/43dc2f820e91cab7c7cff07d2acfcc01645d260c))
+
 ## [0.4.27](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.26...codex-pooler-v0.4.27) (2026-07-14)
 
 
