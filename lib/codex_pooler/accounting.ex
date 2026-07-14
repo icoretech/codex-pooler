@@ -144,6 +144,18 @@ defmodule CodexPooler.Accounting do
   defdelegate token_totals_by_upstream_identity_ids(upstream_identity_ids, started_at, ended_at),
     to: Reporting
 
+  @spec token_totals_by_upstream_identity_and_model_ids(
+          [Ecto.UUID.t()],
+          DateTime.t(),
+          DateTime.t()
+        ) :: %{optional(Ecto.UUID.t()) => [Reporting.model_usage_total()]}
+  defdelegate token_totals_by_upstream_identity_and_model_ids(
+                upstream_identity_ids,
+                started_at,
+                ended_at
+              ),
+              to: Reporting
+
   @spec build_api_key_self_usage(term(), term(), keyword()) ::
           {:ok, map()} | {:error, accounting_error()}
   defdelegate build_api_key_self_usage(pool_or_id, api_key_or_id, opts \\ []),

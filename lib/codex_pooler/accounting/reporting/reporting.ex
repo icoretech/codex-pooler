@@ -203,6 +203,59 @@ defmodule CodexPooler.Accounting.Reporting do
     end)
   end
 
+  @type model_usage_total :: %{
+          required(:model_id) => Ecto.UUID.t() | nil,
+          required(:total_tokens) => non_neg_integer(),
+          required(:request_count) => non_neg_integer(),
+          required(:settled_cost_micros) => non_neg_integer()
+        }
+
+  @spec token_totals_by_upstream_identity_and_model_ids(
+          [Ecto.UUID.t()],
+          DateTime.t(),
+          DateTime.t()
+        ) :: %{optional(Ecto.UUID.t()) => [model_usage_total()]}
+  def token_totals_by_upstream_identity_and_model_ids([], _started_at, _ended_at), do: %{}
+
+  def token_totals_by_upstream_identity_and_model_ids(upstream_identity_ids, started_at, ended_at) do
+    Repo.all(
+      from entry in LedgerEntry,
+        where:
+          entry.upstream_identity_id in ^upstream_identity_ids and
+            entry.entry_kind == ^@settlement and entry.amount_status == ^@recorded and
+            entry.occurred_at >= ^started_at and entry.occurred_at <= ^ended_at,
+        group_by: [entry.upstream_identity_id, entry.model_id],
+        select:
+          {entry.upstream_identity_id, entry.model_id,
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN ? ELSE 0 END",
+               entry.usage_status,
+               ^@usage_known,
+               entry.total_tokens
+             )
+           ), sum(entry.request_count),
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN ? ELSE 0 END",
+               entry.usage_status,
+               ^@usage_known,
+               entry.settled_cost_micros
+             )
+           )}
+    )
+    |> Enum.reduce(%{}, fn {upstream_identity_id, model_id, total, requests, cost}, acc ->
+      row = %{
+        model_id: model_id,
+        total_tokens: non_negative_integer(total),
+        request_count: non_negative_integer(requests),
+        settled_cost_micros: non_negative_integer(cost)
+      }
+
+      Map.update(acc, upstream_identity_id, [row], &[row | &1])
+    end)
+  end
+
   @spec token_usage_by_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
           optional(Ecto.UUID.t()) => map()
         }

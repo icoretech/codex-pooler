@@ -190,20 +190,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-add-capacity-card")
   end
 
-  test "switches account cards between usage, routing, and Pools without exposing provider metadata",
+  test "switches account cards between usage, 5m token usage, and Pools without exposing provider metadata",
        %{
          conn: conn,
          scope: scope
        } do
     {:ok, first_pool} =
-      Pools.create_pool(scope, %{slug: "routing-panel-first", name: "Routing Panel First"})
+      Pools.create_pool(scope, %{slug: "tokens-panel-first", name: "Tokens Panel First"})
 
     {:ok, second_pool} =
-      Pools.create_pool(scope, %{slug: "routing-panel-second", name: "Routing Panel Second"})
+      Pools.create_pool(scope, %{slug: "tokens-panel-second", name: "Tokens Panel Second"})
 
     %{identity: identity, assignment: first_assignment} =
       upstream_assignment_fixture(first_pool, %{
-        account_label: "Routing Panel Account",
+        account_label: "Tokens Panel Account",
         assignment_label: "First routing lane"
       })
 
@@ -226,96 +226,141 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     provider_sentinel = "provider-private-#{System.unique_integer([:positive])}"
 
+    busy_model =
+      model_fixture(first_pool, %{
+        exposed_model_id: "gpt-example-busy",
+        metadata: %{
+          "source_assignment_models" => %{
+            first_assignment.id => %{
+              "supports_responses" => true,
+              "provider" => %{"private" => provider_sentinel}
+            }
+          },
+          "source_assignment_missing_sync_run_ids" => %{
+            first_assignment.id => Ecto.UUID.generate()
+          }
+        }
+      })
+
     model_fixture(first_pool, %{
-      exposed_model_id: "gpt-example-routing",
+      exposed_model_id: "gpt-example-quiet",
       metadata: %{
         "source_assignment_models" => %{
-          first_assignment.id => %{
-            "supports_responses" => true,
-            "supports_streaming" => false,
-            "capabilities" => %{"tools" => true},
-            "provider" => %{"private" => provider_sentinel}
-          }
-        },
-        "source_assignment_missing_sync_run_ids" => %{first_assignment.id => Ecto.UUID.generate()}
+          first_assignment.id => %{"supports_responses" => true}
+        }
       }
+    })
+
+    %{api_key: api_key} = api_key_fixture(first_pool)
+
+    request =
+      request_fixture(%{pool: first_pool, api_key: api_key}, %{
+        model_id: busy_model.id,
+        requested_model: busy_model.exposed_model_id
+      })
+
+    ledger_entry_fixture(request, %{
+      pool_upstream_assignment_id: first_assignment.id,
+      upstream_identity_id: identity.id,
+      total_tokens: 1400,
+      settled_cost_micros: 250_000,
+      occurred_at: DateTime.add(now, -60, :second)
+    })
+
+    stale_request =
+      request_fixture(%{pool: first_pool, api_key: api_key}, %{
+        model_id: busy_model.id,
+        requested_model: busy_model.exposed_model_id
+      })
+
+    ledger_entry_fixture(stale_request, %{
+      pool_upstream_assignment_id: first_assignment.id,
+      upstream_identity_id: identity.id,
+      total_tokens: 999_000,
+      occurred_at: DateTime.add(now, -20 * 60, :second)
     })
 
     {:ok, view, html} = live(conn, ~p"/admin/upstreams")
 
     card_id = "upstream-account-#{identity.id}"
-    routing_panel_id = "#{card_id}-routing-panel"
+    tokens_panel_id = "#{card_id}-tokens-panel"
     pools_panel_id = "#{card_id}-pools-panel"
-    routing_trigger_id = "#{card_id}-routing-panel-trigger"
+    tokens_trigger_id = "#{card_id}-tokens-panel-trigger"
     pools_trigger_id = "#{card_id}-pools-panel-trigger"
 
     assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='usage']")
 
-    assert has_element?(view, "##{routing_panel_id}[aria-hidden='true'][inert]")
+    assert has_element?(view, "##{tokens_panel_id}[aria-hidden='true'][inert]")
 
     assert has_element?(
              view,
-             "##{routing_trigger_id}[type='button'][phx-click='toggle_account_routing_panel'][phx-value-id='#{identity.id}'][aria-controls='#{routing_panel_id}'][aria-expanded='false']",
-             "Routing"
+             "##{tokens_trigger_id}[type='button'][phx-click='toggle_account_tokens_panel'][phx-value-id='#{identity.id}'][aria-controls='#{tokens_panel_id}'][aria-expanded='false']",
+             "Tokens/5m"
            )
 
     assert has_element?(view, "##{pools_trigger_id}[aria-expanded='false']", "Pools")
 
     view
-    |> element("##{routing_trigger_id}")
+    |> element("##{tokens_trigger_id}")
     |> render_click()
 
-    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='routing']")
-    assert has_element?(view, "##{routing_panel_id}[aria-hidden='false']")
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='tokens']")
+    assert has_element?(view, "##{tokens_panel_id}[aria-hidden='false']")
     assert has_element?(view, "##{card_id}-usage-panel[aria-hidden='true'][inert]")
     assert has_element?(view, "##{pools_panel_id}[aria-hidden='true'][inert]")
 
     assert has_element?(
              view,
-             "##{routing_trigger_id}[aria-expanded='true'][aria-label='Show quota status']"
+             "##{tokens_trigger_id}[aria-expanded='true'][aria-label='Show quota status']"
            )
 
-    # The routing panel is one flat, deduplicated model list: model names are
-    # the payload, and badges appear only when they carry real information.
+    # The panel is a leaderboard of the account's models over the trailing
+    # five minutes: settled tokens only, older usage never leaks in.
     assert has_element?(
              view,
-             "##{routing_panel_id} [data-role='upstream-account-routing-model-id']",
-             "gpt-example-routing"
+             "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-busy" <>
+               " [data-role='upstream-account-token-model-tokens']",
+             "1.4k"
            )
 
     assert has_element?(
              view,
-             "##{routing_panel_id} #upstream-account-#{identity.id}-routing-summary",
-             "1 model, 2 Pools"
+             "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-quiet" <>
+               " [data-role='upstream-account-token-model-tokens']",
+             "0"
            )
 
-    # Preserved provenance (kept from an earlier sync) is worth a badge.
     assert has_element?(
              view,
-             "##{routing_panel_id} [data-role='upstream-account-routing-model-provenance']",
-             "preserved"
+             "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-busy" <>
+               " [data-role='upstream-account-token-model-cost']",
+             "$0.25"
            )
 
-    # Advertised only in one of the account's two Pools is worth a badge.
     assert has_element?(
              view,
-             "##{routing_panel_id} [data-role='upstream-account-routing-model-pools']",
-             "Routing Panel First only"
+             "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-quiet" <>
+               " [data-role='upstream-account-token-model-cost']",
+             "$0.00"
            )
 
-    # Nominal state renders nothing: no capability chips and no
-    # unknown/unverified noise.
-    refute has_element?(
+    assert has_element?(
              view,
-             "##{routing_panel_id} [data-role='upstream-account-routing-capability']"
+             "##{tokens_panel_id} ##{card_id}-tokens-summary",
+             "1.4k tokens, 2 models"
            )
 
-    refute has_element?(
-             view,
-             "##{routing_panel_id} [data-role='upstream-account-routing-serving-signal']"
-           )
+    # The leaderboard ranks by usage: the busy model renders before the quiet
+    # one even though it sorts after it alphabetically.
+    panel_html = view |> element("##{tokens_panel_id}") |> render()
 
+    busy_position = :binary.match(panel_html, "token-model-gpt-example-busy") |> elem(0)
+    quiet_position = :binary.match(panel_html, "token-model-gpt-example-quiet") |> elem(0)
+    assert busy_position < quiet_position
+
+    # The old capability/serving-signal chip noise stays gone.
     refute render(view) =~ "Unverified"
+    refute has_element?(view, "[data-role='upstream-account-routing-model']")
 
     _ = second_assignment
 
@@ -326,21 +371,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> render_click()
 
     assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='pools']")
-    assert has_element?(view, "##{routing_panel_id}[aria-hidden='true'][inert]")
+    assert has_element?(view, "##{tokens_panel_id}[aria-hidden='true'][inert]")
     assert has_element?(view, "##{pools_panel_id}[aria-hidden='false']")
 
     view
-    |> element("##{routing_trigger_id}")
+    |> element("##{tokens_trigger_id}")
     |> render_click()
 
-    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='routing']")
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='tokens']")
 
     view
-    |> element("##{routing_trigger_id}[aria-expanded='true']")
+    |> element("##{tokens_trigger_id}[aria-expanded='true']")
     |> render_click()
 
     assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='usage']")
-    assert has_element?(view, "##{routing_trigger_id}[aria-expanded='false']")
+    assert has_element?(view, "##{tokens_trigger_id}[aria-expanded='false']")
   end
 
   test "page read model exposes safe OAuth flow summaries without transient secrets", %{
@@ -2271,7 +2316,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-token-status-cell']",
-             "5m tokens"
+             "Tokens/5m"
            )
 
     assert has_element?(

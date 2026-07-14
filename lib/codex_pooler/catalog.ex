@@ -45,6 +45,24 @@ defmodule CodexPooler.Catalog do
   @type pricing_bucket_map :: %{optional(String.t()) => [String.t()]}
 
   @spec list_assignment_model_summaries(term()) :: [AssignmentModelSummaries.summary()]
+  @spec exposed_model_ids_by_ids([Ecto.UUID.t() | nil]) :: %{
+          optional(Ecto.UUID.t()) => String.t()
+        }
+  def exposed_model_ids_by_ids(model_ids) when is_list(model_ids) do
+    case model_ids |> Enum.filter(&is_binary/1) |> Enum.uniq() do
+      [] ->
+        %{}
+
+      ids ->
+        Repo.all(
+          from model in Model,
+            where: model.id in ^ids,
+            select: {model.id, model.exposed_model_id}
+        )
+        |> Map.new()
+    end
+  end
+
   defdelegate list_assignment_model_summaries(authorized_assignments),
     to: AssignmentModelSummaries,
     as: :list

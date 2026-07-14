@@ -4,7 +4,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   alias CodexPooler.Admin.{UpstreamQuotaReadiness, UpstreamRoutingReadiness}
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.AssignmentModelSummaries
-  alias CodexPooler.Gateway.Routing.ServingSignals
   alias CodexPooler.Jobs
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams
@@ -32,12 +31,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:assignment_id) => Ecto.UUID.t(),
           required(:exposed_model_id) => String.t(),
           required(:capabilities) => AssignmentModelSummaries.capabilities(),
-          required(:provenance) => AssignmentModelSummaries.provenance(),
-          required(:serving_signals) => [ServingSignals.summary()]
-        }
-  @type serving_signal_summary :: %{
-          required(:count) => non_neg_integer(),
-          required(:by_state) => %{optional(ServingSignals.serving_state()) => non_neg_integer()}
+          required(:provenance) => AssignmentModelSummaries.provenance()
         }
   @type assignment_snapshot :: %{
           required(:id) => Ecto.UUID.t(),
@@ -56,8 +50,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:models) => [assignment_model()],
           required(:model_count) => non_neg_integer(),
           required(:advertised_state) => assignment_advertised_state(),
-          required(:model_freshness) => assignment_model_freshness(),
-          required(:serving_signal_summary) => serving_signal_summary()
+          required(:model_freshness) => assignment_model_freshness()
         }
   @type quota_limit_row :: QuotaProjection.quota_limit_row()
   @type quota_readiness :: UpstreamQuotaReadiness.t()
@@ -247,8 +240,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       models: [],
       model_count: 0,
       advertised_state: :not_advertised,
-      model_freshness: :not_advertised,
-      serving_signal_summary: %{count: 0, by_state: %{}}
+      model_freshness: :not_advertised
     }
   end
 
@@ -259,19 +251,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         {assignment.pool_id, assignment.id}
       end
 
-    model_rows = Catalog.list_assignment_model_summaries(authorized_assignments)
-
-    serving_signals =
-      model_rows
-      |> Enum.map(&{&1.pool_id, &1.assignment_id, &1.exposed_model_id})
-      |> ServingSignals.list_summaries()
-      |> Enum.group_by(&{&1.pool_id, &1.assignment_id, &1.exposed_model_id})
-
-    model_rows
-    |> Enum.map(fn model ->
-      key = {model.pool_id, model.assignment_id, model.exposed_model_id}
-      Map.put(model, :serving_signals, Map.get(serving_signals, key, []))
-    end)
+    authorized_assignments
+    |> Catalog.list_assignment_model_summaries()
     |> Enum.group_by(&{&1.pool_id, &1.assignment_id})
   end
 
@@ -288,17 +269,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       |> Map.get({assignment.pool_id, assignment.id}, [])
       |> Enum.sort_by(& &1.exposed_model_id)
 
-    signals = Enum.flat_map(models, & &1.serving_signals)
-
     Map.merge(assignment, %{
       models: models,
       model_count: length(models),
       advertised_state: if(models == [], do: :not_advertised, else: :advertised),
-      model_freshness: model_freshness(models),
-      serving_signal_summary: %{
-        count: length(signals),
-        by_state: Enum.frequencies_by(signals, & &1.serving_state)
-      }
+      model_freshness: model_freshness(models)
     })
   end
 

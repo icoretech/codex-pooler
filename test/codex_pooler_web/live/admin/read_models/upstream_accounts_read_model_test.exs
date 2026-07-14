@@ -6,14 +6,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
   import Phoenix.LiveViewTest
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
 
   setup :register_and_log_in_user
 
-  test "owner snapshot attaches sorted observed and preserved model rows with every route signal state",
+  test "owner snapshot attaches sorted observed and preserved model rows",
        %{conn: conn, scope: scope} do
     pool = pool_fixture(%{name: "Visible routing Pool"})
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -51,41 +50,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
       }
     })
 
-    now = timestamp(-30)
-
-    insert_signal(assignment, "gpt-example-alpha", "proxy_http", %{
-      status: "closed",
-      reason_code: "upstream_model_unavailable",
-      failure_count: 1,
-      last_failure_at: now
-    })
-
-    insert_signal(assignment, "gpt-example-alpha", "proxy_stream", %{
-      status: "closed",
-      reason_code: nil,
-      last_success_at: now
-    })
-
-    insert_signal(assignment, "gpt-example-alpha", "proxy_websocket", %{
-      status: "open",
-      reason_code: "upstream_model_unavailable",
-      failure_count: 2,
-      next_probe_at: timestamp(300)
-    })
-
-    insert_signal(assignment, "gpt-example-zeta", "proxy_http", %{
-      status: "open",
-      reason_code: "upstream_model_unavailable",
-      failure_count: 2,
-      next_probe_at: timestamp(-1)
-    })
-
-    insert_signal(assignment, "gpt-example-zeta", "proxy_stream", %{
-      status: "half_open",
-      reason_code: "upstream_model_unavailable",
-      failure_count: 2
-    })
-
     [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
     [snapshot] = account.assignments
 
@@ -114,35 +78,65 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
              reasoning: true
            }
 
-    assert Enum.map(alpha.serving_signals, &{&1.route_class, &1.serving_state}) == [
-             {"proxy_http", :serving_rejection_observed},
-             {"proxy_stream", :available_observed},
-             {"proxy_websocket", :temporarily_unavailable}
-           ]
-
-    assert Enum.map(zeta.serving_signals, &{&1.route_class, &1.serving_state}) == [
-             {"proxy_http", :probe_due},
-             {"proxy_stream", :probe_in_progress},
-             {"proxy_websocket", :unverified}
-           ]
-
-    assert snapshot.serving_signal_summary == %{
-             count: 6,
-             by_state: %{
-               available_observed: 1,
-               probe_due: 1,
-               probe_in_progress: 1,
-               serving_rejection_observed: 1,
-               temporarily_unavailable: 1,
-               unverified: 1
-             }
-           }
-
     refute inspect(snapshot) =~ sentinel
-    refute inspect(account) =~ "never-project-circuit-metadata"
 
     {:ok, _view, html} = live(conn, ~p"/admin/upstreams")
     refute html =~ sentinel
+  end
+
+  test "token burn ranks per-model settled usage inside the recent window", %{scope: scope} do
+    pool = pool_fixture(%{name: "Token burn Pool"})
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    %{api_key: api_key} = api_key_fixture(pool)
+
+    busy_model = model_fixture(pool, %{exposed_model_id: "gpt-example-busy"})
+    quiet_model = model_fixture(pool, %{exposed_model_id: "gpt-example-quiet"})
+
+    seed_settlement = fn model, total_tokens, offset_seconds, attrs ->
+      request =
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          model_id: model.id,
+          requested_model: model.exposed_model_id
+        })
+
+      ledger_entry_fixture(
+        request,
+        Map.merge(
+          %{
+            pool_upstream_assignment_id: assignment.id,
+            upstream_identity_id: identity.id,
+            total_tokens: total_tokens,
+            occurred_at: DateTime.add(DateTime.utc_now(), offset_seconds, :second)
+          },
+          attrs
+        )
+      )
+    end
+
+    seed_settlement.(busy_model, 40_000, -60, %{settled_cost_micros: 240_000})
+    seed_settlement.(busy_model, 2_000, -240, %{settled_cost_micros: 12_000})
+    seed_settlement.(quiet_model, 1_500, -120, %{settled_cost_micros: 9_000})
+
+    # Outside the five-minute window, or with unusable usage, never counts.
+    seed_settlement.(busy_model, 999_000, -20 * 60, %{settled_cost_micros: 5_994_000})
+
+    seed_settlement.(quiet_model, 555_000, -90, %{
+      usage_status: "usage_unknown",
+      settled_cost_micros: 3_330_000
+    })
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+
+    assert account.token_burn.recent_tokens == 43_500
+
+    # The unknown-usage settlement still counts as a served request, the
+    # out-of-window one never does. Neither contributes tokens or cost.
+    assert account.token_burn.recent_requests == 4
+
+    assert account.token_burn.recent_models == [
+             %{label: "gpt-example-busy", tokens: 42_000, cost_micros: 252_000},
+             %{label: "gpt-example-quiet", tokens: 1_500, cost_micros: 9_000}
+           ]
   end
 
   test "assignments without active provenance receive the explicit empty state", %{scope: scope} do
@@ -162,8 +156,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
              models: [],
              model_count: 0,
              advertised_state: :not_advertised,
-             model_freshness: :not_advertised,
-             serving_signal_summary: %{count: 0, by_state: %{}}
+             model_freshness: :not_advertised
            }
   end
 
@@ -219,19 +212,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
                    tools: :unknown,
                    reasoning: :unknown
                  },
-                 provenance: :observed,
-                 serving_signals:
-                   unverified_signals(
-                     observed_pool.id,
-                     observed_assignment.id,
-                     "gpt-example-observed"
-                   )
+                 provenance: :observed
                }
              ],
              model_count: 1,
              advertised_state: :advertised,
-             model_freshness: :observed,
-             serving_signal_summary: %{count: 3, by_state: %{unverified: 3}}
+             model_freshness: :observed
            }
 
     assert model_state(preserved) == %{
@@ -246,19 +232,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
                    tools: :unknown,
                    reasoning: :unknown
                  },
-                 provenance: :preserved,
-                 serving_signals:
-                   unverified_signals(
-                     preserved_pool.id,
-                     preserved_assignment.id,
-                     "gpt-example-preserved"
-                   )
+                 provenance: :preserved
                }
              ],
              model_count: 1,
              advertised_state: :advertised,
-             model_freshness: :preserved,
-             serving_signal_summary: %{count: 3, by_state: %{unverified: 3}}
+             model_freshness: :preserved
            }
   end
 
@@ -272,7 +251,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
       upstream_assignment_fixture(visible_pool)
 
     hidden_sentinel = "hidden-provider-#{System.unique_integer([:positive])}"
-    hidden_circuit_sentinel = "hidden-circuit-#{System.unique_integer([:positive])}"
 
     hidden_assignment =
       %PoolUpstreamAssignment{
@@ -302,13 +280,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
       }
     })
 
-    insert_signal(hidden_assignment, "gpt-example-hidden", "proxy_http", %{
-      status: "open",
-      reason_code: "upstream_model_unavailable",
-      failure_count: 4,
-      metadata: %{"private" => hidden_circuit_sentinel}
-    })
-
     %{user: admin} =
       operator_fixture(owner_scope, %{
         "email" => unique_user_email(),
@@ -332,7 +303,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     refute projection =~ hidden_assignment.id
     refute projection =~ "gpt-example-hidden"
     refute projection =~ hidden_sentinel
-    refute projection =~ hidden_circuit_sentinel
   end
 
   test "empty and no-visible-Pool loads do not expose accounts", %{scope: owner_scope} do
@@ -347,7 +317,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     assert UpstreamAccountsReadModel.list_visible_accounts(owner_scope, []) == []
   end
 
-  test "added model and route reads stay constant as assignment and model counts grow", %{
+  test "added model reads stay constant as assignment and model counts grow", %{
     scope: scope
   } do
     for size <- [1, 50] do
@@ -362,12 +332,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
             metadata: %{"source_assignment_models" => %{assignment.id => %{}}}
           })
 
-          insert_signal(assignment, model_id, "proxy_http", %{
-            status: "closed",
-            reason_code: "upstream_model_unavailable",
-            failure_count: index
-          })
-
           pool
         end
 
@@ -378,32 +342,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
 
       assert length(accounts) == size
       assert Map.get(queries, "models", 0) == 1
-      assert Map.get(queries, "routing_circuit_states", 0) == 1
+      assert Map.get(queries, "ledger_entries", 0) == 2
     end
-  end
-
-  defp insert_signal(assignment, model_id, route_class, attrs) do
-    now = timestamp(-30)
-
-    %RoutingCircuitState{}
-    |> RoutingCircuitState.changeset(%{
-      pool_id: assignment.pool_id,
-      pool_upstream_assignment_id: assignment.id,
-      upstream_identity_id: assignment.upstream_identity_id,
-      model_identifier: model_id,
-      route_class: route_class,
-      status: Map.fetch!(attrs, :status),
-      reason_code: Map.get(attrs, :reason_code),
-      failure_count: Map.get(attrs, :failure_count, 0),
-      success_count: Map.get(attrs, :success_count, 0),
-      next_probe_at: Map.get(attrs, :next_probe_at),
-      last_failure_at: Map.get(attrs, :last_failure_at),
-      last_success_at: Map.get(attrs, :last_success_at),
-      metadata: Map.get(attrs, :metadata, %{"private" => "never-project-circuit-metadata"}),
-      created_at: now,
-      updated_at: now
-    })
-    |> Repo.insert!()
   end
 
   defp count_repo_sources(fun) do
@@ -450,26 +390,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
       :models,
       :model_count,
       :advertised_state,
-      :model_freshness,
-      :serving_signal_summary
+      :model_freshness
     ])
-  end
-
-  defp unverified_signals(pool_id, assignment_id, model_id) do
-    Enum.map(~w(proxy_http proxy_stream proxy_websocket), fn route_class ->
-      %{
-        pool_id: pool_id,
-        assignment_id: assignment_id,
-        exposed_model_id: model_id,
-        route_class: route_class,
-        serving_state: :unverified,
-        status: nil,
-        reason_code: nil,
-        failure_count: 0,
-        last_failure_at: nil,
-        last_success_at: nil,
-        next_probe_at: nil
-      }
-    end)
   end
 end

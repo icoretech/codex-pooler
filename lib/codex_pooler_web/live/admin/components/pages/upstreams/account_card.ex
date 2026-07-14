@@ -24,7 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   attr :account, :map, required: true
   attr :account_index, :integer, required: true
-  attr :panel_view, :atom, default: :usage, values: [:usage, :routing, :pools]
+  attr :panel_view, :atom, default: :usage, values: [:usage, :tokens, :pools]
 
   attr :datetime_preferences, :map, default: nil
 
@@ -48,6 +48,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> assign(:lifecycle_warning, lifecycle_warning)
       |> assign(:saved_resets, saved_resets)
       |> assign(:saved_reset_policy, saved_reset_policy)
+      |> assign(:token_leaderboard, token_leaderboard(assigns.account))
       |> assign(
         :panel_view,
         normalize_panel_view(assigns.panel_view, saved_resets, assigns.account)
@@ -90,7 +91,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           <p
             id={"upstream-account-#{@account.identity.id}-auth-expiration"}
             data-role="upstream-auth-expiration"
-            class="mt-1 truncate text-xs leading-5 text-base-content/55"
+            class="truncate text-xs leading-4 text-base-content/55"
             title={@auth_expiration.title}
           >
             {@auth_expiration.label}
@@ -174,88 +175,88 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           </section>
 
           <section
-            :if={routing_panel_available?(@account)}
-            id={"upstream-account-#{@account.identity.id}-routing-panel"}
-            data-role="upstream-account-routing-panel"
-            aria-hidden={aria_bool(@panel_view != :routing)}
-            inert={@panel_view != :routing}
-            class={account_panel_class(@panel_view == :routing)}
+            id={"upstream-account-#{@account.identity.id}-tokens-panel"}
+            data-role="upstream-account-tokens-panel"
+            aria-hidden={aria_bool(@panel_view != :tokens)}
+            inert={@panel_view != :tokens}
+            class={account_panel_class(@panel_view == :tokens)}
           >
             <div class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
               <div class="min-w-0">
-                <p class="text-xs font-semibold uppercase text-primary">Routing</p>
+                <p class="text-xs font-semibold uppercase text-primary">
+                  tokens/<span class="normal-case">5m</span>
+                </p>
                 <p
-                  id={"upstream-account-#{@account.identity.id}-routing-summary"}
+                  id={"upstream-account-#{@account.identity.id}-tokens-summary"}
                   class="truncate text-xs text-base-content/60"
                 >
-                  {routing_panel_summary(@account.assignments)}
+                  {tokens_panel_summary(@account, @token_leaderboard)}
                 </p>
               </div>
               <div class="min-w-0 text-right">
-                <p class="text-xs font-semibold uppercase text-primary">Readiness</p>
+                <p class="text-xs font-semibold uppercase text-primary">Requests</p>
                 <p
-                  id={"upstream-account-#{@account.identity.id}-routing-readiness-summary"}
+                  id={"upstream-account-#{@account.identity.id}-tokens-requests-summary"}
                   class="truncate text-xs text-base-content/60"
-                  title={@routing_readiness.reason}
+                  title="Settled requests in the last 5 minutes"
                 >
-                  {@routing_readiness.label}
+                  {recent_request_count_label(@account)}
                 </p>
               </div>
             </div>
 
             <div
-              id={"upstream-account-#{@account.identity.id}-routing-models"}
-              data-role="upstream-account-routing-models"
+              id={"upstream-account-#{@account.identity.id}-token-models"}
+              data-role="upstream-account-token-models"
               class="grid content-start gap-0.5 overflow-y-auto pr-1"
             >
               <p
-                :if={routing_model_rows(@account.assignments) == []}
-                data-role="upstream-account-routing-empty"
+                :if={@token_leaderboard == []}
+                data-role="upstream-account-token-models-empty"
                 class="text-xs text-base-content/60"
               >
-                No models advertised for this account.
+                No models advertised or used in the last 5 minutes.
               </p>
 
               <div
-                :for={row <- routing_model_rows(@account.assignments)}
-                id={"upstream-account-#{@account.identity.id}-routing-model-#{row.dom_id}"}
-                data-role="upstream-account-routing-model"
-                class="flex min-w-0 items-center justify-between gap-3 rounded px-2 py-1.5 text-xs odd:bg-base-200/40"
+                :for={row <- @token_leaderboard}
+                id={"upstream-account-#{@account.identity.id}-token-model-#{row.dom_id}"}
+                data-role="upstream-account-token-model"
+                class="grid min-w-0 grid-cols-[minmax(0,1fr)_4rem_3.5rem_3.5rem] items-center gap-3 rounded px-2 py-1.5 text-xs odd:bg-base-200/40"
               >
                 <span
-                  data-role="upstream-account-routing-model-id"
+                  data-role="upstream-account-token-model-id"
                   class="min-w-0 truncate font-medium text-base-content"
-                  title={row.exposed_model_id}
+                  title={row.label}
                 >
-                  {row.exposed_model_id}
+                  {row.label}
                 </span>
-                <span class="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                <span class="h-1 overflow-hidden rounded-full bg-base-300/60" aria-hidden="true">
                   <span
-                    :for={alert <- row.alerts}
-                    data-role="upstream-account-routing-serving-signal"
-                    class={routing_signal_class(alert.serving_state)}
-                    title={"#{routing_route_class_label(alert.route_class)} transport: #{routing_signal_label(alert.serving_state)}"}
-                  >
-                    {routing_route_class_label(alert.route_class)}: {routing_signal_label(
-                      alert.serving_state
-                    )}
-                  </span>
-                  <span
-                    :if={row.preserved?}
-                    data-role="upstream-account-routing-model-provenance"
-                    class="rounded bg-warning/10 px-1.5 py-0.5 text-[0.65rem] text-warning"
-                    title="Kept from an earlier catalog sync; not observed in the latest discovery"
-                  >
-                    preserved
-                  </span>
-                  <span
-                    :if={row.pool_scoped?}
-                    data-role="upstream-account-routing-model-pools"
-                    class="rounded bg-base-200 px-1.5 py-0.5 text-[0.65rem] text-base-content/60"
-                    title={"Advertised only in: " <> Enum.join(row.pool_labels, ", ")}
-                  >
-                    {routing_pool_scope_label(row.pool_labels)}
-                  </span>
+                    class="block h-full rounded-full bg-primary/70"
+                    style={"width: #{row.share_percent}%"}
+                  ></span>
+                </span>
+                <span
+                  data-role="upstream-account-token-model-tokens"
+                  class={[
+                    "justify-self-end tabular-nums",
+                    if(row.tokens == 0, do: "text-base-content/45", else: "text-base-content/75")
+                  ]}
+                >
+                  {Format.token_count(row.tokens)}
+                </span>
+                <span
+                  data-role="upstream-account-token-model-cost"
+                  class={[
+                    "justify-self-end tabular-nums",
+                    if(row.cost_micros == 0,
+                      do: "text-base-content/40",
+                      else: "text-base-content/60"
+                    )
+                  ]}
+                >
+                  {Format.money_from_micros(row.cost_micros)}
                 </span>
               </div>
             </div>
@@ -357,29 +358,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           id={"upstream-account-#{@account.identity.id}-routing-readiness"}
           class="grid min-w-0 grid-cols-3 divide-x divide-base-300/70 text-xs leading-5"
         >
-          <div class="group relative isolate min-w-0 pr-3" data-role="upstream-routing-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35 transition-colors group-hover:text-primary/70">
-              <button
-                :if={routing_panel_available?(@account)}
-                id={"upstream-account-#{@account.identity.id}-routing-panel-trigger"}
-                type="button"
-                class={footer_panel_trigger_class(@panel_view == :routing, :first)}
-                phx-click="toggle_account_routing_panel"
-                phx-value-id={@account.identity.id}
-                aria-controls={"upstream-account-#{@account.identity.id}-routing-panel"}
-                aria-expanded={aria_bool(@panel_view == :routing)}
-                aria-label={routing_panel_trigger_label(@panel_view, @account.assignments)}
-              >
-                <span class="sr-only">Routing</span>
-              </button>
-              <span class="pointer-events-none relative z-30 block max-w-full truncate text-left uppercase">
-                Routing
-              </span>
+          <div class="min-w-0 pr-3" data-role="upstream-routing-cell">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
+              Routing
             </dt>
-            <dd
-              class="pointer-events-none relative z-30 truncate text-base-content/60 transition-colors group-hover:text-base-content/75"
-              title={@routing_readiness.reason}
-            >
+            <dd class="truncate text-base-content/60" title={@routing_readiness.reason}>
               {@routing_readiness.label}
             </dd>
           </div>
@@ -405,11 +388,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               {assignment_count_label(@account.assignments)}
             </dd>
           </div>
-          <div class="min-w-0 pl-3" data-role="upstream-token-status-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              5m tokens
+          <div class="group relative isolate min-w-0 pl-3" data-role="upstream-token-status-cell">
+            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35 transition-colors group-hover:text-primary/70">
+              <button
+                id={"upstream-account-#{@account.identity.id}-tokens-panel-trigger"}
+                type="button"
+                class={footer_panel_trigger_class(@panel_view == :tokens, :last)}
+                phx-click="toggle_account_tokens_panel"
+                phx-value-id={@account.identity.id}
+                aria-controls={"upstream-account-#{@account.identity.id}-tokens-panel"}
+                aria-expanded={aria_bool(@panel_view == :tokens)}
+                aria-label={tokens_panel_trigger_label(@panel_view)}
+              >
+                <span class="sr-only">Tokens/5m</span>
+              </button>
+              <span class="pointer-events-none relative z-30 block max-w-full truncate text-left uppercase">
+                tokens/<span class="normal-case">5m</span>
+              </span>
             </dt>
-            <dd class="truncate text-base-content/60">
+            <dd class="pointer-events-none relative z-30 truncate text-base-content/60 transition-colors group-hover:text-base-content/75">
               {recent_token_count_label(@account)}
             </dd>
           </div>
@@ -460,9 +457,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp credential_expiry_label(%{age: age}) when is_binary(age) and age != "", do: age
   defp credential_expiry_label(_credential_expiry), do: "at an unknown time"
 
-  defp normalize_panel_view(panel_view, _saved_resets, account)
-       when panel_view in [:routing, :pools] do
-    if pools_panel_available?(account), do: panel_view, else: :usage
+  defp normalize_panel_view(:tokens, _saved_resets, _account), do: :tokens
+
+  defp normalize_panel_view(:pools, _saved_resets, account) do
+    if pools_panel_available?(account), do: :pools, else: :usage
   end
 
   defp normalize_panel_view(_panel_view, _saved_resets, _account), do: :usage
@@ -477,8 +475,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     do: assignments != []
 
   defp pools_panel_available?(_account), do: false
-
-  defp routing_panel_available?(account), do: pools_panel_available?(account)
 
   defp account_panel_class(true) do
     "grid min-w-0 max-h-[28rem] gap-3 overflow-hidden opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none"
@@ -653,71 +649,73 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp pool_assignment_summary_label([_assignment]), do: "1 routing lane"
   defp pool_assignment_summary_label(assignments), do: "#{length(assignments)} routing lanes"
 
-  defp routing_panel_summary(assignments) do
-    model_count = assignments |> routing_model_rows() |> length()
-    "#{routing_model_count_label(model_count)}, #{assignment_count_label(assignments)}"
+  defp tokens_panel_summary(account, leaderboard) do
+    tokens = recent_token_count_label(account)
+    "#{tokens}, #{model_count_label(length(leaderboard))}"
   end
 
-  # One row per distinct exposed model across every routing lane: model names
-  # are the payload, everything else appears only when it says something — a
-  # non-nominal serving signal, preserved provenance, or a model advertised in
-  # only some of the account's Pools. Nominal state renders nothing.
-  defp routing_model_rows(assignments) when is_list(assignments) do
-    pool_count = assignments |> Enum.map(& &1.pool_label) |> Enum.uniq() |> length()
+  # A leaderboard of the account's models over the trailing five minutes: one
+  # row per distinct exposed model advertised by any routing lane or settled in
+  # the window, ranked by settled tokens. Bars are relative to the leader.
+  defp token_leaderboard(account) do
+    usage_by_label =
+      account
+      |> recent_model_usage()
+      |> Map.new(&{&1.label, &1})
 
+    rows =
+      account
+      |> advertised_model_labels()
+      |> MapSet.new()
+      |> MapSet.union(usage_by_label |> Map.keys() |> MapSet.new())
+      |> Enum.map(fn label ->
+        usage = Map.get(usage_by_label, label, %{tokens: 0, cost_micros: 0})
+        %{label: label, tokens: usage.tokens, cost_micros: usage.cost_micros}
+      end)
+
+    leader_tokens = rows |> Enum.map(& &1.tokens) |> Enum.max(fn -> 0 end)
+
+    rows
+    |> Enum.sort_by(&{-&1.tokens, &1.label})
+    |> Enum.map(fn row ->
+      Map.merge(row, %{
+        dom_id: model_dom_id(row.label),
+        share_percent: share_percent(row.tokens, leader_tokens)
+      })
+    end)
+  end
+
+  defp recent_model_usage(%{token_burn: %{recent_models: recent_models}})
+       when is_list(recent_models),
+       do: recent_models
+
+  defp recent_model_usage(_account), do: []
+
+  defp advertised_model_labels(%{assignments: assignments}) when is_list(assignments) do
     assignments
-    |> Enum.flat_map(fn assignment ->
-      Enum.map(routing_models(assignment), &{assignment, &1})
-    end)
-    |> Enum.group_by(fn {_assignment, model} -> model.exposed_model_id end)
-    |> Enum.map(fn {model_id, entries} ->
-      pool_labels =
-        entries
-        |> Enum.map(fn {assignment, _model} -> assignment.pool_label end)
-        |> Enum.uniq()
-        |> Enum.sort()
-
-      %{
-        exposed_model_id: model_id,
-        dom_id: routing_model_dom_id(model_id),
-        pool_labels: pool_labels,
-        pool_scoped?: pool_count > 1 and length(pool_labels) < pool_count,
-        preserved?:
-          Enum.any?(entries, fn {_assignment, model} -> model.provenance == :preserved end),
-        alerts: routing_model_alerts(entries)
-      }
-    end)
-    |> Enum.sort_by(& &1.exposed_model_id)
+    |> Enum.flat_map(&assignment_models/1)
+    |> Enum.map(& &1.exposed_model_id)
+    |> Enum.uniq()
   end
 
-  defp routing_model_rows(_assignments), do: []
+  defp advertised_model_labels(_account), do: []
 
-  defp routing_model_alerts(entries) do
-    entries
-    |> Enum.flat_map(fn {_assignment, model} -> model.serving_signals end)
-    |> Enum.reject(&(&1.serving_state in [:available_observed, :unverified]))
-    |> Enum.uniq_by(&{&1.route_class, &1.serving_state})
-    |> Enum.sort_by(&{&1.route_class, &1.serving_state})
-  end
+  defp assignment_models(%{models: models}) when is_list(models), do: models
+  defp assignment_models(_assignment), do: []
 
-  defp routing_model_dom_id(model_id),
+  defp share_percent(_tokens, 0), do: 0
+  defp share_percent(tokens, leader_tokens), do: round(tokens / leader_tokens * 100)
+
+  defp model_dom_id(model_id),
     do: model_id |> String.replace(~r/[^A-Za-z0-9_-]+/, "-") |> String.slice(0, 80)
 
-  defp routing_pool_scope_label([pool_label]), do: "#{pool_label} only"
-  defp routing_pool_scope_label(pool_labels), do: "#{length(pool_labels)} of the Pools"
+  defp model_count_label(1), do: "1 model"
 
-  defp routing_models(%{models: models}) when is_list(models), do: models
-  defp routing_models(_assignment), do: []
-
-  defp routing_model_count_label(1), do: "1 model"
-
-  defp routing_model_count_label(count) when is_integer(count) and count >= 0,
+  defp model_count_label(count) when is_integer(count) and count >= 0,
     do: "#{count} models"
 
-  defp routing_panel_trigger_label(:routing, _assignments), do: "Show quota status"
-
-  defp routing_panel_trigger_label(_panel_view, assignments),
-    do: "Show routing models: #{routing_panel_summary(assignments)}"
+  defp tokens_panel_trigger_label(:tokens), do: "Show quota status"
+  defp tokens_panel_trigger_label(_panel_view), do: "Show model usage for the last 5 minutes"
 
   defp pools_panel_trigger_label(:pools, _assignments), do: "Show quota status"
 
@@ -737,45 +735,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   # The overlay must read as the footer cell block: an even ~4px breathing gap
   # against the footer edges and the column dividers on every side. The cells
-  # carry asymmetric divider padding (pr-3 on the first, pl-3 on the middle),
-  # so each position needs its own horizontal insets to end up symmetric.
+  # carry asymmetric divider padding (pl-3 on the middle and last), so each
+  # position needs its own horizontal insets to end up symmetric.
   defp footer_panel_trigger_base_class do
     "absolute -inset-y-1.5 z-20 cursor-pointer rounded border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
   end
 
-  defp footer_panel_trigger_position_class(:first), do: "-left-3 right-1"
   defp footer_panel_trigger_position_class(:middle), do: "left-1 right-1"
-
-  defp routing_route_class_label("proxy_http"), do: "HTTP"
-  defp routing_route_class_label("proxy_stream"), do: "SSE"
-  defp routing_route_class_label("proxy_websocket"), do: "Websocket"
-  defp routing_route_class_label(_route_class), do: "Route"
-
-  defp routing_signal_label(:available_observed), do: "Available observed"
-  defp routing_signal_label(:serving_rejection_observed), do: "Serving rejection observed"
-  defp routing_signal_label(:temporarily_unavailable), do: "Temporarily avoided"
-  defp routing_signal_label(:probe_in_progress), do: "Probe in progress"
-  defp routing_signal_label(:probe_due), do: "Probe due"
-  defp routing_signal_label(_state), do: "Unverified"
-
-  defp routing_signal_class(:serving_rejection_observed),
-    do: "rounded border border-warning/35 bg-warning/10 px-1.5 py-0.5 text-[0.65rem] text-warning"
-
-  defp routing_signal_class(:temporarily_unavailable),
-    do: "rounded border border-error/35 bg-error/10 px-1.5 py-0.5 text-[0.65rem] text-error"
-
-  defp routing_signal_class(:probe_in_progress),
-    do: "rounded border border-info/35 bg-info/10 px-1.5 py-0.5 text-[0.65rem] text-info"
-
-  defp routing_signal_class(:probe_due),
-    do: "rounded border border-warning/35 bg-warning/10 px-1.5 py-0.5 text-[0.65rem] text-warning"
-
-  defp routing_signal_class(:available_observed),
-    do: "rounded border border-success/35 bg-success/10 px-1.5 py-0.5 text-[0.65rem] text-success"
-
-  defp routing_signal_class(_state),
-    do:
-      "rounded border border-base-300 bg-base-200 px-1.5 py-0.5 text-[0.65rem] text-base-content/60"
+  defp footer_panel_trigger_position_class(:last), do: "left-1 -right-3"
 
   @spec routing_readiness(map()) :: map()
   defp routing_readiness(%{routing_readiness: routing_readiness}) when is_map(routing_readiness),
@@ -1011,6 +978,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp recent_token_count_label(_account), do: "0 tokens"
+
+  defp recent_request_count_label(%{token_burn: %{recent_requests: requests}})
+       when is_integer(requests) and requests >= 0 do
+    Format.integer(requests)
+  end
+
+  defp recent_request_count_label(_account), do: "0"
 
   @spec recovery_eligible?(map()) :: boolean()
   defp recovery_eligible?(%{identity: %{status: status}} = account) do

@@ -436,6 +436,7 @@ defmodule CodexPooler.PoolerFixtures do
         api_key_id: request.api_key_id,
         pool_upstream_assignment_id: Map.get(attrs, :pool_upstream_assignment_id),
         upstream_identity_id: Map.get(attrs, :upstream_identity_id),
+        model_id: Map.get(attrs, :model_id, request.model_id),
         entry_kind: Map.get(attrs, :entry_kind, "settlement"),
         amount_status: Map.get(attrs, :amount_status, "recorded"),
         usage_status: Map.get(attrs, :usage_status, "usage_known"),
