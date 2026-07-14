@@ -144,6 +144,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     Enum.map(pools, &{&1.name, &1.id})
   end
 
+  @api_key_status_rank %{"active" => 0, "paused" => 1, "revoked" => 2}
+
   @spec pool_groups([Pool.t()], pool_lookup(), [api_key_row()]) :: [pool_group()]
   def pool_groups(pools, pool_lookup, api_keys) do
     api_keys_by_pool_id = Enum.group_by(api_keys, & &1.pool_id)
@@ -161,7 +163,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
               id: pool.id,
               dom_id: pool_dom_id(pool),
               name: pool.name,
-              api_keys: pool_api_keys,
+              api_keys: sort_api_keys(pool_api_keys),
               count_label: api_key_count_label(length(pool_api_keys))
             }
           ]
@@ -180,11 +182,19 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
             id: nil,
             dom_id: "unknown-pool",
             name: "Unknown Pool",
-            api_keys: unknown_api_keys,
+            api_keys: sort_api_keys(unknown_api_keys),
             count_label: api_key_count_label(length(unknown_api_keys))
           }
         ]
     end
+  end
+
+  # Live keys lead the group; retired ones sink to the bottom.
+  defp sort_api_keys(api_keys) do
+    Enum.sort_by(api_keys, fn api_key ->
+      {Map.get(@api_key_status_rank, api_key.status, map_size(@api_key_status_rank)),
+       String.downcase(api_key.display_name || "")}
+    end)
   end
 
   @spec model_policy_label(nil | [String.t()]) :: String.t()

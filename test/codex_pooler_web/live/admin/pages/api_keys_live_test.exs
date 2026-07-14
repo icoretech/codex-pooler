@@ -211,6 +211,46 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     refute key_cell_html =~ "Primary Pool"
   end
 
+  test "orders grouped API keys by lifecycle then name", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "sorted-pool", name: "Sorted Pool"})
+
+    keys =
+      for {name, status} <- [
+            {"zulu revoked key", "revoked"},
+            {"alpha revoked key", "revoked"},
+            {"paused key", "paused"},
+            {"zulu active key", "active"},
+            {"alpha active key", "active"}
+          ] do
+        {:ok, %{api_key: api_key}} = Access.create_api_key(scope, pool, %{display_name: name})
+
+        api_key =
+          api_key
+          |> Ecto.Changeset.change(%{status: status})
+          |> Repo.update!()
+
+        {name, api_key}
+      end
+
+    {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
+
+    group_html = view |> element("#api-key-pool-group-sorted-pool") |> render()
+    keys_by_name = Map.new(keys)
+
+    positions =
+      for name <- [
+            "alpha active key",
+            "zulu active key",
+            "paused key",
+            "alpha revoked key",
+            "zulu revoked key"
+          ] do
+        :binary.match(group_html, "api-key-row-#{keys_by_name[name].id}") |> elem(0)
+      end
+
+    assert positions == Enum.sort(positions)
+  end
+
   test "filters grouped API keys from pool_id query params", %{conn: conn, scope: scope} do
     {:ok, primary_pool} =
       Pools.create_pool(scope, %{slug: "filtered-primary", name: "Filtered Primary"})
