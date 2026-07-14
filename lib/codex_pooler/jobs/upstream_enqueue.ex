@@ -1,6 +1,8 @@
 defmodule CodexPooler.Jobs.UpstreamEnqueue do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Events
 
   alias CodexPooler.Jobs.{
@@ -11,6 +13,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   }
 
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -25,6 +28,16 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
           | :upstream_identity_id_required
   @type job_insert_result ::
           {:ok, Oban.Job.t()} | {:error, Ecto.Changeset.t() | missing_ref_error()}
+
+  @automatic_reconciliation_unique [
+    fields: [:args, :queue, :worker],
+    keys: [:upstream_identity_id],
+    states: :successful,
+    period: 60
+  ]
+  # Oban applies the period to incomplete states too. Keep a separate incomplete-state
+  # guard so a long-running job never falls out of the short completion cooldown.
+  @incomplete_job_states ~w(suspended available scheduled executing retryable)
 
   @spec enqueue_token_refresh(identity_ref(), keyword()) :: job_insert_result()
   def enqueue_token_refresh(identity_or_id, opts \\ []) do
@@ -76,6 +89,19 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
     end
   end
 
+  @spec enqueue_gateway_account_reconciliation(pool_ref(), PoolUpstreamAssignment.t()) ::
+          job_insert_result()
+  def enqueue_gateway_account_reconciliation(
+        pool_or_id,
+        %PoolUpstreamAssignment{} = assignment
+      ) do
+    enqueue_automatic_identity_account_reconciliation(
+      pool_or_id,
+      assignment,
+      trigger_kind: "gateway"
+    )
+  end
+
   @spec enqueue_saved_reset_redemption(assignment_ref(), keyword()) :: job_insert_result()
   def enqueue_saved_reset_redemption(assignment_or_id, opts \\ []) do
     with {:ok, assignment_id} <- assignment_id(assignment_or_id) do
@@ -97,18 +123,100 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         %PoolUpstreamAssignment{} = assignment,
         opts \\ []
       ) do
-    assignment.pool_id
-    |> account_reconciliation_args(assignment.id, opts)
-    |> Map.merge(%{
-      "upstream_identity_id" => assignment.upstream_identity_id,
-      "target_kind" => "upstream_identity"
-    })
-    |> maybe_put_recovery_fence(assignment)
-    |> AccountReconciliationWorker.new(
-      Options.job_options(opts, unique_keys: [:upstream_identity_id, :trigger_kind])
+    enqueue_automatic_identity_account_reconciliation(
+      assignment.pool_id,
+      assignment,
+      Keyword.put_new(opts, :trigger_kind, "scheduled")
     )
-    |> Oban.insert()
-    |> tap_job_status_event(assignment.pool_id, "account_reconciliation", "scheduled")
+  end
+
+  defp enqueue_automatic_identity_account_reconciliation(pool_or_id, assignment, opts) do
+    with {:ok, pool_id} <- pool_id(pool_or_id) do
+      args =
+        pool_id
+        |> account_reconciliation_args(assignment.id, opts)
+        |> Map.merge(%{
+          "upstream_identity_id" => assignment.upstream_identity_id,
+          "target_kind" => "upstream_identity"
+        })
+        |> maybe_put_recovery_fence(assignment)
+
+      args
+      |> insert_automatic_identity_account_reconciliation(assignment, opts)
+      |> tap_job_status_event(pool_id, "account_reconciliation", "scheduled")
+    end
+  end
+
+  defp insert_automatic_identity_account_reconciliation(args, assignment, opts) do
+    transaction_result =
+      Repo.transaction(fn ->
+        # Serialize automatic enqueues across triggers and assignments for this identity.
+        case lock_upstream_identity(assignment.upstream_identity_id) do
+          %UpstreamIdentity{} ->
+            insert_unless_incomplete_reconciliation(args, assignment.upstream_identity_id, opts)
+
+          nil ->
+            {:error, :upstream_identity_id_required}
+        end
+      end)
+
+    case transaction_result do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp lock_upstream_identity(identity_id) do
+    Repo.one(
+      from(identity in UpstreamIdentity,
+        where: identity.id == ^identity_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp insert_unless_incomplete_reconciliation(args, identity_id, opts) do
+    case incomplete_reconciliation_job(identity_id) do
+      %Oban.Job{} = job ->
+        {:ok, %{job | conflict?: true}}
+
+      nil ->
+        args
+        |> AccountReconciliationWorker.new(automatic_reconciliation_job_options(opts))
+        |> Oban.insert()
+    end
+  end
+
+  defp incomplete_reconciliation_job(identity_id) do
+    worker = Oban.Worker.to_string(AccountReconciliationWorker)
+
+    Oban.Job
+    |> where([job], job.worker == ^worker and job.state in ^@incomplete_job_states)
+    |> where(
+      [job],
+      fragment("?->>'upstream_identity_id' = ?", job.args, ^identity_id) or
+        fragment(
+          """
+          EXISTS (
+            SELECT 1
+            FROM pool_upstream_assignments AS reconciliation_assignment
+            WHERE reconciliation_assignment.id::text = ?->>'pool_upstream_assignment_id'
+              AND reconciliation_assignment.upstream_identity_id::text = ?
+          )
+          """,
+          job.args,
+          ^identity_id
+        )
+    )
+    |> order_by([job], desc: job.inserted_at, desc: job.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp automatic_reconciliation_job_options(opts) do
+    opts
+    |> Keyword.take([:scheduled_at, :schedule_in])
+    |> Keyword.put(:unique, @automatic_reconciliation_unique)
   end
 
   defp tap_job_status_event(

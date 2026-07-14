@@ -81,16 +81,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
 
   @spec maybe_enqueue_gateway_reconciliation(Jobs.pool_ref(), PoolUpstreamAssignment.t()) :: :ok
   def maybe_enqueue_gateway_reconciliation(pool_id, assignment) do
-    result =
-      Jobs.enqueue_account_reconciliation(pool_id, assignment,
-        trigger_kind: "gateway",
-        unique: [
-          fields: [:args, :queue, :worker],
-          keys: [:pool_id, :pool_upstream_assignment_id, :trigger_kind],
-          states: :successful,
-          period: 60
-        ]
-      )
+    result = Jobs.enqueue_gateway_account_reconciliation(pool_id, assignment)
 
     case result do
       {:ok, _job} ->

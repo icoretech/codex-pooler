@@ -6,6 +6,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Runtime.Finalization.SideEffects
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Jobs
@@ -2192,6 +2193,10 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
           set: [
             state: "completed",
             attempt: 1,
+            inserted_at:
+              DateTime.utc_now()
+              |> DateTime.add(-61, :second)
+              |> DateTime.truncate(:microsecond),
             attempted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
             completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
           ]
@@ -2356,75 +2361,209 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert is_nil(assignment.metadata["last_reconciliation"])
     end
 
-    test "gateway-triggered reconciliation deduplicates recently completed jobs" do
+    test "gateway finalization reuses an incomplete scheduled identity reconciliation" do
       {pool, assignment} = active_assignment_fixture(%{})
-      assert :ok = Events.subscribe_pool(pool.id)
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
 
-      unique = [
-        fields: [:args, :queue, :worker],
-        keys: [:pool_id, :pool_upstream_assignment_id, :trigger_kind],
-        states: :successful,
-        period: 60
-      ]
-
-      assert {:ok, first_job} =
-               publish_from_task(fn ->
-                 Jobs.enqueue_account_reconciliation(pool, assignment,
-                   trigger_kind: "gateway",
-                   unique: unique
-                 )
-               end)
-
-      assert first_job.args == %{
-               "pool_id" => pool.id,
-               "pool_upstream_assignment_id" => assignment.id,
-               "trigger_kind" => "gateway"
-             }
-
-      first_job_id = Integer.to_string(first_job.id)
-
-      assert_receive {Events,
-                      %{
-                        reason: "job_status_updated",
-                        payload: %{
-                          "id" => ^first_job_id,
-                          "status" => "scheduled",
-                          "worker" => "account_reconciliation"
-                        }
-                      }}
-
-      {1, _rows} =
-        from(job in Oban.Job, where: job.id == ^first_job.id)
-        |> Repo.update_all(
-          set: [
-            state: "completed",
-            attempt: 1,
-            attempted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
-            completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
-          ]
+      {_second_pool, second_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Gateway assignment duplicate",
+          created_at: DateTime.add(assignment.created_at, 60, :second)
         )
 
-      assert {:ok, second_job} =
-               publish_from_task(fn ->
-                 Jobs.enqueue_account_reconciliation(pool, assignment,
-                   trigger_kind: "gateway",
-                   unique: unique
-                 )
-               end)
+      assert {:ok, %{inserted: [scheduled_job], conflicts: [], errors: []}} =
+               Jobs.enqueue_account_reconciliation_for_active_pools(trigger_kind: "scheduled")
 
-      refute first_job.conflict?
-      assert second_job.conflict?
-      assert second_job.id == first_job.id
-      refute_received {Events, %{reason: "job_status_updated"}}
+      assert :ok =
+               SideEffects.maybe_enqueue_gateway_reconciliation(
+                 second_assignment.pool_id,
+                 second_assignment
+               )
 
-      assert [job] =
+      assert [persisted_job] =
                Repo.all(
                  from(job in Oban.Job,
                    where: job.worker == ^worker_name(AccountReconciliationWorker)
                  )
                )
 
-      assert job.id == first_job.id
+      assert persisted_job.id == scheduled_job.id
+      assert scheduled_job.args["pool_id"] == pool.id
+      assert scheduled_job.args["pool_upstream_assignment_id"] == assignment.id
+      assert scheduled_job.args["upstream_identity_id"] == identity.id
+      assert scheduled_job.args["trigger_kind"] == "scheduled"
+    end
+
+    test "scheduled reconciliation reuses an incomplete gateway identity reconciliation" do
+      {_pool, assignment} = active_assignment_fixture(%{})
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      {second_pool, second_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Scheduled assignment duplicate",
+          created_at: DateTime.add(assignment.created_at, 60, :second)
+        )
+
+      assert {:ok, gateway_job} =
+               Jobs.enqueue_gateway_account_reconciliation(second_pool, second_assignment)
+
+      assert {:ok, %{inserted: [], conflicts: [scheduled_conflict], errors: []}} =
+               Jobs.enqueue_account_reconciliation_for_active_pools(trigger_kind: "scheduled")
+
+      refute gateway_job.conflict?
+      assert scheduled_conflict.conflict?
+      assert scheduled_conflict.id == gateway_job.id
+
+      assert gateway_job.args == %{
+               "pool_id" => second_pool.id,
+               "pool_upstream_assignment_id" => second_assignment.id,
+               "upstream_identity_id" => identity.id,
+               "target_kind" => "upstream_identity",
+               "trigger_kind" => "gateway"
+             }
+    end
+
+    test "concurrent gateway finalization enqueues one effective reconciliation job" do
+      {pool, assignment} = active_assignment_fixture(%{})
+      identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+      {second_pool, second_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Concurrent gateway assignment",
+          created_at: DateTime.add(assignment.created_at, 60, :second)
+        )
+
+      targets =
+        [{pool, assignment}, {second_pool, second_assignment}]
+        |> Stream.cycle()
+        |> Enum.take(12)
+
+      results =
+        Enum.map(targets, fn {target_pool, target_assignment} ->
+          start_allowed_task(fn ->
+            Jobs.enqueue_gateway_account_reconciliation(target_pool, target_assignment)
+          end)
+        end)
+        |> Enum.map(&Task.await/1)
+
+      assert Enum.count(results, &match?({:ok, %{conflict?: false}}, &1)) == 1
+      assert Enum.count(results, &match?({:ok, %{conflict?: true}}, &1)) == 11
+
+      assert [job_id] =
+               results
+               |> Enum.map(fn {:ok, job} -> job.id end)
+               |> Enum.uniq()
+
+      assert [persisted_job] =
+               Repo.all(
+                 from(job in Oban.Job,
+                   where: job.worker == ^worker_name(AccountReconciliationWorker)
+                 )
+               )
+
+      assert persisted_job.id == job_id
+
+      Repo.delete_all(Oban.Job)
+
+      side_effect_results =
+        Enum.map(targets, fn {target_pool, target_assignment} ->
+          start_allowed_task(fn ->
+            SideEffects.maybe_enqueue_gateway_reconciliation(
+              target_pool.id,
+              target_assignment
+            )
+          end)
+        end)
+        |> Enum.map(&Task.await/1)
+
+      assert Enum.all?(side_effect_results, &(&1 == :ok))
+
+      assert [_single_job] =
+               Repo.all(
+                 from(job in Oban.Job,
+                   where: job.worker == ^worker_name(AccountReconciliationWorker)
+                 )
+               )
+    end
+
+    test "automatic reconciliation blocks incomplete jobs older than the cooldown" do
+      {pool, assignment} = active_assignment_fixture(%{})
+
+      for incomplete_state <- ~w(suspended available scheduled executing retryable) do
+        Repo.delete_all(Oban.Job)
+
+        assert {:ok, first_job} =
+                 Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+        expired_inserted_at =
+          DateTime.utc_now()
+          |> DateTime.add(-120, :second)
+          |> DateTime.truncate(:microsecond)
+
+        {1, _rows} =
+          from(job in Oban.Job, where: job.id == ^first_job.id)
+          |> Repo.update_all(set: [state: incomplete_state, inserted_at: expired_inserted_at])
+
+        assert {:ok, duplicate_job} =
+                 Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+        assert duplicate_job.conflict?
+        assert duplicate_job.id == first_job.id
+      end
+    end
+
+    test "automatic reconciliation cools down completion but not cancelled or discarded jobs" do
+      {pool, assignment} = active_assignment_fixture(%{})
+
+      assert {:ok, completed_job} =
+               Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^completed_job.id)
+        |> Repo.update_all(set: [state: "completed"])
+
+      assert {:ok, completed_conflict} =
+               Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      assert completed_conflict.conflict?
+      assert completed_conflict.id == completed_job.id
+
+      for retryable_terminal_state <- ~w(discarded cancelled) do
+        Repo.delete_all(Oban.Job)
+
+        assert {:ok, first_job} =
+                 Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+        {1, _rows} =
+          from(job in Oban.Job, where: job.id == ^first_job.id)
+          |> Repo.update_all(set: [state: retryable_terminal_state])
+
+        assert {:ok, replacement_job} =
+                 Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+        refute replacement_job.conflict?
+        assert replacement_job.id != first_job.id
+      end
+    end
+
+    test "gateway reconciliation can run again after the automatic cooldown expires" do
+      {pool, assignment} = active_assignment_fixture(%{})
+
+      assert {:ok, first_job} = Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      expired_inserted_at =
+        DateTime.utc_now()
+        |> DateTime.add(-61, :second)
+        |> DateTime.truncate(:microsecond)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^first_job.id)
+        |> Repo.update_all(set: [state: "completed", inserted_at: expired_inserted_at])
+
+      assert {:ok, later_job} = Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      refute later_job.conflict?
+      assert later_job.id != first_job.id
     end
 
     test "manual reconciliation can target a non-canonical assignment for the same identity" do
@@ -2448,12 +2587,6 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                "trigger_kind" => "manual"
              }
     end
-  end
-
-  defp publish_from_task(fun) when is_function(fun, 0) do
-    fun
-    |> Task.async()
-    |> Task.await(5_000)
   end
 
   defp start_allowed_task(fun) when is_function(fun, 0) do

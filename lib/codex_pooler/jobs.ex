@@ -101,6 +101,14 @@ defmodule CodexPooler.Jobs do
     UpstreamEnqueue.enqueue_account_reconciliation(pool_or_id, assignment_or_id, opts)
   end
 
+  @spec enqueue_gateway_account_reconciliation(
+          pool_ref(),
+          PoolUpstreamAssignment.t()
+        ) :: job_insert_result()
+  def enqueue_gateway_account_reconciliation(pool_or_id, %PoolUpstreamAssignment{} = assignment) do
+    UpstreamEnqueue.enqueue_gateway_account_reconciliation(pool_or_id, assignment)
+  end
+
   @spec enqueue_assignment_priming(pool_ref(), assignment_ref(), keyword()) ::
           job_insert_result() | {:error, term()}
   def enqueue_assignment_priming(pool_or_id, assignment_or_id, opts \\ []) do
