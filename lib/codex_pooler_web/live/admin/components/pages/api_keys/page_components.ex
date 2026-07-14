@@ -280,69 +280,75 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <article
             :for={api_key <- group.api_keys}
             id={"api-key-row-#{api_key.id}"}
-            class="relative grid min-w-0 gap-4 p-4 transition-colors hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto] xl:items-start"
+            class="relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 p-4 transition-colors hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto] xl:gap-4"
           >
-            <div
-              id={"api-key-row-#{api_key.id}-key"}
-              class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-3"
-            >
-              <div class="grid min-w-0 gap-1.5">
-                <div class="flex min-w-0 items-center gap-2">
-                  <span class="truncate font-semibold text-base-content">{api_key.display_name}</span>
+            <div class="grid min-w-0 gap-2 xl:contents">
+              <div id={"api-key-row-#{api_key.id}-key"} class="grid min-w-0 gap-1.5">
+                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span class="truncate font-semibold text-base-content">
+                    {api_key.display_name}
+                  </span>
                   <.api_key_notes_popover
                     :if={ApiKeysReadModel.api_key_operator_notes(api_key)}
                     id={"api-key-row-#{api_key.id}-notes"}
                     notes={ApiKeysReadModel.api_key_operator_notes(api_key)}
                   />
+                  <span
+                    id={"api-key-row-#{api_key.id}-status"}
+                    class={[AdminBadges.lifecycle_chip_class(api_key.status), "shrink-0"]}
+                  >
+                    {api_key.status}
+                  </span>
                 </div>
-                <span class="truncate text-xs text-base-content/55">
-                  <span class="font-medium text-base-content/70">Prefix</span>
+                <span class="truncate font-mono text-xs text-base-content/55">
                   {api_key.key_prefix}
                 </span>
               </div>
-              <span
-                id={"api-key-row-#{api_key.id}-status"}
-                class={[
-                  AdminBadges.lifecycle_chip_class(api_key.status),
-                  "w-fit shrink-0 justify-self-start"
-                ]}
-              >
-                {api_key.status}
-              </span>
-            </div>
-            <div class="grid gap-2 text-sm text-base-content/70">
-              <div id={"api-key-row-#{api_key.id}-last-used"} class="grid gap-0.5">
-                <span class="text-xs font-medium text-base-content/50">Last used</span>
-                <span>{last_used_label(api_key.last_used_at, @datetime_preferences)}</span>
-              </div>
-              <div id={"api-key-row-#{api_key.id}-expires"} class="grid gap-0.5">
-                <span class="text-xs font-medium text-base-content/50">Expires</span>
-                <span class={expiry_label_class(api_key.expires_at)}>
-                  {expiry_label(api_key.expires_at, @datetime_preferences)}
+              <dl class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm text-base-content/70 xl:grid xl:content-start xl:gap-2">
+                <div
+                  id={"api-key-row-#{api_key.id}-last-used"}
+                  class="flex items-baseline gap-1.5 xl:grid xl:gap-0.5"
+                >
+                  <dt class="text-xs font-medium text-base-content/50">Last used</dt>
+                  <dd>{last_used_label(api_key.last_used_at, @datetime_preferences)}</dd>
+                </div>
+                <div
+                  id={"api-key-row-#{api_key.id}-expires"}
+                  class="flex items-baseline gap-1.5 xl:grid xl:gap-0.5"
+                >
+                  <dt class="text-xs font-medium text-base-content/50">Expires</dt>
+                  <dd class={expiry_label_class(api_key.expires_at)}>
+                    {expiry_label(api_key.expires_at, @datetime_preferences)}
+                  </dd>
+                </div>
+              </dl>
+              <div class="grid min-w-0 gap-1 text-sm text-base-content/70 xl:content-start xl:gap-2">
+                <div class="flex min-w-0 items-baseline gap-1.5 xl:grid xl:gap-0.5">
+                  <span class="text-xs font-medium text-base-content/50">Model access</span>
+                  <span
+                    id={"api-key-row-#{api_key.id}-models"}
+                    class="min-w-0 truncate xl:whitespace-normal"
+                  >
+                    {ApiKeysReadModel.model_policy_label(api_key.allowed_model_identifiers)}
+                  </span>
+                </div>
+                <span
+                  :if={
+                    ApiKeysReadModel.model_policy_warning_label(
+                      Map.get(@model_policy_summaries, api_key.id)
+                    )
+                  }
+                  id={"api-key-row-#{api_key.id}-model-policy-warning"}
+                  class="inline-flex items-start gap-1.5 text-xs font-medium leading-5 text-warning"
+                >
+                  <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    {ApiKeysReadModel.model_policy_warning_label(
+                      Map.get(@model_policy_summaries, api_key.id)
+                    )}
+                  </span>
                 </span>
               </div>
-            </div>
-            <div class="grid min-w-0 gap-2 text-sm text-base-content/70">
-              <span class="text-xs font-medium text-base-content/50">Model access</span>
-              <span id={"api-key-row-#{api_key.id}-models"}>
-                {ApiKeysReadModel.model_policy_label(api_key.allowed_model_identifiers)}
-              </span>
-              <span
-                :if={
-                  ApiKeysReadModel.model_policy_warning_label(
-                    Map.get(@model_policy_summaries, api_key.id)
-                  )
-                }
-                id={"api-key-row-#{api_key.id}-model-policy-warning"}
-                class="inline-flex items-start gap-1.5 text-xs font-medium leading-5 text-warning"
-              >
-                <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  {ApiKeysReadModel.model_policy_warning_label(
-                    Map.get(@model_policy_summaries, api_key.id)
-                  )}
-                </span>
-              </span>
             </div>
             <div class="relative z-10 justify-self-end">
               <.api_key_actions_menu api_key={api_key} />
