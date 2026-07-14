@@ -209,6 +209,40 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
      }}
   end
 
+  def assignment_model_terminal_sse(family, opts \\ []) do
+    message = Keyword.get(opts, :message, "raw-assignment-model-miss-sentinel")
+
+    error =
+      case family do
+        :structured ->
+          %{
+            "code" => "model_not_found",
+            "type" => "invalid_request_error",
+            "param" => "model",
+            "message" => message
+          }
+
+        :provenance_backed ->
+          %{"type" => "invalid_request_error", "param" => "model", "message" => message}
+      end
+
+    FakeUpstream.sse_stream(
+      [
+        {"response.failed",
+         %{
+           "type" => "response.failed",
+           "response" => %{
+             "id" => "resp_assignment_model_miss",
+             "status" => "failed",
+             "error" => error,
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 0, "total_tokens" => 4}
+           }
+         }}
+      ],
+      done: false
+    )
+  end
+
   defp maybe_put_error_param(error, nil), do: error
   defp maybe_put_error_param(error, param), do: Map.put(error, "param", param)
 

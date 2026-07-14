@@ -12,6 +12,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   describe "plan_route/1 leaf ordering" do
     test "bridge_ring keeps rendezvous ordering stable for the same seed and candidate set" do
       setup = routing_setup(3)
@@ -640,6 +642,50 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert plan.selected_assignment_id == hd(Enum.reject(base_ids, &(&1 == sticky_id)))
     end
 
+    test "another process observes demotion only for the exact API key model assignment lane" do
+      setup = in_db_observer(fn -> routing_setup(3) end)
+      cleanup_unboxed_pool(setup.pool.id)
+      seed = "persisted-exact-demotion-seed"
+      base_ids = rendezvous_order_ids(setup.candidates, seed)
+      demoted_id = hd(base_ids)
+      {demoted_assignment, demoted_identity} = candidate_by_id!(setup.candidates, demoted_id)
+      initial_plan = in_db_observer(fn -> plan_for(setup, "bridge_ring", seed) end)
+
+      assert "upstream_model_unavailable" =
+               in_db_observer(fn ->
+                 BridgeRing.record_failure(
+                   initial_plan,
+                   demoted_assignment,
+                   demoted_identity,
+                   "upstream_model_unavailable"
+                 )
+               end)
+
+      observed_plan = in_db_observer(fn -> plan_for(setup, "bridge_ring", seed) end)
+
+      assert Map.has_key?(observed_plan.demotions, demoted_id)
+      assert candidate_ids(observed_plan.candidates) == tl(base_ids) ++ [demoted_id]
+
+      sibling_model =
+        in_db_observer(fn ->
+          model_fixture(setup.pool, %{
+            exposed_model_id: "gpt-example-demotion-sibling",
+            upstream_model_id: "upstream-gpt-example-demotion-sibling"
+          })
+        end)
+
+      sibling_plan =
+        in_db_observer(fn ->
+          setup
+          |> Map.put(:model, sibling_model)
+          |> plan_for("bridge_ring", seed)
+        end)
+
+      assert sibling_plan.demotions == %{}
+      assert candidate_ids(sibling_plan.candidates) == base_ids
+      assert sibling_plan.selected_assignment_id == demoted_id
+    end
+
     test "expired demotion is ignored when ordering candidates" do
       setup = routing_setup(3)
       seed = "expired-demotion-seed"
@@ -1107,6 +1153,21 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     end)
 
     Enum.map(tasks, &Task.await(&1, 10_000))
+  end
+
+  defp in_db_observer(callback) do
+    task = Task.async(fn -> Sandbox.unboxed_run(Repo, callback) end)
+
+    Task.await(task, 5_000)
+  end
+
+  defp cleanup_unboxed_pool(pool_id) do
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        pool = Repo.get(CodexPooler.Pools.Pool, pool_id)
+        if pool, do: Repo.delete!(pool)
+      end)
+    end)
   end
 
   defp rotated_ids(candidate_ids, _seed) when length(candidate_ids) <= 1, do: candidate_ids

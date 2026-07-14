@@ -104,6 +104,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec retryable_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
   defdelegate retryable_first_terminal_failure(event), to: TerminalOutcome
 
+  @spec retryable_first_terminal_failure(map(), boolean()) ::
+          {:ok, terminal_failure()} | :error
+  defdelegate retryable_first_terminal_failure(event, assignment_advertised?),
+    to: TerminalOutcome
+
   @spec auth_refresh_first_terminal_failure(map()) :: {:ok, terminal_failure()} | :error
   defdelegate auth_refresh_first_terminal_failure(event), to: TerminalOutcome
 

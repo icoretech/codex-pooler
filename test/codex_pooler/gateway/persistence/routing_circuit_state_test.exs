@@ -9,6 +9,8 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
 
+  alias Ecto.Adapters.SQL.Sandbox
+
   setup do
     old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
 
@@ -191,6 +193,216 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert CircuitState.eligible?(auth, model, assignment, "proxy_websocket")
   end
 
+  test "a failure observed from another process opens only its exact assignment model route lane" do
+    {auth, model, assignment, sibling_assignment, sibling_model} =
+      in_db_observer(fn ->
+        {auth, model, assignment} = routing_fixture()
+        %{assignment: sibling_assignment} = upstream_assignment_fixture(auth.pool)
+        sibling_model = model_fixture(auth.pool, %{exposed_model_id: "gpt-example-sibling"})
+        {auth, model, assignment, sibling_assignment, sibling_model}
+      end)
+
+    cleanup_unboxed_pool(auth.pool.id)
+
+    update_circuit_settings(%{"circuit_failure_threshold" => 1})
+
+    assert {:ok, %RoutingCircuitState{status: "open"}} =
+             in_db_observer(fn ->
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_http",
+                 :upstream_model_unavailable
+               )
+             end)
+
+    assert %{
+             exact_lane: false,
+             sibling_assignment: true,
+             sibling_model: true,
+             sibling_route: true
+           } =
+             in_db_observer(fn ->
+               %{
+                 exact_lane: CircuitState.eligible?(auth, model, assignment, "proxy_http"),
+                 sibling_assignment:
+                   CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
+                 sibling_model:
+                   CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
+                 sibling_route: CircuitState.eligible?(auth, model, assignment, "proxy_stream")
+               }
+             end)
+
+    assert %RoutingCircuitState{
+             pool_id: pool_id,
+             api_key_id: nil,
+             pool_upstream_assignment_id: assignment_id,
+             model_identifier: model_identifier,
+             route_class: "proxy_http",
+             reason_code: "upstream_model_unavailable"
+           } = in_db_observer(fn -> Repo.one!(RoutingCircuitState) end)
+
+    assert pool_id == auth.pool.id
+    assert assignment_id == assignment.id
+    assert model_identifier == model.exposed_model_id
+  end
+
+  test "threshold and bounded half-open recovery persist across process observers" do
+    {auth, model, assignment} = in_db_observer(&routing_fixture/0)
+    cleanup_unboxed_pool(auth.pool.id)
+
+    update_circuit_settings(%{
+      "circuit_failure_threshold" => 2,
+      "circuit_success_threshold" => 2,
+      "circuit_half_open_probe_limit" => 1
+    })
+
+    assert {:ok, %RoutingCircuitState{status: "closed", failure_count: 1}} =
+             in_db_observer(fn ->
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_stream",
+                 :first_failure
+               )
+             end)
+
+    assert {:ok, %RoutingCircuitState{status: "open", failure_count: 2} = opened} =
+             in_db_observer(fn ->
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_stream",
+                 :second_failure
+               )
+             end)
+
+    in_db_observer(fn ->
+      opened
+      |> Ecto.Changeset.change(%{next_probe_at: DateTime.add(now(), -1, :second)})
+      |> Repo.update!()
+    end)
+
+    assert {:ok, %RoutingCircuitState{status: "half_open"} = first_probe} =
+             in_db_observer(fn ->
+               CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
+             end)
+
+    assert first_probe.metadata["probe_in_flight_count"] == 1
+
+    assert {:error, :routing_circuit_probe_in_flight} =
+             in_db_observer(fn ->
+               CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
+             end)
+
+    assert {:ok, %RoutingCircuitState{status: "half_open", success_count: 1} = first_success} =
+             in_db_observer(fn ->
+               CircuitState.record_success(auth, model, assignment, "proxy_stream")
+             end)
+
+    assert first_success.failure_count == 2
+    assert first_success.metadata["probe_in_flight_count"] == 0
+
+    assert {:ok, %RoutingCircuitState{status: "half_open"}} =
+             in_db_observer(fn ->
+               CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
+             end)
+
+    assert {:ok, %RoutingCircuitState{status: "closed", success_count: 2} = recovered} =
+             in_db_observer(fn ->
+               CircuitState.record_success(auth, model, assignment, "proxy_stream")
+             end)
+
+    assert recovered.failure_count == 0
+    assert recovered.reason_code == nil
+    assert recovered.next_probe_at == nil
+    assert recovered.metadata["probe_in_flight_count"] == 0
+
+    assert in_db_observer(fn ->
+             CircuitState.eligible?(auth, model, assignment, "proxy_stream")
+           end)
+  end
+
+  test "concurrent half-open attempts admit exactly one probe across independent checkouts" do
+    {auth, model, assignment} = in_db_observer(&routing_fixture/0)
+    cleanup_unboxed_pool(auth.pool.id)
+
+    update_circuit_settings(%{
+      "circuit_failure_threshold" => 1,
+      "circuit_half_open_probe_limit" => 1
+    })
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = opened} =
+             in_db_observer(fn ->
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_stream",
+                 :probe_race
+               )
+             end)
+
+    in_db_observer(fn ->
+      opened
+      |> Ecto.Changeset.change(%{next_probe_at: DateTime.add(now(), -1, :second)})
+      |> Repo.update!()
+    end)
+
+    parent = self()
+    barrier = make_ref()
+
+    attempts =
+      Enum.map(1..2, fn _index ->
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            %{rows: [[attempt_backend_pid]]} =
+              Ecto.Adapters.SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+
+            send(parent, {:probe_attempt_started, barrier, self(), attempt_backend_pid})
+
+            receive do
+              {:release_probe_attempt, ^barrier} -> :ok
+            after
+              5_000 -> raise "timed out waiting to start half-open probe race"
+            end
+
+            CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
+          end)
+        end)
+      end)
+
+    attempt_processes =
+      Enum.map(attempts, fn _task ->
+        assert_receive {:probe_attempt_started, ^barrier, pid, backend_pid}, 5_000
+        {pid, backend_pid}
+      end)
+
+    assert attempt_processes |> Enum.map(&elem(&1, 0)) |> Enum.uniq() ==
+             Enum.map(attempt_processes, &elem(&1, 0))
+
+    attempt_backend_pids = Enum.map(attempt_processes, &elem(&1, 1))
+    assert Enum.uniq(attempt_backend_pids) == attempt_backend_pids
+
+    Enum.each(attempts, fn task ->
+      send(task.pid, {:release_probe_attempt, barrier})
+    end)
+
+    results = Enum.map(attempts, &Task.await(&1, 5_000))
+
+    assert Enum.count(results, &match?({:ok, %RoutingCircuitState{status: "half_open"}}, &1)) == 1
+
+    assert Enum.count(results, &(&1 == {:error, :routing_circuit_probe_in_flight})) == 1
+
+    assert %RoutingCircuitState{status: "half_open", metadata: metadata} =
+             in_db_observer(fn -> Repo.get!(RoutingCircuitState, opened.id) end)
+
+    assert metadata["probe_in_flight_count"] == 1
+  end
+
   defp open_circuit!(auth, model, assignment, attrs) do
     now = now()
     next_probe_at = Keyword.fetch!(attrs, :next_probe_at)
@@ -306,5 +518,20 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert {:ok, _updated} =
              InstanceSettings.update_system_settings(instance_settings, %{"gateway" => attrs})
+  end
+
+  defp in_db_observer(callback) do
+    task = Task.async(fn -> Sandbox.unboxed_run(Repo, callback) end)
+
+    Task.await(task, 5_000)
+  end
+
+  defp cleanup_unboxed_pool(pool_id) do
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        pool = Repo.get(CodexPooler.Pools.Pool, pool_id)
+        if pool, do: Repo.delete!(pool)
+      end)
+    end)
   end
 end

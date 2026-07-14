@@ -53,6 +53,24 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     context = prepared_context.context
 
     case dispatch_websocket_request_with_owner_recovery(prepared_context, dispatch_request) do
+      {:error, %{reason: {:assignment_model_unavailable_first_event, failure}} = response} ->
+        handle_assignment_model_unavailable_first_event(
+          context,
+          dispatch_request,
+          response,
+          failure,
+          started
+        )
+
+      result ->
+        handle_dispatch_result(result, prepared_context, dispatch_request, callbacks, started)
+    end
+  end
+
+  defp handle_dispatch_result(result, prepared_context, dispatch_request, callbacks, started) do
+    context = prepared_context.context
+
+    case result do
       {:error, %{reason: {:auth_refresh_first_event, failure}} = response} ->
         handle_auth_refresh_websocket_failure(
           prepared_context,
@@ -272,6 +290,46 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       failure,
       response_context
     )
+  end
+
+  defp handle_assignment_model_unavailable_first_event(
+         %{allow_retry?: true} = context,
+         _dispatch_request,
+         response,
+         failure,
+         _started
+       ) do
+    response_context = retryable_websocket_response_context(context, response)
+
+    case Finalization.record_retryable_first_event_stream_failure(
+           Map.get(response, :body, ""),
+           failure,
+           response_context
+         ) do
+      {:ok, _recorded_failure} -> {:retry, :upstream_model_unavailable}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp handle_assignment_model_unavailable_first_event(
+         context,
+         dispatch_request,
+         response,
+         failure,
+         _started
+       ) do
+    deliver_retry_exhausted_websocket_failure(dispatch_request, response)
+
+    response_context = retryable_websocket_response_context(context, response)
+
+    case Finalization.finalize_first_event_stream_failure(
+           Map.get(response, :body, ""),
+           failure,
+           response_context
+         ) do
+      {:ok, _finalized} -> {:ok, %{status: 200, headers: [], websocket_messages: []}}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp pre_visible_transport_metadata(response, context, code) do

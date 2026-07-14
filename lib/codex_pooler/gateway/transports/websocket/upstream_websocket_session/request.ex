@@ -1,7 +1,16 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request do
   @moduledoc false
 
-  defstruct [:url, :headers, :payload, :timeouts, :writer, :message_mapper, :frame_observer]
+  defstruct [
+    :url,
+    :headers,
+    :payload,
+    :timeouts,
+    :writer,
+    :message_mapper,
+    :frame_observer,
+    assignment_advertised?: false
+  ]
 
   @type writer :: (binary() -> any())
   @type frame_observer :: (binary() -> any()) | nil
@@ -14,6 +23,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           writer: writer(),
           message_mapper:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
-          frame_observer: frame_observer()
+          frame_observer: frame_observer(),
+          assignment_advertised?: boolean()
         }
 end

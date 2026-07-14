@@ -474,6 +474,84 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     refute metadata_text =~ "auth.json"
   end
 
+  test "compact assignment model miss finalizes without retry or route-health mutation" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    endpoint = "/backend-api/codex/responses/compact"
+    request_options = request_options(auth, payload, setup, endpoint: endpoint)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: endpoint,
+               transport: "http_sse",
+               correlation_id: "compact-stream-model-miss-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: endpoint,
+        attempt: attempt
+      )
+
+    response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
+    parent = self()
+
+    handler =
+      StreamLifecycle.first_event_retry_handler(
+        response_context,
+        fn _context ->
+          send(parent, :compact_retry_dispatch_called)
+          {:ok, %{status: 200}}
+        end,
+        reset_state: & &1,
+        write_final_event: fn state, body ->
+          send(parent, {:compact_terminal_written, body})
+          {:ok, state}
+        end,
+        stream_candidate: fn result, state ->
+          send(parent, {:compact_stream_candidate_called, result, state})
+          {:ok, state}
+        end
+      )
+
+    body =
+      ~s(event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"code":"model_not_found","param":"model"}}}\n\n)
+
+    failure = %{
+      code: "model_not_found",
+      upstream_code: "model_not_found",
+      upstream_error_param: "model",
+      event_type: "response.failed",
+      data_type: "response.failed"
+    }
+
+    assert {:ok, %{relay: :state}} = handler.(%{relay: :state}, body, failure)
+    assert_received {:compact_terminal_written, ^body}
+    refute_received :compact_retry_dispatch_called
+    refute_received {:compact_stream_candidate_called, _result, _state}
+
+    assert [request] = Repo.all(from(r in Request, where: r.id == ^reserved.request.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "model_not_found"
+
+    assert [final_attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert final_attempt.status == "failed"
+    assert final_attempt.network_error_code == "model_not_found"
+    refute final_attempt.retryable
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+  end
+
   test "pre-first-event silent stream after headers finalizes idle timeout without retry" do
     release_ref = make_ref()
 

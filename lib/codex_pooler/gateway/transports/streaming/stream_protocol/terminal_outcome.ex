@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcome do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
@@ -123,6 +124,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   def retryable_first_terminal_failure(event) do
     with {:ok, %{code: code} = failure} <- terminal_failure_event(event),
          true <- ErrorCanonicalization.retryable_first_event_code?(code),
+         false <- ErrorCanonicalization.previous_response_miss_code?(failure.upstream_code) do
+      {:ok, failure}
+    else
+      _other -> :error
+    end
+  end
+
+  @spec retryable_first_terminal_failure(map(), boolean()) ::
+          {:ok, terminal_failure()} | :error
+  def retryable_first_terminal_failure(event, assignment_advertised?)
+      when is_boolean(assignment_advertised?) do
+    with {:ok, %{code: code} = failure} <- terminal_failure_event(event),
+         true <-
+           ErrorCanonicalization.retryable_first_event_code?(code) or
+             ModelUnavailability.terminal_failure?(failure, assignment_advertised?),
          false <- ErrorCanonicalization.previous_response_miss_code?(failure.upstream_code) do
       {:ok, failure}
     else

@@ -264,6 +264,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_frame, "request-result", 1, :complete}
   end
 
+  test "forwards a terminal failure body when the upstream request returns an error", context do
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "id" => "resp_owner_failure",
+          "error" => %{"code" => "model_not_found"}
+        }
+      })
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        {:error, %{body: terminal_frame, reason: :model_not_found}}
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
+    }
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("terminal-failure"))
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "request-frame",
+      timeouts: %{},
+      writer: fn _frame -> :ok end
+    }
+
+    assert {:error, %{body: ^terminal_frame, reason: :model_not_found}} =
+             WebsocketOwnerSession.submit_request(owner, downstream, request)
+
+    assert_receive {:websocket_owner_frame, "terminal-failure", 1, {:data, ^terminal_frame}}
+    refute_received {:websocket_owner_frame, "terminal-failure", 1, :complete}
+  end
+
   test "latest reconnect increments downstream epoch and fences old downstream sends", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     {:ok, owner} = start_owner(context, upstream: upstream)

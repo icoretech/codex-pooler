@@ -185,6 +185,18 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     get_in(model.metadata || %{}, ["source_assignment_models", assignment_id]) || metadata(model)
   end
 
+  @spec assignment_source?(Model.t(), Ecto.UUID.t()) :: boolean()
+  def assignment_source?(%Model{} = model, assignment_id) when is_binary(assignment_id) do
+    metadata = model.metadata || %{}
+    source_assignment_ids = Map.get(metadata, "source_assignment_ids")
+    source_assignment_models = Map.get(metadata, "source_assignment_models")
+
+    (is_list(source_assignment_ids) and assignment_id in source_assignment_ids) or
+      (is_map(source_assignment_models) and Map.has_key?(source_assignment_models, assignment_id))
+  end
+
+  def assignment_source?(%Model{}, _assignment_id), do: false
+
   defp projected_default_reasoning_level(
          %MetadataProjection{default_effort: default_effort},
          _model,

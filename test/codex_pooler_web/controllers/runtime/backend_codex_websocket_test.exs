@@ -6259,6 +6259,401 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute metadata_text =~ "upstream-token"
   end
 
+  for {family, error} <- [
+        {:structured,
+         %{
+           "code" => "model_not_found",
+           "type" => "invalid_request_error",
+           "param" => "model",
+           "message" => "raw websocket structured model miss sentinel"
+         }},
+        {:provenance_backed,
+         %{
+           "type" => "invalid_request_error",
+           "param" => "model",
+           "message" => "raw websocket provenance model miss sentinel"
+         }}
+      ] do
+    @tag assignment_model_miss_family: family
+    test "websocket pre-visible #{family} assignment model miss retries a later assignment" do
+      error = unquote(Macro.escape(error))
+
+      first_upstream =
+        start_upstream(
+          FakeUpstream.sse_stream(
+            [
+              {"response.failed",
+               %{
+                 "type" => "response.failed",
+                 "response" => %{
+                   "id" => "resp_ws_assignment_model_miss",
+                   "error" => error
+                 }
+               }}
+            ],
+            done: false
+          )
+        )
+
+      second_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_assignment_model_fallback_success",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+
+      second =
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-ws-model-fallback",
+          compact?: false
+        )
+
+      prime_routing_quota!(second.identity)
+      use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+      setup =
+        Map.put(
+          setup,
+          :model,
+          put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+        )
+
+      request_id =
+        seed_preferring_assignment(
+          [setup.assignment.id, second.assignment.id],
+          setup.assignment.id
+        )
+
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => "synthetic websocket assignment model failover input",
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{request_id: request_id},
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_received {:websocket_frame, frame}
+      assert %{"id" => "resp_ws_assignment_model_fallback_success"} = Jason.decode!(frame)
+      refute_received {:websocket_frame, _unexpected}
+
+      assert FakeUpstream.count(first_upstream) == 1
+      assert FakeUpstream.count(second_upstream) == 1
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.network_error_code == "upstream_model_unavailable"
+      assert first_attempt.usage_status == "usage_unknown"
+      assert second_attempt.pool_upstream_assignment_id == second.assignment.id
+      assert second_attempt.status == "succeeded"
+      assert second_attempt.usage_status == "usage_known"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.retry_count == 1
+
+      assert [settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.attempt_id == second_attempt.id
+      assert settlement.pool_upstream_assignment_id == second.assignment.id
+      assert settlement.usage_status == "usage_known"
+      assert settlement.total_tokens == 7
+
+      assert %RoutingCircuitState{
+               pool_upstream_assignment_id: first_assignment_id,
+               model_identifier: "gpt-example-luna",
+               route_class: "proxy_websocket",
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(c in RoutingCircuitState))
+
+      assert first_assignment_id == setup.assignment.id
+
+      assert %BridgeDemotion{
+               pool_upstream_assignment_id: demoted_assignment_id,
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(d in BridgeDemotion))
+
+      assert demoted_assignment_id == setup.assignment.id
+
+      persisted = inspect({request, first_attempt, second_attempt})
+      refute persisted =~ "raw websocket structured model miss sentinel"
+      refute persisted =~ "raw websocket provenance model miss sentinel"
+      refute persisted =~ "synthetic websocket assignment model failover input"
+      refute persisted =~ setup.authorization
+      refute persisted =~ "upstream-token-ws-model-fallback"
+    end
+  end
+
+  test "websocket final assignment model miss emits one sanitized terminal failure" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "response" => %{
+                 "id" => "resp_ws_final_model_miss",
+                 "error" => %{
+                   "code" => "model_not_found",
+                   "message" => "raw final websocket model miss sentinel"
+                 }
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "final websocket assignment model miss",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-final-assignment-model-miss"},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"type" => "response.failed"} = Jason.decode!(frame)
+    refute_received {:websocket_frame, _unexpected}
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.status == "failed"
+    assert attempt.retryable == false
+    assert attempt.network_error_code == "upstream_model_unavailable"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_model_unavailable"
+
+    persisted = inspect({request, attempt})
+    refute persisted =~ "raw final websocket model miss sentinel"
+    refute persisted =~ "final websocket assignment model miss"
+  end
+
+  test "websocket visible output prevents assignment model failover" do
+    first_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.output_text.delta",
+             %{"type" => "response.output_text.delta", "delta" => "visible"}},
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "response" => %{
+                 "id" => "resp_ws_visible_model_miss",
+                 "error" => %{"code" => "model_not_found", "message" => "hidden sentinel"}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_ws_fallback_must_not_run"}))
+
+    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-ws-visible-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, fallback.assignment.id],
+        setup.assignment.id
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "visible websocket assignment model miss",
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: request_id},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    frames =
+      receive_websocket_frames_by_type(
+        ["response.output_text.delta", "response.failed"],
+        @websocket_frame_timeout
+      )
+
+    assert frames["response.output_text.delta"]["delta"] == "visible"
+    assert frames["response.failed"]["response"]["error"]["code"] == "model_not_found"
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.status == "failed"
+    assert attempt.retryable == false
+  end
+
+  test "live direct websocket keeps an accepted assignment model miss on its established lane" do
+    pinned_upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_live_direct_anchor",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+           }),
+           FakeUpstream.sse_stream(
+             [
+               {"response.failed",
+                %{
+                  "type" => "response.failed",
+                  "response" => %{
+                    "id" => "resp_live_direct_model_miss",
+                    "error" => %{"code" => "model_not_found", "param" => "model"}
+                  }
+                }}
+             ],
+             done: false
+           )
+         ]}
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_live_direct_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-live-direct-model-miss",
+          accepted_turn_state: "ws-live-direct-model-miss",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    try do
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {Jason.encode!(%{
+                    "type" => "response.create",
+                    "model" => setup.model.exposed_model_id,
+                    "input" => "synthetic live direct anchor",
+                    "stream" => true,
+                    "generate" => true
+                  }), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, anchor_frame}, state} = receive_socket_push(state)
+      assert %{"id" => "resp_live_direct_anchor"} = Jason.decode!(anchor_frame)
+      assert {:ok, state} = receive_socket_done(state)
+
+      fallback =
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-live-direct-fallback",
+          compact?: false
+        )
+
+      prime_routing_quota!(fallback.identity)
+
+      _model =
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {Jason.encode!(%{
+                    "type" => "response.create",
+                    "model" => setup.model.exposed_model_id,
+                    "input" => "synthetic live direct model miss",
+                    "stream" => true,
+                    "generate" => true
+                  }), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
+      assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert FakeUpstream.count(pinned_upstream) == 2
+      assert FakeUpstream.count(fallback_upstream) == 0
+
+      assert [anchor_request, failed_request] =
+               Repo.all(
+                 from(request in Request,
+                   where: request.pool_id == ^setup.pool.id,
+                   order_by: [asc: request.admitted_at]
+                 )
+               )
+
+      assert anchor_request.status == "succeeded"
+      assert failed_request.status == "failed"
+      assert failed_request.retry_count == 0
+
+      assert [failed_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+
+      assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert failed_attempt.status == "failed"
+      assert failed_attempt.usage_status == "usage_unknown"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   @tag :feature_websocket_connection_limit_retry
   test "websocket connection limit first event retries same assignment without demotion" do
     upstream =

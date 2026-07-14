@@ -55,6 +55,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       :identity,
       :accounting_request,
       :writer,
+      :assignment_advertised?,
       :request_options
     ]
 
@@ -66,6 +67,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             identity: UpstreamIdentity.t(),
             accounting_request: AccountingRequest.t() | nil,
             writer: Transport.websocket_writer(),
+            assignment_advertised?: boolean(),
             request_options: RequestOptions.t()
           }
   end
@@ -243,6 +245,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         identity: identity,
         accounting_request: request,
         writer: writer,
+        assignment_advertised?: assignment_advertised?,
         request_options: %RequestOptions{} = request_options
       }) do
     headers = websocket_headers(identity, token)
@@ -256,7 +259,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       timeouts: timeouts,
       writer: writer,
       message_mapper: message_mapper,
-      frame_observer: websocket_frame_observer(identity)
+      frame_observer: websocket_frame_observer(identity),
+      assignment_advertised?: assignment_advertised?
     }
 
     case owner_transport(request_options) do

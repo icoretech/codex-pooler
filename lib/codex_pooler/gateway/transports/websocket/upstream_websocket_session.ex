@@ -219,7 +219,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       writer: request.writer,
       timeouts: request.timeouts,
       message_mapper: request.message_mapper,
-      frame_observer: request.frame_observer
+      frame_observer: request.frame_observer,
+      assignment_advertised?: request.assignment_advertised?
     }
 
     connect_and_send_request(
@@ -591,19 +592,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp failure_phase(:unexpected_upstream_websocket_binary), do: :unexpected_frame
   defp failure_phase(_reason), do: :receive
 
-  defp retryable_first_text_frame(raw_text, %ReceiveState{downstream_output_started?: false}) do
+  defp retryable_first_text_frame(
+         raw_text,
+         %ReceiveState{downstream_output_started?: false} = receive_state
+       ) do
     case StreamProtocol.first_complete_event(raw_text) do
-      {:ok, event} -> retryable_pre_visible_terminal_event(event)
+      {:ok, event} -> retryable_pre_visible_terminal_event(event, receive_state)
       :incomplete -> :error
     end
   end
 
   defp retryable_first_text_frame(_raw_text, %ReceiveState{}), do: :error
 
-  defp retryable_pre_visible_terminal_event(event) do
+  defp retryable_pre_visible_terminal_event(event, receive_state) do
     case StreamProtocol.auth_refresh_first_terminal_failure(event) do
       {:ok, failure} -> {:ok, {:auth_refresh_first_event, failure}}
-      :error -> retryable_connection_limit_event(event)
+      :error -> retryable_assignment_model_unavailable_event(event, receive_state)
+    end
+  end
+
+  defp retryable_assignment_model_unavailable_event(event, receive_state) do
+    case StreamProtocol.retryable_first_terminal_failure(
+           event,
+           receive_state.assignment_advertised?
+         ) do
+      {:ok, %{code: code} = failure}
+      when code in ["model_not_found", "invalid_request_error"] ->
+        {:ok, {:assignment_model_unavailable_first_event, failure}}
+
+      _other ->
+        retryable_connection_limit_event(event)
     end
   end
 

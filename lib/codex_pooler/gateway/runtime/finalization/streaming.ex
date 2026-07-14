@@ -13,7 +13,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     SideEffects
   }
 
+  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
+  alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
@@ -80,13 +82,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         %ResponseContext{context: context, response: response},
         opts \\ []
       ) do
-    code = failure.code
-    health_code = failure.upstream_code || code
+    code = stream_failure_code(failure, context)
+    health_code = stream_health_code(failure, code)
+    failure = %{failure | code: code}
 
     health_result =
-      if Keyword.get(opts, :record_health?, true),
-        do: record_health_failure(health_code, health_code, context),
-        else: :ok
+      cond do
+        compact_assignment_model_miss?(failure, context) ->
+          :ok
+
+        Keyword.get(opts, :record_health?, true) ->
+          record_health_failure(health_code, health_code, context)
+
+        true ->
+          :ok
+      end
 
     with :ok <- health_result do
       AttemptSettlement.record_retryable_failure(
@@ -118,11 +128,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         failure,
         %ResponseContext{context: context, response: response}
       ) do
-    code = failure.code
+    code = stream_failure_code(failure, context)
+    health_code = stream_health_code(failure, code)
+    failure = %{failure | code: code}
 
-    health_code = failure.upstream_code || code
+    health_result =
+      if compact_assignment_model_miss?(failure, context),
+        do: :ok,
+        else: record_terminal_health_failure(health_code, response.headers, context)
 
-    with :ok <- record_terminal_health_failure(health_code, response.headers, context) do
+    with :ok <- health_result do
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
@@ -245,9 +260,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     record_health_failure(reason, code, context)
   end
 
-  defp record_stream_failure_health(_reason, code, terminal_failure, headers, context) do
-    health_code = terminal_failure.upstream_code || code
-    record_terminal_health_failure(health_code, headers, context)
+  defp record_stream_failure_health(
+         _reason,
+         code,
+         terminal_failure,
+         headers,
+         %SelectedCandidateContext{} = context
+       ) do
+    if compact_assignment_model_miss?(terminal_failure, context) do
+      :ok
+    else
+      health_code = terminal_failure.upstream_code || code
+      record_terminal_health_failure(health_code, headers, context)
+    end
   end
 
   defp route_failure(%SelectedCandidateContext{} = context, code) do
@@ -291,6 +316,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp terminal_failure_reason({:terminal_stream_failure, %{} = failure}), do: failure
   defp terminal_failure_reason(_reason), do: nil
+
+  defp stream_failure_code(nil, _context), do: nil
+
+  defp stream_failure_code(failure, context) do
+    assignment_advertised? =
+      ModelMetadata.assignment_source?(context.model, context.assignment.id)
+
+    if not compact_stream?(context) and
+         ModelUnavailability.terminal_failure?(failure, assignment_advertised?) do
+      "upstream_model_unavailable"
+    else
+      failure.code
+    end
+  end
+
+  defp stream_health_code(_failure, "upstream_model_unavailable"),
+    do: "upstream_model_unavailable"
+
+  defp stream_health_code(failure, code), do: failure.upstream_code || code
+
+  defp compact_assignment_model_miss?(failure, context) do
+    compact_stream?(context) and
+      ModelUnavailability.terminal_failure?(
+        failure,
+        ModelMetadata.assignment_source?(context.model, context.assignment.id)
+      )
+  end
+
+  defp compact_stream?(%SelectedCandidateContext{endpoint: endpoint}),
+    do: endpoint == "/backend-api/codex/responses/compact"
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
 end

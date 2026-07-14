@@ -481,11 +481,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     DownstreamState.clear_active_turn_monitors(state.active_turn)
 
     case result do
-      :ok -> _result = send_downstream(downstream, :complete)
-      {:ok, _result} -> _result = send_downstream(downstream, :complete)
-      {:error, %{body: _body, reason: _reason}} -> :ok
-      {:error, reason} -> _result = send_owner_error(downstream, reason)
-      _other -> _result = send_owner_error(downstream, :owner_crashed)
+      :ok ->
+        _result = send_downstream(downstream, :complete)
+
+      {:ok, _result} ->
+        _result = send_downstream(downstream, :complete)
+
+      {:error, %{body: body, reason: _reason}} when is_binary(body) and body != "" ->
+        _result = send_downstream(downstream, {:data, body})
+
+      {:error, %{body: _body, reason: _reason}} ->
+        :ok
+
+      {:error, reason} ->
+        _result = send_owner_error(downstream, reason)
+
+      _other ->
+        _result = send_owner_error(downstream, :owner_crashed)
     end
 
     state

@@ -99,6 +99,39 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataTest do
            |> ModelMetadata.supports_reasoning_summary_parameter?()
   end
 
+  test "assignment source lookup uses only exact per-assignment provenance" do
+    assignment_from_ids = Ecto.UUID.generate()
+    assignment_from_models = Ecto.UUID.generate()
+    aggregate_only_assignment = Ecto.UUID.generate()
+
+    model =
+      reasoning_model(%{
+        "source_assignment_ids" => [assignment_from_ids],
+        "source_assignment_models" => %{assignment_from_models => %{"supports_responses" => true}},
+        "upstream_model" => %{
+          "source_assignment_ids" => [aggregate_only_assignment],
+          "source_assignment_models" => %{aggregate_only_assignment => %{}}
+        }
+      })
+
+    assert ModelMetadata.assignment_source?(model, assignment_from_ids)
+    assert ModelMetadata.assignment_source?(model, assignment_from_models)
+    refute ModelMetadata.assignment_source?(model, aggregate_only_assignment)
+    refute ModelMetadata.assignment_source?(model, Ecto.UUID.generate())
+  end
+
+  test "assignment source lookup rejects malformed provenance metadata" do
+    assignment_id = Ecto.UUID.generate()
+
+    refute ModelMetadata.assignment_source?(
+             reasoning_model(%{
+               "source_assignment_ids" => assignment_id,
+               "source_assignment_models" => [assignment_id]
+             }),
+             assignment_id
+           )
+  end
+
   test "codex model payload preserves all advertised GPT-5.6 reasoning levels" do
     efforts = ~w(low medium high xhigh max ultra)
 

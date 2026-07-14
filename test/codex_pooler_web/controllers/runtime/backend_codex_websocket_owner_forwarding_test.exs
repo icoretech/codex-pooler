@@ -646,6 +646,211 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "owner-forwarded pre-visible assignment model miss retries a later assignment" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream(
+             [
+               {"response.failed",
+                %{
+                  "type" => "response.failed",
+                  "response" => %{
+                    "id" => "resp_owner_assignment_model_miss",
+                    "error" => %{
+                      "code" => "model_not_found",
+                      "message" => "raw owner model miss sentinel"
+                    }
+                  }
+                }}
+             ],
+             done: false
+           ),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_assignment_model_fallback_success",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+
+    second =
+      gateway_upstream(setup.pool, upstream, "upstream-token-owner-model-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(second.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+      )
+
+    request_id = Ecto.UUID.generate()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, request_id, request_id)
+
+    try do
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(setup, "owner assignment model failover", %{
+                    "request_id" => request_id
+                  }), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
+      assert %{"id" => "resp_owner_assignment_model_fallback_success"} = Jason.decode!(frame)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert FakeUpstream.count(upstream) == 2
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      refute first_attempt.pool_upstream_assignment_id ==
+               second_attempt.pool_upstream_assignment_id
+
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.network_error_code == "upstream_model_unavailable"
+      assert first_attempt.usage_status == "usage_unknown"
+      assert second_attempt.status == "succeeded"
+      assert second_attempt.usage_status == "usage_known"
+
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "succeeded"
+      assert request.retry_count == 1
+
+      assert [settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.attempt_id == second_attempt.id
+      assert settlement.pool_upstream_assignment_id == second_attempt.pool_upstream_assignment_id
+      assert settlement.usage_status == "usage_known"
+      assert settlement.total_tokens == 7
+
+      assert %RoutingCircuitState{
+               pool_upstream_assignment_id: first_assignment_id,
+               route_class: "proxy_websocket",
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(c in RoutingCircuitState))
+
+      assert first_assignment_id == first_attempt.pool_upstream_assignment_id
+
+      assert %BridgeDemotion{
+               pool_upstream_assignment_id: demoted_assignment_id,
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(d in BridgeDemotion))
+
+      assert demoted_assignment_id == first_attempt.pool_upstream_assignment_id
+
+      persisted = inspect({request, first_attempt, second_attempt})
+      refute persisted =~ "raw owner model miss sentinel"
+      refute persisted =~ "owner assignment model failover"
+      refute persisted =~ setup.authorization
+      refute persisted =~ "upstream-token-owner-model-fallback"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  test "live owner-forwarded websocket keeps an accepted model miss on its established lane" do
+    pinned_upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_live_anchor",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+           }),
+           FakeUpstream.sse_stream(
+             [
+               {"response.failed",
+                %{
+                  "type" => "response.failed",
+                  "response" => %{
+                    "id" => "resp_owner_live_model_miss",
+                    "error" => %{"code" => "model_not_found", "param" => "model"}
+                  }
+                }}
+             ],
+             done: false
+           )
+         ]}
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_owner_live_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-live-model-miss", "owner-live-model-miss")
+
+    try do
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(setup, "synthetic owner live anchor"), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+      assert %{"id" => "resp_owner_live_anchor"} = Jason.decode!(anchor_frame)
+      assert {:ok, state} = receive_socket_done(state)
+
+      fallback =
+        gateway_upstream(setup.pool, fallback_upstream, "upstream-token-owner-live-fallback",
+          compact?: false
+        )
+
+      prime_routing_quota!(fallback.identity)
+      _model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {websocket_payload(setup, "synthetic owner live model miss"), [opcode: :text]},
+                 state
+               )
+
+      assert {:ok, state} = receive_socket_done(state)
+      assert {:push, {:text, failed_frame}, _state} = receive_owner_socket_push(state)
+      assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+
+      assert FakeUpstream.count(pinned_upstream) == 2
+      assert FakeUpstream.count(fallback_upstream) == 0
+
+      assert [anchor_request, failed_request] = request_logs(setup.pool.id)
+      assert anchor_request.status == "succeeded"
+      assert failed_request.status == "failed"
+      assert failed_request.retry_count == 0
+
+      assert [failed_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+
+      assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert failed_attempt.status == "failed"
+      assert failed_attempt.usage_status == "usage_unknown"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   @tag :feature_websocket_terminal_auth_refresh
   test "owner-forwarded websocket handshake 401 refreshes through the same owner without demotion" do
     upstream =

@@ -32,10 +32,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
 
   @spec upstream_error_code(map()) :: String.t() | nil
   def upstream_error_code(decoded) when is_map(decoded) do
-    upstream_sse_error_code_from_error(decoded) ||
+    structured_error_code(decoded) ||
       nested_string(decoded, ["response", "incomplete_details", "reason"]) ||
       nested_string(decoded, ["incomplete_details", "reason"]) ||
       decoded_string(decoded, "code")
+  end
+
+  @spec structured_error_code(map()) :: String.t() | nil
+  def structured_error_code(decoded) when is_map(decoded) do
+    [
+      get_in(decoded, ["response", "error"]),
+      get_in(decoded, ["error"]),
+      get_in(decoded, ["response", "status_details", "error"]),
+      get_in(decoded, ["status_details", "error"])
+    ]
+    |> Enum.find(&is_map/1)
+    |> case do
+      %{} = error -> error_code_from_nested_error(error)
+      _error -> wrapped_error_envelope_code(decoded)
+    end
   end
 
   @spec error_code_from_nested_error(map()) :: String.t() | nil
@@ -120,39 +135,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
 
   def wrapped_top_level_error(_decoded), do: nil
 
-  defp error_code_from_decoded(%{"response" => %{"error" => %{} = error}}) do
-    error_code_from_nested_error(error)
-  end
-
-  defp error_code_from_decoded(%{"error" => %{} = error}) do
-    error_code_from_nested_error(error)
-  end
-
-  defp error_code_from_decoded(%{
-         "response" => %{"status_details" => %{"error" => %{} = error}}
-       }) do
-    error_code_from_nested_error(error)
-  end
-
-  defp error_code_from_decoded(%{"status_details" => %{"error" => %{} = error}}) do
-    error_code_from_nested_error(error)
-  end
-
+  defp error_code_from_decoded(decoded) when is_map(decoded), do: structured_error_code(decoded)
   defp error_code_from_decoded(_decoded), do: nil
-
-  defp upstream_sse_error_code_from_error(decoded) do
-    [
-      get_in(decoded, ["response", "error"]),
-      get_in(decoded, ["error"]),
-      get_in(decoded, ["response", "status_details", "error"]),
-      get_in(decoded, ["status_details", "error"])
-    ]
-    |> Enum.find(&is_map/1)
-    |> case do
-      %{} = error -> error_code_from_nested_error(error)
-      _error -> wrapped_error_envelope_code(decoded)
-    end
-  end
 
   defp wrapped_error_envelope_code(%{"type" => "error"} = decoded) do
     decoded

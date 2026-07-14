@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
@@ -204,9 +205,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp http_stream_writer(%ResponseContext{response: response} = response_context) do
     fn conn, data ->
-      if sse_response?(response) do
+      if sse_response?(response) and not compact_stream?(response_context.context) do
         {classification, first_event_state} =
-          StreamAttempt.classify_first_event(data, first_event_state(conn))
+          StreamAttempt.classify_first_event(
+            data,
+            first_event_state(conn),
+            ModelMetadata.assignment_source?(
+              response_context.context.model,
+              response_context.context.assignment.id
+            )
+          )
 
         conn = put_first_event_state(conn, first_event_state)
 
@@ -216,6 +224,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       end
     end
   end
+
+  defp compact_stream?(%SelectedCandidateContext{endpoint: endpoint}),
+    do: endpoint == "/backend-api/codex/responses/compact"
 
   defp http_stream_terminal_failure_writer do
     fn state, reason ->
@@ -379,9 +390,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> then(fn retry ->
       retry.(response_context,
         reset_state: &reset_first_event_retry_state/1,
+        write_final_event: &write_final_first_event(response_context, &1, &2),
         stream_candidate: &stream_candidate_result/2
       )
     end)
+  end
+
+  defp write_final_first_event(response_context, conn, data) do
+    case write_stream_data(response_context, conn, data) do
+      {:ok, conn} -> {:ok, conn}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp stream_candidate_result({:retry, nil}, conn), do: {:ok, conn}

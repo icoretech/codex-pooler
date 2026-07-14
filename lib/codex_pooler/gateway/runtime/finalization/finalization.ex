@@ -18,7 +18,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     Websocket
   }
 
+  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
+  alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
@@ -74,9 +76,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       body = Metadata.response_body(response)
       RateLimitObserver.record_error(identity, body)
 
-      with :ok <- record_status_route_failure(context, status) do
-        finalize_retryable_status_or_failure(response, context, body)
-      end
+      finalize_retryable_non_success_response(response, context, body)
     end
   end
 
@@ -112,7 +112,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   def handle_http_response(
-        %Req.Response{status: status} = response,
+        %Req.Response{} = response,
         %SelectedCandidateContext{} = context,
         _callbacks
       ) do
@@ -126,15 +126,37 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       body = Metadata.response_body(response)
       RateLimitObserver.record_error(identity, body)
 
-      with :ok <- maybe_record_unauthorized_route_failure(status, context) do
-        finalize_upstream_status_failure(response, context, body)
-      end
+      finalize_non_success_response(response, context, body)
     end
   end
 
   defp normalize_stream_result({:ok, result}), do: {:ok, result}
   defp normalize_stream_result({:error, reason}), do: {:error, reason}
   defp normalize_stream_result(result), do: {:ok, result}
+
+  defp finalize_non_success_response(%Req.Response{status: status} = response, context, body) do
+    if assignment_model_unavailable?(status, body, context) do
+      finalize_assignment_model_unavailable(response, context, body)
+    else
+      with :ok <- maybe_record_unauthorized_route_failure(status, context) do
+        finalize_upstream_status_failure(response, context, body)
+      end
+    end
+  end
+
+  defp finalize_retryable_non_success_response(
+         %Req.Response{status: status} = response,
+         context,
+         body
+       ) do
+    if assignment_model_unavailable?(status, body, context) do
+      finalize_assignment_model_unavailable(response, context, body)
+    else
+      with :ok <- record_status_route_failure(context, status) do
+        finalize_retryable_status_or_failure(response, context, body)
+      end
+    end
+  end
 
   @spec handle_dispatch_error(term(), SelectedCandidateContext.t(), non_neg_integer()) ::
           {:error, map()} | {:retry, term()}
@@ -272,6 +294,45 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         attempt_status: if(allow_retry?, do: "retryable_failed", else: "failed")
       )
     end
+  end
+
+  defp finalize_assignment_model_unavailable(response, context, body) do
+    with :ok <- record_dispatch_route_failure("upstream_model_unavailable", context) do
+      if context.allow_retry? do
+        record_assignment_model_unavailable_retry(response, context)
+      else
+        finalize_upstream_status_failure(response, context, body)
+      end
+    end
+  end
+
+  defp record_assignment_model_unavailable_retry(response, context) do
+    %{reserved: reserved, attempt: attempt, request_options: request_options} = context
+
+    case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
+           response_status_code: response.status,
+           last_error_code: "upstream_model_unavailable",
+           error_message: "upstream model unavailable",
+           latency_ms: elapsed_ms(context.started),
+           attempt_metadata:
+             Metadata.response_metadata(
+               response,
+               "upstream_model_unavailable",
+               request_options
+             )
+         }) do
+      {:ok, _attempt} -> {:retry, :upstream_model_unavailable}
+      {:error, gateway_error} -> {:error, gateway_error}
+    end
+  end
+
+  defp assignment_model_unavailable?(status, body, context) do
+    not compact_endpoint?(context.endpoint) and
+      ModelUnavailability.http_response?(
+        status,
+        body,
+        ModelMetadata.assignment_source?(context.model, context.assignment.id)
+      )
   end
 
   defp finalize_dispatch_error_after_route_failure(

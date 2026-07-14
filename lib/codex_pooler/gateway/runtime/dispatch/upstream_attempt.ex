@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @moduledoc false
 
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
+  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
   alias CodexPooler.Gateway.Runtime.Finalization
@@ -83,6 +84,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       identity: context.identity,
       accounting_request: Keyword.get(opts, :accounting_request),
       writer: Keyword.get(opts, :writer),
+      assignment_advertised?:
+        ModelMetadata.assignment_source?(context.model, context.assignment.id),
       request_options: context.request_options
     }
   end

@@ -1,6 +1,33 @@
 defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  defmodule KeepaliveNotifyingAdapter do
+    @moduledoc false
+
+    def chunk(%{adapter: adapter, payload: payload} = state, chunk) do
+      result = adapter.chunk(payload, chunk)
+
+      case result do
+        :ok ->
+          notify_after_keepalive(state, chunk)
+          :ok
+
+        {:ok, body, next_payload} ->
+          notify_after_keepalive(state, chunk)
+          {:ok, body, %{state | payload: next_payload}}
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+
+    defp notify_after_keepalive(%{notify: notify, release_ref: release_ref}, chunk) do
+      if IO.iodata_to_binary(chunk) == ": keepalive\n\n" do
+        send(notify, {:stream_keepalive_written, release_ref})
+      end
+    end
+  end
+
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias Ecto.Adapters.SQL.Sandbox, as: Sandbox
 
@@ -4974,6 +5001,643 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_safe_runtime_routing_metadata!(request, [first_attempt, second_attempt], setup)
   end
 
+  for {family, miss_payload} <- [
+        {:structured,
+         %{
+           "error" => %{
+             "code" => "model_not_found",
+             "type" => "invalid_request_error",
+             "param" => "model",
+             "message" => "raw-structured-model-miss-sentinel"
+           }
+         }},
+        {:provenance_backed,
+         %{
+           "error" => %{
+             "type" => "invalid_request_error",
+             "param" => "model",
+             "message" => "raw-provenance-model-miss-sentinel"
+           }
+         }}
+      ] do
+    @tag assignment_model_miss_family: family
+    @tag assignment_model_http: true
+    test "POST /backend-api/codex/responses fails over a #{family} assignment model miss",
+         %{conn: conn} do
+      miss_payload = unquote(Macro.escape(miss_payload))
+      first_upstream = start_upstream(FakeUpstream.json_response(miss_payload, 404))
+
+      second_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_assignment_model_failover_success",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+
+      second =
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback",
+          compact?: false
+        )
+
+      prime_routing_quota!(second.identity)
+      use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+      setup =
+        Map.put(
+          setup,
+          :model,
+          put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+        )
+
+      request_id = seed_with_assignment_order([setup.assignment.id, second.assignment.id])
+
+      conn =
+        conn
+        |> put_req_header("x-request-id", request_id)
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic assignment model failover input"
+        })
+
+      assert %{"id" => "resp_assignment_model_failover_success"} = json_response(conn, 200)
+      assert FakeUpstream.count(first_upstream) == 1
+      assert FakeUpstream.count(second_upstream) == 1
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.upstream_status_code == 404
+      assert first_attempt.network_error_code == "upstream_model_unavailable"
+      assert first_attempt.usage_status == "usage_unknown"
+      assert first_attempt.response_metadata["error_kind"] == "upstream_model_unavailable"
+
+      assert second_attempt.pool_upstream_assignment_id == second.assignment.id
+      assert second_attempt.status == "succeeded"
+      assert second_attempt.usage_status == "usage_known"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.retry_count == 1
+
+      assert %RoutingCircuitState{
+               pool_upstream_assignment_id: first_assignment_id,
+               model_identifier: "gpt-example-luna",
+               route_class: "proxy_http",
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(c in RoutingCircuitState))
+
+      assert first_assignment_id == setup.assignment.id
+
+      assert %BridgeDemotion{
+               pool_upstream_assignment_id: demoted_assignment_id,
+               reason_code: "upstream_model_unavailable",
+               attempt_count: 1
+             } = Repo.one!(from(d in BridgeDemotion))
+
+      assert demoted_assignment_id == setup.assignment.id
+
+      assert [%LedgerEntry{} = settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.attempt_id == second_attempt.id
+      assert settlement.pool_upstream_assignment_id == second.assignment.id
+      assert settlement.upstream_identity_id == second.identity.id
+      assert settlement.usage_status == "usage_known"
+      assert settlement.amount_status == "recorded"
+      assert settlement.total_tokens == 7
+
+      persisted = inspect({request, first_attempt, second_attempt, settlement})
+      refute persisted =~ "raw-structured-model-miss-sentinel"
+      refute persisted =~ "raw-provenance-model-miss-sentinel"
+      refute persisted =~ "synthetic assignment model failover input"
+      refute persisted =~ setup.authorization
+      refute persisted =~ "upstream-token-model-fallback"
+    end
+  end
+
+  for status <- [429, 500] do
+    @tag assignment_model_http: true
+    test "POST /backend-api/codex/responses fails over structured model_not_found at #{status}",
+         %{conn: conn} do
+      status = unquote(status)
+
+      first_upstream =
+        start_upstream(
+          FakeUpstream.json_response(
+            %{
+              "error" => %{
+                "code" => "model_not_found",
+                "type" => "invalid_request_error",
+                "param" => "model"
+              }
+            },
+            status
+          )
+        )
+
+      second_upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_assignment_model_status_failover_success",
+            "object" => "response"
+          })
+        )
+
+      setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+
+      second =
+        gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback",
+          compact?: false
+        )
+
+      prime_routing_quota!(second.identity)
+      use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+      setup =
+        Map.put(
+          setup,
+          :model,
+          put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+        )
+
+      request_id = seed_with_assignment_order([setup.assignment.id, second.assignment.id])
+
+      conn =
+        conn
+        |> put_req_header("x-request-id", request_id)
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic assignment status failover input"
+        })
+
+      assert %{"id" => "resp_assignment_model_status_failover_success"} =
+               json_response(conn, 200)
+
+      assert [%{json: first_payload}] = FakeUpstream.requests(first_upstream)
+      assert [%{json: second_payload}] = FakeUpstream.requests(second_upstream)
+      assert first_payload["model"] == second_payload["model"]
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.upstream_status_code == status
+      assert first_attempt.network_error_code == "upstream_model_unavailable"
+      assert first_attempt.response_metadata["error_kind"] == "upstream_model_unavailable"
+      assert second_attempt.status == "succeeded"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.retry_count == 1
+      refute request.last_error_code == "no_eligible_backend"
+
+      assert %RoutingCircuitState{reason_code: "upstream_model_unavailable"} =
+               Repo.one!(from(c in RoutingCircuitState))
+
+      assert %BridgeDemotion{reason_code: "upstream_model_unavailable"} =
+               Repo.one!(from(d in BridgeDemotion))
+    end
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses preserves a final canonical model miss", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "model_not_found",
+              "type" => "invalid_request_error",
+              "param" => "model",
+              "message" => "sanitized model unavailable"
+            }
+          },
+          404
+        )
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic final model miss input"
+      })
+
+    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_status"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 404
+
+    assert %RoutingCircuitState{reason_code: "upstream_model_unavailable"} =
+             Repo.one!(from(c in RoutingCircuitState))
+
+    assert %BridgeDemotion{reason_code: "upstream_model_unavailable"} =
+             Repo.one!(from(d in BridgeDemotion))
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses preserves a final provenance-backed model miss",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"type" => "invalid_request_error", "param" => "model"}},
+          404
+        )
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic final provenance model miss input"
+      })
+
+    assert %{"error" => %{"type" => "invalid_request_error", "param" => "model"}} =
+             json_response(conn, 404)
+
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    refute request.last_error_code == "no_eligible_backend"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 404
+
+    assert %RoutingCircuitState{reason_code: "upstream_model_unavailable"} =
+             Repo.one!(from(c in RoutingCircuitState))
+
+    assert %BridgeDemotion{reason_code: "upstream_model_unavailable"} =
+             Repo.one!(from(d in BridgeDemotion))
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses keeps a hard-pinned canonical model miss final",
+       %{conn: conn} do
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_hard_pinned_model_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "model_not_found",
+              "type" => "invalid_request_error",
+              "param" => "model"
+            }
+          },
+          404
+        )
+      )
+
+    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+
+    pinned =
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin",
+        compact?: false
+      )
+
+    prime_routing_quota!(pinned.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [pinned.assignment, setup.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    previous_response_id = "resp_model_hard_pin_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, pinned.assignment, previous_response_id)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic hard pinned model miss input",
+        "previous_response_id" => previous_response_id
+      })
+
+    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == pinned.assignment.id
+    assert attempt.status == "failed"
+
+    assert %RoutingCircuitState{
+             pool_upstream_assignment_id: pinned_assignment_id,
+             reason_code: "upstream_model_unavailable"
+           } = Repo.one!(from(c in RoutingCircuitState))
+
+    assert pinned_assignment_id == pinned.assignment.id
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses keeps a hard-pinned provenance-backed model miss final",
+       %{conn: conn} do
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_hard_pinned_provenance_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"type" => "invalid_request_error", "param" => "model"}},
+          404
+        )
+      )
+
+    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+
+    pinned =
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin",
+        compact?: false
+      )
+
+    prime_routing_quota!(pinned.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [pinned.assignment, setup.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    previous_response_id = "resp_provenance_pin_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, pinned.assignment, previous_response_id)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic hard pinned provenance model miss input",
+        "previous_response_id" => previous_response_id
+      })
+
+    assert %{"error" => %{"type" => "invalid_request_error", "param" => "model"}} =
+             json_response(conn, 404)
+
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    refute request.last_error_code == "no_eligible_backend"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == pinned.assignment.id
+    assert attempt.status == "failed"
+
+    assert %RoutingCircuitState{
+             pool_upstream_assignment_id: pinned_assignment_id,
+             reason_code: "upstream_model_unavailable"
+           } = Repo.one!(from(c in RoutingCircuitState))
+
+    assert pinned_assignment_id == pinned.assignment.id
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses keeps a file-affinity canonical model miss final",
+       %{conn: conn} do
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_file_model_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"code" => "model_not_found", "param" => "model"}},
+          404
+        )
+      )
+
+    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+
+    pinned =
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin",
+        compact?: false
+      )
+
+    prime_routing_quota!(pinned.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [pinned.assignment, setup.assignment])
+      )
+
+    file_id =
+      response_affinity_file_fixture(setup, pinned.assignment, pinned.identity,
+        file_id: "file_model_pin_#{System.unique_integer([:positive])}",
+        filename: "synthetic-model-pin.txt",
+        byte_size: 12,
+        status: "uploaded",
+        finalize_status: "succeeded"
+      ).file_id
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [%{"type" => "input_file", "file_id" => file_id}]
+      })
+
+    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == pinned.assignment.id
+    assert attempt.status == "failed"
+    assert attempt.usage_status == "usage_unknown"
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses does not fail over a generic 404", %{conn: conn} do
+    first_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"code" => "request_not_found", "type" => "invalid_request_error"}},
+          404
+        )
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_generic_404_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+
+    second =
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-generic-404", compact?: false)
+
+    prime_routing_quota!(second.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+      )
+
+    request_id = seed_with_assignment_order([setup.assignment.id, second.assignment.id])
+
+    conn =
+      conn
+      |> put_req_header("x-request-id", request_id)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic generic 404 input"
+      })
+
+    assert %{"error" => %{"code" => "request_not_found"}} = json_response(conn, 404)
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(second_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert Repo.all(from(d in BridgeDemotion)) == []
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses/compact does not classify a canonical model miss",
+       %{conn: conn} do
+    first_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "model_not_found",
+              "type" => "invalid_request_error",
+              "param" => "model"
+            }
+          },
+          404
+        )
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 1, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(first_upstream, compact?: true, exposed_model_id: "gpt-example-luna")
+
+    second =
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback",
+        compact?: true
+      )
+
+    prime_routing_quota!(second.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+      )
+
+    request_id = seed_with_assignment_order([setup.assignment.id, second.assignment.id])
+
+    conn =
+      conn
+      |> put_req_header("x-request-id", request_id)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic compact model miss input"
+      })
+
+    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(second_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.transport == "http_compact_json"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert Repo.all(from(d in BridgeDemotion)) == []
+  end
+
   test "POST /backend-api/codex/responses records prompt-cache routing-locality metadata safely",
        %{
          conn: conn
@@ -5895,6 +6559,265 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "server_is_overloaded")
   end
 
+  for family <- [:structured, :provenance_backed] do
+    @tag :task_4_assignment_model_sse
+    @tag assignment_model_miss_family: family
+    test "SSE first-event #{family} assignment model miss retries without relaying the failure",
+         %{conn: conn} do
+      family = unquote(family)
+      raw_sentinel = "raw-#{family}-sse-model-miss-sentinel"
+
+      {setup, failing_upstream, success_upstream} =
+        stream_retry_setup(assignment_model_terminal_sse(family, message: raw_sentinel))
+
+      stream_conn =
+        conn
+        |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic assignment model SSE failover input",
+          "stream" => true
+        })
+
+      assert stream_conn.status == 200
+      assert stream_conn.resp_body =~ "resp_stream_retry_success"
+      assert stream_conn.resp_body =~ "data: [DONE]\n\n"
+      refute stream_conn.resp_body =~ "resp_assignment_model_miss"
+      refute stream_conn.resp_body =~ raw_sentinel
+      refute stream_conn.resp_body =~ "model_not_found"
+
+      assert FakeUpstream.count(failing_upstream) == 1
+      assert FakeUpstream.count(success_upstream) == 1
+
+      assert [first_attempt, second_attempt] =
+               Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+      assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert first_attempt.status == "retryable_failed"
+      assert first_attempt.network_error_code == "upstream_model_unavailable"
+      assert first_attempt.usage_status == "usage_known"
+      assert first_attempt.response_metadata["stream_failure_stage"] == "first_event"
+      assert second_attempt.pool_upstream_assignment_id == setup.fallback_assignment.id
+      assert second_attempt.status == "succeeded"
+      assert second_attempt.usage_status == "usage_known"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.transport == "http_sse"
+      assert request.retry_count == 1
+
+      assert %RoutingCircuitState{
+               pool_upstream_assignment_id: first_assignment_id,
+               route_class: "proxy_stream",
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(c in RoutingCircuitState))
+
+      assert first_assignment_id == setup.assignment.id
+
+      assert %BridgeDemotion{
+               pool_upstream_assignment_id: first_assignment_id,
+               reason_code: "upstream_model_unavailable"
+             } = Repo.one!(from(d in BridgeDemotion))
+
+      assert first_assignment_id == setup.assignment.id
+
+      assert [%LedgerEntry{} = settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.attempt_id == second_attempt.id
+      assert settlement.pool_upstream_assignment_id == setup.fallback_assignment.id
+      assert settlement.total_tokens == 7
+
+      persisted = inspect({request, first_attempt, second_attempt, settlement})
+      refute persisted =~ raw_sentinel
+      refute persisted =~ "synthetic assignment model SSE failover input"
+      refute persisted =~ setup.authorization
+      refute persisted =~ "upstream-token-stream-retry"
+    end
+  end
+
+  @tag :task_4_assignment_model_sse
+  test "SSE keepalive before assignment model miss preserves the failover window" do
+    previous_env = Application.get_env(:codex_pooler, OperationalSettings)
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{sse_keepalive_interval_ms: 50}
+    )
+
+    on_exit(fn ->
+      if previous_env,
+        do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
+        else: Application.delete_env(:codex_pooler, OperationalSettings)
+    end)
+
+    release_ref = make_ref()
+
+    first_mode =
+      FakeUpstream.barrier_sse_stream(
+        [
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "response" => %{
+               "id" => "resp_assignment_model_keepalive_miss",
+               "status" => "failed",
+               "error" => %{
+                 "code" => "model_not_found",
+                 "type" => "invalid_request_error",
+                 "param" => "model"
+               }
+             }
+           }}
+        ],
+        barrier_after: 0,
+        done: false,
+        notify: self(),
+        release_ref: release_ref
+      )
+
+    {setup, failing_upstream, success_upstream} = stream_retry_setup(first_mode)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, stream_conn} =
+             execute_stream_after_releasing_barrier(
+               auth,
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "keepalive before assignment model miss fixture",
+                 "stream" => true
+               },
+               %{
+                 request_id: deterministic_rotation_seed(2, 0),
+                 upstream_endpoint: "/backend-api/codex/responses"
+               },
+               release_ref
+             )
+
+    assert stream_conn.resp_body =~ ": keepalive\n\n"
+    assert stream_conn.resp_body =~ "resp_stream_retry_success"
+    assert stream_conn.resp_body =~ "data: [DONE]\n\n"
+    refute stream_conn.resp_body =~ "resp_assignment_model_keepalive_miss"
+    refute stream_conn.resp_body =~ "model_not_found"
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+    assert_stream_retry_success!(setup, "upstream_model_unavailable")
+  end
+
+  @tag :task_4_assignment_model_sse
+  test "SSE visible delta closes provenance-backed assignment model retry window" do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "visible-once"}},
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "response" => %{
+               "status" => "failed",
+               "error" => %{"type" => "invalid_request_error", "param" => "model"}
+             }
+           }}
+        ],
+        done: false
+      )
+
+    {setup, failing_upstream, fallback_upstream} = stream_retry_setup(first_mode)
+
+    execute_backend_stream!(setup, "visible-assignment-model-no-retry")
+
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert_stream_terminal_failure!(setup, "invalid_request_error")
+  end
+
+  @tag :task_4_assignment_model_sse
+  test "SSE assignment model misses exhaust planned candidates without retrying the final attempt" do
+    {setup, first_upstream, second_upstream} =
+      stream_retry_setup(
+        assignment_model_terminal_sse(:structured),
+        assignment_model_terminal_sse(:provenance_backed)
+      )
+
+    execute_backend_stream!(setup, "assignment-model-sse-exhaustion")
+
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(second_upstream) == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.network_error_code == "upstream_model_unavailable"
+    assert second_attempt.status == "failed"
+    assert second_attempt.network_error_code == "upstream_model_unavailable"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 1
+    assert request.last_error_code == "upstream_model_unavailable"
+  end
+
+  @tag :task_4_assignment_model_sse
+  test "SSE hard-pinned assignment model miss preserves the terminal event without fallback", %{
+    conn: conn
+  } do
+    fallback_upstream = start_upstream(stream_success_sse())
+    pinned_upstream = start_upstream(assignment_model_terminal_sse(:structured))
+    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+
+    pinned =
+      gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin",
+        compact?: false
+      )
+
+    prime_routing_quota!(pinned.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [pinned.assignment, setup.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    previous_response_id = "resp_sse_model_pin_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, pinned.assignment, previous_response_id)
+
+    stream_conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic hard-pinned SSE model miss input",
+        "previous_response_id" => previous_response_id,
+        "stream" => true
+      })
+
+    assert stream_conn.status == 200
+    assert stream_conn.resp_body =~ "event: response.failed\n"
+    assert stream_conn.resp_body =~ ~s("code":"model_not_found")
+    refute stream_conn.resp_body =~ "resp_stream_retry_success"
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_model_unavailable"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == pinned.assignment.id
+    assert attempt.status == "failed"
+    refute attempt.retryable
+  end
+
   @tag :task_4_first_event_stream_retry
   test "SSE visible output followed by transient failure does not retry" do
     first_upstream =
@@ -6637,8 +7560,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                  request_id: "sse-keepalive",
                  upstream_endpoint: "/backend-api/codex/responses"
                },
-               release_ref,
-               125
+               release_ref
              )
 
     assert stream_conn.resp_body =~ "event: response.output_text.delta\n"
@@ -6747,8 +7669,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                  request_id: deterministic_rotation_seed(2, 0),
                  upstream_endpoint: "/backend-api/codex/responses"
                },
-               release_ref,
-               125
+               release_ref
              )
 
     assert stream_conn.resp_body =~ ": keepalive\n\n"
@@ -6942,6 +7863,98 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
     assert ["release", "reservation"] == ledger_entry_kinds(request)
+  end
+
+  test "GET models keeps a degraded-only source visible while inference has no eligible backend",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_degraded_visible_model_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-degraded-visible")
+    hidden_pool = pool_fixture()
+    hidden_model = model_fixture(hidden_pool, %{exposed_model_id: "gpt-example-hidden-degraded"})
+
+    %{assignment: hidden_assignment, identity: hidden_identity} =
+      upstream_assignment_fixture(hidden_pool)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %RoutingCircuitState{
+      pool_id: setup.pool.id,
+      pool_upstream_assignment_id: setup.assignment.id,
+      upstream_identity_id: setup.identity.id,
+      model_identifier: setup.model.exposed_model_id,
+      route_class: "proxy_http",
+      status: "open",
+      reason_code: "upstream_model_unavailable",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 60, :second),
+      metadata: %{"probe_in_flight_count" => 0},
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+
+    %RoutingCircuitState{
+      pool_id: hidden_pool.id,
+      pool_upstream_assignment_id: hidden_assignment.id,
+      upstream_identity_id: hidden_identity.id,
+      model_identifier: hidden_model.exposed_model_id,
+      route_class: "proxy_http",
+      status: "open",
+      reason_code: "upstream_model_unavailable",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 60, :second),
+      metadata: %{"probe_in_flight_count" => 0},
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+
+    models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => models} = json_response(models_conn, 200)
+    assert Enum.any?(models, &(&1["slug"] == setup.model.exposed_model_id))
+    refute Enum.any?(models, &(&1["slug"] == hidden_model.exposed_model_id))
+
+    inference_conn =
+      models_conn
+      |> recycle()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic degraded source visibility check"
+      })
+
+    assert %{"error" => %{"code" => "no_eligible_backend"}} =
+             json_response(inference_conn, 503)
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [models_request, inference_request] =
+             Repo.all(
+               from request in Request,
+                 where: request.pool_id == ^setup.pool.id,
+                 order_by: [asc: request.admitted_at, asc: request.id]
+             )
+
+    assert models_request.status == "succeeded"
+    assert inference_request.status == "rejected"
+    assert inference_request.last_error_code == "no_eligible_backend"
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id == ^inference_request.id),
+             :count
+           ) == 0
   end
 
   test "POST /backend-api/codex/responses retries the next planned candidate after circuit begin rejects",
@@ -8332,6 +9345,145 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ "upstream-token-soft-pinned-json"
   end
 
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses retries an accepted model miss from a local session-header preference",
+       %{conn: conn} do
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"code" => "model_not_found", "param" => "model"}},
+          404
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_session_header_model_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    session_header = "model-miss-session-#{System.unique_integer([:positive])}"
+    session = register_session_header_anchor!(auth, setup.assignment, session_header)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("session-id", session_header)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic local session accepted miss"
+      })
+
+    assert %{"id" => "resp_session_header_model_fallback"} = json_response(conn, 200)
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.usage_status == "usage_unknown"
+    assert second_attempt.pool_upstream_assignment_id == fallback.assignment.id
+    assert second_attempt.status == "succeeded"
+    assert second_attempt.usage_status == "usage_known"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.request_metadata["codex_session_id"] == session.id
+    assert request.retry_count == 1
+  end
+
+  @tag assignment_model_http: true
+  test "POST /backend-api/codex/responses retries an accepted model miss from accepted turn state",
+       %{conn: conn} do
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{"error" => %{"code" => "model_not_found", "param" => "model"}},
+          404
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_turn_state_model_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "model-miss-turn-#{System.unique_integer([:positive])}"
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: turn_state})
+    session = pin_session_to_assignment!(session, setup.assignment)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> put_req_header("x-codex-turn-state", turn_state)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic accepted turn state model miss"
+      })
+
+    assert %{"id" => "resp_turn_state_model_fallback"} = json_response(conn, 200)
+    assert FakeUpstream.count(pinned_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.usage_status == "usage_unknown"
+    assert second_attempt.pool_upstream_assignment_id == fallback.assignment.id
+    assert second_attempt.status == "succeeded"
+    assert second_attempt.usage_status == "usage_known"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.request_metadata["codex_session_id"] == session.id
+    assert request.retry_count == 1
+  end
+
   @tag :hard_pinned_quota_recovery
   test "POST /backend-api/codex/responses keeps previous_response_id hard pinned when pinned quota is exhausted",
        %{conn: conn} do
@@ -9114,8 +10266,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
          auth,
          payload,
          opts,
-         release_ref,
-         keepalive_wait_ms
+         release_ref
        ) do
     parent = self()
 
@@ -9139,6 +10290,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           Phoenix.ConnTest.build_conn()
           |> Plug.Conn.put_resp_content_type("text/event-stream")
           |> Plug.Conn.send_chunked(200)
+          |> notify_on_keepalive(parent, release_ref)
 
         stream.(stream_conn)
       end)
@@ -9147,19 +10299,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     send(task.pid, :sandbox_allowed)
 
     assert_receive {:fake_upstream_chunk_barrier, _index, upstream_pid, ^release_ref}, 1_000
-    wait_for_keepalive_window(keepalive_wait_ms)
+    assert_receive {:stream_keepalive_written, ^release_ref}, 1_000
     send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
     Task.await(task, 2_000)
   end
 
-  defp wait_for_keepalive_window(0), do: :ok
+  defp notify_on_keepalive(%Plug.Conn{adapter: {adapter, payload}} = conn, notify, release_ref) do
+    adapter_state = %{
+      adapter: adapter,
+      payload: payload,
+      notify: notify,
+      release_ref: release_ref
+    }
 
-  defp wait_for_keepalive_window(timeout_ms) do
-    receive do
-    after
-      timeout_ms -> :ok
-    end
+    %{conn | adapter: {KeepaliveNotifyingAdapter, adapter_state}}
   end
 
   defp lineage_metadata_fixture(forked_thread_id) do

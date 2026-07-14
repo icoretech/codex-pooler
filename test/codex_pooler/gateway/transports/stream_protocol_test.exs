@@ -749,6 +749,45 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "assignment model unavailable first terminal failures" do
+    test "accepts model_not_found without provenance and gates invalid_request_error by provenance" do
+      model_not_found = terminal_event(%{"code" => "model_not_found", "param" => "model"})
+      code_less = terminal_event(%{"type" => "invalid_request_error", "param" => "model"})
+
+      assert {:ok, model_not_found_event} = StreamProtocol.first_complete_event(model_not_found)
+
+      assert {:ok, model_not_found_failure} =
+               StreamProtocol.retryable_first_terminal_failure(model_not_found_event, false)
+
+      assert model_not_found_failure.upstream_code == "model_not_found"
+
+      assert {:ok, code_less_event} = StreamProtocol.first_complete_event(code_less)
+      assert StreamProtocol.retryable_first_terminal_failure(code_less_event) == :error
+      assert StreamProtocol.retryable_first_terminal_failure(code_less_event, false) == :error
+
+      assert {:ok, code_less_failure} =
+               StreamProtocol.retryable_first_terminal_failure(code_less_event, true)
+
+      assert code_less_failure.upstream_code == "invalid_request_error"
+      assert code_less_failure.upstream_error_param == "model"
+    end
+
+    test "keeps continuation and message-only model claims non-retryable" do
+      fixtures = [
+        terminal_event(%{
+          "code" => "previous_response_not_found",
+          "param" => "previous_response_id"
+        }),
+        terminal_event(%{"message" => "model not found", "param" => "model"})
+      ]
+
+      for frame <- fixtures do
+        assert {:ok, event} = StreamProtocol.first_complete_event(frame)
+        assert StreamProtocol.retryable_first_terminal_failure(event, true) == :error
+      end
+    end
+  end
+
   describe "websocket_error_frame_headers/1" do
     test "extracts allowlisted scalar headers from status wrapped errors" do
       frame =
@@ -865,6 +904,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"
+  end
+
+  defp terminal_event(error) do
+    sse_event("response.failed", %{
+      "type" => "response.failed",
+      "response" => %{"status" => "failed", "error" => error}
+    })
   end
 
   defp websocket_error_frame_headers(frame) do
