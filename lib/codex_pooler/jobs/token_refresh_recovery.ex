@@ -11,8 +11,9 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @refresh_due UpstreamIdentity.refresh_due_status()
+  @refreshing UpstreamIdentity.refreshing_status()
   @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @candidate_statuses [@refresh_due, @refresh_failed]
+  @candidate_statuses [@refresh_due, @refreshing, @refresh_failed]
   @assignment_active PoolUpstreamAssignment.active_status()
   @pool_active "active"
   @incomplete_job_states ~w(available scheduled executing retryable)
@@ -86,6 +87,20 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     end
   end
 
+  defp with_eligibility_timestamp(
+         %UpstreamIdentity{status: status} = identity,
+         now
+       )
+       when status == @refreshing do
+    reference_at =
+      identity.metadata
+      |> token_refresh_metadata()
+      |> started_at()
+      |> Kernel.||(timestamp_or_now(identity.updated_at || identity.created_at, now))
+
+    [{identity, reference_at}]
+  end
+
   defp fresh_token_refresh_in_progress?(%UpstreamIdentity{} = identity, now) do
     identity.metadata
     |> token_refresh_metadata()
@@ -111,6 +126,19 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     case metadata["finished_at"] do
       finished_at when is_binary(finished_at) ->
         case DateTime.from_iso8601(finished_at) do
+          {:ok, parsed, _offset} -> DateTime.truncate(parsed, :microsecond)
+          _invalid -> nil
+        end
+
+      _value ->
+        nil
+    end
+  end
+
+  defp started_at(%{} = metadata) do
+    case metadata["started_at"] do
+      started_at when is_binary(started_at) ->
+        case DateTime.from_iso8601(started_at) do
           {:ok, parsed, _offset} -> DateTime.truncate(parsed, :microsecond)
           _invalid -> nil
         end

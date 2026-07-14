@@ -43,7 +43,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert [] = all_enqueued(worker: TokenRefreshWorker)
     end
 
-    test "only refresh_due and cooled-down refresh_failed identities are scheduled candidates" do
+    test "only recoverable lifecycle states are scheduled candidates" do
       due = recovery_identity_fixture("refresh_due", updated_at: DateTime.add(@now, -15, :minute))
 
       failed =
@@ -60,7 +60,6 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
 
       for status <- [
             "active",
-            "refreshing",
             "reauth_required",
             "paused",
             "deleted",
@@ -147,17 +146,17 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
     end
 
     test "fresh in-progress token refresh metadata blocks recovery, but stale or malformed metadata does not" do
-      recovery_identity_fixture("refresh_due",
+      recovery_identity_fixture("refreshing",
         metadata: refreshing_metadata(DateTime.add(@now, -10, :second), 60_000)
       )
 
       stale =
-        recovery_identity_fixture("refresh_due",
+        recovery_identity_fixture("refreshing",
           metadata: refreshing_metadata(DateTime.add(@now, -2, :minute), 60_000)
         )
 
       malformed =
-        recovery_identity_fixture("refresh_due",
+        recovery_identity_fixture("refreshing",
           metadata: %{
             "token_refresh" => %{
               "status" => "refreshing",
