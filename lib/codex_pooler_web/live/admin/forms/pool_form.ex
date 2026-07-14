@@ -89,6 +89,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "prompt_cache_affinity_enabled" => settings.prompt_cache_affinity_enabled,
       "v1_compatibility_enabled" => settings.v1_compatibility_enabled,
       "request_compression_enabled" => settings.request_compression_enabled,
+      "upstream_websocket_bridge_enabled" => settings.upstream_websocket_bridge_enabled,
       "upstream_identity_ids" => active_upstream_identity_ids(pool),
       "api_key_ids" => active_api_key_ids(pool)
     }
@@ -199,6 +200,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       "prompt_cache_affinity_enabled" => true,
       "v1_compatibility_enabled" => true,
       "request_compression_enabled" => false,
+      "upstream_websocket_bridge_enabled" => false,
       "upstream_identity_ids" => [],
       "api_key_ids" => []
     }

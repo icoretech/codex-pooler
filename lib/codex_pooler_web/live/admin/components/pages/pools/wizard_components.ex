@@ -247,6 +247,17 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         Shrinks eligible Responses tool outputs before upstream dispatch.
                       </p>
                     </div>
+                    <div class="routing-matrix-option">
+                      <.input
+                        field={@form[:upstream_websocket_bridge_enabled]}
+                        type="checkbox"
+                        label="Upstream websocket bridge"
+                      />
+                      <p class="routing-option-help">
+                        Carries public streaming turns upstream over the session's
+                        Codex websocket to reuse the provider prompt cache.
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>

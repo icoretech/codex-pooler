@@ -174,7 +174,9 @@ defmodule CodexPooler.Admin.PoolWorkflow do
       "sticky_http_sessions" => Map.get(attrs, "sticky_http_sessions", false),
       "prompt_cache_affinity_enabled" => Map.get(attrs, "prompt_cache_affinity_enabled", true),
       "v1_compatibility_enabled" => Map.get(attrs, "v1_compatibility_enabled", true),
-      "request_compression_enabled" => Map.get(attrs, "request_compression_enabled", false)
+      "request_compression_enabled" => Map.get(attrs, "request_compression_enabled", false),
+      "upstream_websocket_bridge_enabled" =>
+        Map.get(attrs, "upstream_websocket_bridge_enabled", false)
     }
   end
 

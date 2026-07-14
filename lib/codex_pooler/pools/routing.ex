@@ -136,6 +136,14 @@ defmodule CodexPooler.Pools.Routing do
               settings.request_compression_enabled
             )
           ),
+        upstream_websocket_bridge_enabled:
+          parse_boolean(
+            routing_attr(
+              attrs,
+              "upstream_websocket_bridge_enabled",
+              settings.upstream_websocket_bridge_enabled
+            )
+          ),
         metadata: settings.metadata || %{},
         created_at: settings.created_at,
         updated_at: now
@@ -149,7 +157,8 @@ defmodule CodexPooler.Pools.Routing do
             sticky_websocket_sessions: settings.sticky_websocket_sessions,
             sticky_http_sessions: settings.sticky_http_sessions,
             prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
-            request_compression_enabled: settings.request_compression_enabled
+            request_compression_enabled: settings.request_compression_enabled,
+            upstream_websocket_bridge_enabled: settings.upstream_websocket_bridge_enabled
           })
 
           maybe_broadcast_routing_change(opts, pool, settings)
@@ -187,6 +196,7 @@ defmodule CodexPooler.Pools.Routing do
       prompt_cache_affinity_enabled: true,
       v1_compatibility_enabled: true,
       request_compression_enabled: false,
+      upstream_websocket_bridge_enabled: false,
       metadata: %{},
       created_at: now,
       updated_at: now

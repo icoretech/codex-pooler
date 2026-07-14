@@ -317,6 +317,50 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
       assert settings.prompt_cache_affinity_enabled == false
       assert settings.v1_compatibility_enabled == false
     end
+
+    test "creation persists the upstream websocket bridge routing setting when enabled" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               PoolWorkflow.create_pool_with_related_settings(scope, %{
+                 "name" => "Bridge Workflow Create",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_websocket_bridge_enabled" => "true"
+               })
+
+      assert Pools.get_routing_settings(pool).upstream_websocket_bridge_enabled == true
+    end
+
+    test "update toggles the upstream websocket bridge routing setting both ways" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+      pool = pool_fixture(%{slug: "bridge-workflow-edit", name: "Bridge Workflow Edit"})
+
+      assert {:ok, enabled_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Bridge Workflow Enabled",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_websocket_bridge_enabled" => "true",
+                 "upstream_identity_ids" => [],
+                 "api_key_ids" => []
+               })
+
+      assert Pools.get_routing_settings(enabled_pool).upstream_websocket_bridge_enabled == true
+
+      assert {:ok, disabled_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, enabled_pool, %{
+                 "name" => "Bridge Workflow Disabled",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "upstream_websocket_bridge_enabled" => "false",
+                 "upstream_identity_ids" => [],
+                 "api_key_ids" => []
+               })
+
+      assert Pools.get_routing_settings(disabled_pool).upstream_websocket_bridge_enabled == false
+    end
   end
 
   defp publish_from_task(fun) when is_function(fun, 0) do
