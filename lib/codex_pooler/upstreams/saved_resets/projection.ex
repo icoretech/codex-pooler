@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
   Metadata-only helpers for Codex saved reset observations and policy projection.
   """
 
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @reported "reported"
@@ -702,7 +703,27 @@ defmodule CodexPooler.Upstreams.SavedResets do
   defp label(_status, _count), do: "Saved resets not reported"
 
   @spec redemption_state(map() | term(), DateTime.t()) :: :in_progress | :stale | :complete
-  defp redemption_state(
+  defp redemption_state(redemption, %DateTime{} = timestamp) do
+    case RedemptionLifecycle.phase(redemption) do
+      nil -> legacy_redemption_state(redemption, timestamp)
+      :unknown -> :stale
+      phase -> lifecycle_redemption_state(phase)
+    end
+  end
+
+  # A phase-bearing record is governed by the lifecycle, not legacy freshness:
+  # nonterminal phases keep the identity in progress (fail-closed, no second
+  # credit), an expired window is ineligible until fresh evidence supersedes it,
+  # and every settled/confirmed phase releases the projection to normal routing.
+  defp lifecycle_redemption_state(phase) do
+    cond do
+      RedemptionLifecycle.nonterminal?(phase) -> :in_progress
+      phase == RedemptionLifecycle.expired() -> :stale
+      true -> :complete
+    end
+  end
+
+  defp legacy_redemption_state(
          %{"status" => "redeeming", "started_at" => started_at},
          %DateTime{} = timestamp
        )
@@ -716,8 +737,8 @@ defmodule CodexPooler.Upstreams.SavedResets do
     end
   end
 
-  defp redemption_state(%{"status" => "redeeming"}, _timestamp), do: :stale
-  defp redemption_state(_redemption, _timestamp), do: :complete
+  defp legacy_redemption_state(%{"status" => "redeeming"}, _timestamp), do: :stale
+  defp legacy_redemption_state(_redemption, _timestamp), do: :complete
 
   @spec fresh_redemption?(DateTime.t(), DateTime.t()) :: boolean()
   defp fresh_redemption?(%DateTime{} = started_at, %DateTime{} = timestamp) do
