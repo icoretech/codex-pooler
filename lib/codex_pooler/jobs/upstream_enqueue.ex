@@ -1,6 +1,8 @@
 defmodule CodexPooler.Jobs.UpstreamEnqueue do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Events
 
   alias CodexPooler.Jobs.{
@@ -11,6 +13,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   }
 
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -25,6 +28,18 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
           | :upstream_identity_id_required
   @type job_insert_result ::
           {:ok, Oban.Job.t()} | {:error, Ecto.Changeset.t() | missing_ref_error()}
+
+  @automatic_reconciliation_unique [
+    fields: [:args, :queue, :worker],
+    keys: [:upstream_identity_id],
+    states: :successful,
+    period: 60
+  ]
+  # Oban applies the unique period to incomplete states too, so an
+  # executing/available job older than the cooldown would stop blocking new
+  # inserts. The untimed incomplete-state guard below keeps at most one
+  # non-terminal automatic reconciliation per identity regardless of its age.
+  @incomplete_job_states ~w(suspended available scheduled executing retryable)
 
   @spec enqueue_token_refresh(identity_ref(), keyword()) :: job_insert_result()
   def enqueue_token_refresh(identity_or_id, opts \\ []) do
@@ -97,18 +112,87 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         %PoolUpstreamAssignment{} = assignment,
         opts \\ []
       ) do
-    assignment.pool_id
-    |> account_reconciliation_args(assignment.id, opts)
-    |> Map.merge(%{
-      "upstream_identity_id" => assignment.upstream_identity_id,
-      "target_kind" => "upstream_identity"
-    })
-    |> maybe_put_recovery_fence(assignment)
-    |> AccountReconciliationWorker.new(
-      Options.job_options(opts, unique_keys: [:upstream_identity_id, :trigger_kind])
+    enqueue_automatic_identity_account_reconciliation(
+      assignment.pool_id,
+      assignment,
+      Keyword.put_new(opts, :trigger_kind, "scheduled")
     )
-    |> Oban.insert()
-    |> tap_job_status_event(assignment.pool_id, "account_reconciliation", "scheduled")
+  end
+
+  @spec enqueue_gateway_account_reconciliation(pool_ref(), PoolUpstreamAssignment.t()) ::
+          job_insert_result()
+  def enqueue_gateway_account_reconciliation(pool_or_id, %PoolUpstreamAssignment{} = assignment) do
+    with {:ok, pool_id} <- pool_id(pool_or_id) do
+      enqueue_automatic_identity_account_reconciliation(
+        pool_id,
+        assignment,
+        trigger_kind: "gateway"
+      )
+    end
+  end
+
+  # Scheduled and gateway triggers share one automatic dedup boundary per
+  # upstream identity: an incomplete job of either shape blocks a new insert
+  # regardless of age, a completed job imposes the 60-second inserted-at
+  # cooldown from the Oban unique config, and cancelled/discarded jobs are
+  # replaceable immediately. The check-then-insert pair is deliberately not
+  # serialized here: a racing enqueue falls through to Oban's advisory-locked
+  # unique insert and resolves as conflict?: true.
+  defp enqueue_automatic_identity_account_reconciliation(pool_id, assignment, opts) do
+    args =
+      pool_id
+      |> account_reconciliation_args(assignment.id, opts)
+      |> Map.merge(%{
+        "upstream_identity_id" => assignment.upstream_identity_id,
+        "target_kind" => "upstream_identity"
+      })
+      |> maybe_put_recovery_fence(assignment)
+
+    case incomplete_automatic_reconciliation_job(assignment.upstream_identity_id) do
+      %Oban.Job{} = job ->
+        {:ok, %{job | conflict?: true}}
+
+      nil ->
+        args
+        |> AccountReconciliationWorker.new(automatic_reconciliation_job_options(opts))
+        |> Oban.insert()
+    end
+    |> tap_job_status_event(pool_id, "account_reconciliation", "scheduled")
+  end
+
+  defp incomplete_automatic_reconciliation_job(identity_id) do
+    worker = Oban.Worker.to_string(AccountReconciliationWorker)
+
+    Oban.Job
+    |> where([job], job.worker == ^worker and job.state in ^@incomplete_job_states)
+    |> where(
+      [job],
+      fragment("?->>'upstream_identity_id' = ?", job.args, ^identity_id) or
+        fragment(
+          # Legacy gateway jobs enqueued by not-yet-upgraded nodes carry only
+          # the assignment; resolve them to the identity. Remove one release
+          # after every node writes identity-shaped args.
+          """
+          EXISTS (
+            SELECT 1
+            FROM pool_upstream_assignments AS reconciliation_assignment
+            WHERE reconciliation_assignment.id::text = ?->>'pool_upstream_assignment_id'
+              AND reconciliation_assignment.upstream_identity_id::text = ?
+          )
+          """,
+          job.args,
+          ^identity_id
+        )
+    )
+    |> order_by([job], desc: job.inserted_at, desc: job.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp automatic_reconciliation_job_options(opts) do
+    opts
+    |> Keyword.take([:scheduled_at, :schedule_in])
+    |> Keyword.put(:unique, @automatic_reconciliation_unique)
   end
 
   defp tap_job_status_event(

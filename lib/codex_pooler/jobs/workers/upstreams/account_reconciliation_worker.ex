@@ -2,8 +2,8 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
   @moduledoc """
   Refreshes one pool assignment's account health, quota windows, and catalog state.
 
-  Scheduled jobs may target an upstream identity for dedupe and operator display while
-  still carrying the canonical assignment used to execute reconciliation.
+  Automatic jobs may target an upstream identity for dedupe and operator display while
+  still carrying the assignment used to execute reconciliation.
   """
 
   use Oban.Worker,
