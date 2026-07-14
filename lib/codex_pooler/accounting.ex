@@ -57,11 +57,11 @@ defmodule CodexPooler.Accounting do
   defdelegate latest_success_by_assignment_ids(assignment_ids), to: LedgerReads
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
-          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   defdelegate create_attempt(request, assignment, attrs \\ %{}), to: RequestLifecycle
 
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
-          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   defdelegate record_retryable_attempt_failure(attempt, attrs \\ %{}), to: RequestLifecycle
 
   @spec finalize_reserved_request_failure(Request.t(), map()) :: request_result()

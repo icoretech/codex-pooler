@@ -34,6 +34,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @usage_known "usage_known"
   @usage_unknown "usage_unknown"
   @usage_not_applicable "not_applicable"
+  @dispatchable_request_statuses ~w(accepted in_progress)
+  @retryable_attempt_statuses ~w(queued in_progress)
   @type auth :: CodexPooler.Access.auth_context()
   @type model_ref :: Model.t() | Ecto.UUID.t() | String.t() | nil
   @type accounting_error :: Metadata.accounting_error()
@@ -87,13 +89,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   @spec create_attempt(Request.t(), PoolUpstreamAssignment.t(), map()) ::
-          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   def create_attempt(%Request{} = request, %PoolUpstreamAssignment{} = assignment, attrs \\ %{}) do
-    model = attempt_model(request, attrs)
-    pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
     timestamp = now(attrs)
 
     Repo.transaction(fn ->
+      request = Repo.get!(Request, request.id, lock: "FOR UPDATE")
+      ensure_request_dispatchable!(request)
+
+      model = attempt_model(request, attrs)
+      pricing_snapshot = attempt_pricing_snapshot(request, model, attrs)
+
       attempt_number =
         Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count, :id) + 1
 
@@ -133,11 +139,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
-          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   def record_retryable_attempt_failure(%Attempt{} = attempt, attrs \\ %{}) do
     timestamp = now(attrs)
 
     Repo.transaction(fn ->
+      request = Repo.get!(Request, attempt.request_id, lock: "FOR UPDATE")
+      ensure_request_dispatchable!(request)
+
+      attempt = Repo.get!(Attempt, attempt.id, lock: "FOR UPDATE")
+      ensure_attempt_retryable!(attempt)
+
       case attempt
            |> Ecto.Changeset.change(%{
              status: Map.get(attrs, :attempt_status, "retryable_failed"),
@@ -160,6 +172,32 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       end
     end)
     |> unwrap_transaction()
+  end
+
+  defp ensure_request_dispatchable!(%Request{status: status, completed_at: nil})
+       when status in @dispatchable_request_statuses,
+       do: :ok
+
+  defp ensure_request_dispatchable!(%Request{}) do
+    Repo.rollback(
+      Metadata.accounting_error(
+        :request_already_finalized,
+        "request lifecycle completed before another upstream attempt could start"
+      )
+    )
+  end
+
+  defp ensure_attempt_retryable!(%Attempt{status: status, completed_at: nil})
+       when status in @retryable_attempt_statuses,
+       do: :ok
+
+  defp ensure_attempt_retryable!(%Attempt{}) do
+    Repo.rollback(
+      Metadata.accounting_error(
+        :attempt_already_finalized,
+        "upstream attempt completed before retryable failure could be recorded"
+      )
+    )
   end
 
   @spec finalize_reserved_request_failure(Request.t(), map()) :: request_result()

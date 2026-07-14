@@ -333,6 +333,47 @@ defmodule CodexPooler.AccountingTest do
       assert rollup.total_tokens == 10
     end
 
+    test "terminal request fences late retry updates and new upstream attempts" do
+      setup = accounting_setup()
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 10},
+                 %{correlation_id: "corr-terminal-attempt-fence"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, finalized} =
+               Accounting.finalize_failure(reserved.request, attempt, %{
+                 response_status_code: 499,
+                 last_error_code: "owner_unavailable",
+                 usage_status: "usage_unknown"
+               })
+
+      assert finalized.request.status == "failed"
+      assert finalized.attempt.status == "failed"
+
+      assert {:error, %{code: :request_already_finalized}} =
+               Accounting.record_retryable_attempt_failure(attempt, %{
+                 response_status_code: 499,
+                 last_error_code: "upstream_network_error"
+               })
+
+      assert {:error, %{code: :request_already_finalized}} =
+               Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert Repo.reload!(attempt).status == "failed"
+
+      assert Repo.aggregate(
+               from(a in Attempt, where: a.request_id == ^reserved.request.id),
+               :count,
+               :id
+             ) == 1
+    end
+
     test "late known usage replaces an unknown settlement and its projections" do
       setup = accounting_setup()
       first_timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -672,6 +713,64 @@ defmodule CodexPooler.AccountingTest do
                "reservation",
                "settlement"
              ]
+    end
+
+    test "recovers stale open attempts attached to terminal requests" do
+      setup = accounting_setup()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 10},
+                 %{correlation_id: "corr-terminal-orphan-attempt"}
+               )
+
+      assert {:ok, first_attempt} =
+               Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, _finalized} =
+               Accounting.finalize_failure(reserved.request, first_attempt, %{
+                 response_status_code: 499,
+                 last_error_code: "owner_unavailable",
+                 usage_status: "usage_unknown"
+               })
+
+      orphaned_attempt =
+        %Attempt{
+          request_id: reserved.request.id,
+          attempt_number: 2,
+          pool_upstream_assignment_id: setup.assignment.id,
+          upstream_identity_id: setup.identity.id,
+          model_id: setup.model.id,
+          upstream_model_id: setup.model.upstream_model_id,
+          transport: reserved.request.transport,
+          status: "in_progress",
+          started_at: DateTime.add(now, -7, :hour),
+          retryable: false,
+          usage_status: "usage_pending",
+          response_metadata: %{}
+        }
+        |> Repo.insert!()
+
+      assert {:ok,
+              %{
+                stale_reservations_released: 0,
+                stale_reservations_settled: 0,
+                stale_terminal_attempts_recovered: 1
+              }} = Accounting.recover_stale_reservations(now)
+
+      recovered_attempt = Repo.reload!(orphaned_attempt)
+      assert recovered_attempt.status == "failed"
+      assert recovered_attempt.retryable == false
+      assert recovered_attempt.usage_status == "usage_unknown"
+      assert recovered_attempt.network_error_code == "terminal_request_attempt_recovered"
+      assert recovered_attempt.completed_at == now
+
+      fact = Repo.get_by!(RequestLogFact, request_id: reserved.request.id)
+      assert fact.latest_attempt_id == orphaned_attempt.id
+      assert fact.latest_attempt_status == "failed"
     end
 
     test "partial stream failure is accounted once and remains metadata-only" do

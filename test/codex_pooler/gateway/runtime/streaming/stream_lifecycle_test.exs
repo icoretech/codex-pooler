@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
+  alias CodexPooler.Gateway.Runtime.Dispatch
 
   alias CodexPooler.Gateway.Runtime.Dispatch.{
     ResponseContext,
@@ -783,6 +784,87 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert updated.reason_code == "upstream_5xx"
     assert updated.failure_count == 3
     assert updated.success_count == 0
+    assert updated.metadata["probe_in_flight_count"] == 0
+  end
+
+  test "terminal request rejects a late candidate retry and releases its half-open probe" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([]),
+        FakeUpstream.sse_stream([])
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id:
+                 "terminal-request-attempt-fence-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, finalized} =
+             Accounting.finalize_failure(reserved.request, attempt, %{
+               response_status_code: 499,
+               last_error_code: "owner_unavailable",
+               usage_status: "usage_unknown"
+             })
+
+    circuit =
+      %RoutingCircuitState{
+        pool_id: auth.pool.id,
+        pool_upstream_assignment_id: setup.assignment.id,
+        upstream_identity_id: setup.identity.id,
+        model_identifier: setup.model.exposed_model_id,
+        route_class: request_options.transport.route_class,
+        status: "half_open",
+        reason_code: "upstream_5xx",
+        failure_count: 3,
+        success_count: 0,
+        opened_at: DateTime.add(now, -120, :second),
+        half_opened_at: now,
+        metadata: %{"probe_in_flight_count" => 0},
+        created_at: DateTime.add(now, -120, :second),
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    context =
+      retry_context(setup, auth, request_options, finalized.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: nil
+      )
+
+    parent = self()
+
+    assert {:error,
+            %{
+              status: 499,
+              code: "request_already_finalized",
+              message: "request lifecycle completed before upstream dispatch"
+            }} =
+             Dispatch.dispatch_from(context, 0, fn _context ->
+               send(parent, :late_upstream_dispatch_called)
+               {:ok, %{status: 200}}
+             end)
+
+    refute_received :late_upstream_dispatch_called
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id == ^reserved.request.id),
+             :count,
+             :id
+           ) == 1
+
+    updated = Repo.reload!(circuit)
+    assert updated.status == "half_open"
     assert updated.metadata["probe_in_flight_count"] == 0
   end
 

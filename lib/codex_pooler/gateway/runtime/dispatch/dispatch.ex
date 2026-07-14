@@ -8,7 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
-  alias CodexPooler.Gateway.Routing.{ModelMetadata, RoutingSelection}
+  alias CodexPooler.Gateway.Routing.{ModelMetadata, RouteLifecycle, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
@@ -103,7 +103,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     with {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
          {:ok, context} <- persist_route_metadata(context),
          {:ok, context} <- begin_candidate_circuit(context, selection),
-         {:ok, context} <- start_dispatch_attempt(context) do
+         {:ok, context} <- start_dispatch_attempt(context, selection) do
       transport_dispatch.(context)
     end
   end
@@ -210,7 +210,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
 
   defp route_metadata_reload?(%SelectedCandidateContext{index: index}), do: index != 0
 
-  defp start_dispatch_attempt(%SelectedCandidateContext{} = context) do
+  defp start_dispatch_attempt(
+         %SelectedCandidateContext{} = context,
+         %RoutingSelection{} = selection
+       ) do
     case Accounting.create_attempt(context.reserved.request, context.assignment, %{
            model: context.model,
            pricing_snapshot: Map.get(context.reserved, :pricing_snapshot),
@@ -223,6 +226,23 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
          }) do
       {:ok, attempt} ->
         {:ok, %{context | attempt: attempt, started: System.monotonic_time(:millisecond)}}
+
+      {:error, %{code: :request_already_finalized}} ->
+        selection = %{selection | circuit_state: context.routing_circuit_state}
+
+        RouteLifecycle.log_optional_result(
+          "release_finalized_request_circuit_probe",
+          [request_id: context.reserved.request.id],
+          RouteLifecycle.selection_neutral_completion(context.auth, context.model, selection)
+        )
+
+        {:error,
+         error(
+           499,
+           "request_already_finalized",
+           "request lifecycle completed before upstream dispatch",
+           "request"
+         )}
 
       {:error, reason} ->
         FailureResponse.accounting_failure(

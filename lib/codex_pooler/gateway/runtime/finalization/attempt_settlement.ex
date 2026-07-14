@@ -72,6 +72,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
 
   defp accounting_result({:ok, value}, _operation, _request, _attempt), do: {:ok, value}
 
+  defp accounting_result(
+         {:error, %{code: code}},
+         _operation,
+         _request,
+         _attempt
+       )
+       when code in [:request_already_finalized, :attempt_already_finalized] do
+    {:error,
+     %{
+       status: 499,
+       code: Atom.to_string(code),
+       message: "request lifecycle already completed"
+     }}
+  end
+
   defp accounting_result({:error, reason}, operation, request, attempt) do
     FailureResponse.accounting_failure(operation, request, attempt, reason)
   end

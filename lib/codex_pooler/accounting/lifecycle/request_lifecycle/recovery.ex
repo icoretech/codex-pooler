@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFacts}
   alias CodexPooler.Accounting.RequestLifecycle
   alias CodexPooler.Gateway.Persistence.RuntimeCleanup
   alias CodexPooler.Repo
@@ -11,14 +11,18 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
   @stale_after_seconds 6 * 60 * 60
   @request_statuses ~w(accepted in_progress)
   @attempt_statuses ~w(queued in_progress retryable_failed failed cancelled)
+  @terminal_request_statuses ~w(succeeded failed rejected cancelled)
+  @open_attempt_statuses ~w(queued in_progress)
   @recovery_code "stale_reservation_recovered"
+  @terminal_attempt_recovery_code "terminal_request_attempt_recovered"
   @recovery_source "stale_reservation_recovery"
 
   @spec recover_stale_reservations(DateTime.t(), keyword()) ::
           {:ok,
            %{
              required(:stale_reservations_released) => non_neg_integer(),
-             required(:stale_reservations_settled) => non_neg_integer()
+             required(:stale_reservations_settled) => non_neg_integer(),
+             required(:stale_terminal_attempts_recovered) => non_neg_integer()
            }}
           | {:error, term()}
   def recover_stale_reservations(now, opts \\ []) do
@@ -27,9 +31,14 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
     limit = Keyword.get(opts, :limit, 100)
 
-    now
-    |> stale_requests(cutoff, limit)
-    |> Enum.reduce_while({:ok, initial_summary()}, &recover_request(&1, &2, now))
+    with {:ok, summary} <-
+           now
+           |> stale_requests(cutoff, limit)
+           |> Enum.reduce_while({:ok, initial_summary()}, &recover_request(&1, &2, now)) do
+      cutoff
+      |> stale_terminal_attempts(limit)
+      |> Enum.reduce_while({:ok, summary}, &recover_terminal_attempt(&1, &2, now))
+    end
   end
 
   defp stale_requests(now, cutoff, limit) do
@@ -76,6 +85,68 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
     )
   end
 
+  defp stale_terminal_attempts(cutoff, limit) do
+    Repo.all(
+      from attempt in Attempt,
+        join: request in Request,
+        on: request.id == attempt.request_id,
+        where:
+          request.status in ^@terminal_request_statuses and
+            attempt.status in ^@open_attempt_statuses and attempt.started_at <= ^cutoff,
+        order_by: [asc: attempt.started_at, asc: attempt.id],
+        limit: ^limit,
+        select: {request.id, attempt.id}
+    )
+  end
+
+  defp recover_terminal_attempt({request_id, attempt_id}, {:ok, summary}, now) do
+    case recover_terminal_attempt(request_id, attempt_id, now) do
+      {:ok, :recovered} ->
+        {:cont, {:ok, increment(summary, :stale_terminal_attempts_recovered)}}
+
+      {:ok, :noop} ->
+        {:cont, {:ok, summary}}
+
+      {:error, reason} ->
+        {:halt, {:error, reason}}
+    end
+  end
+
+  defp recover_terminal_attempt(request_id, attempt_id, now) do
+    Repo.transaction(fn ->
+      request = Repo.get(Request, request_id, lock: "FOR UPDATE")
+      attempt = Repo.get(Attempt, attempt_id, lock: "FOR UPDATE")
+
+      if terminal_request_with_open_attempt?(request, attempt) do
+        attempt =
+          attempt
+          |> Ecto.Changeset.change(%{
+            status: "failed",
+            completed_at: now,
+            retryable: false,
+            network_error_code: @terminal_attempt_recovery_code,
+            error_message: "open attempt recovered after request lifecycle had already completed",
+            usage_status: "usage_unknown"
+          })
+          |> Repo.update!()
+
+        RequestLogFacts.record_attempt_written!(attempt)
+        :recovered
+      else
+        :noop
+      end
+    end)
+  end
+
+  defp terminal_request_with_open_attempt?(
+         %Request{status: request_status},
+         %Attempt{status: attempt_status}
+       ) do
+    request_status in @terminal_request_statuses and attempt_status in @open_attempt_statuses
+  end
+
+  defp terminal_request_with_open_attempt?(_request, _attempt), do: false
+
   defp release_undispatched_request(%Request{} = request, now) do
     with {:ok, result} <-
            RequestLifecycle.finalize_reserved_request_failure(request, %{
@@ -119,7 +190,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
   defp attempt_id(_attempt), do: nil
 
   defp initial_summary do
-    %{stale_reservations_released: 0, stale_reservations_settled: 0}
+    %{
+      stale_reservations_released: 0,
+      stale_reservations_settled: 0,
+      stale_terminal_attempts_recovered: 0
+    }
   end
 
   defp increment(summary, key), do: Map.update!(summary, key, &(&1 + 1))
