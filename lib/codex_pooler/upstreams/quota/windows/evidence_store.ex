@@ -12,6 +12,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @runtime_quota_sources ~w(codex_rate_limit_event codex_response_headers codex_rate_limit_error)
   @usage_reset_forward_tolerance_seconds 5 * 60
   @weekly_restart_anchor_margin_seconds 60 * 60
+  @weekly_restart_confirmation_span_seconds 3 * 60
+  @weekly_restart_sliding_tolerance_seconds 2 * 60
   @usage_reset_reanchor_min_shift_seconds 60 * 60
   @restart_corroboration_reset_tolerance_seconds 5 * 60
   @relative_reset_refresh_tolerance_seconds 5
@@ -298,11 +300,90 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          timestamp
        ) do
     if uncorroborated_zero_reenable_attempt?(evidence, existing, timestamp) do
-      rejected_snapshot_attrs(existing, evidence, timestamp)
+      sliding_restart_attrs(existing, attrs, evidence, timestamp)
     else
       merge_attrs_by_decision(existing, attrs, evidence, timestamp)
     end
   end
+
+  # After the provider retired the anchored 5h windows, a restarted weekly
+  # account arrives from the usage endpoint as a weak zero whose full-window
+  # relative reset is recomputed at response time, so reset_at slides forward in
+  # step with each observation. A blocked account receives no traffic, so the
+  # runtime corroboration demanded above can never materialize — quarantining
+  # genuine restarts (and post-redemption resets) forever. Distinct live
+  # responses are still distinguishable from a cached or replayed body: the
+  # floating reset advances with observation time, while a cached body keeps a
+  # fixed reset. Accept the zero only when a stored candidate and the incoming
+  # observation prove that sliding-live shape across the confirmation span;
+  # otherwise keep the exhausted row and let the candidate age or restart.
+  defp sliding_restart_attrs(existing, attrs, evidence, timestamp) do
+    metadata = existing.metadata || %{}
+
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        cond do
+          not newer_observation?(evidence.observed_at, candidate.observed_at) ->
+            candidate_snapshot_attrs(existing, metadata, timestamp)
+
+          confirmed_sliding_restart?(candidate, evidence, timestamp) ->
+            accepted_snapshot_attrs(existing, attrs, timestamp)
+
+          consistent_sliding_candidate?(candidate, evidence, timestamp) ->
+            # Consistent but still inside the confirmation span: keep the
+            # original candidate so minute-by-minute observations cannot reset
+            # the clock and starve the confirmation forever.
+            candidate_snapshot_attrs(existing, metadata, timestamp)
+
+          true ->
+            candidate_snapshot_attrs(
+              existing,
+              put_candidate(clear_candidate(metadata), evidence),
+              timestamp
+            )
+        end
+
+      :none ->
+        candidate_snapshot_attrs(
+          existing,
+          put_candidate(clear_candidate(metadata), evidence),
+          timestamp
+        )
+    end
+  end
+
+  defp confirmed_sliding_restart?(candidate, evidence, timestamp) do
+    consistent_sliding_candidate?(candidate, evidence, timestamp) and
+      DateTime.diff(evidence.observed_at, candidate.observed_at, :second) >=
+        @weekly_restart_confirmation_span_seconds
+  end
+
+  defp consistent_sliding_candidate?(candidate, evidence, timestamp) do
+    candidate_valid?(candidate, timestamp) and
+      zero_candidate?(candidate) and
+      sliding_live_reset?(candidate, evidence)
+  end
+
+  # parse_candidate/1 guarantees a Decimal used_percent on success.
+  defp zero_candidate?(%{used_percent: %Decimal{} = percent}), do: zero_percent?(percent)
+
+  defp sliding_live_reset?(
+         %{
+           reset_at: %DateTime{} = candidate_reset,
+           observed_at: %DateTime{} = candidate_observed
+         },
+         %Evidence{
+           reset_at: %DateTime{} = incoming_reset,
+           observed_at: %DateTime{} = incoming_observed
+         }
+       ) do
+    delta_observed = DateTime.diff(incoming_observed, candidate_observed, :second)
+    delta_reset = DateTime.diff(incoming_reset, candidate_reset, :second)
+
+    abs(delta_reset - delta_observed) <= @weekly_restart_sliding_tolerance_seconds
+  end
+
+  defp sliding_live_reset?(_candidate, _evidence), do: false
 
   # A usage-endpoint zero must never re-enable exhausted weekly quota on its
   # own: without this chokepoint guard, an expired or stale canonical takes

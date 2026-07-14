@@ -74,7 +74,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
   # operators; keep only the safe accounting fields.
   defp sanitize_last_redemption(nil), do: nil
   defp sanitize_last_redemption(%{} = redemption), do: Map.drop(redemption, ["probe"])
-  defp sanitize_last_redemption(_redemption), do: nil
 
   defp reset_lifecycle(%{"phase" => phase} = redemption, datetime_preferences)
        when is_map_key(@lifecycle_labels, phase) do
