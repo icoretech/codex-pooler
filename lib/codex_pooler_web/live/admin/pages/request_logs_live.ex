@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.RequestLogDetailDrawer
@@ -34,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        selected_pool: nil,
        request_logs: empty_request_logs(),
        current_params: %{},
+       current_page: 1,
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
        filter_errors: [],
@@ -238,6 +240,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
             <.request_logs_table
               request_logs={@request_logs}
+              current_params={@current_params}
               datetime_preferences={@datetime_preferences}
             />
           </section>
@@ -317,36 +320,54 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     {filters, form_values, filter_errors} =
       RequestLogFilterForm.parse_filters(params, selected_pool, visible_upstream_identity_ids)
 
-    filter_errors = Enum.reject([pool_error | filter_errors], &is_nil/1)
+    {page, page_error} = LogPagination.parse_page(params)
+    filter_errors = Enum.reject([pool_error, page_error | filter_errors], &is_nil/1)
     visible_pool_ids = pool_ids(pools)
-    request_logs = request_logs(selected_pool, filters, visible_pool_ids)
+    request_logs = request_logs(selected_pool, filters, visible_pool_ids, page)
     model_filter_models = request_log_models(selected_pool, visible_pool_ids)
 
-    socket
-    |> cancel_request_logs_reload_timer()
-    |> maybe_subscribe_pool_events(pools, selected_pool)
-    |> assign(
-      pools: pools,
-      selected_pool: selected_pool,
-      request_logs: request_logs,
-      current_params: params,
-      filter_form:
-        to_form(form_values,
-          as: :filters,
-          errors: RequestLogFilterForm.form_errors(filter_errors)
-        ),
-      filter_values: form_values,
-      filter_errors: filter_errors,
-      pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
-      model_filter_options: model_filter_options(model_filter_models, form_values["model"]),
-      upstream_account_options: upstream_account_options(upstream_filter_identities),
-      visible_pool_ids: visible_pool_ids,
-      request_log_filters: filters,
-      request_logs_loaded?: true
-    )
-    |> assign_selected_request_log(params)
-    |> maybe_clear_missing_selected_request_log()
-    |> notify_request_logs_reload(reload_stage, started_at)
+    case LogPagination.clamp_page(page, request_logs) do
+      ^page ->
+        socket
+        |> cancel_request_logs_reload_timer()
+        |> maybe_subscribe_pool_events(pools, selected_pool)
+        |> assign(
+          pools: pools,
+          selected_pool: selected_pool,
+          request_logs: request_logs,
+          current_params:
+            params
+            |> normalize_request_log_query_params()
+            |> LogPagination.put_page(page),
+          current_page: page,
+          filter_form:
+            to_form(form_values,
+              as: :filters,
+              errors: RequestLogFilterForm.form_errors(filter_errors)
+            ),
+          filter_values: form_values,
+          filter_errors: filter_errors,
+          pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
+          model_filter_options: model_filter_options(model_filter_models, form_values["model"]),
+          upstream_account_options: upstream_account_options(upstream_filter_identities),
+          visible_pool_ids: visible_pool_ids,
+          request_log_filters: filters,
+          request_logs_loaded?: true
+        )
+        |> assign_selected_request_log(params)
+        |> maybe_clear_missing_selected_request_log()
+        |> notify_request_logs_reload(reload_stage, started_at)
+
+      clamped_page ->
+        push_patch(socket,
+          to:
+            LogPagination.path(
+              "/admin/request-logs",
+              normalize_request_log_query_params(params),
+              clamped_page
+            )
+        )
+    end
   end
 
   defp refresh_request_logs_from_events(socket) do
@@ -354,19 +375,33 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     selected_pool = socket.assigns.selected_pool
     filters = socket.assigns.request_log_filters
     visible_pool_ids = socket.assigns.visible_pool_ids
-    request_logs = request_logs(selected_pool, filters, visible_pool_ids)
+    page = socket.assigns.current_page
+    request_logs = request_logs(selected_pool, filters, visible_pool_ids, page)
     model_filter_models = request_log_models(selected_pool, visible_pool_ids)
 
-    socket
-    |> cancel_request_logs_reload_timer()
-    |> assign(
-      request_logs: request_logs,
-      model_filter_options:
-        model_filter_options(model_filter_models, socket.assigns.filter_values["model"])
-    )
-    |> assign_selected_request_log(socket.assigns.current_params)
-    |> maybe_clear_missing_selected_request_log()
-    |> notify_request_logs_reload(:event_refresh, started_at)
+    case LogPagination.clamp_page(page, request_logs) do
+      ^page ->
+        socket
+        |> cancel_request_logs_reload_timer()
+        |> assign(
+          request_logs: request_logs,
+          model_filter_options:
+            model_filter_options(model_filter_models, socket.assigns.filter_values["model"])
+        )
+        |> assign_selected_request_log(socket.assigns.current_params)
+        |> maybe_clear_missing_selected_request_log()
+        |> notify_request_logs_reload(:event_refresh, started_at)
+
+      clamped_page ->
+        push_patch(socket,
+          to:
+            LogPagination.path(
+              "/admin/request-logs",
+              socket.assigns.current_params,
+              clamped_page
+            )
+        )
+    end
   end
 
   defp assign_selected_request_log(socket, params) do
@@ -426,13 +461,19 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     |> Map.new()
   end
 
-  defp request_logs(selected_pool, filters, _visible_pool_ids) when not is_nil(selected_pool) do
-    Accounting.list_request_logs(selected_pool, limit: @page_size, filters: filters)
+  defp request_logs(selected_pool, filters, _visible_pool_ids, page)
+       when not is_nil(selected_pool) do
+    Accounting.list_request_logs(selected_pool,
+      limit: @page_size,
+      offset: LogPagination.offset(page, @page_size),
+      filters: filters
+    )
   end
 
-  defp request_logs(_selected_pool, filters, visible_pool_ids) do
+  defp request_logs(_selected_pool, filters, visible_pool_ids, page) do
     Accounting.list_request_logs(nil,
       limit: @page_size,
+      offset: LogPagination.offset(page, @page_size),
       filters: filters,
       visible_pool_ids: visible_pool_ids
     )

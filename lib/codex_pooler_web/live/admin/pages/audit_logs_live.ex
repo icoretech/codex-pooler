@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   alias CodexPooler.Audit
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -22,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
        pools: [],
        selected_pool: nil,
        audit_logs: empty_audit_logs(),
+       current_params: %{},
        selected_audit_event: nil,
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
@@ -104,7 +106,11 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
               pool_filter_options={@pool_filter_options}
             />
 
-            <.audit_logs_table audit_logs={@audit_logs} datetime_preferences={@datetime_preferences} />
+            <.audit_logs_table
+              audit_logs={@audit_logs}
+              current_params={@current_params}
+              datetime_preferences={@datetime_preferences}
+            />
           </section>
         </div>
 
@@ -121,29 +127,57 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     pools = Pools.list_log_filter_pools(socket.assigns.current_scope)
     {selected_pool, pool_error} = select_pool(pools, params["pool_id"])
     {filters, form_values, filter_errors} = parse_filters(params, selected_pool)
-    filter_errors = Enum.reject([pool_error | filter_errors], &is_nil/1)
+    {page, page_error} = LogPagination.parse_page(params)
+    filter_errors = Enum.reject([pool_error, page_error | filter_errors], &is_nil/1)
+    offset = LogPagination.offset(page, @page_size)
 
     audit_logs =
       if selected_pool do
-        Audit.list_events(selected_pool, limit: @page_size, filters: filters)
+        Audit.list_events(selected_pool, limit: @page_size, offset: offset, filters: filters)
       else
         Audit.list_events_for_scope(socket.assigns.current_scope,
           limit: @page_size,
+          offset: offset,
           filters: filters
         )
       end
 
-    assign(socket,
-      pools: pools,
-      selected_pool: selected_pool,
-      audit_logs: audit_logs,
-      selected_audit_event:
-        selected_audit_event(socket.assigns.selected_audit_event, audit_logs.items),
-      filter_form: to_form(form_values, as: :filters, errors: form_errors(filter_errors)),
-      filter_values: form_values,
-      filter_errors: filter_errors,
-      pool_filter_options: PoolFilterComponents.pool_filter_options(pools)
-    )
+    case LogPagination.clamp_page(page, audit_logs) do
+      ^page ->
+        assign(socket,
+          pools: pools,
+          selected_pool: selected_pool,
+          audit_logs: audit_logs,
+          current_params:
+            params
+            |> normalize_query_params()
+            |> LogPagination.put_page(page),
+          selected_audit_event:
+            selected_audit_event(socket.assigns.selected_audit_event, audit_logs.items),
+          filter_form: to_form(form_values, as: :filters, errors: form_errors(filter_errors)),
+          filter_values: form_values,
+          filter_errors: filter_errors,
+          pool_filter_options: PoolFilterComponents.pool_filter_options(pools)
+        )
+
+      clamped_page ->
+        push_patch(socket,
+          to:
+            LogPagination.path(
+              "/admin/audit-logs",
+              normalize_query_params(params),
+              clamped_page
+            )
+        )
+    end
+  end
+
+  defp normalize_query_params(params) do
+    params
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> Map.take(~w(pool_id outcome actor_type actor action target date_from date_to page))
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Map.new()
   end
 
   defp parse_filters(params, selected_pool) do

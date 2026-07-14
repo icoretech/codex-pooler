@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.AuditLogsComponents.Filters
+  alias CodexPoolerWeb.Admin.LogPagination
 
   import CodexPoolerWeb.Admin.AuditLogsComponents.Presentation,
     only: [
@@ -23,6 +24,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   defdelegate audit_log_filters(assigns), to: Filters
 
   attr :audit_logs, :map, required: true
+  attr :current_params, :map, required: true
   attr :datetime_preferences, :map, required: true
 
   def audit_logs_table(assigns) do
@@ -31,6 +33,17 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
       id="admin-audit-logs"
       class="min-w-0 rounded-box border border-base-300 bg-base-100 shadow-sm"
     >
+      <LogPagination.controls
+        page={@audit_logs}
+        base_path="/admin/audit-logs"
+        current_params={@current_params}
+        id_prefix="admin-audit-logs-pagination-top"
+        range_id="admin-audit-logs-range-top"
+        range_role="audit-logs-range"
+        label="Audit logs"
+        placement={:top}
+      />
+
       <div class="hidden overflow-x-auto md:block">
         <table class="table min-w-[58rem] font-sans">
           <colgroup>
@@ -243,6 +256,17 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
           </caption>
         </table>
       </div>
+
+      <LogPagination.controls
+        page={@audit_logs}
+        base_path="/admin/audit-logs"
+        current_params={@current_params}
+        id_prefix="admin-audit-logs-pagination-bottom"
+        range_id="admin-audit-logs-range-bottom"
+        range_role="audit-logs-range"
+        label="Audit logs"
+        placement={:bottom}
+      />
     </div>
     """
   end

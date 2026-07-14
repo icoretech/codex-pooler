@@ -703,6 +703,60 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
     assert has_element?(owner_view, "#audit-log-row-#{nilified_event.id}", "Pool deleted")
   end
 
+  test "paginates audit logs, preserves filters, and clamps overflow pages", %{conn: conn} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for index <- 1..52 do
+      %AuditEvent{
+        occurred_at: DateTime.add(now, -index, :second),
+        actor_type: "system",
+        action: "pool.update",
+        target_type: "pool",
+        target_id: Ecto.UUID.generate(),
+        outcome: "success",
+        details: %{"index" => index}
+      }
+      |> Repo.insert!()
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/admin/audit-logs?action=pool.update")
+
+    assert has_element?(view, "#admin-audit-logs-pagination-top", "Page 1 of 2")
+    assert has_element?(view, "#admin-audit-logs-pagination-bottom", "Page 1 of 2")
+    assert has_element?(view, "#admin-audit-logs-range-top", "Showing 1-50 of 52")
+    assert has_element?(view, "#admin-audit-logs-range-bottom", "Showing 1-50 of 52")
+    assert has_element?(view, "#admin-audit-logs-pagination-top-prev.btn-disabled")
+    refute has_element?(view, "#admin-audit-logs-pagination-top-next.btn-disabled")
+
+    view
+    |> element("#admin-audit-logs-pagination-top-next")
+    |> render_click()
+
+    assert_patch(view, "/admin/audit-logs?action=pool.update&page=2")
+    assert has_element?(view, "#admin-audit-logs-pagination-bottom", "Page 2 of 2")
+    assert has_element?(view, "#admin-audit-logs-range-bottom", "Showing 51-52 of 52")
+    refute has_element?(view, "#admin-audit-logs-pagination-bottom-prev.btn-disabled")
+    assert has_element?(view, "#admin-audit-logs-pagination-bottom-next.btn-disabled")
+
+    view
+    |> element("#admin-audit-logs-pagination-bottom-prev")
+    |> render_click()
+
+    assert_patch(view, "/admin/audit-logs?action=pool.update")
+
+    assert {:error, {:live_redirect, %{to: overflow_to}}} =
+             live(conn, ~p"/admin/audit-logs?action=pool.update&page=99")
+
+    assert overflow_to == "/admin/audit-logs?action=pool.update&page=2"
+  end
+
+  test "clamps an empty audit-log page to page one", %{conn: conn} do
+    assert {:error, {:live_redirect, %{to: overflow_to}}} =
+             live(conn, ~p"/admin/audit-logs?action=auth.logout&page=4")
+
+    assert overflow_to == "/admin/audit-logs?action=auth.logout"
+  end
+
   defp set_datetime_preferences!(user, attrs) do
     {1, _rows} =
       from(operator in User, where: operator.id == ^user.id)

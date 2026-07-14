@@ -308,6 +308,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#request-logs-table")
     assert has_element?(view, "#mobile-request-logs-table")
     assert has_element?(view, "#mobile-request-logs-table-body")
+    assert has_element?(view, "#admin-request-logs-pagination-top", "Page 1 of 1")
+    assert has_element?(view, "#admin-request-logs-pagination", "Page 1 of 1")
+    assert has_element?(view, "#admin-request-logs-range-top", "Showing")
+    assert has_element?(view, "#admin-request-logs-range", "Showing")
+    assert has_element?(view, "#admin-request-logs-pagination-top-prev.btn-disabled")
+    assert has_element?(view, "#admin-request-logs-pagination-prev.btn-disabled")
+    assert has_element?(view, "#admin-request-logs-pagination-top-next.btn-disabled")
+    assert has_element?(view, "#admin-request-logs-pagination-next.btn-disabled")
     assert has_element?(view, "#admin-request-logs", "Usage")
     assert has_element?(view, "#admin-request-logs", "$0.12")
     assert has_element?(view, "#request-log-row-#{request.id}", "Admin key")
@@ -2104,6 +2112,84 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  test "paginates request logs, preserves filters, and clamps overflow pages",
+       %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "paginate-logs", name: "Paginate Logs"})
+    reload_ref = attach_request_log_reload_telemetry()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    logs =
+      for index <- 1..51 do
+        request_log_fixture(pool, %{
+          correlation_id: "req-paginate-#{index}",
+          requested_model: "gpt-paginate",
+          admitted_at: DateTime.add(now, -index, :second)
+        }).request
+      end
+
+    newest = List.first(logs)
+    oldest = List.last(logs)
+
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&model=gpt-paginate")
+
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+    assert has_element?(view, "#admin-request-logs-pagination-top", "Page 1 of 2")
+    assert has_element?(view, "#admin-request-logs-pagination", "Page 1 of 2")
+    assert has_element?(view, "#admin-request-logs-range-top", "Showing 1-50 of 51")
+    assert has_element?(view, "#admin-request-logs-range", "Showing 1-50 of 51")
+    assert has_element?(view, "#request-log-row-#{newest.id}")
+    refute has_element?(view, "#request-log-row-#{oldest.id}")
+    assert has_element?(view, "#admin-request-logs-pagination-top-prev.btn-disabled")
+    refute has_element?(view, "#admin-request-logs-pagination-top-next.btn-disabled")
+
+    view
+    |> element("#admin-request-logs-pagination-top-next")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/request-logs?model=gpt-paginate&page=2&pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :filter_patch, :selected_pool)
+    assert has_element?(view, "#admin-request-logs-pagination", "Page 2 of 2")
+    assert has_element?(view, "#admin-request-logs-range", "Showing 51-51 of 51")
+    assert has_element?(view, "#request-log-row-#{oldest.id}")
+    refute has_element?(view, "#request-log-row-#{newest.id}")
+    refute has_element?(view, "#admin-request-logs-pagination-prev.btn-disabled")
+    assert has_element?(view, "#admin-request-logs-pagination-next.btn-disabled")
+
+    refreshed_request =
+      request_log_fixture(pool, %{
+        correlation_id: "req-paginate-refresh",
+        requested_model: "gpt-paginate",
+        admitted_at: DateTime.add(now, 1, :second)
+      }).request
+
+    assert {:ok, _event} =
+             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+               request_id: refreshed_request.id,
+               status: refreshed_request.status
+             })
+
+    assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
+    assert has_element?(view, "#admin-request-logs-pagination", "Page 2 of 2")
+    assert has_element?(view, "#admin-request-logs-range", "Showing 51-52 of 52")
+    refute has_element?(view, "#request-log-row-#{refreshed_request.id}")
+
+    assert {:error, {:live_redirect, %{to: overflow_to}}} =
+             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&model=gpt-paginate&page=99")
+
+    assert overflow_to ==
+             ~p"/admin/request-logs?model=gpt-paginate&page=2&pool_id=#{pool.id}"
+  end
+
+  test "clamps an empty request-log page to page one", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "empty-page-logs", name: "Empty Page Logs"})
+
+    assert {:error, {:live_redirect, %{to: overflow_to}}} =
+             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&status=failed&page=7")
+
+    assert overflow_to == ~p"/admin/request-logs?pool_id=#{pool.id}&status=failed"
+  end
+
   test "missing request timestamp keeps not recorded display", %{scope: scope} do
     {:ok, pool} =
       Pools.create_pool(scope, %{slug: "missing-time-logs", name: "Missing Time Logs"})
@@ -2120,6 +2206,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     html =
       render_component(&RequestLogsPresentation.request_logs_table/1,
         request_logs: request_logs,
+        current_params: %{},
         datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"}
       )
 

@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.RequestLogsPresentation.Usage
 
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
@@ -35,6 +36,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     ]
 
   attr :request_logs, :map, required: true
+  attr :current_params, :map, required: true
   attr :datetime_preferences, :map, required: true
 
   def request_logs_table(assigns) do
@@ -43,7 +45,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       id="admin-request-logs"
       class={[
         "min-w-0",
-        @request_logs.items != [] && "rounded-box border border-base-300 bg-base-100 shadow-sm"
+        (@request_logs.items != [] or @request_logs.total > 0) &&
+          "rounded-box border border-base-300 bg-base-100 shadow-sm"
       ]}
     >
       <AdminComponents.empty_state
@@ -52,6 +55,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         title="No request logs"
         description="Send a request through a Pool or adjust the filters to find existing log rows."
         icon="hero-document-magnifying-glass"
+      />
+
+      <LogPagination.controls
+        page={@request_logs}
+        base_path="/admin/request-logs"
+        current_params={@current_params}
+        id_prefix="admin-request-logs-pagination-top"
+        range_id="admin-request-logs-range-top"
+        range_role="request-logs-range"
+        label="Request logs"
+        placement={:top}
+        show_border={@request_logs.items != []}
       />
 
       <div :if={@request_logs.items != []} class="hidden overflow-x-auto md:block">
@@ -256,6 +271,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           </caption>
         </table>
       </div>
+
+      <LogPagination.controls
+        page={@request_logs}
+        base_path="/admin/request-logs"
+        current_params={@current_params}
+        id_prefix="admin-request-logs-pagination"
+        range_id="admin-request-logs-range"
+        range_role="request-logs-range"
+        label="Request logs"
+        placement={:bottom}
+        show_border={@request_logs.items != []}
+      />
     </div>
     """
   end
