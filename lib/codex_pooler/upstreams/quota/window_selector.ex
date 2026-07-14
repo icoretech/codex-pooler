@@ -38,8 +38,46 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> Enum.reject(&future_observation?(&1, as_of))
     |> Enum.map(&normalize_legacy_weekly_primary/1)
     |> Enum.group_by(&logical_key/1)
-    |> Enum.map(fn {_logical_key, candidates} -> best_by_score(candidates, as_of) end)
+    |> Enum.map(fn {_logical_key, candidates} ->
+      candidates
+      |> reject_prior_cycle_windows(as_of)
+      |> best_by_score(as_of)
+    end)
     |> Enum.sort_by(&logical_sort_key/1)
+  end
+
+  # A fresh sibling whose reset lies a full margin beyond a STALE row's reset
+  # proves the provider started a new cycle after that row was last observed:
+  # rows still describing the ended cycle must not compete for selection, or
+  # their pessimistic pressure keeps winning the merge and masks the restart
+  # from operators and routing alike (observed live: a stale rate-limit-event
+  # row at 94 percent from the ended cycle displayed as 6 percent remaining
+  # while the account was genuinely unused). Fresh rows are never rejected —
+  # same-cycle resets legitimately drift up to the window's own duration across
+  # provider surfaces — and groups without any fresh reset-bearing row are left
+  # untouched, so an all-stale exhausted group keeps its fail-closed pessimism.
+  @prior_cycle_margin_seconds 60 * 60
+
+  defp reject_prior_cycle_windows(candidates, as_of) do
+    fresh_resets =
+      for window <- candidates,
+          fresh?(window, as_of),
+          match?(%DateTime{}, window.reset_at),
+          do: window.reset_at
+
+    case fresh_resets do
+      [] ->
+        candidates
+
+      resets ->
+        newest = Enum.max(resets, DateTime)
+
+        Enum.reject(candidates, fn window ->
+          not fresh?(window, as_of) and
+            match?(%DateTime{}, window.reset_at) and
+            DateTime.diff(newest, window.reset_at, :second) > @prior_cycle_margin_seconds
+        end)
+    end
   end
 
   # Evidence observed after the evaluation instant did not exist in that form

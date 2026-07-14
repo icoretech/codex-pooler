@@ -82,6 +82,89 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
              primary_5h
   end
 
+  test "a fresh new-cycle window supersedes stale prior-cycle rows in the logical merge" do
+    # Live incident shape: a stale rate-limit-event row at 94% from the ended
+    # cycle was outranking the fresh 0% rows of the restarted cycle by pressure,
+    # showing 6% remaining for a genuinely unused account.
+    stale_prior_cycle =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_rate_limit_event",
+        merge_precedence: 90,
+        used_percent: Decimal.new("94"),
+        reset_at: DateTime.add(@as_of, 2, :day),
+        observed_at: DateTime.add(@as_of, -7, :hour)
+      )
+
+    fresh_new_cycle =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("0"),
+        reset_at: DateTime.add(@as_of, 7, :day),
+        observed_at: DateTime.add(@as_of, -60, :second)
+      )
+
+    assert WindowSelector.logical_windows([stale_prior_cycle, fresh_new_cycle], @as_of) == [
+             fresh_new_cycle
+           ]
+  end
+
+  test "an all-stale exhausted group keeps its pessimistic row" do
+    # No fresh new-cycle evidence: fail-closed pessimism is preserved.
+    stale_exhausted =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@as_of, 2, :day),
+        observed_at: DateTime.add(@as_of, -4, :hour)
+      )
+
+    stale_lower =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("77"),
+        reset_at: DateTime.add(@as_of, 2, :day),
+        observed_at: DateTime.add(@as_of, -10, :hour)
+      )
+
+    assert WindowSelector.logical_windows([stale_exhausted, stale_lower], @as_of) == [
+             stale_exhausted
+           ]
+  end
+
+  test "same-cycle rows with countdown jitter are not rejected" do
+    # Resets within the margin describe the same running cycle.
+    fresh_zero =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("0"),
+        reset_at: DateTime.add(@as_of, 7, :day),
+        observed_at: DateTime.add(@as_of, -60, :second)
+      )
+
+    jittered =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("12"),
+        reset_at: DateTime.add(@as_of, 7, :day) |> DateTime.add(-120, :second),
+        observed_at: DateTime.add(@as_of, -30, :second)
+      )
+
+    # Both survive the cycle filter; the winner is chosen by the normal score
+    # (pressure prefers the measured 12%).
+    assert WindowSelector.logical_windows([fresh_zero, jittered], @as_of) == [jittered]
+  end
+
   defp account_window(attrs) do
     observed_at = Keyword.get(attrs, :observed_at, @as_of)
 
