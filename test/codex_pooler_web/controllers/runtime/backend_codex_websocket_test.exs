@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
+  import CodexPooler.PoolerFixtures, only: [request_fixture: 2]
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -6402,6 +6403,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "websocket attached session model miss retries a later assignment" do
+    setup = attached_session_model_fallback_setup("attached-session")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "attached-session"})
+    session = pin_session_to_assignment!(session, setup.assignment)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               model_fallback_websocket_payload(setup.model, "attached session"),
+               %{request_id: Ecto.UUID.generate(), codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_attached-session_model_fallback"} = Jason.decode!(frame)
+    refute_received {:websocket_frame, _unexpected}
+
+    assert_soft_session_model_fallback!(setup)
+  end
+
+  test "websocket same-model successful-turn session model miss retries a later assignment" do
+    setup = attached_session_model_fallback_setup("same-model-turn")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "same-model-turn"})
+    session = pin_session_to_assignment!(session, setup.assignment)
+    insert_successful_session_turn!(setup, session)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               model_fallback_websocket_payload(setup.model, "same model successful turn"),
+               %{request_id: Ecto.UUID.generate(), codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert %{"id" => "resp_ws_same-model-turn_model_fallback"} = Jason.decode!(frame)
+    refute_received {:websocket_frame, _unexpected}
+
+    assert_soft_session_model_fallback!(setup)
+  end
+
   test "websocket final assignment model miss emits one sanitized terminal failure" do
     upstream =
       start_upstream(
@@ -8496,6 +8540,113 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     session
     |> Ecto.Changeset.change(%{pool_upstream_assignment_id: assignment.id})
     |> Repo.update!()
+  end
+
+  defp attached_session_model_fallback_setup(label) do
+    pinned_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "response" => %{
+                 "id" => "resp_ws_#{label}_model_miss",
+                 "error" => %{"code" => "model_not_found", "param" => "model"}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_#{label}_model_fallback",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-#{label}-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup
+    |> Map.put(:fallback, fallback)
+    |> Map.put(:pinned_upstream, pinned_upstream)
+    |> Map.put(:fallback_upstream, fallback_upstream)
+    |> Map.put(
+      :model,
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    )
+  end
+
+  defp model_fallback_websocket_payload(model, marker) do
+    Jason.encode!(%{
+      "type" => "response.create",
+      "model" => model.exposed_model_id,
+      "input" => "synthetic #{marker} model fallback",
+      "stream" => true,
+      "generate" => true
+    })
+  end
+
+  defp insert_successful_session_turn!(setup, session) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    request =
+      request_fixture(setup, %{
+        model_id: setup.model.id,
+        requested_model: setup.model.exposed_model_id,
+        transport: "websocket",
+        status: "succeeded",
+        usage_status: "usage_known",
+        response_status_code: 200,
+        completed_at: now
+      })
+
+    %CodexTurn{
+      codex_session_id: session.id,
+      request_id: request.id,
+      turn_sequence: 1,
+      transport_kind: "websocket",
+      status: "succeeded",
+      started_at: now,
+      completed_at: now,
+      created_at: now,
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp assert_soft_session_model_fallback!(setup) do
+    assert FakeUpstream.count(setup.pinned_upstream) == 1
+    assert FakeUpstream.count(setup.fallback_upstream) == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.network_error_code == "upstream_model_unavailable"
+    assert second_attempt.pool_upstream_assignment_id == setup.fallback.assignment.id
+    assert second_attempt.status == "succeeded"
+
+    assert %Request{status: "succeeded", retry_count: 1} =
+             Repo.one!(
+               from request in Request,
+                 where: request.pool_id == ^setup.pool.id and request.transport == "websocket",
+                 order_by: [desc: request.admitted_at],
+                 limit: 1
+             )
   end
 
   defp mark_pinned_assignment_reauth_required!(setup) do

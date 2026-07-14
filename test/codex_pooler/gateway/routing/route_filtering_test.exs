@@ -264,7 +264,9 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           {:path_json,
            %{
              "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" => {200, usage_payload(0)}
+             "/api/codex/usage" =>
+               {200,
+                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
            }}
         )
 
@@ -355,14 +357,27 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       %{identity: identity, assignment: assignment} =
         active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
 
+      %{identity: sibling_identity, assignment: sibling_assignment} =
+        active_upstream_assignment_fixture(pool)
+
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
-      filter_input = filter_input(pool, api_key, assignment, identity, "auto-probe")
+      upsert_weekly_exhausted_quota!(sibling_identity)
 
-      assert {:ok, [{%{id: assignment_id}, _identity}], filtered_options} =
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [{assignment, identity}, {sibling_assignment, sibling_identity}],
+          "auto-probe"
+        )
+
+      assert {:ok, [{%{id: assignment_id}, routed_identity}], filtered_options} =
                RouteFiltering.filter_candidates(filter_input)
 
       assert assignment_id == assignment.id
+      assert routed_identity.id == identity.id
+      refute assignment_id == sibling_assignment.id
       assert filtered_options.routing.quota_decision["routing_state"] == "reset_probe"
 
       redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
@@ -763,6 +778,68 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert usage_request.path == "/api/codex/usage"
     end
 
+    test "route-state saved reset probe narrows an otherwise eligible sibling to the claimed lane" do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" =>
+               {200,
+                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{
+          metadata: saved_reset_metadata(upstream, 1)
+        })
+
+      sibling = active_upstream_assignment_fixture(pool)
+
+      redeeming_identity =
+        enable_saved_reset_auto_redeem!(redeeming.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
+      upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
+      upsert_weekly_pressure_quota!(sibling.identity, Decimal.new("97"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [
+            {redeeming.assignment, redeeming_identity},
+            {sibling.assignment, sibling.identity}
+          ],
+          "route-state-expiring-reset-singleton"
+        )
+
+      route_state = route_state(filter_input)
+
+      assert {:ok, [claimed_candidate], decision, filtered_route_state} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert {redeeming.assignment.id, redeeming_identity.id} ==
+               candidate_ids_pair(claimed_candidate)
+
+      assert filtered_route_state.candidates == [claimed_candidate]
+      assert decision.routing.quota_decision["routing_state"] == "reset_probe"
+      assert decision.routing.quota_decision["reset_probe_candidate_count"] == 1
+      refute sibling.assignment.id in candidate_ids(filtered_route_state.candidates)
+
+      assert Enum.count(
+               FakeUpstream.requests(upstream),
+               &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+             ) == 1
+
+      assert Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/api/codex/usage"))
+    end
+
     test "expiring saved reset auto redemption waits when no weekly usage would be recovered" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -927,6 +1004,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   defp candidate_ids(candidates),
     do: Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+
+  defp candidate_ids_pair({assignment, identity}), do: {assignment.id, identity.id}
 
   defp filter_input(pool, api_key, model, candidates) when is_list(candidates) do
     payload = %{"model" => model.exposed_model_id, "input" => "route filtering"}

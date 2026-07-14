@@ -9,7 +9,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :writer,
     :message_mapper,
     :frame_observer,
-    assignment_advertised?: false
+    assignment_advertised?: false,
+    forward_error_body?: true
   ]
 
   @type writer :: (binary() -> any())
@@ -24,6 +25,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           message_mapper:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer: frame_observer(),
-          assignment_advertised?: boolean()
+          assignment_advertised?: boolean(),
+          forward_error_body?: boolean()
         }
 end

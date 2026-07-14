@@ -135,7 +135,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
 
   def wrapped_top_level_error(_decoded), do: nil
 
-  defp error_code_from_decoded(decoded) when is_map(decoded), do: structured_error_code(decoded)
+  # Deliberately narrower than structured_error_code/1: websocket terminal
+  # classification must keep the terminal-type fallback for wrapped top-level
+  # {"type":"error"} and status-only payloads, so this resolves only nested
+  # error envelopes and returns nil otherwise (the pre-failover semantics).
+  defp error_code_from_decoded(decoded) when is_map(decoded) do
+    [
+      get_in(decoded, ["response", "error"]),
+      get_in(decoded, ["error"]),
+      get_in(decoded, ["response", "status_details", "error"]),
+      get_in(decoded, ["status_details", "error"])
+    ]
+    |> Enum.find(&is_map/1)
+    |> case do
+      %{} = error -> error_code_from_nested_error(error)
+      _error -> nil
+    end
+  end
+
   defp error_code_from_decoded(_decoded), do: nil
 
   defp wrapped_error_envelope_code(%{"type" => "error"} = decoded) do

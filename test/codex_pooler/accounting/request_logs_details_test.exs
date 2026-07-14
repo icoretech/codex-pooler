@@ -520,9 +520,11 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
         log
       end)
 
-    assert log.debug.attempts
-           |> Enum.find(&(&1.attempt_number == valid_attempt.attempt_number))
-           |> Map.fetch!(:upstream_error_param) == "reasoning.summary"
+    projected_valid_attempt =
+      Enum.find(log.debug.attempts, &(&1.attempt_number == valid_attempt.attempt_number))
+
+    assert projected_valid_attempt.pool_upstream_assignment_id == assignment.id
+    assert projected_valid_attempt.upstream_error_param == "reasoning.summary"
 
     for attempt <- [invalid_attempt, succeeded_attempt] do
       projected_attempt =

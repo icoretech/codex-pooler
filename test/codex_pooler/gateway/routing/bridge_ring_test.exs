@@ -6,11 +6,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion}
+  alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, CodexSession}
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -49,6 +51,38 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       assert candidate_ids(first_plan.candidates) == candidate_ids(second_plan.candidates)
       assert first_plan.selected_assignment_id == second_plan.selected_assignment_id
+    end
+
+    test "eligible codex session assignment remains preferred after strategy ordering" do
+      setup = routing_setup(3)
+      preferred_assignment = List.last(setup.assignments)
+      seed = seed_avoiding_assignment(setup.candidates, preferred_assignment.id)
+
+      plan = plan_for(setup, "bridge_ring", seed, session_assignment_id: preferred_assignment.id)
+
+      assert plan.selected_assignment_id == preferred_assignment.id
+    end
+
+    test "codex session preference does not restore a candidate excluded before planning" do
+      setup = routing_setup(3)
+      excluded_assignment = List.last(setup.assignments)
+
+      candidates =
+        Enum.reject(setup.candidates, fn {assignment, _identity} ->
+          assignment.id == excluded_assignment.id
+        end)
+
+      plan =
+        plan_for(setup, "bridge_ring", "excluded-session-assignment",
+          candidates: candidates,
+          ring_size: 3,
+          session_assignment_id: excluded_assignment.id
+        )
+
+      refute excluded_assignment.id in candidate_ids(plan.candidates)
+
+      assert Enum.sort(candidate_ids(plan.candidates)) == Enum.sort(candidate_ids(candidates))
+      assert length(plan.candidates) == 2
     end
   end
 
@@ -642,9 +676,27 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert plan.selected_assignment_id == hd(Enum.reject(base_ids, &(&1 == sticky_id)))
     end
 
+    test "active demotion overrides an eligible codex session preference" do
+      setup = routing_setup(3)
+      preferred_assignment = List.last(setup.assignments)
+
+      {_assignment, preferred_identity} =
+        candidate_by_id!(setup.candidates, preferred_assignment.id)
+
+      insert_demotion!(setup, preferred_assignment, preferred_identity, "upstream_5xx")
+
+      plan =
+        plan_for(setup, "bridge_ring", "session-preference-demotion",
+          session_assignment_id: preferred_assignment.id
+        )
+
+      assert List.last(candidate_ids(plan.candidates)) == preferred_assignment.id
+      refute plan.selected_assignment_id == preferred_assignment.id
+    end
+
     test "another process observes demotion only for the exact API key model assignment lane" do
       setup = in_db_observer(fn -> routing_setup(3) end)
-      cleanup_unboxed_pool(setup.pool.id)
+      cleanup_unboxed_fixture(setup.pool.id, Enum.map(setup.identities, & &1.id))
       seed = "persisted-exact-demotion-seed"
       base_ids = rendezvous_order_ids(setup.candidates, seed)
       demoted_id = hd(base_ids)
@@ -887,7 +939,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   end
 
   defp plan_for(setup, strategy, seed, opts \\ []) do
-    ring_size = Keyword.get(opts, :ring_size, length(setup.candidates))
+    candidates = Keyword.get(opts, :candidates, setup.candidates)
+    ring_size = Keyword.get(opts, :ring_size, length(candidates))
     update_routing_settings!(setup.pool, strategy, ring_size)
 
     request =
@@ -897,14 +950,35 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         correlation_id: "#{seed}-#{System.unique_integer([:positive])}"
       })
 
+    request_options =
+      RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+
+    request_options =
+      case Keyword.fetch(opts, :session_assignment_id) do
+        {:ok, assignment_id} ->
+          RequestOptions.put_continuity(request_options,
+            codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}
+          )
+
+        :error ->
+          request_options
+      end
+
     BridgeRing.plan_route(%{
       auth: setup.auth,
       model: setup.model,
-      candidates: setup.candidates,
+      candidates: candidates,
       route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
-      request_options:
-        RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+      request_options: request_options
     })
+  end
+
+  defp seed_avoiding_assignment(candidates, assignment_id) do
+    Enum.find_value(1..100, fn index ->
+      seed = "session-preference-seed-#{index}"
+
+      if hd(rendezvous_order_ids(candidates, seed)) != assignment_id, do: seed
+    end) || raise "could not find a seed avoiding assignment #{assignment_id}"
   end
 
   defp plan_for_prompt_cache(setup, strategy, seed, prompt_cache_key, opts \\ []) do
@@ -1161,13 +1235,20 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     Task.await(task, 5_000)
   end
 
-  defp cleanup_unboxed_pool(pool_id) do
+  defp cleanup_unboxed_fixture(pool_id, upstream_identity_ids) do
     on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        pool = Repo.get(CodexPooler.Pools.Pool, pool_id)
-        if pool, do: Repo.delete!(pool)
-      end)
+      Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(pool_id, upstream_identity_ids) end)
     end)
+  end
+
+  defp cleanup_fixture(pool_id, upstream_identity_ids) do
+    pool = Repo.get(Pool, pool_id)
+    if pool, do: Repo.delete!(pool)
+
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.id in ^upstream_identity_ids
+    )
   end
 
   defp rotated_ids(candidate_ids, _seed) when length(candidate_ids) <= 1, do: candidate_ids

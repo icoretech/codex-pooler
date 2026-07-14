@@ -1408,6 +1408,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                "reasoning.summary"
              )
 
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-assignment",
+               assignment.id
+             )
+
       refute has_element?(view, "#request-log-detail-attempt-2-upstream-error-param")
 
       html = render(view)

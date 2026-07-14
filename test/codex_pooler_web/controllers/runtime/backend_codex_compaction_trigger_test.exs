@@ -338,6 +338,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "compact SSE terminal failure finalizes as a failure without duplicating relayed blocks",
+       %{conn: conn} do
+    # Regression: the compact stream writer must classify terminal events like
+    # every other SSE stream. Before the fix, a compact stream ending in
+    # response.failed was relayed and finalized as a SUCCESSFUL request, and the
+    # exhaustion path replayed the full retained body (duplicating blocks that
+    # had already been written downstream).
+    rate_limits_block =
+      "event: codex.rate_limits\n" <>
+        "data: #{Jason.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
+
+    {_event, failed_payload} = first_event_terminal_payload("response.failed", "server_error")
+
+    failure_block =
+      "event: response.failed\n" <> "data: #{Jason.encode!(failed_payload)}\n\n"
+
+    upstream = start_upstream({:sse, [rate_limits_block, failure_block]})
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic"),
+        "stream" => true
+      })
+
+    # The client received the terminal failure exactly once, and the already
+    # relayed rate-limits block was not replayed by the final delivery.
+    body = response.resp_body
+    assert length(String.split(body, "event: response.failed")) == 2
+    assert length(String.split(body, "event: codex.rate_limits")) == 2
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    refute request.status == "succeeded"
+
+    attempts = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    refute Enum.any?(attempts, &(&1.status == "succeeded"))
+  end
+
   defp visible_input(text) do
     [
       %{

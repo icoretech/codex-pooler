@@ -260,7 +260,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       writer: writer,
       message_mapper: message_mapper,
       frame_observer: websocket_frame_observer(identity),
-      assignment_advertised?: assignment_advertised?
+      assignment_advertised?: assignment_advertised?,
+      forward_error_body?: false
     }
 
     case owner_transport(request_options) do

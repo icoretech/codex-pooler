@@ -160,7 +160,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
          response_context,
          write_final_event
        ) do
-    case write_final_event.(state, body) do
+    # Deliver only the withheld content (the intercepted terminal and anything
+    # still buffered by the classifier): the retained `body` also contains
+    # blocks that were already written downstream, and replaying it would
+    # duplicate them — or emit a truncated retained-body suffix as malformed
+    # SSE. Finalization still receives the full retained body for accounting.
+    case write_final_event.(state, Map.get(failure, :withheld_body, body)) do
       {:ok, state} ->
         case Finalization.finalize_first_event_stream_failure(body, failure, response_context) do
           {:ok, _finalized} -> {:ok, state}

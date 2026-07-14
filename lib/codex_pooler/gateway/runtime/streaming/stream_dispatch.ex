@@ -203,13 +203,20 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
+  # Compact streams classify like every other SSE stream — a compact terminal
+  # failure must finalize as a failure, never as a relayed success. Compactness
+  # only changes what happens on a retryable first event, and that decision
+  # lives in StreamLifecycle.first_event_retry_handler (compact model misses
+  # finalize without retry or health mutation).
   defp http_stream_writer(%ResponseContext{response: response} = response_context) do
     fn conn, data ->
-      if sse_response?(response) and not compact_stream?(response_context.context) do
+      if sse_response?(response) do
+        previous_state = first_event_state(conn)
+
         {classification, first_event_state} =
           StreamAttempt.classify_first_event(
             data,
-            first_event_state(conn),
+            previous_state,
             ModelMetadata.assignment_source?(
               response_context.context.model,
               response_context.context.assignment.id
@@ -218,15 +225,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
         conn = put_first_event_state(conn, first_event_state)
 
-        handle_classified_stream_data(classification, response_context, conn, data)
+        classification
+        |> attach_withheld_body(previous_state, data)
+        |> handle_classified_stream_data(response_context, conn, data)
       else
         write_stream_data(response_context, conn, data)
       end
     end
   end
 
-  defp compact_stream?(%SelectedCandidateContext{endpoint: endpoint}),
-    do: endpoint == "/backend-api/codex/responses/compact"
+  # The relay retains every streamed part — including non-visible blocks that
+  # were already written downstream — so the exhaustion path must not replay
+  # the whole retained body. The classifier's buffer plus the intercepted chunk
+  # is exactly the content the client has not received yet; carry it on the
+  # failure so final delivery writes only that.
+  defp attach_withheld_body({:retry, failure}, %{buffer: buffer}, data),
+    do: {:retry, Map.put(failure, :withheld_body, buffer <> data)}
+
+  defp attach_withheld_body(classification, _previous_state, _data), do: classification
 
   defp http_stream_terminal_failure_writer do
     fn state, reason ->

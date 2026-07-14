@@ -20,6 +20,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         mono: true
       ),
       detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-assignment",
+        "Assignment id",
+        attempt.pool_upstream_assignment_id,
+        mono: true
+      ),
+      detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-status-code",
         "Upstream status",
         attempt.upstream_status_code

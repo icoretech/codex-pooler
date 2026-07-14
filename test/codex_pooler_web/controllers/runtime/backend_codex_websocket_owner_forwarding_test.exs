@@ -829,7 +829,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                )
 
       assert {:ok, state} = receive_socket_done(state)
-      assert {:push, {:text, failed_frame}, _state} = receive_owner_socket_push(state)
+      assert {:push, {:text, failed_frame}, _state} = receive_socket_push(state)
       assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
 
       assert FakeUpstream.count(pinned_upstream) == 2

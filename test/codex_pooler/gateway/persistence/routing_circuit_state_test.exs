@@ -8,7 +8,10 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
@@ -202,12 +205,15 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
         {auth, model, assignment, sibling_assignment, sibling_model}
       end)
 
-    cleanup_unboxed_pool(auth.pool.id)
+    cleanup_unboxed_fixture(auth.pool.id, [
+      assignment.upstream_identity_id,
+      sibling_assignment.upstream_identity_id
+    ])
 
     update_circuit_settings(%{"circuit_failure_threshold" => 1})
 
-    assert {:ok, %RoutingCircuitState{status: "open"}} =
-             in_db_observer(fn ->
+    assert {writer_backend_pid, {:ok, %RoutingCircuitState{status: "open"} = written}} =
+             in_db_observer_with_backend_pid(fn ->
                CircuitState.record_failure(
                  auth,
                  model,
@@ -217,22 +223,28 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
                )
              end)
 
-    assert %{
-             exact_lane: false,
-             sibling_assignment: true,
-             sibling_model: true,
-             sibling_route: true
-           } =
-             in_db_observer(fn ->
+    assert {reader_backend_pid,
+            %{
+              exact_lane: false,
+              sibling_assignment: true,
+              sibling_model: true,
+              sibling_route: true,
+              retained_state: %RoutingCircuitState{id: retained_id, status: "open"}
+            }} =
+             in_db_observer_with_backend_pid(fn ->
                %{
                  exact_lane: CircuitState.eligible?(auth, model, assignment, "proxy_http"),
                  sibling_assignment:
                    CircuitState.eligible?(auth, model, sibling_assignment, "proxy_http"),
                  sibling_model:
                    CircuitState.eligible?(auth, sibling_model, assignment, "proxy_http"),
-                 sibling_route: CircuitState.eligible?(auth, model, assignment, "proxy_stream")
+                 sibling_route: CircuitState.eligible?(auth, model, assignment, "proxy_stream"),
+                 retained_state: Repo.get!(RoutingCircuitState, written.id)
                }
              end)
+
+    refute writer_backend_pid == reader_backend_pid
+    assert retained_id == written.id
 
     assert %RoutingCircuitState{
              pool_id: pool_id,
@@ -250,7 +262,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
   test "threshold and bounded half-open recovery persist across process observers" do
     {auth, model, assignment} = in_db_observer(&routing_fixture/0)
-    cleanup_unboxed_pool(auth.pool.id)
+    cleanup_unboxed_fixture(auth.pool.id, [assignment.upstream_identity_id])
 
     update_circuit_settings(%{
       "circuit_failure_threshold" => 2,
@@ -328,7 +340,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
   test "concurrent half-open attempts admit exactly one probe across independent checkouts" do
     {auth, model, assignment} = in_db_observer(&routing_fixture/0)
-    cleanup_unboxed_pool(auth.pool.id)
+    cleanup_unboxed_fixture(auth.pool.id, [assignment.upstream_identity_id])
 
     update_circuit_settings(%{
       "circuit_failure_threshold" => 1,
@@ -360,7 +372,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
         Task.async(fn ->
           Sandbox.unboxed_run(Repo, fn ->
             %{rows: [[attempt_backend_pid]]} =
-              Ecto.Adapters.SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+              SQL.query!(Repo, "SELECT pg_backend_pid()", [])
 
             send(parent, {:probe_attempt_started, barrier, self(), attempt_backend_pid})
 
@@ -526,12 +538,26 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     Task.await(task, 5_000)
   end
 
-  defp cleanup_unboxed_pool(pool_id) do
-    on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn ->
-        pool = Repo.get(CodexPooler.Pools.Pool, pool_id)
-        if pool, do: Repo.delete!(pool)
-      end)
+  defp in_db_observer_with_backend_pid(callback) do
+    in_db_observer(fn ->
+      %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+      {backend_pid, callback.()}
     end)
+  end
+
+  defp cleanup_unboxed_fixture(pool_id, upstream_identity_ids) do
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(pool_id, upstream_identity_ids) end)
+    end)
+  end
+
+  defp cleanup_fixture(pool_id, upstream_identity_ids) do
+    pool = Repo.get(Pool, pool_id)
+    if pool, do: Repo.delete!(pool)
+
+    Repo.delete_all(
+      from identity in UpstreamIdentity,
+        where: identity.id in ^upstream_identity_ids
+    )
   end
 end

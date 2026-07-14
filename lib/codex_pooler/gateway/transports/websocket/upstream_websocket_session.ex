@@ -220,7 +220,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       timeouts: request.timeouts,
       message_mapper: request.message_mapper,
       frame_observer: request.frame_observer,
-      assignment_advertised?: request.assignment_advertised?
+      # Tolerant access: during a rolling deploy an owner-forwarded request may
+      # have been built by a replica that predates this field. nil keeps the
+      # pre-provenance classification semantics for that request instead of
+      # crashing the session.
+      assignment_advertised?: Map.get(request, :assignment_advertised?)
     }
 
     connect_and_send_request(

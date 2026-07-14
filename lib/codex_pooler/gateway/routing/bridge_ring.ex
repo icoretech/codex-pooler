@@ -13,7 +13,14 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   alias CodexPooler.Accounting
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, RoutingCircuitState}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeAffinity,
+    BridgeDemotion,
+    CodexSession,
+    RoutingCircuitState
+  }
+
   alias CodexPooler.Gateway.Routing.BridgeRing.{Metadata, Status}
   alias CodexPooler.Gateway.Routing.RoutePlanInput
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -104,6 +111,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       )
       |> apply_prompt_cache_locality(prompt_cache_locality)
       |> apply_affinity(affinity)
+      |> apply_codex_session_preference(request_options)
       |> apply_demotions(demotions)
 
     ring_size = max(settings.bridge_ring_size || @default_ring_size, 1)
@@ -292,6 +300,21 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
     matched ++ rest
   end
+
+  defp apply_codex_session_preference(
+         candidates,
+         %RequestOptions{
+           continuity: %{codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}}
+         }
+       )
+       when is_binary(assignment_id) do
+    {matched, rest} =
+      Enum.split_with(candidates, fn {assignment, _identity} -> assignment.id == assignment_id end)
+
+    matched ++ rest
+  end
+
+  defp apply_codex_session_preference(candidates, %RequestOptions{}), do: candidates
 
   defp apply_prompt_cache_locality(candidates, %{status: "applied", seed: seed}) do
     Enum.sort_by(candidates, fn {assignment, _identity} ->

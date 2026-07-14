@@ -214,6 +214,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
       attempt_number: attempt.attempt_number,
       status: attempt.status,
       retryable: attempt.retryable,
+      pool_upstream_assignment_id: attempt.pool_upstream_assignment_id,
       upstream_status_code: attempt.upstream_status_code,
       network_error_code: attempt.network_error_code,
       latency_ms: attempt.latency_ms,

@@ -968,6 +968,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
              "attempt_number" => 1,
              "status" => "failed",
              "retryable" => true,
+             "pool_upstream_assignment_id" => assignment.id,
              "upstream_status_code" => 499,
              "network_error_code" => "owner_drained",
              "latency_ms" => 321,

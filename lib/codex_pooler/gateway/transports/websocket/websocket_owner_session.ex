@@ -434,7 +434,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       owner: self(),
       ref: ref,
       upstream_pid: state.upstream_pid,
-      upstream_sender: state.upstream_sender
+      upstream_sender: state.upstream_sender,
+      forward_error_body?: forward_error_body?(upstream_payload)
     }
 
     Task.Supervisor.async_nolink(@task_supervisor, fn ->
@@ -444,11 +445,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp send_upstream(
-         %{owner: owner, ref: ref, upstream_pid: upstream_pid, upstream_sender: sender},
+         %{
+           owner: owner,
+           ref: ref,
+           upstream_pid: upstream_pid,
+           upstream_sender: sender,
+           forward_error_body?: forward_error_body?
+         },
          upstream_payload
        ) do
     writer = fn frame -> send(owner, {:websocket_owner_upstream_frame, ref, frame}) end
-    sender.(upstream_pid, upstream_payload, writer)
+
+    case sender.(upstream_pid, upstream_payload, writer) do
+      {:error, response} when is_map(response) ->
+        {:error, Map.put(response, :forward_error_body?, forward_error_body?)}
+
+      result ->
+        result
+    end
   end
 
   defp send_downstream(nil, _payload), do: {:error, :owner_unavailable}
@@ -487,7 +501,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:ok, _result} ->
         _result = send_downstream(downstream, :complete)
 
-      {:error, %{body: body, reason: _reason}} when is_binary(body) and body != "" ->
+      {:error, %{body: body, forward_error_body?: true, reason: _reason}}
+      when is_binary(body) and body != "" ->
         _result = send_downstream(downstream, {:data, body})
 
       {:error, %{body: _body, reason: _reason}} ->
@@ -515,6 +530,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp schedule_owner_renewal(state), do: state
+
+  defp forward_error_body?(%UpstreamWebsocketSession.Request{forward_error_body?: value}),
+    do: value
+
+  defp forward_error_body?(_upstream_payload), do: false
 
   defp cancel_owner_renewal(%{owner_renewal_ref: ref} = state) when is_reference(ref) do
     Process.cancel_timer(ref)

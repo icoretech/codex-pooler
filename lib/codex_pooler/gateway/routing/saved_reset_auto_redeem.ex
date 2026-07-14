@@ -150,8 +150,11 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     decision = reset_probe_decision(identity, token)
 
     case Map.get(refresh_plan, :route_state) do
-      %RouteState{} = route_state -> {:ok, [candidate], decision, route_state}
-      _no_route_state -> {:ok, [candidate], decision}
+      %RouteState{} = route_state ->
+        {:ok, [candidate], decision, RouteState.put_candidates(route_state, [candidate])}
+
+      _no_route_state ->
+        {:ok, [candidate], decision}
     end
   end
 

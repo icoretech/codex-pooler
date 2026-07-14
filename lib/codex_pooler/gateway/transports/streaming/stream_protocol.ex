@@ -14,7 +14,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           required(:upstream_code) => String.t() | nil,
           required(:upstream_error_param) => String.t() | nil,
           required(:event_type) => String.t() | nil,
-          required(:data_type) => String.t() | nil
+          required(:data_type) => String.t() | nil,
+          optional(:withheld_body) => String.t()
         }
   @type terminal_outcome :: %{
           required(:kind) => atom(),
