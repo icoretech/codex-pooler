@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.3",
-    "astro": "7.0.7",
+    "astro": "7.0.8",
     "starlight-page-actions": "0.6.2"
   },
   "devDependencies": {
