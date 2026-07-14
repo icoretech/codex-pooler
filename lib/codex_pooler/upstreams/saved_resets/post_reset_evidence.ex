@@ -27,26 +27,33 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   alias CodexPooler.Upstreams.Quota.Windows
 
   @account_quota_key "account"
-  @explicit_precisions ~w(observed authoritative)
+  # A window carrying "unknown" precision was not parsed into a trustworthy
+  # descriptor; everything else (observed/authoritative/inferred) is explicit
+  # enough — the descriptor was present in the provider payload.
+  @unparseable_precision "unknown"
 
   @type classification :: :confirmed | :reblocked | :pending
 
   @doc """
   Classifies the account-level evidence for an identity that consumed a credit
   at `consumed_at`. `windows` are that identity's stored account quota windows.
+
+  Fail-closed: a single fresh exhausted account window reblocks (it would still
+  exclude the identity from routing), and confirmation requires every fresh
+  account window to be usable.
   """
   @spec classify([AccountQuotaWindow.t()], DateTime.t(), DateTime.t()) :: classification()
   def classify(windows, %DateTime{} = consumed_at, %DateTime{} = now) when is_list(windows) do
     fresh_account_windows =
       windows
       |> Enum.filter(&account_window?/1)
-      |> Enum.filter(&explicit_precision?/1)
+      |> Enum.filter(&parse_safe?/1)
       |> Enum.filter(&observed_at_or_after?(&1, consumed_at))
 
     cond do
       fresh_account_windows == [] -> :pending
-      Enum.any?(fresh_account_windows, &Windows.usable_window?(&1, now)) -> :confirmed
       Enum.any?(fresh_account_windows, &exhausted?(&1, now)) -> :reblocked
+      Enum.all?(fresh_account_windows, &Windows.usable_window?(&1, now)) -> :confirmed
       true -> :pending
     end
   end
@@ -54,11 +61,8 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   defp account_window?(%AccountQuotaWindow{quota_key: @account_quota_key}), do: true
   defp account_window?(_window), do: false
 
-  defp explicit_precision?(%AccountQuotaWindow{source_precision: precision})
-       when precision in @explicit_precisions,
-       do: true
-
-  defp explicit_precision?(_window), do: false
+  defp parse_safe?(%AccountQuotaWindow{source_precision: @unparseable_precision}), do: false
+  defp parse_safe?(%AccountQuotaWindow{}), do: true
 
   defp observed_at_or_after?(
          %AccountQuotaWindow{observed_at: %DateTime{} = observed_at},

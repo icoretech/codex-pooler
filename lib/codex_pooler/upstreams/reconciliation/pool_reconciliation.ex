@@ -10,6 +10,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.SavedResets
+  alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -294,6 +295,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
     case result do
       {:ok, %{windows: refreshed, identity: updated_identity}} ->
+        # Fresh quota is now persisted: converge any pending saved-reset
+        # redemption on this identity from that evidence (self-healing). Best
+        # effort and a no-op for identities without a pending lifecycle.
+        Convergence.converge(updated_identity, observed_at)
+
         step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
           "window_count" => length(refreshed)
         })

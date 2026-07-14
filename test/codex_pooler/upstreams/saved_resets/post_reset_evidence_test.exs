@@ -59,8 +59,13 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :confirmed
   end
 
-  test "inferred/unknown precision is not explicit enough to transition" do
+  test "inferred precision still counts as explicit provider evidence" do
     windows = [window(used_percent: Decimal.new("0"), source_precision: "inferred")]
+    assert PostResetEvidence.classify(windows, @consumed_at, @now) == :confirmed
+  end
+
+  test "unknown precision is not parse-safe enough to transition" do
+    windows = [window(used_percent: Decimal.new("0"), source_precision: "unknown")]
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :pending
   end
 
@@ -73,12 +78,14 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :pending
   end
 
-  test "a usable window confirms even alongside an exhausted sibling" do
+  test "an exhausted sibling reblocks even when another window is usable" do
+    # A single blocking window still excludes the identity from routing, so the
+    # reset is not confirmed just because a different window is usable.
     windows = [
       window(used_percent: Decimal.new("100")),
       window(used_percent: Decimal.new("5"))
     ]
 
-    assert PostResetEvidence.classify(windows, @consumed_at, @now) == :confirmed
+    assert PostResetEvidence.classify(windows, @consumed_at, @now) == :reblocked
   end
 end

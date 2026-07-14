@@ -10,9 +10,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
@@ -571,6 +573,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp result_from_response(code, status, available_count_before, identity, assignment, claim) do
     cond do
       code == "reset" ->
+        # The provider consumed a credit as of now; capture that before the
+        # refresh so evidence is only accepted when observed at/after it.
+        consumed_at = now()
+
         case PoolReconciliation.refresh_quota_from_usage(identity, assignment,
                receive_timeout: claim.receive_timeout
              ) do
@@ -581,6 +587,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               status: :succeeded,
               applied?: true,
               code: code,
+              phase: post_reset_phase(refreshed_identity, consumed_at),
+              consumed_at: consumed_at,
               available_count_before: available_count_before,
               available_count_after: available_count_after,
               http_status: status
@@ -598,7 +606,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               applied?: true,
               code: code,
               phase: RedemptionLifecycle.consumed_pending_probe(),
-              consumed_at: now(),
+              consumed_at: consumed_at,
               available_count_before: available_count_before,
               http_status: status,
               reason: "quota refresh after saved reset is pending confirmation"
@@ -785,6 +793,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp redemption_lifecycle_fields(result), do: %{"status" => Atom.to_string(result.status)}
+
+  # After a consumed reset, only fresh usable account evidence observed at/after
+  # the consume time confirms the identity. Anything else (the provider omitted
+  # the account window, or it is still exhausted) stays pending and converges
+  # later from real evidence — never a fabricated success.
+  defp post_reset_phase(refreshed_identity, consumed_at) do
+    case PostResetEvidence.classify(Windows.list_evidence(refreshed_identity), consumed_at, now()) do
+      :confirmed -> RedemptionLifecycle.confirmed_by_quota()
+      _pending_or_reblocked -> RedemptionLifecycle.consumed_pending_probe()
+    end
+  end
 
   # The provider idempotency key is derived deterministically from the persisted
   # attempt id and generation, so a retry of the same claim reproduces the same
