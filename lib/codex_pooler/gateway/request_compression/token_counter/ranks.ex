@@ -54,7 +54,7 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounter.Ranks do
     raw
     |> String.split("\n", trim: true)
     |> Enum.reduce_while({:ok, %{}}, fn line, {:ok, acc} ->
-      case parse_line(line) do
+      case parse_line(String.trim(line)) do
         {:ok, token, rank} -> {:cont, {:ok, Map.put(acc, token, rank)}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
