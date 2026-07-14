@@ -62,7 +62,7 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounter.Ranks do
   end
 
   defp parse_line(line) do
-    with [encoded_token, rank_string] <- String.split(line, " ", parts: 2),
+    with [encoded_token, rank_string] <- line |> String.trim() |> String.split(" ", parts: 2),
          {:ok, token} <- Base.decode64(encoded_token),
          {rank, ""} <- Integer.parse(rank_string) do
       {:ok, token, rank}
