@@ -8,7 +8,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias Ecto.Adapters.SQL.Sandbox
 
   setup do
     on_exit(fn -> :ok end)
@@ -596,6 +598,106 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
 
       assert [] = FakeUpstream.requests(fake)
+    end
+  end
+
+  describe "concurrent gateway redemption (multi-node safety)" do
+    test "two concurrent redeems on the same identity consume exactly one credit" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+      parent = self()
+
+      results =
+        for _index <- 1..2 do
+          Task.async(fn ->
+            Sandbox.allow(Repo, parent, self())
+
+            SavedResetRedemption.redeem(assignment,
+              trigger_kind: "gateway_auto",
+              gateway_auto_context: context,
+              receive_timeout: 15_000
+            )
+          end)
+        end
+        |> Task.await_many(15_000)
+
+      # Exactly one attempt consumed a credit; the other was blocked in progress.
+      assert Enum.count(results, &match?({:ok, %{applied?: true}}, &1)) == 1
+
+      # The provider saw exactly one consume POST — no double consumption.
+      consume_requests =
+        fake
+        |> FakeUpstream.requests()
+        |> Enum.filter(&(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
+
+      assert length(consume_requests) == 1
+
+      persisted = Repo.reload!(identity)
+      redemption = persisted.metadata["saved_reset_redemption"]
+      assert redemption["result"]["code"] == "reset"
+      assert redemption["result"]["applied"] == true
+    end
+
+    test "concurrent probe claims after a shared consume yield a single holder" do
+      # Both requests observe the same consumed_pending_probe identity and race to
+      # claim the one-shot probe; exactly one token may hold it.
+      consumed_at =
+        DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
+
+      %{identity: identity} =
+        active_upstream_assignment_fixture(pool_fixture(), %{
+          metadata: %{
+            "saved_reset_redemption" => %{
+              "status" => "redeeming",
+              "phase" => "consumed_pending_probe",
+              "attempt_id" => Ecto.UUID.generate(),
+              "generation" => 4,
+              "trigger_kind" => "gateway_auto",
+              "consumed_at" => DateTime.to_iso8601(consumed_at),
+              "deadline_at" =>
+                consumed_at |> RedemptionLifecycle.deadline_at() |> DateTime.to_iso8601(),
+              "result" => %{"code" => "reset", "applied" => true}
+            }
+          }
+        })
+
+      generation = 4
+
+      attempt_id =
+        get_in(Repo.reload!(identity).metadata, ["saved_reset_redemption", "attempt_id"])
+
+      parent = self()
+
+      results =
+        for index <- 1..3 do
+          Task.async(fn ->
+            Sandbox.allow(Repo, parent, self())
+
+            CodexPooler.Upstreams.SavedResets.ProbeLease.claim(
+              identity,
+              generation,
+              attempt_id,
+              "token-#{index}"
+            )
+          end)
+        end
+        |> Task.await_many(15_000)
+
+      assert Enum.count(results, &match?({:ok, :claimed}, &1)) == 1
+      assert Enum.count(results, &match?({:error, :unavailable}, &1)) == 2
     end
   end
 
