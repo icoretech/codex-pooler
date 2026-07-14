@@ -11,8 +11,9 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @refresh_due UpstreamIdentity.refresh_due_status()
+  @refreshing UpstreamIdentity.refreshing_status()
   @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @candidate_statuses [@refresh_due, @refresh_failed]
+  @candidate_statuses [@refresh_due, @refreshing, @refresh_failed]
   @assignment_active PoolUpstreamAssignment.active_status()
   @pool_active "active"
   @incomplete_job_states ~w(available scheduled executing retryable)
@@ -66,6 +67,25 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     [{identity, timestamp_or_now(identity.updated_at || identity.created_at, now)}]
   end
 
+  # A refreshing identity is only reachable here once its refresh lease went
+  # stale (fresh leases are rejected before this step): an interrupted inline
+  # refresh leaves the claim behind with no Oban job to resume it. Selection
+  # never mutates the identity — the worker's row-locked stale-attempt
+  # takeover stays the only recovery authority.
+  defp with_eligibility_timestamp(
+         %UpstreamIdentity{status: status} = identity,
+         now
+       )
+       when status == @refreshing do
+    reference_at =
+      identity.metadata
+      |> token_refresh_metadata()
+      |> metadata_datetime("started_at")
+      |> Kernel.||(timestamp_or_now(identity.updated_at || identity.created_at, now))
+
+    [{identity, reference_at}]
+  end
+
   defp with_eligibility_timestamp(
          %UpstreamIdentity{status: status} = identity,
          now
@@ -74,7 +94,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     reference_at =
       identity.metadata
       |> token_refresh_metadata()
-      |> finished_at()
+      |> metadata_datetime("finished_at")
       |> Kernel.||(timestamp_or_now(identity.updated_at || identity.created_at, now))
 
     eligible_at = DateTime.add(reference_at, @refresh_failed_cooldown_seconds, :second)
@@ -107,10 +127,10 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
     end
   end
 
-  defp finished_at(%{} = metadata) do
-    case metadata["finished_at"] do
-      finished_at when is_binary(finished_at) ->
-        case DateTime.from_iso8601(finished_at) do
+  defp metadata_datetime(%{} = metadata, key) do
+    case metadata[key] do
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
           {:ok, parsed, _offset} -> DateTime.truncate(parsed, :microsecond)
           _invalid -> nil
         end

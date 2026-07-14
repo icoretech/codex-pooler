@@ -43,7 +43,7 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
       assert [] = all_enqueued(worker: TokenRefreshWorker)
     end
 
-    test "only refresh_due and cooled-down refresh_failed identities are scheduled candidates" do
+    test "only recoverable lifecycle states are scheduled candidates" do
       due = recovery_identity_fixture("refresh_due", updated_at: DateTime.add(@now, -15, :minute))
 
       failed =
@@ -58,9 +58,19 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
           metadata: failed_metadata(DateTime.add(@now, -1, :hour))
         )
 
+      stale_refreshing =
+        recovery_identity_fixture("refreshing",
+          updated_at: DateTime.add(@now, -30, :minute),
+          metadata: refreshing_metadata(DateTime.add(@now, -5, :minute), 60_000)
+        )
+
+      fresh_refreshing =
+        recovery_identity_fixture("refreshing",
+          metadata: refreshing_metadata(DateTime.add(@now, -10, :second), 60_000)
+        )
+
       for status <- [
             "active",
-            "refreshing",
             "reauth_required",
             "paused",
             "deleted",
@@ -78,9 +88,10 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
                Jobs.enqueue_scheduled_token_refreshes(now: @now)
 
       assert jobs |> Enum.map(& &1.args["upstream_identity_id"]) |> Enum.sort() ==
-               Enum.sort([due.id, failed.id])
+               Enum.sort([due.id, failed.id, stale_refreshing.id])
 
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == recent_failed.id))
+      refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == fresh_refreshing.id))
     end
 
     test "excludes identities without an active assignment in an active pool" do
@@ -215,6 +226,34 @@ defmodule CodexPooler.Jobs.TokenRefreshRecoveryTest do
 
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == recent_finished.id))
       refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == future.id))
+    end
+
+    test "recovers stale refreshing identities in claim-start order without touching fresh leases" do
+      fresh =
+        recovery_identity_fixture("refreshing",
+          metadata: refreshing_metadata(DateTime.add(@now, -10, :second), 60_000)
+        )
+
+      stale =
+        recovery_identity_fixture("refreshing",
+          updated_at: DateTime.add(@now, -1, :hour),
+          metadata: refreshing_metadata(DateTime.add(@now, -5, :minute), 60_000)
+        )
+
+      # A refreshing identity whose claim metadata was lost entirely still
+      # recovers, ordered by its row timestamp.
+      bare =
+        recovery_identity_fixture("refreshing",
+          updated_at: DateTime.add(@now, -2, :hour),
+          metadata: %{}
+        )
+
+      assert {:ok, %{inserted: jobs, conflicts: [], errors: []}} =
+               Jobs.enqueue_scheduled_token_refreshes(now: @now)
+
+      assert Enum.map(jobs, & &1.args["upstream_identity_id"]) == [bare.id, stale.id]
+      refute Enum.any?(jobs, &(&1.args["upstream_identity_id"] == fresh.id))
+      assert Enum.all?(jobs, &(&1.args["trigger_kind"] == "scheduled"))
     end
 
     test "orders by eligibility timestamp then identity id and applies the requested limit" do
