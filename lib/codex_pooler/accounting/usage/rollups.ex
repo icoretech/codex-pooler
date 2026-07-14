@@ -13,6 +13,18 @@ defmodule CodexPooler.Accounting.Rollups do
   @amount_recorded "recorded"
   @usage_known "usage_known"
   @unknown_model_code "Unknown model"
+  @daily_rollup_conflict_targets %{
+    "pool" => {:unsafe_fragment, "(rollup_date, pool_id) WHERE dimension_kind = 'pool'"},
+    "api_key" =>
+      {:unsafe_fragment, "(rollup_date, pool_id, api_key_id) WHERE dimension_kind = 'api_key'"},
+    "pool_upstream_assignment" =>
+      {:unsafe_fragment,
+       "(rollup_date, pool_upstream_assignment_id) WHERE dimension_kind = 'pool_upstream_assignment'"},
+    "upstream_identity" =>
+      {:unsafe_fragment,
+       "(rollup_date, upstream_identity_id) WHERE dimension_kind = 'upstream_identity'"},
+    "model" => {:unsafe_fragment, "(rollup_date, model_id) WHERE dimension_kind = 'model'"}
+  }
 
   @daily_rollup_rebuild_sql """
   WITH source AS MATERIALIZED (
@@ -660,22 +672,46 @@ defmodule CodexPooler.Accounting.Rollups do
 
   defp upsert_rollup!(identity, date, delta) do
     now = now()
-    existing = Repo.get_by(DailyRollup, rollup_lookup(identity, date))
 
-    attrs = Map.merge(identity, Map.merge(delta, %{rollup_date: date, updated_at: now}))
+    attrs =
+      identity
+      |> Map.merge(delta)
+      |> Map.merge(%{rollup_date: date, created_at: now, updated_at: now})
 
-    case existing do
-      %DailyRollup{} = rollup ->
-        rollup
-        |> Ecto.Changeset.change(add_rollup_attrs(rollup, delta, now))
-        |> Repo.update!()
+    Repo.insert_all(DailyRollup, [attrs],
+      on_conflict: daily_rollup_increment_conflict(delta, now),
+      conflict_target: daily_rollup_conflict_target(identity)
+    )
 
-      nil ->
-        attrs
-        |> Map.put(:created_at, now)
-        |> then(&struct(DailyRollup, &1))
-        |> Repo.insert!()
-    end
+    :ok
+  end
+
+  defp daily_rollup_conflict_target(%{dimension_kind: dimension_kind}) do
+    Map.fetch!(@daily_rollup_conflict_targets, dimension_kind)
+  end
+
+  defp daily_rollup_increment_conflict(delta, now) do
+    from rollup in DailyRollup,
+      update: [
+        set: [
+          estimated_cost_micros:
+            fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
+          settled_cost_micros:
+            fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          updated_at: ^now
+        ],
+        inc: [
+          request_count: ^delta.request_count,
+          success_count: ^delta.success_count,
+          failure_count: ^delta.failure_count,
+          retry_count: ^delta.retry_count,
+          input_tokens: ^delta.input_tokens,
+          cached_input_tokens: ^delta.cached_input_tokens,
+          output_tokens: ^delta.output_tokens,
+          reasoning_tokens: ^delta.reasoning_tokens,
+          total_tokens: ^delta.total_tokens
+        ]
+      ]
   end
 
   defp subtract_rollup!(identity, date, delta) do
@@ -687,24 +723,6 @@ defmodule CodexPooler.Accounting.Rollups do
     else
       rollup |> Ecto.Changeset.change(attrs) |> Repo.update!()
     end
-  end
-
-  defp add_rollup_attrs(rollup, delta, timestamp) do
-    %{
-      request_count: rollup.request_count + delta.request_count,
-      success_count: rollup.success_count + delta.success_count,
-      failure_count: rollup.failure_count + delta.failure_count,
-      retry_count: rollup.retry_count + delta.retry_count,
-      input_tokens: rollup.input_tokens + delta.input_tokens,
-      cached_input_tokens: rollup.cached_input_tokens + delta.cached_input_tokens,
-      output_tokens: rollup.output_tokens + delta.output_tokens,
-      reasoning_tokens: rollup.reasoning_tokens + delta.reasoning_tokens,
-      total_tokens: rollup.total_tokens + delta.total_tokens,
-      estimated_cost_micros:
-        Decimal.add(rollup.estimated_cost_micros, delta.estimated_cost_micros),
-      settled_cost_micros: Decimal.add(rollup.settled_cost_micros, delta.settled_cost_micros),
-      updated_at: timestamp
-    }
   end
 
   defp subtract_rollup_attrs(rollup, delta, timestamp) do

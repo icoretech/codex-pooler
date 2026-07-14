@@ -128,6 +128,7 @@ defmodule CodexPooler.SchemaContractTest do
           "ledger_entries_api_key_recorded_occurred_idx",
           "request_log_facts_latest_upstream_identity_request_idx",
           "requests_admitted_id_idx",
+          "daily_rollups_api_key_uq",
           "daily_rollups_pool_uq",
           "hourly_model_usage_rollups_bucket_pool_model_code_uq",
           "hourly_model_usage_rollups_pool_bucket_model_idx",
@@ -174,6 +175,12 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert indexes["request_log_facts_latest_upstream_identity_request_idx"] =~
              "WHERE (latest_upstream_identity_id IS NOT NULL)"
+
+    assert indexes["daily_rollups_api_key_uq"] =~
+             "(rollup_date, pool_id, api_key_id)"
+
+    assert indexes["daily_rollups_api_key_uq"] =~
+             "WHERE (dimension_kind = 'api_key'::text)"
 
     assert indexes["hourly_model_usage_rollups_bucket_pool_model_code_uq"] =~
              "(bucket_started_at, pool_id, model_code)"

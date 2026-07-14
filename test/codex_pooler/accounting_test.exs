@@ -801,6 +801,100 @@ defmodule CodexPooler.AccountingTest do
       assert rollup.total_tokens == 24
     end
 
+    test "API key moved between pools keeps a separate daily rollup for each pool" do
+      setup = accounting_setup()
+      other_pool = pool_fixture()
+
+      first_request =
+        request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
+          correlation_id: "api-key-before-pool-move"
+        })
+
+      moved_api_key =
+        setup.api_key
+        |> Ecto.Changeset.change(pool_id: other_pool.id)
+        |> Repo.update!()
+
+      second_request =
+        request_fixture(%{pool: other_pool, api_key: moved_api_key}, %{
+          correlation_id: "api-key-after-pool-move"
+        })
+
+      first_settlement = ledger_entry_fixture(first_request, %{total_tokens: 11})
+      second_settlement = ledger_entry_fixture(second_request, %{total_tokens: 13})
+
+      assert :ok = Rollups.accumulate!(first_request, first_settlement)
+      assert :ok = Rollups.accumulate!(second_request, second_settlement)
+
+      date = DateTime.to_date(first_settlement.occurred_at)
+
+      expected =
+        Enum.sort([
+          {setup.pool.id, 1, 11},
+          {other_pool.id, 1, 13}
+        ])
+
+      assert api_key_rollup_summaries(date, setup.api_key.id) == expected
+
+      assert {:ok, 2} = Accounting.rebuild_daily_rollups_for_date(date)
+      assert api_key_rollup_summaries(date, setup.api_key.id) == expected
+    end
+
+    test "incremental daily rollups use atomic conflict-safe increments" do
+      setup = accounting_setup()
+
+      request_settlements =
+        for index <- 1..2 do
+          request =
+            request_fixture(%{pool: setup.pool, api_key: setup.api_key}, %{
+              correlation_id: "atomic-daily-rollup-#{index}",
+              model_id: setup.model.id,
+              requested_model: setup.model.exposed_model_id
+            })
+
+          settlement =
+            ledger_entry_fixture(request, %{
+              pool_upstream_assignment_id: setup.assignment.id,
+              upstream_identity_id: setup.identity.id,
+              input_tokens: 7,
+              cached_input_tokens: 3,
+              output_tokens: 5,
+              reasoning_tokens: 2,
+              total_tokens: 12,
+              estimated_cost_micros: 11,
+              settled_cost_micros: 9
+            })
+
+          {request, settlement}
+        end
+
+      {results, commands} =
+        count_repo_commands(fn ->
+          Enum.map(request_settlements, fn {request, settlement} ->
+            Rollups.accumulate!(request, settlement)
+          end)
+        end)
+
+      assert results == [:ok, :ok]
+      assert command_count(commands, "daily_rollups", "SELECT") == 0
+      assert command_count(commands, "daily_rollups", "UPDATE") == 0
+      assert command_count(commands, "daily_rollups", "INSERT") == 10
+
+      date =
+        request_settlements |> hd() |> elem(1) |> Map.fetch!(:occurred_at) |> DateTime.to_date()
+
+      rollups = daily_rollup_rows(date)
+
+      assert Enum.map(rollups, & &1.dimension_kind) |> Enum.sort() ==
+               Enum.sort(daily_rollup_dimensions())
+
+      assert Enum.all?(rollups, &(&1.request_count == 2))
+      assert Enum.all?(rollups, &(&1.total_tokens == 24))
+      assert Enum.all?(rollups, &(&1.cached_input_tokens == 6))
+      assert Enum.all?(rollups, &(&1.estimated_cost_micros == "22"))
+      assert Enum.all?(rollups, &(&1.settled_cost_micros == "18"))
+    end
+
     @tag :daily_rollup_rebuild_set_based_correctness
     test "daily rollup rebuild matches incremental rollups across every dimension" do
       date = ~D[2026-05-31]
@@ -1195,6 +1289,18 @@ defmodule CodexPooler.AccountingTest do
     |> Repo.all()
     |> Enum.map(&daily_rollup_row/1)
     |> Enum.sort_by(&daily_rollup_sort_key/1)
+  end
+
+  defp api_key_rollup_summaries(date, api_key_id) do
+    DailyRollup
+    |> where(
+      [rollup],
+      rollup.rollup_date == ^date and rollup.dimension_kind == "api_key" and
+        rollup.api_key_id == ^api_key_id
+    )
+    |> Repo.all()
+    |> Enum.map(&{&1.pool_id, &1.request_count, &1.total_tokens})
+    |> Enum.sort()
   end
 
   defp daily_rollup_row(%DailyRollup{} = rollup) do
