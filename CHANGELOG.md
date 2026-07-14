@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.29](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.28...codex-pooler-v0.4.29) (2026-07-14)
+
+
+### Features
+
+* **admin:** rank per-model usage in the account tokens panel ([ce1e88b](https://github.com/icoretech/codex-pooler/commit/ce1e88b8999acd99a649cd83a3a97bc10f0a159b))
+* **admin:** show each account's models as a plain routing list ([00060a2](https://github.com/icoretech/codex-pooler/commit/00060a2d0378c3437b3685cbafd5d879a80e4f5d))
+* **dev-seeds:** surface routing badges and token burn in full seed ([7b851f1](https://github.com/icoretech/codex-pooler/commit/7b851f189280c9367ef8d6e195afde635a14ce44))
+* **gateway:** fail over assignment-dropped models across transports ([3e7338a](https://github.com/icoretech/codex-pooler/commit/3e7338ae5d5e2ff0a9d296e46e29aaaaf3e87574))
+* **gateway:** harden assignment-model failover transports ([e60fb7c](https://github.com/icoretech/codex-pooler/commit/e60fb7c96daef1739c0a448739d45001e12817c3))
+
+
+### Bug Fixes
+
+* **accounting:** make daily rollup increments conflict-safe ([81947db](https://github.com/icoretech/codex-pooler/commit/81947db0482eecab94b619cb0540916f8939e69b))
+* **accounting:** prevent terminal request lifecycle races ([f7e6c7a](https://github.com/icoretech/codex-pooler/commit/f7e6c7ab7c1ba98edebe7529ee9337f2c88cc5ec))
+* **accounting:** subtract rollups atomically on settlement replacement ([fef4e88](https://github.com/icoretech/codex-pooler/commit/fef4e88294a96ad1b4f1a5484aa3f75c74dcfbb9))
+* **admin:** tidy the quota reconciliation banner ([41a5edd](https://github.com/icoretech/codex-pooler/commit/41a5edd45cf5e03b5de9359b1650d50d21902ed6))
+* **catalog:** preserve partial upstream sync results ([6b58a89](https://github.com/icoretech/codex-pooler/commit/6b58a89f3ca73dcd7fe464f1d7ecfaf3d2f25d21))
+* **deps:** update dependency astro to v7.0.8 ([#161](https://github.com/icoretech/codex-pooler/issues/161)) ([38b557b](https://github.com/icoretech/codex-pooler/commit/38b557b03abb99e36d0e33495d12da49aba7ab53))
+* **deps:** update dependency starlight-page-actions to v0.7.0 ([#162](https://github.com/icoretech/codex-pooler/issues/162)) ([cf08d92](https://github.com/icoretech/codex-pooler/commit/cf08d92ab3def9e3c09b82128a65fee961eb71b1))
+* **dev-seeds:** price seeded burn usage and count the third pool ([3c1b2fd](https://github.com/icoretech/codex-pooler/commit/3c1b2fd27208b4c250904952381b1708165df5a6))
+* **gateway:** fence websocket inline refreshes by credential epoch ([995e910](https://github.com/icoretech/codex-pooler/commit/995e910fe8eb298fbc7634638aca304c195278d5))
+* **jobs:** dedupe automatic reconciliation by upstream identity ([c0b13b2](https://github.com/icoretech/codex-pooler/commit/c0b13b263877dc1178dbd524f3437563008502c2))
+* **upstreams:** fence late usage-probe refreshes by credential epoch ([2470c0f](https://github.com/icoretech/codex-pooler/commit/2470c0f4c72c9e7329747251f31487efaff8c00e))
+* **upstreams:** recover stale refreshing identities ([dc90464](https://github.com/icoretech/codex-pooler/commit/dc90464ce1c59c4f952aadf2eeda6339bd5f5345))
+
 ## [0.4.28](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.27...codex-pooler-v0.4.28) (2026-07-14)
 
 
