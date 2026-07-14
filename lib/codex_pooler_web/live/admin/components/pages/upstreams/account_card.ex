@@ -525,6 +525,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       >
         <li>
           <AdminComponents.dropdown_action_item
+            id={"assign-pool-upstream-account-#{@account.identity.id}"}
+            icon="hero-server-stack"
+            label="Assign to Pool"
+            phx-click="open_assign_pool"
+            phx-value-id={@account.identity.id}
+            disabled={@account.identity.status == "deleted"}
+          />
+        </li>
+        <li>
+          <AdminComponents.dropdown_action_item
             id={"rename-upstream-account-#{@account.identity.id}"}
             icon="hero-pencil-square"
             label="Rename"

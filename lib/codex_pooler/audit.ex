@@ -36,6 +36,7 @@ defmodule CodexPooler.Audit do
     {"Pool invite created", "invite.create"},
     {"Pool invite revoked", "invite.revoke"},
     {"Upstream account imported", "upstream_account.import"},
+    {"Upstream account assigned to Pool", "upstream_account.assign_pool"},
     {"Upstream account paused", "upstream_account.pause"},
     {"Upstream account reactivated", "upstream_account.reactivate"},
     {"Upstream account token refresh queued", "upstream_account.refresh_enqueue"},

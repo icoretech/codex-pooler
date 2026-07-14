@@ -49,9 +49,11 @@ defmodule CodexPooler.Upstreams do
   @spec list_upstream_identities(keyword()) :: [UpstreamIdentity.t()]
   def list_upstream_identities(opts \\ []) do
     status = Keyword.get(opts, :status)
+    excluded_status = Keyword.get(opts, :exclude_status)
 
     UpstreamIdentity
     |> maybe_where_status(status)
+    |> maybe_exclude_status(excluded_status)
     |> order_by([identity], asc: identity.account_label)
     |> Repo.all()
   end
@@ -248,4 +250,9 @@ defmodule CodexPooler.Upstreams do
 
   defp maybe_where_status(query, status),
     do: from(identity in query, where: identity.status == ^status)
+
+  defp maybe_exclude_status(query, nil), do: query
+
+  defp maybe_exclude_status(query, status),
+    do: from(identity in query, where: identity.status != ^status)
 end
