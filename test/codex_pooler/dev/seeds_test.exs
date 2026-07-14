@@ -227,14 +227,14 @@ defmodule CodexPooler.Dev.SeedsTest do
     Seeds.full()
     result = Seeds.full()
 
-    assert Repo.aggregate(Pool, :count) == 2
-    assert statuses_for(Pool) == ["active", "disabled"]
+    assert Repo.aggregate(Pool, :count) == 3
+    assert statuses_for(Pool) == ["active", "active", "disabled"]
 
     owner_scope = Scope.for_user(result.owner, ["instance_owner"])
 
     assert {:ok, pools} = Pools.list_pools_for_management(owner_scope)
 
-    assert length(pools) == 2
+    assert length(pools) == 3
 
     active_pool = Enum.find(pools, &(&1.slug == "dev-primary"))
 
@@ -278,6 +278,7 @@ defmodule CodexPooler.Dev.SeedsTest do
              "active",
              "active",
              "active",
+             "active",
              "paused",
              "reauth_required"
            ]
@@ -286,6 +287,12 @@ defmodule CodexPooler.Dev.SeedsTest do
              "failed",
              "in_progress",
              "rejected",
+             "succeeded",
+             "succeeded",
+             "succeeded",
+             "succeeded",
+             "succeeded",
+             "succeeded",
              "succeeded",
              "succeeded"
            ]
@@ -380,8 +387,17 @@ defmodule CodexPooler.Dev.SeedsTest do
     first = Seeds.docs_screenshots()
     result = Seeds.docs_screenshots()
 
-    assert first.pools |> Enum.map(& &1.name) == ["Example Production", "Example Standby"]
-    assert result.pools |> Enum.map(& &1.name) == ["Example Production", "Example Standby"]
+    assert first.pools |> Enum.map(& &1.name) == [
+             "Example Production",
+             "Example Secondary",
+             "Example Standby"
+           ]
+
+    assert result.pools |> Enum.map(& &1.name) == [
+             "Example Production",
+             "Example Secondary",
+             "Example Standby"
+           ]
 
     assert Enum.map(result.api_keys, &{&1.display_name, &1.key_prefix}) == [
              {"Build automation", "sk-cxp-docs00000001"},
@@ -412,7 +428,7 @@ defmodule CodexPooler.Dev.SeedsTest do
     api_key_audit_event = Enum.find(result.audit_events, &(&1.action == "api_key.create"))
     assert api_key_audit_event.details["key_prefix"] == "sk-cxp-docs00000001"
 
-    assert Repo.aggregate(Pool, :count) == 2
+    assert Repo.aggregate(Pool, :count) == 3
     assert Repo.aggregate(APIKey, :count) == 4
   end
 

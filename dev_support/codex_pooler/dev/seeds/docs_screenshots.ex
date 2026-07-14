@@ -7,7 +7,7 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  @pool_names ["Example Production", "Example Standby"]
+  @pool_names ["Example Production", "Example Secondary", "Example Standby"]
 
   @api_key_specs [
     {"Build automation", "sk-cxp-docs00000001"},
@@ -31,7 +31,8 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     "Example Exhausted Assignment",
     "Example Cooldown Assignment",
     "Example Reauthentication Assignment",
-    "Example Paused Assignment"
+    "Example Paused Assignment",
+    "Example Secondary Assignment"
   ]
 
   @spec run(map()) :: map()

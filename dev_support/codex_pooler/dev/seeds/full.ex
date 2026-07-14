@@ -8,6 +8,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Catalog.Sync.PreservedSources
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -34,6 +36,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     reset_full_fake_data!()
 
     pool_active = seed_pool!(owner, %{slug: "dev-primary", name: "Dev Primary Pool"})
+    pool_secondary = seed_pool!(owner, %{slug: "dev-secondary", name: "Dev Secondary Pool"})
 
     pool_disabled =
       seed_pool!(owner, %{
@@ -47,9 +50,28 @@ defmodule CodexPooler.Dev.Seeds.Full do
     seed_operator_pool_assignments!(owner, operators, pool_active)
     identities = seed_identities!(owner)
     assignments = seed_assignments!(owner, pool_active, identities)
-    models = seed_models!(pool_active)
+
+    [active | _rest] = identities
+
+    secondary_assignment =
+      seed_assignment!(
+        assignment_attrs(
+          owner,
+          pool_secondary,
+          active,
+          "Dev Active Secondary Assignment",
+          "active",
+          "active",
+          "eligible"
+        )
+      )
+
+    models = seed_models!(pool_active, assignments, secondary_assignment)
+    secondary_models = seed_secondary_models!(pool_secondary, secondary_assignment)
+    seed_routing_circuit_states!(pool_active, assignments, active)
     quota_windows = seed_quota_windows!(identities)
     request_logs = seed_request_logs!(pool_active, api_keys, assignments, models)
+    seed_recent_token_usage!(pool_active, api_keys, assignments, models)
     invites = seed_invites!(owner, pool_active)
     audit_events = seed_audit_events!(owner, pool_active, api_keys)
     jobs = seed_jobs!(pool_active, assignments, identities, api_keys)
@@ -58,11 +80,11 @@ defmodule CodexPooler.Dev.Seeds.Full do
       owner: owner,
       operators: operators,
       password: password,
-      pools: [pool_active, pool_disabled],
+      pools: [pool_active, pool_secondary, pool_disabled],
       api_keys: api_keys,
       upstream_identities: identities,
-      assignments: assignments,
-      models: models,
+      assignments: assignments ++ [secondary_assignment],
+      models: models ++ secondary_models,
       quota_windows: quota_windows,
       request_logs: request_logs,
       invites: invites,
@@ -84,7 +106,9 @@ defmodule CodexPooler.Dev.Seeds.Full do
       from invite in Invite, where: like(invite.invited_email, "dev-invite-%@example.com")
     )
 
-    Repo.delete_all(from pool in Pool, where: pool.slug in ["dev-primary", "dev-disabled"])
+    Repo.delete_all(
+      from pool in Pool, where: pool.slug in ["dev-primary", "dev-secondary", "dev-disabled"]
+    )
 
     Repo.delete_all(
       from identity in UpstreamIdentity,
@@ -261,21 +285,123 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "ineligible"
       )
     ]
-    |> Enum.map(fn attrs ->
-      %PoolUpstreamAssignment{} |> PoolUpstreamAssignment.changeset(attrs) |> Repo.insert!()
-    end)
+    |> Enum.map(&seed_assignment!/1)
   end
 
-  defp seed_models!(pool) do
+  defp seed_assignment!(attrs) do
+    %PoolUpstreamAssignment{} |> PoolUpstreamAssignment.changeset(attrs) |> Repo.insert!()
+  end
+
+  defp seed_models!(pool, [active_assignment, ready_assignment | _rest], _secondary_assignment) do
+    active_id = active_assignment.id
+    ready_id = ready_assignment.id
+
     [
-      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active"),
-      model_attrs(pool, "gpt-5.4", "GPT 5.4", "active"),
+      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active",
+        source_assignment_models: %{
+          active_id => observed_source_metadata(),
+          ready_id => observed_source_metadata()
+        }
+      ),
+      model_attrs(pool, "gpt-5.4", "GPT 5.4", "active",
+        source_assignment_models: %{
+          active_id => observed_source_metadata(),
+          ready_id => observed_source_metadata()
+        },
+        missing_sync_assignment_ids: [active_id]
+      ),
+      model_attrs(pool, "gpt-5.5", "GPT 5.5", "active",
+        source_assignment_models: %{active_id => observed_source_metadata()}
+      ),
       model_attrs(pool, "gpt-5.5-pro", "GPT 5.5 Pro", "stale", stale_at: minutes_ago(45)),
       model_attrs(pool, "codex-image", "Codex Image", "suppressed",
         suppressed_at: minutes_ago(15)
       )
     ]
     |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
+  end
+
+  defp seed_secondary_models!(pool, secondary_assignment) do
+    [
+      model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active",
+        source_assignment_models: %{secondary_assignment.id => observed_source_metadata()}
+      )
+    ]
+    |> Enum.map(fn attrs -> %Model{} |> Model.changeset(attrs) |> Repo.insert!() end)
+  end
+
+  defp observed_source_metadata do
+    %{
+      "supports_responses" => true,
+      "supports_streaming" => true,
+      "supports_tools" => true,
+      "supports_reasoning" => true
+    }
+  end
+
+  # Circuit rows chosen so the routing panel shows one model per serving
+  # signal: a serving rejection, a cooling-off route with a probe in flight,
+  # and a nominal observed route that must render without badges.
+  defp seed_routing_circuit_states!(pool, [active_assignment | _rest], active_identity) do
+    [
+      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.4-mini", "proxy_stream",
+        status: "closed",
+        reason_code: "upstream_model_unavailable",
+        failure_count: 4,
+        last_failure_at: minutes_ago(6),
+        closed_at: minutes_ago(6)
+      ),
+      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.5", "proxy_http",
+        status: "open",
+        reason_code: "upstream_model_unavailable",
+        failure_count: 3,
+        last_failure_at: minutes_ago(4),
+        opened_at: minutes_ago(4),
+        next_probe_at: minutes_from_now(12)
+      ),
+      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.5", "proxy_websocket",
+        status: "half_open",
+        reason_code: "upstream_model_unavailable",
+        failure_count: 2,
+        last_failure_at: minutes_ago(9),
+        half_opened_at: minutes_ago(1)
+      ),
+      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.4", "proxy_http",
+        status: "closed",
+        failure_count: 0,
+        success_count: 12,
+        last_success_at: minutes_ago(2),
+        closed_at: minutes_ago(120)
+      )
+    ]
+    |> Enum.each(fn attrs ->
+      %RoutingCircuitState{} |> RoutingCircuitState.changeset(attrs) |> Repo.insert!()
+    end)
+  end
+
+  defp circuit_attrs(pool, assignment, identity, model_identifier, route_class, extras) do
+    timestamp = now()
+
+    %{
+      pool_id: pool.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: identity.id,
+      model_identifier: model_identifier,
+      route_class: route_class,
+      status: Keyword.fetch!(extras, :status),
+      reason_code: Keyword.get(extras, :reason_code),
+      failure_count: Keyword.get(extras, :failure_count, 0),
+      success_count: Keyword.get(extras, :success_count, 0),
+      opened_at: Keyword.get(extras, :opened_at),
+      half_opened_at: Keyword.get(extras, :half_opened_at),
+      closed_at: Keyword.get(extras, :closed_at),
+      next_probe_at: Keyword.get(extras, :next_probe_at),
+      last_failure_at: Keyword.get(extras, :last_failure_at),
+      last_success_at: Keyword.get(extras, :last_success_at),
+      metadata: %{"dev_seed" => @seed_key},
+      created_at: timestamp,
+      updated_at: timestamp
+    }
   end
 
   defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused]) do
@@ -382,8 +508,43 @@ defmodule CodexPooler.Dev.Seeds.Full do
     |> Enum.map(fn {spec, index} -> seed_request!(pool, spec, index) end)
   end
 
+  # Settled usage inside the token-burn windows: requests in the last five
+  # minutes feed the 5M TOKENS footer block, the older ones give the burn
+  # multiplier a previous-hour baseline to compare against.
+  defp seed_recent_token_usage!(pool, [active_key, limited_key | _rest], assignments, models) do
+    [active_assignment | _rest_assignments] = assignments
+    [mini_model, full_model, fresh_model | _rest_models] = models
+
+    [
+      {active_key, full_model, 1, 46_400},
+      {active_key, mini_model, 3, 11_600},
+      {limited_key, fresh_model, 4, 3_200},
+      {active_key, full_model, 20, 58_000},
+      {active_key, mini_model, 35, 49_000},
+      {limited_key, full_model, 50, 41_000}
+    ]
+    |> Enum.with_index(1)
+    |> Enum.each(fn {{api_key, model, minutes, total_tokens}, index} ->
+      spec =
+        request_spec(
+          api_key,
+          active_assignment,
+          model,
+          "succeeded",
+          "usage_known",
+          200,
+          "http_sse",
+          occurred_at: minutes_ago(minutes),
+          total_tokens: total_tokens,
+          correlation_prefix: "dev-seed-burn"
+        )
+
+      seed_request!(pool, spec, index)
+    end)
+  end
+
   defp seed_request!(pool, spec, index) do
-    timestamp = minutes_ago(index * 7)
+    timestamp = Map.get(spec, :occurred_at) || minutes_ago(index * 7)
 
     request =
       %Request{
@@ -395,7 +556,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
         transport: spec.transport,
         status: spec.status,
         usage_status: spec.usage_status,
-        correlation_id: "dev-seed-request-#{index}",
+        correlation_id: "#{Map.get(spec, :correlation_prefix, "dev-seed-request")}-#{index}",
         user_agent: "codex-pooler-dev-seed/1.0",
         request_metadata:
           Map.merge(%{"dev_seed" => @seed_key}, Map.get(spec, :request_metadata, %{})),
@@ -434,6 +595,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
       }
       |> Repo.insert!()
 
+    tokens = ledger_tokens(spec, index)
+
     if spec.usage_status == "usage_known" do
       %LedgerEntry{
         request_id: request.id,
@@ -448,11 +611,11 @@ defmodule CodexPooler.Dev.Seeds.Full do
         usage_status: "usage_known",
         transport: spec.transport,
         currency_code: "USD",
-        input_tokens: 1200 * index,
-        cached_input_tokens: 100 * index,
-        output_tokens: 240 * index,
-        reasoning_tokens: 80 * index,
-        total_tokens: 1520 * index,
+        input_tokens: tokens.input,
+        cached_input_tokens: tokens.cached,
+        output_tokens: tokens.output,
+        reasoning_tokens: tokens.reasoning,
+        total_tokens: tokens.total,
         request_count: 1,
         estimated_cost_micros: Decimal.new(index * 1000),
         settled_cost_micros: Decimal.new(index * 1000),
@@ -728,7 +891,10 @@ defmodule CodexPooler.Dev.Seeds.Full do
     }
   end
 
-  defp model_attrs(pool, exposed_model_id, display_name, status, extras \\ []) do
+  defp model_attrs(pool, exposed_model_id, display_name, status, extras) do
+    source_models = Keyword.get(extras, :source_assignment_models, %{})
+    missing_sync_ids = Keyword.get(extras, :missing_sync_assignment_ids, [])
+
     %{
       pool_id: pool.id,
       upstream_model_id: "upstream-#{exposed_model_id}",
@@ -739,14 +905,32 @@ defmodule CodexPooler.Dev.Seeds.Full do
       supports_streaming: status != "suppressed",
       supports_tools: status in ["active", "stale"],
       supports_reasoning: status in ["active", "stale"],
-      source_assignment_count: 1,
+      source_assignment_count: max(map_size(source_models), 1),
       first_seen_at: minutes_ago(180),
       last_seen_at: minutes_ago(5),
       stale_at: Keyword.get(extras, :stale_at),
       suppressed_at: Keyword.get(extras, :suppressed_at),
-      metadata: %{"dev_seed" => @seed_key}
+      metadata: model_metadata(source_models, missing_sync_ids)
     }
   end
+
+  defp model_metadata(source_models, missing_sync_ids) do
+    %{"dev_seed" => @seed_key}
+    |> put_present_metadata("source_assignment_models", source_models)
+    |> put_present_metadata(
+      "source_assignment_ids",
+      source_models |> Map.keys() |> Enum.sort()
+    )
+    |> put_present_metadata(
+      PreservedSources.missing_sync_metadata_key(),
+      Map.new(missing_sync_ids, &{&1, Ecto.UUID.generate()})
+    )
+  end
+
+  defp put_present_metadata(metadata, _key, value) when value == %{} or value == [],
+    do: metadata
+
+  defp put_present_metadata(metadata, key, value), do: Map.put(metadata, key, value)
 
   @spec quota_window_spec(
           String.t(),
@@ -896,6 +1080,29 @@ defmodule CodexPooler.Dev.Seeds.Full do
       "kind" => kind,
       "error" => message,
       "at" => DateTime.to_iso8601(now())
+    }
+  end
+
+  defp ledger_tokens(%{total_tokens: total}, _index) when is_integer(total) do
+    input = div(total * 3, 4)
+    reasoning = div(total, 20)
+
+    %{
+      input: input,
+      cached: div(input, 5),
+      output: total - input - reasoning,
+      reasoning: reasoning,
+      total: total
+    }
+  end
+
+  defp ledger_tokens(_spec, index) do
+    %{
+      input: 1200 * index,
+      cached: 100 * index,
+      output: 240 * index,
+      reasoning: 80 * index,
+      total: 1520 * index
     }
   end
 
