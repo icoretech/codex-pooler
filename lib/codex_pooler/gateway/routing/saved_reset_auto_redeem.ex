@@ -10,6 +10,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.ProbeLease
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @spec maybe_redeem_after_quota_exhaustion(term(), map(), :required | :optional) :: term()
@@ -87,9 +89,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
              gateway_auto_context(refresh_plan, assignment, identity, trigger),
            receive_timeout: 15_000
          ) do
-      {:ok, %{applied?: true, code: code}} ->
+      {:ok, %{applied?: true, code: code} = redeem_result} ->
         log_redemption(assignment, identity, "gateway_auto", code, true)
-        refilter_after_redemption(result, refresh_plan)
+        route_after_redemption(result, refresh_plan, assignment, redeem_result)
 
       {:ok, %{applied?: applied?, code: code}} ->
         log_redemption(assignment, identity, "gateway_auto", code, applied?)
@@ -103,6 +105,67 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
       log_redemption(assignment, identity, "gateway_auto", safe_reason(exception), false)
       result
+  end
+
+  # A confirmed redemption (fresh usable quota) can route through the normal
+  # refilter. A consumed-but-pending redemption cannot — its quota window still
+  # reads exhausted — so the one triggering request claims the irreversible probe
+  # and force-routes to the redeemed identity. If the probe was already claimed
+  # (another node/request), fall back to the normal refilter.
+  defp route_after_redemption(result, refresh_plan, assignment, redeem_result) do
+    identity = redeem_result.identity
+
+    if pending_probe?(redeem_result) do
+      case claim_probe(identity) do
+        {:ok, token} -> force_probe_route(refresh_plan, assignment, identity, token)
+        {:error, _reason} -> refilter_after_redemption(result, refresh_plan)
+      end
+    else
+      refilter_after_redemption(result, refresh_plan)
+    end
+  end
+
+  defp pending_probe?(%{phase: phase}),
+    do: phase == RedemptionLifecycle.consumed_pending_probe()
+
+  defp pending_probe?(_redeem_result), do: false
+
+  defp claim_probe(%UpstreamIdentity{} = identity) do
+    redemption = (identity.metadata || %{})["saved_reset_redemption"] || %{}
+    token = Ecto.UUID.generate()
+
+    case ProbeLease.claim(
+           identity,
+           redemption["generation"],
+           redemption["attempt_id"],
+           token
+         ) do
+      {:ok, :claimed} -> {:ok, token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp force_probe_route(refresh_plan, assignment, identity, token) do
+    candidate = {assignment, identity}
+    decision = reset_probe_decision(identity, token)
+
+    case Map.get(refresh_plan, :route_state) do
+      %RouteState{} = route_state -> {:ok, [candidate], decision, route_state}
+      _no_route_state -> {:ok, [candidate], decision}
+    end
+  end
+
+  defp reset_probe_decision(%UpstreamIdentity{} = identity, token) do
+    %{
+      "allowed" => true,
+      "routing_state" => "reset_probe",
+      "summary" => "guarded probe after saved reset pending confirmation",
+      "reset_probe_candidate_count" => 1,
+      "reset_probe" => %{
+        "token" => token,
+        "upstream_identity_id" => identity.id
+      }
+    }
   end
 
   defp refilter_after_redemption(

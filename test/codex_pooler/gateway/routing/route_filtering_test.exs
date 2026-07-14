@@ -293,6 +293,43 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       refute metadata_json =~ "credit_id"
     end
 
+    test "force-routes the triggering request as a guarded probe when usage omits the account window" do
+      # Consume succeeds (credit spent) but the post-reset usage refresh OMITS the
+      # account rate_limit window — the exact production deadlock. The account
+      # stays consumed_pending_probe, so the one triggering request claims the
+      # probe and is force-routed instead of getting quota_exhausted.
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" =>
+               {200,
+                %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      filter_input = filter_input(pool, api_key, assignment, identity, "auto-probe")
+
+      assert {:ok, [{%{id: assignment_id}, _identity}], filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert assignment_id == assignment.id
+      assert filtered_options.routing.quota_decision["routing_state"] == "reset_probe"
+
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert redemption["phase"] == "consumed_pending_probe"
+      # Exactly one credit consumed, and the probe is claimed by one token.
+      assert is_binary(redemption["probe"]["token"])
+    end
+
     test "second stale auto attempt does not consume after current count was refreshed" do
       {:ok, upstream} =
         FakeUpstream.start_link(
