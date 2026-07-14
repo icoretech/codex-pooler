@@ -189,13 +189,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
     end
   end
 
-  # Live keys lead the group; retired ones sink to the bottom.
+  # Live keys lead the group; retired ones sink to the bottom. The key is a
+  # total order — duplicate display names (key rotations) fall back to the
+  # newest creation first, then the id — so the listing never depends on
+  # query order.
   defp sort_api_keys(api_keys) do
     Enum.sort_by(api_keys, fn api_key ->
       {Map.get(@api_key_status_rank, api_key.status, map_size(@api_key_status_rank)),
-       String.downcase(api_key.display_name || "")}
+       String.downcase(api_key.display_name || ""), created_at_desc_rank(api_key.created_at),
+       api_key.id}
     end)
   end
+
+  defp created_at_desc_rank(%DateTime{} = created_at),
+    do: -DateTime.to_unix(created_at, :microsecond)
+
+  defp created_at_desc_rank(_created_at), do: 0
 
   @spec model_policy_label(nil | [String.t()]) :: String.t()
   def model_policy_label(nil), do: "All models"
@@ -415,7 +424,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
       :last_used_at,
       :expires_at,
       :allowed_model_identifiers,
-      :metadata
+      :metadata,
+      :created_at
     ])
   end
 

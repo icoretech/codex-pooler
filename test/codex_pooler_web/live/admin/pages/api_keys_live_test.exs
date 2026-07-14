@@ -211,41 +211,45 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     refute key_cell_html =~ "Primary Pool"
   end
 
-  test "orders grouped API keys by lifecycle then name", %{conn: conn, scope: scope} do
+  test "orders grouped API keys by lifecycle, name, then newest creation", %{
+    conn: conn,
+    scope: scope
+  } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "sorted-pool", name: "Sorted Pool"})
 
-    keys =
-      for {name, status} <- [
-            {"zulu revoked key", "revoked"},
-            {"alpha revoked key", "revoked"},
-            {"paused key", "paused"},
-            {"zulu active key", "active"},
-            {"alpha active key", "active"}
-          ] do
-        {:ok, %{api_key: api_key}} = Access.create_api_key(scope, pool, %{display_name: name})
+    create_key = fn name, status ->
+      {:ok, %{api_key: api_key}} = Access.create_api_key(scope, pool, %{display_name: name})
 
-        api_key =
-          api_key
-          |> Ecto.Changeset.change(%{status: status})
-          |> Repo.update!()
+      api_key
+      |> Ecto.Changeset.change(%{status: status})
+      |> Repo.update!()
+    end
 
-        {name, api_key}
-      end
+    zulu_revoked = create_key.("zulu revoked key", "revoked")
+    alpha_revoked = create_key.("alpha revoked key", "revoked")
+    paused = create_key.("paused key", "paused")
+    zulu_active = create_key.("zulu active key", "active")
+    alpha_active = create_key.("alpha active key", "active")
+
+    # Duplicate names (key rotations) break the tie on the newest creation.
+    twin_older = create_key.("twin rotation key", "active")
+    twin_newer = create_key.("twin rotation key", "active")
 
     {:ok, view, _html} = live(conn, ~p"/admin/api-keys")
 
     group_html = view |> element("#api-key-pool-group-sorted-pool") |> render()
-    keys_by_name = Map.new(keys)
 
     positions =
-      for name <- [
-            "alpha active key",
-            "zulu active key",
-            "paused key",
-            "alpha revoked key",
-            "zulu revoked key"
+      for api_key <- [
+            alpha_active,
+            twin_newer,
+            twin_older,
+            zulu_active,
+            paused,
+            alpha_revoked,
+            zulu_revoked
           ] do
-        :binary.match(group_html, "api-key-row-#{keys_by_name[name].id}") |> elem(0)
+        :binary.match(group_html, "api-key-row-#{api_key.id}") |> elem(0)
       end
 
     assert positions == Enum.sort(positions)
