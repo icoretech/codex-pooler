@@ -260,7 +260,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             <.icon name="hero-server-stack" class="size-4" />
           </span>
           <div class="min-w-0 flex-1 xl:order-last xl:basis-full">
-            <p class="text-xs font-medium text-base-content/55">Pool registry</p>
+            <p class="text-xs font-medium text-base-content/55">Pool</p>
             <h2 class="break-words text-lg font-bold leading-6 text-base-content">{group.name}</h2>
           </div>
           <span
@@ -303,7 +303,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 </div>
                 <div class="flex min-w-0 items-baseline gap-1.5 xl:grid xl:gap-0.5">
                   <dt class="text-xs font-medium text-base-content/50">Prefix</dt>
-                  <dd class="min-w-0 truncate font-mono text-[0.7rem] leading-5 text-base-content/60">
+                  <dd class="min-w-0 truncate text-xs leading-5 text-base-content/60">
                     {api_key.key_prefix}
                   </dd>
                 </div>
