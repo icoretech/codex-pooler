@@ -323,30 +323,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp sliding_restart_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
 
-    case parse_candidate(metadata) do
-      {:ok, candidate} ->
-        cond do
-          not newer_observation?(evidence.observed_at, candidate.observed_at) ->
-            candidate_snapshot_attrs(existing, metadata, timestamp)
+    case restart_candidate_decision(metadata, existing, evidence, timestamp) do
+      :accept ->
+        accepted_snapshot_attrs(existing, attrs, timestamp)
 
-          confirmed_sliding_restart?(candidate, evidence, timestamp) ->
-            accepted_snapshot_attrs(existing, attrs, timestamp)
+      :keep ->
+        candidate_snapshot_attrs(existing, metadata, timestamp)
 
-          consistent_sliding_candidate?(candidate, evidence, timestamp) ->
-            # Consistent but still inside the confirmation span: keep the
-            # original candidate so minute-by-minute observations cannot reset
-            # the clock and starve the confirmation forever.
-            candidate_snapshot_attrs(existing, metadata, timestamp)
-
-          true ->
-            candidate_snapshot_attrs(
-              existing,
-              put_candidate(clear_candidate(metadata), evidence),
-              timestamp
-            )
-        end
-
-      :none ->
+      :restart ->
         candidate_snapshot_attrs(
           existing,
           put_candidate(clear_candidate(metadata), evidence),
@@ -355,10 +339,59 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
+  defp restart_candidate_decision(metadata, existing, evidence, timestamp) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        cond do
+          not newer_observation?(evidence.observed_at, candidate.observed_at) ->
+            :keep
+
+          confirmed_sliding_restart?(candidate, evidence, timestamp) ->
+            :accept
+
+          confirmed_expired_cycle_restart?(candidate, evidence, existing, timestamp) ->
+            :accept
+
+          consistent_sliding_candidate?(candidate, evidence, timestamp) or
+              expired_cycle_zero_candidate?(candidate, existing, timestamp) ->
+            # Consistent but still inside the confirmation span: keep the
+            # original candidate so minute-by-minute observations cannot reset
+            # the clock and starve the confirmation forever.
+            :keep
+
+          true ->
+            :restart
+        end
+
+      :none ->
+        :restart
+    end
+  end
+
   defp confirmed_sliding_restart?(candidate, evidence, timestamp) do
     consistent_sliding_candidate?(candidate, evidence, timestamp) and
-      DateTime.diff(evidence.observed_at, candidate.observed_at, :second) >=
-        @weekly_restart_confirmation_span_seconds
+      confirmation_span_reached?(candidate, evidence)
+  end
+
+  # Once the exhausted canonical's own reset time has passed, the cycle ended by
+  # the canonical's own declaration, so a zero confirmed across the span may
+  # converge it even when the reset does not slide — the anchored window shape
+  # (suspended 2026-07-13, announced as temporary) confirms through this path
+  # when it returns, without another debugging round.
+  defp confirmed_expired_cycle_restart?(candidate, evidence, existing, timestamp) do
+    expired_cycle_zero_candidate?(candidate, existing, timestamp) and
+      confirmation_span_reached?(candidate, evidence)
+  end
+
+  defp expired_cycle_zero_candidate?(candidate, existing, timestamp) do
+    Evidence.expired?(existing, timestamp) and
+      candidate_valid?(candidate, timestamp) and
+      zero_candidate?(candidate)
+  end
+
+  defp confirmation_span_reached?(candidate, evidence) do
+    DateTime.diff(evidence.observed_at, candidate.observed_at, :second) >=
+      @weekly_restart_confirmation_span_seconds
   end
 
   defp consistent_sliding_candidate?(candidate, evidence, timestamp) do

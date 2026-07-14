@@ -21,7 +21,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     identity
   end
 
-  defp exhausted_row!(identity, observed_at) do
+  defp exhausted_row!(identity, observed_at, opts \\ []) do
+    reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, 5, :day))
+
     Windows.record_evidence(
       identity,
       %{
@@ -29,7 +31,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
         window_kind: "secondary",
         window_minutes: 10_080,
         used_percent: Decimal.new("100"),
-        reset_at: DateTime.add(observed_at, 5, :day),
+        reset_at: reset_at,
         observed_at: observed_at,
         last_sync_at: observed_at,
         source: "codex_usage_api",
@@ -134,6 +136,54 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t3), t3)
     row = account_row(identity)
     assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+  end
+
+  test "anchored zeros converge once the exhausted cycle's own reset time has passed" do
+    # Future-proof for the anchored 5h shape returning: the reset does not
+    # slide, but the canonical itself declared the cycle over, so a candidate-
+    # confirmed zero across the span converges it.
+    t0 = DateTime.utc_now() |> DateTime.add(-2, :hour) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    # The exhausted row's own reset passed an hour ago.
+    assert {:ok, _row} = exhausted_row!(identity, t0, reset_at: DateTime.add(t0, 1, :hour))
+
+    t1 = DateTime.utc_now() |> DateTime.add(-6, :minute) |> DateTime.truncate(:microsecond)
+    anchored_reset = DateTime.add(t1, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t1, reset_at: anchored_reset), t1)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t2, reset_at: anchored_reset), t2)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+  end
+
+  test "anchored zeros stay quarantined while the exhausted cycle is still running" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    # Reset still days away: an anchored (non-sliding) zero must not converge.
+    assert {:ok, _row} = exhausted_row!(identity, t0)
+
+    t1 = DateTime.add(t0, 300, :second)
+    anchored_reset = DateTime.add(t1, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t1, reset_at: anchored_reset), t1)
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t2, reset_at: anchored_reset), t2)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
   end
 
   test "a non-exhausted row is untouched by the restart path" do
