@@ -99,4 +99,41 @@ defmodule CodexPooler.Upstreams.SavedResets.ProbeLeaseTest do
     assert {:error, :unavailable} = ProbeLease.claim(identity, @generation, @attempt, "token-A")
     assert probe_holder(identity) == nil
   end
+
+  defp phase(identity),
+    do: RedemptionLifecycle.phase(Repo.reload!(identity).metadata["saved_reset_redemption"])
+
+  test "a successful probe confirms the holding token as upstream-confirmed" do
+    identity = identity_with_pending()
+    assert {:ok, :claimed} = ProbeLease.claim(identity, @generation, @attempt, "token-A")
+
+    assert {:ok, :confirmed} = ProbeLease.confirm_upstream(identity, "token-A")
+    assert phase(identity) == "confirmed_by_upstream"
+  end
+
+  test "a non-holding token cannot confirm the probe" do
+    identity = identity_with_pending()
+    assert {:ok, :claimed} = ProbeLease.claim(identity, @generation, @attempt, "token-A")
+
+    assert {:ok, :unchanged} = ProbeLease.confirm_upstream(identity, "token-B")
+    assert phase(identity) == "consumed_pending_probe"
+  end
+
+  test "confirming an unclaimed probe is a no-op" do
+    identity = identity_with_pending()
+
+    assert {:ok, :unchanged} = ProbeLease.confirm_upstream(identity, "token-A")
+    assert phase(identity) == "consumed_pending_probe"
+  end
+
+  test "a probe already settled by quota is not re-confirmed by a late success" do
+    identity =
+      identity_with_pending(
+        phase: "confirmed_by_quota",
+        extra: %{"probe" => %{"token" => "token-A"}}
+      )
+
+    assert {:ok, :unchanged} = ProbeLease.confirm_upstream(identity, "token-A")
+    assert phase(identity) == "confirmed_by_quota"
+  end
 end
