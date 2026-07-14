@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.4.27](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.26...codex-pooler-v0.4.27) (2026-07-14)
+
+
+### Features
+
+* **admin:** render credit-backed quota meters with striped progress bars ([72ca0f5](https://github.com/icoretech/codex-pooler/commit/72ca0f593bf4f19f201cfdaa89bbde508243b3b5))
+* **admin:** show reset confirmation lifecycle ([4f126d5](https://github.com/icoretech/codex-pooler/commit/4f126d5b109961b92c88f18316bddc1e51b55fd7))
+* **gateway:** expose catalog ETags and normalize Codex request envelopes ([484bc37](https://github.com/icoretech/codex-pooler/commit/484bc371d15ab94e74f34a90691d57724c9f2797))
+* **gateway:** support reasoning effort controls end-to-end ([69b1cca](https://github.com/icoretech/codex-pooler/commit/69b1ccabf432f8eb07acd8e36fcc19797f0adbb8))
+
+
+### Bug Fixes
+
+* **admin:** expose current quota reconciliation state ([838d7c1](https://github.com/icoretech/codex-pooler/commit/838d7c1cedbe3301771b05a01ab94dfe5cb4b511))
+* **admin:** restore auth expiry card subtitle ([b628d7e](https://github.com/icoretech/codex-pooler/commit/b628d7ead6ab8cf359311d6861135ea528697264))
+* **deps:** update dependency daisyui to ^5.6.18 ([#152](https://github.com/icoretech/codex-pooler/issues/152)) ([2d5b4e5](https://github.com/icoretech/codex-pooler/commit/2d5b4e5b2e99b21be4ae75b26a644fbfb46384ce))
+* **gateway:** confirm reset probe on success ([527b2d4](https://github.com/icoretech/codex-pooler/commit/527b2d4624b1f94cf90f614e4d0fc7b8533c94b3))
+* **quotas:** confirm restarts by their forward anchor ([7379623](https://github.com/icoretech/codex-pooler/commit/73796239f47ff189c36bc6719c6ac2d74414fcce))
+* **quotas:** converge anchored restarts after cycle end ([501654d](https://github.com/icoretech/codex-pooler/commit/501654dd3530783feb708771166ff7a91ee674e1))
+* **quotas:** converge weekly restarts from sliding live evidence ([810fbae](https://github.com/icoretech/codex-pooler/commit/810fbaec76e01846cf82e94cdc5db0125f0d1463))
+* **quotas:** cover descriptors with declared-null windows ([a25fbf4](https://github.com/icoretech/codex-pooler/commit/a25fbf4e18fe5fce92b0874fa3a978af7669a3c1))
+* **quotas:** purge quota rows stranded on ended cycles ([2986bb8](https://github.com/icoretech/codex-pooler/commit/2986bb847b98f8480fef50125c0ee5817b4ce6f7))
+* **quotas:** stop prior-cycle stale rows from masking restarts ([eec2700](https://github.com/icoretech/codex-pooler/commit/eec2700f2b4257a80c2a94ea55a615d192a004be))
+* **quotas:** validate post-reset evidence freshness ([6ea17aa](https://github.com/icoretech/codex-pooler/commit/6ea17aa880f1c7269a4ab30af02ec52572a5b3b7))
+* **routing:** force-route the guarded reset probe ([f12f4eb](https://github.com/icoretech/codex-pooler/commit/f12f4eb94749537fd4b4896ddc1ab60349c3b659))
+* **routing:** route guarded reset probe candidates ([e4c428b](https://github.com/icoretech/codex-pooler/commit/e4c428b1100267a664baa0d194ed4858c0c98efb))
+* **saved-resets:** add one-shot probe lease ([3c58174](https://github.com/icoretech/codex-pooler/commit/3c5817463a00b204092d2e6db0e010f993bfdaf2))
+* **saved-resets:** confirm resets from fresh quota ([ac646fe](https://github.com/icoretech/codex-pooler/commit/ac646fe354765979c55e379d7fbfc4c7d9dff1fa))
+* **saved-resets:** model pending reset confirmation ([6c35d85](https://github.com/icoretech/codex-pooler/commit/6c35d85adafca874aada709560a922e69fbb1905))
+* **saved-resets:** persist redemption idempotency ([6178b9e](https://github.com/icoretech/codex-pooler/commit/6178b9e48b47d7c997ee71b5e8c45a0228b28176))
+* **tokenizer:** load CRLF rank files ([1242699](https://github.com/icoretech/codex-pooler/commit/1242699fb9da2f384b297448b2850480e6f2ff91))
+* **upstreams:** guard definitive usage auth rejection ([c6ea3ca](https://github.com/icoretech/codex-pooler/commit/c6ea3cac7eca912e67fcc8a762beb508b19b0779))
+* **upstreams:** recover relinked identity assignments together ([ff289f5](https://github.com/icoretech/codex-pooler/commit/ff289f523767d08e35ca517adcdd34de5340091e))
+
 ## [0.4.26](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.25...codex-pooler-v0.4.26) (2026-07-12)
 
 
