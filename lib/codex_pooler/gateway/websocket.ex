@@ -243,6 +243,59 @@ defmodule CodexPooler.Gateway.Websocket do
     )
   end
 
+  @doc """
+  Prepares (or reuses) the owner websocket session for an HTTP-downstream
+  bridged turn: resolves the continuity session, mints or validates the owner
+  lease, ensures the owner process, and attaches the given bridge relay as the
+  owner downstream. The downstream pid receives the owner frame messages.
+  """
+  @spec prepare_owner_bridge_session(auth(), RequestOptions.t(), map()) ::
+          {:ok, websocket_runtime()} | {:error, term()}
+  def prepare_owner_bridge_session(auth, %RequestOptions{} = opts, %{
+        pid: pid,
+        correlation_id: correlation_id
+      })
+      when is_pid(pid) and is_binary(correlation_id) do
+    opts =
+      opts
+      |> owner_websocket_opts()
+      |> RequestOptions.put_transport(
+        websocket_owner_downstream: %{pid: pid, correlation_id: correlation_id},
+        websocket_owner_reject_if_busy?: true
+      )
+
+    with :ok <- reject_if_rollout_draining(),
+         :ok <- require_websocket_owner_forwarding_enabled(),
+         {:ok, session} <- start_codex_session(auth, opts) do
+      prepare_owner_websocket_session_with_recovery(session, opts, true)
+    end
+  end
+
+  @doc """
+  Applies the prepared owner bundle to an HTTP request's options without
+  changing its downstream transport, and marks the attempt as websocket
+  bridged for accounting metadata.
+  """
+  @spec bridge_owner_request_options(RequestOptions.t(), map()) :: RequestOptions.t()
+  def bridge_owner_request_options(%RequestOptions{} = opts, runtime) when is_map(runtime) do
+    session = Map.fetch!(runtime, :codex_session)
+    downstream = Map.fetch!(runtime, :websocket_owner_downstream)
+
+    opts
+    |> RequestOptions.put_continuity(codex_session: session)
+    |> RequestOptions.put_transport(
+      websocket_owner_forwarding_enabled?: true,
+      websocket_owner_session: session,
+      websocket_owner_lease_token: Map.fetch!(runtime, :websocket_owner_lease_token),
+      websocket_owner_downstream: downstream,
+      websocket_owner_downstream_epoch: downstream_epoch(downstream),
+      websocket_owner_proxy_instance_id: Atom.to_string(node()),
+      websocket_owner_instance_id: owner_instance_id(session),
+      websocket_owner_forwarder_opts: owner_forwarder_opts(owner_websocket_opts(opts)),
+      upstream_websocket_bridge?: true
+    )
+  end
+
   @spec recover_websocket_owner_response_options(RequestOptions.t()) ::
           {:ok, RequestOptions.t()} | {:error, term()}
   def recover_websocket_owner_response_options(
@@ -642,6 +695,13 @@ defmodule CodexPooler.Gateway.Websocket do
     end
   end
 
+  defp owner_attach_opts(%RequestOptions{
+         transport: %{websocket_owner: %{reject_if_busy?: true}}
+       }),
+       do: [reject_if_busy: true]
+
+  defp owner_attach_opts(_opts), do: []
+
   defp owner_downstream_target(%RequestOptions{
          transport: %{websocket_owner: %{downstream: %{pid: pid, correlation_id: correlation_id}}}
        })
@@ -657,7 +717,7 @@ defmodule CodexPooler.Gateway.Websocket do
              codex_session_id,
              owner_lookup_metadata(owner_instance_id, opts)
            ) do
-      WebsocketOwnerSession.attach_downstream(pid, downstream)
+      WebsocketOwnerSession.attach_downstream(pid, downstream, owner_attach_opts(opts))
     end
   end
 
@@ -665,7 +725,11 @@ defmodule CodexPooler.Gateway.Websocket do
     WebsocketOwnerForwarder.call_remote(
       node,
       :remote_attach_downstream,
-      [codex_session_id, downstream],
+      WebsocketOwnerForwarder.remote_attach_args(
+        codex_session_id,
+        downstream,
+        owner_attach_opts(opts)
+      ),
       opts
       |> owner_forwarder_opts()
       |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_owner_call_timeout_ms())

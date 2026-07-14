@@ -112,15 +112,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def resolve_owner(%CodexSession{}, _opts), do: {:error, :owner_unavailable}
 
   @doc false
-  @spec remote_attach_downstream(binary(), map()) ::
+  @spec remote_attach_downstream(binary(), map(), keyword()) ::
           {:ok, WebsocketOwnerSession.downstream()}
           | {:error, WebsocketOwnerContract.owner_error()}
-  def remote_attach_downstream(codex_session_id, downstream)
-      when is_binary(codex_session_id) and is_map(downstream) do
+  def remote_attach_downstream(codex_session_id, downstream, opts \\ [])
+      when is_binary(codex_session_id) and is_map(downstream) and is_list(opts) do
     with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-      WebsocketOwnerSession.attach_downstream(owner_pid, downstream)
+      WebsocketOwnerSession.attach_downstream(owner_pid, downstream, opts)
     end
   end
+
+  @doc """
+  Builds the remote attach call arguments with rolling-deploy compatibility:
+  an attach without options keeps the previous two-argument shape so a new
+  proxy node can still attach through an owner node running the prior
+  release, which only exports `remote_attach_downstream/2`. Only option-
+  carrying attaches (the bridge's busy guard) use the new three-argument
+  shape; against an old owner they fail closed and the bridge falls back.
+  """
+  @spec remote_attach_args(binary(), map(), keyword()) :: [term()]
+  def remote_attach_args(codex_session_id, downstream, [] = _opts),
+    do: [codex_session_id, downstream]
+
+  def remote_attach_args(codex_session_id, downstream, opts) when is_list(opts),
+    do: [codex_session_id, downstream, opts]
 
   @doc false
   @spec remote_submit_frame(

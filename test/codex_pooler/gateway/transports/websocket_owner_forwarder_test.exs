@@ -381,6 +381,85 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     refute_received {:websocket_owner_harness_node_call, _call}
   end
 
+  test "remote attach args keep the two-argument shape for option-less attaches" do
+    downstream = %{pid: self(), correlation_id: "corr-rolling-deploy"}
+
+    # Rolling-deploy compatibility: an owner node on the previous release only
+    # exports remote_attach_downstream/2, so native attaches must not grow a
+    # third argument. Only option-carrying (bridge) attaches use arity 3.
+    assert WebsocketOwnerForwarder.remote_attach_args("session-a", downstream, []) ==
+             ["session-a", downstream]
+
+    assert WebsocketOwnerForwarder.remote_attach_args("session-a", downstream,
+             reject_if_busy: true
+           ) ==
+             ["session-a", downstream, [reject_if_busy: true]]
+
+    Code.ensure_loaded!(WebsocketOwnerForwarder)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
+  end
+
+  test "attaching through an old-release owner node fails closed for the bridge and still serves native attaches",
+       %{auth: auth} do
+    remote_node = :"codex_pooler@old-release-owner.example"
+    remote_node_string = Atom.to_string(remote_node)
+    %{session: session} = owner_session_fixture(auth, remote_node_string)
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), messages: [])
+    {:ok, _owner} = start_owner(session, upstream)
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :old_release}
+      )
+
+    # This is verbatim the proxy-side remote attach: websocket.ex calls
+    # call_remote(:remote_attach_downstream, remote_attach_args(...)). The
+    # option-carrying bridge attach hits the missing /3 on the old node and
+    # must map the :erpc undef to a fail-closed owner error so the bridge
+    # falls back to HTTP instead of committing.
+    bridge_args =
+      WebsocketOwnerForwarder.remote_attach_args(
+        session.id,
+        downstream("corr-old-release-bridge"),
+        reject_if_busy: true
+      )
+
+    assert {:error, :owner_crashed} =
+             WebsocketOwnerForwarder.call_remote(
+               remote_node,
+               :remote_attach_downstream,
+               bridge_args,
+               opts
+             )
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_attach_downstream, arity: 3}}
+
+    # The option-less native attach keeps the two-argument shape the old
+    # release exports and reaches the real owner process end to end.
+    native_args =
+      WebsocketOwnerForwarder.remote_attach_args(
+        session.id,
+        downstream("corr-old-release-native"),
+        []
+      )
+
+    assert {:ok, %{correlation_id: "corr-old-release-native", epoch: epoch}} =
+             WebsocketOwnerForwarder.call_remote(
+               remote_node,
+               :remote_attach_downstream,
+               native_args,
+               opts
+             )
+
+    assert is_integer(epoch)
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_attach_downstream, arity: 2}}
+  end
+
   test "disconnected remote owner string maps to owner_unavailable", %{auth: auth} do
     remote_node = :"codex_pooler@known-app.example"
     disconnected_node = :"codex_pooler@disconnected-app.example"

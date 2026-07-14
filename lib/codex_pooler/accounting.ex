@@ -64,6 +64,10 @@ defmodule CodexPooler.Accounting do
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
   defdelegate record_retryable_attempt_failure(attempt, attrs \\ %{}), to: RequestLifecycle
 
+  @spec mark_attempt_upstream_transport(Attempt.t(), String.t()) ::
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+  defdelegate mark_attempt_upstream_transport(attempt, transport), to: RequestLifecycle
+
   @spec finalize_reserved_request_failure(Request.t(), map()) :: request_result()
   defdelegate finalize_reserved_request_failure(request, attrs \\ %{}), to: RequestLifecycle
 

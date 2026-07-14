@@ -140,6 +140,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   @spec record_retryable_attempt_failure(Attempt.t(), map()) ::
           {:ok, Attempt.t()} | {:error, Ecto.Changeset.t() | accounting_error()}
+  @doc """
+  Records the upstream transport an attempt actually used when it differs from
+  the request's downstream transport (an HTTP turn bridged over an upstream
+  websocket). The request keeps the downstream protocol.
+  """
+  @spec mark_attempt_upstream_transport(Attempt.t(), String.t()) ::
+          {:ok, Attempt.t()} | {:error, Ecto.Changeset.t()}
+  def mark_attempt_upstream_transport(%Attempt{} = attempt, transport)
+      when is_binary(transport) do
+    attempt
+    |> Ecto.Changeset.change(%{transport: transport})
+    |> Repo.update()
+  end
+
   def record_retryable_attempt_failure(%Attempt{} = attempt, attrs \\ %{}) do
     timestamp = now(attrs)
 

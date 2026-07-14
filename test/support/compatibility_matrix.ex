@@ -374,6 +374,17 @@ defmodule CodexPooler.CompatibilityMatrix do
         "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches; protected exact-output function tool outputs for Read, Glob, Grep, Write, Edit, and external retrieval are skipped before rewriting with aggregate-only skip counts; output-only function tool results fail closed as protected when their tool name is unavailable; search-result compression covers classic path-line matches, grouped heading matches, and portable NUL-delimited matches, diff compression covers hunk-based additions-only, deletions-only, replacement, minimal unified diffs, combined unified diffs, and long-preamble diffs, and log-output compression preserves every failure block when a summary reports failure/error counts; ordinary prose remains outside diff/search/log compression shapes; public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
     },
     %{
+      slug: :upstream_websocket_bridge,
+      status: :supported,
+      current: :pool_gated_owner_websocket_cache_bridge,
+      categories: [:route, :auth, :error, :streaming, :ownership, :degraded],
+      routes: [%{method: :post, path: "/v1/responses"}],
+      future_routes: [],
+      fixture: :upstream_websocket_bridge,
+      contract:
+        "the upstream websocket bridge is Pool-gated by upstream_websocket_bridge_enabled (default off) and applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket to reuse provider prompt-cache locality; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape"
+    },
+    %{
       slug: :function_tool_schema_lowering,
       status: :supported,
       current: :non_strict_function_tool_schema_lowering,
@@ -1144,6 +1155,44 @@ defmodule CodexPooler.CompatibilityMatrix do
           "code" => "unsupported_parameter",
           "param" => "logprobs"
         }
+      }
+    },
+    upstream_websocket_bridge: %{
+      pool_gate: %{
+        setting: "upstream_websocket_bridge_enabled",
+        default_enabled: false,
+        disabled_behavior: "plain_http_dispatch"
+      },
+      downstream_transport: "http_sse",
+      upstream_transport: "websocket",
+      eligibility: %{
+        route: "public_v1_responses_stream",
+        owner_forwarding: "required",
+        websocket_writer: "absent",
+        session: "unpinned_or_selected_assignment"
+      },
+      fallback: %{
+        boundary: "first_downstream_visible_public_event",
+        internal_events: "buffered_never_committing",
+        target: "same_candidate_same_attempt_http",
+        settlements: 1,
+        post_visible_upstream_death: "failed_request"
+      },
+      accounting: %{
+        request_transport: "http_sse",
+        attempt_transport: "websocket",
+        attempt_metadata: ["upstream_websocket_bridge", "upstream_transport"],
+        payload_compression_subject: "websocket_envelope"
+      },
+      crash_hygiene: %{
+        submit_task: "catch_all_scrubbed_atom_reasons",
+        payload_in_crash_logs: false,
+        authorization_in_crash_logs: false
+      },
+      rolling_deploy: %{
+        native_attach_arity: 2,
+        bridge_attach_arity: 3,
+        old_owner_bridge_attach: "fail_closed_http_fallback"
       }
     },
     v1_unsupported_public_surface: %{

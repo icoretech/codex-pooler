@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
 
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
 
   @type relay_state :: term()
   @type stream_write_result ::
@@ -89,12 +90,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
     do: {:cont, state, chunks}
 
   defp stream_keepalive_result({:error, reason}, state, chunks, response) do
-    Req.cancel_async_response(response)
+    source_cancel(response)
     {:error, state, chunks, {:chunk, reason}}
   end
 
   defp handle_stream_message(message, state, response, chunks, handlers) do
-    case Req.parse_message(response, message) do
+    case source_parse(response, message) do
       {:ok, parts} -> stream_parts(state, response, chunks, parts, handlers)
       {:error, reason} -> finalize_stream_parse_error(state, chunks, reason, handlers)
       :unknown -> stream_upstream(state, response, chunks, handlers)
@@ -153,7 +154,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
     do: {:cont, {:cont, state, append_stream_chunk(chunks, data)}}
 
   defp stream_write_result({:retry_first_event, failure}, state, chunks, data, response) do
-    Req.cancel_async_response(response)
+    source_cancel(response)
     {:halt, {:retry_first_event, state, append_stream_chunk(chunks, data), failure}}
   end
 
@@ -164,19 +165,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
          data,
          response
        ) do
-    Req.cancel_async_response(response)
+    source_cancel(response)
     reason = {:terminal_stream_failure, failure}
     {:halt, {:error, next_state, append_stream_chunk(chunks, data), reason}}
   end
 
   defp stream_write_result({:terminal_stream_failure, failure}, state, chunks, data, response) do
-    Req.cancel_async_response(response)
+    source_cancel(response)
     reason = {:terminal_stream_failure, failure}
     {:halt, {:error, state, append_stream_chunk(chunks, data), reason}}
   end
 
   defp stream_write_result({:error, reason}, state, chunks, _data, response) do
-    Req.cancel_async_response(response)
+    source_cancel(response)
     {:halt, {:error, state, chunks, {:chunk, reason}}}
   end
 
@@ -272,4 +273,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
 
   defp stream_finalization_result({:ok, _finalized}, state), do: {:ok, state}
   defp stream_finalization_result({:error, _gateway_error} = error, _state), do: error
+
+  # The relay consumes exactly one message shape: `{response.body.ref, part}`.
+  # A fabricated response whose body is a WebsocketBridgeStream keeps that
+  # shape while sourcing parts from an upstream websocket turn instead of Req.
+  defp source_parse(%Req.Response{body: %WebsocketBridgeStream{} = stream}, message),
+    do: WebsocketBridgeStream.parse_message(stream, message)
+
+  defp source_parse(response, message), do: Req.parse_message(response, message)
+
+  defp source_cancel(%Req.Response{body: %WebsocketBridgeStream{} = stream}),
+    do: WebsocketBridgeStream.cancel(stream)
+
+  defp source_cancel(response), do: Req.cancel_async_response(response)
 end

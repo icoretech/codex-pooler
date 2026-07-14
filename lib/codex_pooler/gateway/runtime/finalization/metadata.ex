@@ -54,8 +54,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(payload_compression_attempt_metadata(opts))
     |> Map.merge(reasoning_effort_attempt_metadata(opts))
+    |> Map.merge(upstream_websocket_bridge_attempt_metadata(opts))
     |> Map.merge(metadata)
   end
+
+  defp upstream_websocket_bridge_attempt_metadata(%RequestOptions{
+         transport: %{upstream_websocket_bridge?: true}
+       }) do
+    %{"upstream_transport" => "websocket", "upstream_websocket_bridge" => true}
+  end
+
+  defp upstream_websocket_bridge_attempt_metadata(_opts), do: %{}
 
   @spec response_body_limit_exceeded?(Req.Response.t()) :: boolean()
   def response_body_limit_exceeded?(%Req.Response{} = response),

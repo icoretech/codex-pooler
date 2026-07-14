@@ -152,6 +152,18 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   defp dispatch_call_mode(:crash, _node, _module, _function, _args),
     do: raise("simulated remote owner crash")
 
+  # Emulates an owner node still running the previous release: it exports
+  # remote_attach_downstream/2 but not /3, so the option-carrying bridge
+  # attach raises the same {:exception, :undef, _} error :erpc.call surfaces
+  # for a missing remote function, while every other forward works unchanged.
+  defp dispatch_call_mode(:old_release, _node, module, function, args) do
+    if function == :remote_attach_downstream and length(args) == 3 do
+      :erlang.error({:exception, :undef, [{module, function, args, []}]})
+    else
+      apply(module, function, args)
+    end
+  end
+
   defp dispatch_call_mode(
          {:delayed_success, _parent, _release_ref},
          _node,

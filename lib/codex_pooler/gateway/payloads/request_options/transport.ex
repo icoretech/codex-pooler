@@ -12,7 +12,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
     :upstream_websocket_session,
     :websocket_owner,
     :route_class,
-    forwarded_metadata_headers: []
+    forwarded_metadata_headers: [],
+    upstream_websocket_bridge?: false
   ]
 
   @type websocket_writer :: (binary() -> any()) | nil
@@ -24,7 +25,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           forwarded_metadata_headers: [{String.t(), String.t()}],
           upstream_websocket_session: term(),
           websocket_owner: WebsocketOwnerContext.t(),
-          route_class: String.t() | nil
+          route_class: String.t() | nil,
+          upstream_websocket_bridge?: boolean()
         }
 
   @spec build(map() | keyword(), String.t(), map()) :: t()
@@ -51,6 +53,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
       Map.split(updates, [
         :websocket_owner,
         :websocket_owner_forwarding_enabled?,
+        :websocket_owner_reject_if_busy?,
         :websocket_owner_session,
         :websocket_owner_lease_token,
         :websocket_owner_downstream,

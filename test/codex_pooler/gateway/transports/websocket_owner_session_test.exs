@@ -81,6 +81,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
   end
 
+  test "reject_if_busy attach refuses to steal an attached downstream", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, first} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("bridge-first"))
+
+    # A second bridge turn on the same session must not steal the downstream.
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("bridge-second"),
+               reject_if_busy: true
+             )
+
+    assert %{downstream: ^first} = :sys.get_state(owner)
+
+    # The native path (no reject_if_busy) still replaces for reconnect.
+    assert {:ok, replacement} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("native-reconnect"))
+
+    assert replacement.epoch > first.epoch
+    assert %{downstream: ^replacement} = :sys.get_state(owner)
+  end
+
   test "detached idle owner stops after reconnect window", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
 

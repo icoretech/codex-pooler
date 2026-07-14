@@ -44,6 +44,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     unsupported_input_image_reference
     first_event_stream_retry
     request_compression
+    upstream_websocket_bridge
     function_tool_schema_lowering
     v1_supported_surface
     v1_unsupported_public_surface

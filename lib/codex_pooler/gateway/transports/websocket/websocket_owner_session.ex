@@ -124,9 +124,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @spec attach_downstream(GenServer.server(), map()) :: {:ok, downstream()} | {:error, term()}
-  def attach_downstream(owner, %{pid: pid, correlation_id: correlation_id})
-      when is_pid(pid) and is_binary(correlation_id) do
-    GenServer.call(owner, {:attach_downstream, pid, correlation_id}, owner_call_timeout())
+  def attach_downstream(owner, downstream), do: attach_downstream(owner, downstream, [])
+
+  @spec attach_downstream(GenServer.server(), map(), keyword()) ::
+          {:ok, downstream()} | {:error, term()}
+  def attach_downstream(owner, %{pid: pid, correlation_id: correlation_id}, opts)
+      when is_pid(pid) and is_binary(correlation_id) and is_list(opts) do
+    GenServer.call(
+      owner,
+      {:attach_downstream, pid, correlation_id, opts},
+      owner_call_timeout()
+    )
   end
 
   @spec detach_downstream(GenServer.server(), map()) ::
@@ -232,29 +240,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     {:stop, :normal, :ok, %{state | draining?: true}}
   end
 
-  def handle_call({:attach_downstream, _pid, _correlation_id}, _from, %{draining?: true} = state) do
+  def handle_call(
+        {:attach_downstream, _pid, _correlation_id, _opts},
+        _from,
+        %{draining?: true} = state
+      ) do
     {:reply, {:error, :owner_drained}, state}
   end
 
-  def handle_call({:attach_downstream, pid, correlation_id}, _from, state) do
-    state =
-      state
-      |> DownstreamState.demonitor_downstream()
-      |> DownstreamState.cancel_idle_shutdown()
-
-    epoch = DownstreamState.next_downstream_epoch(state.downstream)
-    monitor = Process.monitor(pid)
-
-    downstream = %{
-      pid: pid,
-      epoch: epoch,
-      correlation_id: correlation_id,
-      active_turn_reconnect?: DownstreamState.active_turn?(state)
-    }
-
-    state = DownstreamState.put_active_turn_downstream(state, downstream)
-
-    {:reply, {:ok, downstream}, %{state | downstream: downstream, downstream_monitor: monitor}}
+  # A bridged HTTP turn must never steal another turn's downstream. Each bridge
+  # turn attaches a fresh downstream and detaches when done, so an already
+  # attached downstream (or an active turn) means another bridge turn owns the
+  # session: reject the attach atomically so the caller falls back to plain HTTP
+  # instead of redirecting the running turn's frames.
+  def handle_call({:attach_downstream, pid, correlation_id, opts}, _from, state) do
+    if Keyword.get(opts, :reject_if_busy, false) and owner_occupied?(state) do
+      {:reply, {:error, :owner_busy}, state}
+    else
+      attach_downstream_now(state, pid, correlation_id)
+    end
   end
 
   def handle_call({:detach_downstream, pid, epoch, correlation_id}, _from, state) do
@@ -488,6 +492,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp reply_active_turn(%{active_turn: %{reply_to: reply_to}}, result) do
     GenServer.reply(reply_to, result)
+  end
+
+  defp owner_occupied?(state) do
+    DownstreamState.active_turn?(state) or not is_nil(state.downstream)
+  end
+
+  defp attach_downstream_now(state, pid, correlation_id) do
+    state =
+      state
+      |> DownstreamState.demonitor_downstream()
+      |> DownstreamState.cancel_idle_shutdown()
+
+    epoch = DownstreamState.next_downstream_epoch(state.downstream)
+    monitor = Process.monitor(pid)
+
+    downstream = %{
+      pid: pid,
+      epoch: epoch,
+      correlation_id: correlation_id,
+      active_turn_reconnect?: DownstreamState.active_turn?(state)
+    }
+
+    state = DownstreamState.put_active_turn_downstream(state, downstream)
+
+    {:reply, {:ok, downstream}, %{state | downstream: downstream, downstream_monitor: monitor}}
   end
 
   defp finish_active_turn(state, result) do

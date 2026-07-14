@@ -11,11 +11,13 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.WebsocketOwnerContext do
     :proxy_instance_id,
     :owner_instance_id,
     enabled?: false,
+    reject_if_busy?: false,
     forwarder_opts: []
   ]
 
   @type t :: %__MODULE__{
           enabled?: boolean(),
+          reject_if_busy?: boolean(),
           session: term(),
           lease_token: String.t() | nil,
           downstream: map() | nil,
@@ -49,6 +51,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.WebsocketOwnerContext do
     |> maybe_put_update(
       :enabled?,
       Map.get(opts, :websocket_owner_forwarding_enabled?, Map.get(opts, :enabled?)),
+      &(&1 == true)
+    )
+    |> maybe_put_update(
+      :reject_if_busy?,
+      Map.get(opts, :websocket_owner_reject_if_busy?, Map.get(opts, :reject_if_busy?)),
       &(&1 == true)
     )
     |> maybe_put_update(

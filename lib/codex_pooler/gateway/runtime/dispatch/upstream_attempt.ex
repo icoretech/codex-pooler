@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
+  alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Streaming.StreamDispatch
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
@@ -20,10 +21,33 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
 
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
-    if websocket_upstream?(context.payload, context.request_options.transport) do
-      dispatch_websocket(prepared_context, callbacks)
-    else
-      dispatch_http(prepared_context, callbacks)
+    cond do
+      websocket_upstream?(context.payload, context.request_options.transport) ->
+        dispatch_websocket(prepared_context, callbacks)
+
+      WebsocketBridge.eligible?(prepared_context) ->
+        dispatch_websocket_bridge(prepared_context, callbacks)
+
+      true ->
+        dispatch_http(prepared_context, callbacks)
+    end
+  end
+
+  # A bridged turn that fails before the first upstream event falls back to
+  # plain HTTP dispatch on the same candidate and attempt; after the first
+  # event it finalizes through the standard HTTP streaming path.
+  defp dispatch_websocket_bridge(%PreparedContext{} = prepared_context, callbacks) do
+    case WebsocketBridge.open(prepared_context) do
+      {:ok, %PreparedContext{context: context}, response} ->
+        Finalization.handle_http_response(
+          response,
+          context,
+          finalization_callbacks(callbacks)
+        )
+
+      {:fallback, reason} ->
+        WebsocketBridge.log_fallback(prepared_context, reason)
+        dispatch_http(prepared_context, callbacks)
     end
   end
 
