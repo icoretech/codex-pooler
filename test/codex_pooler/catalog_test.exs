@@ -13,6 +13,135 @@ defmodule CodexPooler.CatalogTest do
 
   import CodexPooler.PoolerFixtures
 
+  describe "list_assignment_model_summaries/1" do
+    test "returns only authorized active per-assignment provenance with raw capability certainty" do
+      pool = pool_fixture()
+      hidden_pool = pool_fixture()
+      %{assignment: first} = upstream_assignment_fixture(pool)
+      %{assignment: second} = upstream_assignment_fixture(pool)
+      %{assignment: hidden} = upstream_assignment_fixture(hidden_pool)
+      sentinel = "provider-private-value-#{System.unique_integer([:positive])}"
+
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-example-alpha",
+        metadata: %{
+          "source_assignment_models" => %{
+            first.id => %{
+              "supports_responses" => true,
+              "supports_streaming" => false,
+              "supports_tools" => sentinel,
+              "capabilities" => %{"reasoning" => true},
+              "provider" => %{"private" => sentinel}
+            },
+            second.id => %{
+              "capabilities" => %{
+                "responses" => false,
+                "streaming" => true,
+                "tools" => true,
+                "reasoning" => false
+              }
+            },
+            hidden.id => %{"supports_responses" => true}
+          },
+          "source_assignment_missing_sync_run_ids" => %{second.id => Ecto.UUID.generate()}
+        }
+      })
+
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-example-stale",
+        status: "stale",
+        metadata: %{"source_assignment_models" => %{first.id => %{}}}
+      })
+
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-example-suppressed",
+        status: "suppressed",
+        metadata: %{"source_assignment_models" => %{first.id => %{}}}
+      })
+
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-example-retired",
+        status: "retired",
+        metadata: %{"source_assignment_models" => %{first.id => %{}}}
+      })
+
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-example-malformed",
+        metadata: %{"source_assignment_models" => [first.id]}
+      })
+
+      model_fixture(hidden_pool, %{
+        exposed_model_id: "gpt-example-hidden",
+        metadata: %{"source_assignment_models" => %{first.id => %{}}}
+      })
+
+      rows = Catalog.list_assignment_model_summaries([{pool.id, first.id}, {pool.id, second.id}])
+
+      expected =
+        [
+          %{
+            pool_id: pool.id,
+            assignment_id: first.id,
+            exposed_model_id: "gpt-example-alpha",
+            capabilities: %{
+              responses: true,
+              streaming: false,
+              tools: :unknown,
+              reasoning: true
+            },
+            provenance: :observed
+          },
+          %{
+            pool_id: pool.id,
+            assignment_id: second.id,
+            exposed_model_id: "gpt-example-alpha",
+            capabilities: %{
+              responses: false,
+              streaming: true,
+              tools: true,
+              reasoning: false
+            },
+            provenance: :preserved
+          }
+        ]
+        |> Enum.sort_by(&{&1.assignment_id, &1.exposed_model_id})
+
+      assert rows == expected
+
+      refute inspect(rows) =~ sentinel
+      assert Catalog.list_assignment_model_summaries([]) == []
+      assert Catalog.list_assignment_model_summaries([{"bad", first.id}, pool.id, nil]) == []
+    end
+
+    test "uses exactly one models query for one and fifty Pool/model tuples" do
+      for size <- [1, 50] do
+        authorized =
+          for index <- 1..size do
+            pool = pool_fixture()
+            %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+            model_fixture(pool, %{
+              exposed_model_id: "gpt-example-query-#{size}-#{index}",
+              metadata: %{
+                "source_assignment_models" => %{
+                  assignment.id => %{"supports_responses" => true}
+                }
+              }
+            })
+
+            {pool.id, assignment.id}
+          end
+
+        {rows, queries} =
+          count_repo_sources(fn -> Catalog.list_assignment_model_summaries(authorized) end)
+
+        assert length(rows) == size
+        assert Map.get(queries, "models", 0) == 1
+        assert Enum.sum(Map.values(queries)) == 1
+      end
+    end
+  end
+
   describe "catalog sync" do
     test "excludes reauth-required identities even if assignment state is still eligible" do
       pool = pool_fixture()
@@ -601,6 +730,39 @@ defmodule CodexPooler.CatalogTest do
 
     assert model.metadata["source_assignment_models"][current_source.id]["source_marker"] ==
              "#{case_name}-b-second"
+  end
+
+  defp count_repo_sources(fun) do
+    parent = self()
+    handler_id = "catalog-query-count-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and is_binary(metadata[:source]) do
+            send(parent, {handler_id, metadata.source})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_sources(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_sources(handler_id, counts) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_sources(handler_id, Map.update(counts, source, 1, &(&1 + 1)))
+    after
+      0 -> counts
+    end
   end
 
   defp sync_run_fixture(pool, attrs) do

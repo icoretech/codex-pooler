@@ -268,6 +268,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
      update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :pools))}
   end
 
+  def handle_event("toggle_account_routing_panel", %{"id" => identity_id}, socket) do
+    {:noreply,
+     update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :routing))}
+  end
+
   def handle_event("cancel_saved_reset_redemption", _params, socket) do
     {:noreply, assign(socket, :confirming_saved_reset_redemption, nil)}
   end
@@ -480,7 +485,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     Enum.find(accounts, &(&1.identity.id == identity_id))
   end
 
-  @spec toggle_account_panel_view(map(), String.t(), :pools) :: map()
+  @type account_panel_view :: :routing | :pools
+
+  @spec toggle_account_panel_view(map(), String.t(), account_panel_view()) :: map()
   defp toggle_account_panel_view(panel_views, identity_id, target_view)
        when is_map(panel_views) and is_binary(identity_id) do
     case Map.get(panel_views, identity_id, :usage) do
@@ -495,7 +502,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     visible_account_ids = MapSet.new(accounts, & &1.identity.id)
 
     Map.filter(panel_views, fn {identity_id, view} ->
-      MapSet.member?(visible_account_ids, identity_id) and view == :pools
+      MapSet.member?(visible_account_ids, identity_id) and view in [:routing, :pools]
     end)
   end
 

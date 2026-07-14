@@ -190,6 +190,159 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-add-capacity-card")
   end
 
+  test "switches account cards between usage, routing, and Pools without exposing provider metadata",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, first_pool} =
+      Pools.create_pool(scope, %{slug: "routing-panel-first", name: "Routing Panel First"})
+
+    {:ok, second_pool} =
+      Pools.create_pool(scope, %{slug: "routing-panel-second", name: "Routing Panel Second"})
+
+    %{identity: identity, assignment: first_assignment} =
+      upstream_assignment_fixture(first_pool, %{
+        account_label: "Routing Panel Account",
+        assignment_label: "First routing lane"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    second_assignment =
+      %PoolUpstreamAssignment{}
+      |> PoolUpstreamAssignment.changeset(%{
+        pool_id: second_pool.id,
+        upstream_identity_id: identity.id,
+        assignment_label: "Second routing lane",
+        status: "active",
+        health_status: "active",
+        eligibility_status: "eligible",
+        metadata: %{},
+        created_at: now,
+        updated_at: now
+      })
+      |> Repo.insert!()
+
+    provider_sentinel = "provider-private-#{System.unique_integer([:positive])}"
+
+    model_fixture(first_pool, %{
+      exposed_model_id: "gpt-example-routing",
+      metadata: %{
+        "source_assignment_models" => %{
+          first_assignment.id => %{
+            "supports_responses" => true,
+            "supports_streaming" => false,
+            "capabilities" => %{"tools" => true},
+            "provider" => %{"private" => provider_sentinel}
+          }
+        },
+        "source_assignment_missing_sync_run_ids" => %{first_assignment.id => Ecto.UUID.generate()}
+      }
+    })
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    card_id = "upstream-account-#{identity.id}"
+    routing_panel_id = "#{card_id}-routing-panel"
+    pools_panel_id = "#{card_id}-pools-panel"
+    routing_trigger_id = "#{card_id}-routing-panel-trigger"
+    pools_trigger_id = "#{card_id}-pools-panel-trigger"
+
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='usage']")
+
+    assert has_element?(view, "##{routing_panel_id}[aria-hidden='true'][inert]")
+
+    assert has_element?(
+             view,
+             "##{routing_trigger_id}[type='button'][phx-click='toggle_account_routing_panel'][phx-value-id='#{identity.id}'][aria-controls='#{routing_panel_id}'][aria-expanded='false']",
+             "Routing"
+           )
+
+    assert has_element?(view, "##{pools_trigger_id}[aria-expanded='false']", "Pools")
+
+    view
+    |> element("##{routing_trigger_id}")
+    |> render_click()
+
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='routing']")
+    assert has_element?(view, "##{routing_panel_id}[aria-hidden='false']")
+    assert has_element?(view, "##{card_id}-usage-panel[aria-hidden='true'][inert]")
+    assert has_element?(view, "##{pools_panel_id}[aria-hidden='true'][inert]")
+
+    assert has_element?(
+             view,
+             "##{routing_trigger_id}[aria-expanded='true'][aria-label='Show quota status']"
+           )
+
+    # The routing panel is one flat, deduplicated model list: model names are
+    # the payload, and badges appear only when they carry real information.
+    assert has_element?(
+             view,
+             "##{routing_panel_id} [data-role='upstream-account-routing-model-id']",
+             "gpt-example-routing"
+           )
+
+    assert has_element?(
+             view,
+             "##{routing_panel_id} #upstream-account-#{identity.id}-routing-summary",
+             "1 model, 2 Pools"
+           )
+
+    # Preserved provenance (kept from an earlier sync) is worth a badge.
+    assert has_element?(
+             view,
+             "##{routing_panel_id} [data-role='upstream-account-routing-model-provenance']",
+             "preserved"
+           )
+
+    # Advertised only in one of the account's two Pools is worth a badge.
+    assert has_element?(
+             view,
+             "##{routing_panel_id} [data-role='upstream-account-routing-model-pools']",
+             "Routing Panel First only"
+           )
+
+    # Nominal state renders nothing: no capability chips and no
+    # unknown/unverified noise.
+    refute has_element?(
+             view,
+             "##{routing_panel_id} [data-role='upstream-account-routing-capability']"
+           )
+
+    refute has_element?(
+             view,
+             "##{routing_panel_id} [data-role='upstream-account-routing-serving-signal']"
+           )
+
+    refute render(view) =~ "Unverified"
+
+    _ = second_assignment
+
+    refute html =~ provider_sentinel
+
+    view
+    |> element("##{pools_trigger_id}")
+    |> render_click()
+
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='pools']")
+    assert has_element?(view, "##{routing_panel_id}[aria-hidden='true'][inert]")
+    assert has_element?(view, "##{pools_panel_id}[aria-hidden='false']")
+
+    view
+    |> element("##{routing_trigger_id}")
+    |> render_click()
+
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='routing']")
+
+    view
+    |> element("##{routing_trigger_id}[aria-expanded='true']")
+    |> render_click()
+
+    assert has_element?(view, "##{card_id}-panel-switcher[data-panel-view='usage']")
+    assert has_element?(view, "##{routing_trigger_id}[aria-expanded='false']")
+  end
+
   test "page read model exposes safe OAuth flow summaries without transient secrets", %{
     conn: conn,
     scope: scope

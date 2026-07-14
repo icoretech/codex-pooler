@@ -5,7 +5,15 @@ defmodule CodexPooler.Catalog do
 
   import Ecto.Query
 
-  alias CodexPooler.Catalog.{Model, ModelSelectorState, PricingSnapshot, Sync, SyncRun}
+  alias CodexPooler.Catalog.{
+    AssignmentModelSummaries,
+    Model,
+    ModelSelectorState,
+    PricingSnapshot,
+    Sync,
+    SyncRun
+  }
+
   alias CodexPooler.Catalog.OpenAIPricingImporter
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -35,6 +43,11 @@ defmodule CodexPooler.Catalog do
           | {:error, term(), catalog_error() | Ecto.Changeset.t() | term()}
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
   @type pricing_bucket_map :: %{optional(String.t()) => [String.t()]}
+
+  @spec list_assignment_model_summaries(term()) :: [AssignmentModelSummaries.summary()]
+  defdelegate list_assignment_model_summaries(authorized_assignments),
+    to: AssignmentModelSummaries,
+    as: :list
 
   @spec sync_pool_catalog(pool_ref(), keyword()) :: catalog_result()
   defdelegate sync_pool_catalog(pool_or_id, opts \\ []), to: Sync

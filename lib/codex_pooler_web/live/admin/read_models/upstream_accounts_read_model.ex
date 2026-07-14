@@ -2,7 +2,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @moduledoc false
 
   alias CodexPooler.Admin.{UpstreamQuotaReadiness, UpstreamRoutingReadiness}
+  alias CodexPooler.Catalog
+  alias CodexPooler.Catalog.AssignmentModelSummaries
+  alias CodexPooler.Gateway.Routing.ServingSignals
   alias CodexPooler.Jobs
+  alias CodexPooler.Pools
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPooler.Upstreams.Auth.TokenRefresh
@@ -21,6 +25,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   alias CodexPoolerWeb.DateTimeDisplay
 
+  @type assignment_advertised_state :: :advertised | :not_advertised
+  @type assignment_model_freshness :: :observed | :preserved | :mixed | :not_advertised
+  @type assignment_model :: %{
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:assignment_id) => Ecto.UUID.t(),
+          required(:exposed_model_id) => String.t(),
+          required(:capabilities) => AssignmentModelSummaries.capabilities(),
+          required(:provenance) => AssignmentModelSummaries.provenance(),
+          required(:serving_signals) => [ServingSignals.summary()]
+        }
+  @type serving_signal_summary :: %{
+          required(:count) => non_neg_integer(),
+          required(:by_state) => %{optional(ServingSignals.serving_state()) => non_neg_integer()}
+        }
   @type assignment_snapshot :: %{
           required(:id) => Ecto.UUID.t(),
           required(:upstream_identity_id) => Ecto.UUID.t(),
@@ -34,7 +52,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:quota_priming_label) => String.t(),
           required(:last_successful_refresh_at) => DateTime.t() | nil,
           optional(:last_reconciliation) => map() | nil,
-          required(:pool_label) => String.t()
+          required(:pool_label) => String.t(),
+          required(:models) => [assignment_model()],
+          required(:model_count) => non_neg_integer(),
+          required(:advertised_state) => assignment_advertised_state(),
+          required(:model_freshness) => assignment_model_freshness(),
+          required(:serving_signal_summary) => serving_signal_summary()
         }
   @type quota_limit_row :: QuotaProjection.quota_limit_row()
   @type quota_readiness :: UpstreamQuotaReadiness.t()
@@ -131,8 +154,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         ]
   def list_visible_accounts(scope, pools, filters, datetime_preferences)
       when is_list(pools) and is_map(filters) and is_map(datetime_preferences) do
+    pools = intersect_visible_pools(scope, pools)
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
+    model_inventory = assignment_model_inventory(assignments)
+    assignments = attach_assignment_model_inventory(assignments, model_inventory)
 
     identities =
       scope
@@ -144,6 +170,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     identities
     |> Enum.map(&account_snapshot(&1, assignments, token_burns, datetime_preferences))
     |> Filter.apply(filters)
+  end
+
+  defp intersect_visible_pools(scope, pools) do
+    visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)
+    Enum.filter(pools, &MapSet.member?(visible_pool_ids, &1.id))
   end
 
   @spec oauth_flow_state(term(), [term()], DateTimeDisplay.preferences(), keyword()) ::
@@ -212,8 +243,75 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       quota_priming_label: QuotaProjection.assignment_priming_label(assignment),
       last_successful_refresh_at: assignment.last_successful_refresh_at,
       last_reconciliation: nested_map(assignment.metadata, "last_reconciliation"),
-      pool_label: pool_label(pool)
+      pool_label: pool_label(pool),
+      models: [],
+      model_count: 0,
+      advertised_state: :not_advertised,
+      model_freshness: :not_advertised,
+      serving_signal_summary: %{count: 0, by_state: %{}}
     }
+  end
+
+  defp assignment_model_inventory(assignments) do
+    authorized_assignments =
+      for {_identity_id, identity_assignments} <- assignments,
+          assignment <- identity_assignments do
+        {assignment.pool_id, assignment.id}
+      end
+
+    model_rows = Catalog.list_assignment_model_summaries(authorized_assignments)
+
+    serving_signals =
+      model_rows
+      |> Enum.map(&{&1.pool_id, &1.assignment_id, &1.exposed_model_id})
+      |> ServingSignals.list_summaries()
+      |> Enum.group_by(&{&1.pool_id, &1.assignment_id, &1.exposed_model_id})
+
+    model_rows
+    |> Enum.map(fn model ->
+      key = {model.pool_id, model.assignment_id, model.exposed_model_id}
+      Map.put(model, :serving_signals, Map.get(serving_signals, key, []))
+    end)
+    |> Enum.group_by(&{&1.pool_id, &1.assignment_id})
+  end
+
+  defp attach_assignment_model_inventory(assignments, model_inventory) do
+    Map.new(assignments, fn {identity_id, identity_assignments} ->
+      snapshots = Enum.map(identity_assignments, &attach_assignment_models(&1, model_inventory))
+      {identity_id, snapshots}
+    end)
+  end
+
+  defp attach_assignment_models(assignment, model_inventory) do
+    models =
+      model_inventory
+      |> Map.get({assignment.pool_id, assignment.id}, [])
+      |> Enum.sort_by(& &1.exposed_model_id)
+
+    signals = Enum.flat_map(models, & &1.serving_signals)
+
+    Map.merge(assignment, %{
+      models: models,
+      model_count: length(models),
+      advertised_state: if(models == [], do: :not_advertised, else: :advertised),
+      model_freshness: model_freshness(models),
+      serving_signal_summary: %{
+        count: length(signals),
+        by_state: Enum.frequencies_by(signals, & &1.serving_state)
+      }
+    })
+  end
+
+  defp model_freshness([]), do: :not_advertised
+
+  defp model_freshness(models) do
+    provenances = models |> Enum.map(& &1.provenance) |> Enum.uniq()
+
+    case provenances do
+      [:observed] -> :observed
+      [:preserved] -> :preserved
+      _mixed -> :mixed
+    end
   end
 
   defp account_snapshot(identity, assignments, token_burns, datetime_preferences) do
