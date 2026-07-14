@@ -6173,7 +6173,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
-  defp assert_single_element(view, selector, text \\ nil) do
+  defp assert_single_element(view, selector, text) do
     rendered = view |> element(selector, text) |> render()
     assert rendered != ""
   end
