@@ -617,16 +617,7 @@ defmodule CodexPooler.Accounting.Rollups do
           model_code: identity.model_code
         }
 
-        rollup = Repo.get_by!(HourlyModelUsageRollup, lookup)
-        attrs = subtract_rollup_attrs(rollup, delta, now())
-
-        if attrs.request_count == 0 do
-          Repo.delete!(rollup)
-        else
-          rollup |> Ecto.Changeset.change(attrs) |> Repo.update!()
-        end
-
-        :ok
+        atomic_subtract!(HourlyModelUsageRollup, lookup, delta)
     end
   end
 
@@ -715,32 +706,58 @@ defmodule CodexPooler.Accounting.Rollups do
   end
 
   defp subtract_rollup!(identity, date, delta) do
-    rollup = Repo.get_by!(DailyRollup, rollup_lookup(identity, date))
-    attrs = subtract_rollup_attrs(rollup, delta, now())
-
-    if attrs.request_count == 0 do
-      Repo.delete!(rollup)
-    else
-      rollup |> Ecto.Changeset.change(attrs) |> Repo.update!()
-    end
+    atomic_subtract!(DailyRollup, rollup_lookup(identity, date), delta)
   end
 
-  defp subtract_rollup_attrs(rollup, delta, timestamp) do
-    %{
-      request_count: rollup.request_count - delta.request_count,
-      success_count: rollup.success_count - delta.success_count,
-      failure_count: rollup.failure_count - delta.failure_count,
-      retry_count: rollup.retry_count - delta.retry_count,
-      input_tokens: rollup.input_tokens - delta.input_tokens,
-      cached_input_tokens: rollup.cached_input_tokens - delta.cached_input_tokens,
-      output_tokens: rollup.output_tokens - delta.output_tokens,
-      reasoning_tokens: rollup.reasoning_tokens - delta.reasoning_tokens,
-      total_tokens: rollup.total_tokens - delta.total_tokens,
-      estimated_cost_micros:
-        Decimal.sub(rollup.estimated_cost_micros, delta.estimated_cost_micros),
-      settled_cost_micros: Decimal.sub(rollup.settled_cost_micros, delta.settled_cost_micros),
-      updated_at: timestamp
-    }
+  # A settlement replacement must not lose a racing settlement's increment:
+  # the decrement is a single atomic UPDATE, and a fully drained row is
+  # deleted only while its request_count is still zero — an increment that
+  # loses that race simply re-inserts the row through the upsert path.
+  defp atomic_subtract!(schema, lookup, delta) do
+    filters = Enum.to_list(lookup)
+
+    {subtracted, _rows} = Repo.update_all(subtract_query(schema, filters, delta, now()), [])
+
+    if subtracted == 0 do
+      raise Ecto.NoResultsError, queryable: schema
+    end
+
+    Repo.delete_all(from(rollup in schema, where: ^filters, where: rollup.request_count == 0))
+
+    :ok
+  end
+
+  defp subtract_query(schema, filters, delta, now) do
+    from rollup in schema,
+      where: ^filters,
+      update: [
+        set: [
+          estimated_cost_micros:
+            fragment(
+              "? - ?",
+              rollup.estimated_cost_micros,
+              type(^delta.estimated_cost_micros, :decimal)
+            ),
+          settled_cost_micros:
+            fragment(
+              "? - ?",
+              rollup.settled_cost_micros,
+              type(^delta.settled_cost_micros, :decimal)
+            ),
+          updated_at: ^now
+        ],
+        inc: [
+          request_count: ^(-delta.request_count),
+          success_count: ^(-delta.success_count),
+          failure_count: ^(-delta.failure_count),
+          retry_count: ^(-delta.retry_count),
+          input_tokens: ^(-delta.input_tokens),
+          cached_input_tokens: ^(-delta.cached_input_tokens),
+          output_tokens: ^(-delta.output_tokens),
+          reasoning_tokens: ^(-delta.reasoning_tokens),
+          total_tokens: ^(-delta.total_tokens)
+        ]
+      ]
   end
 
   defp rollup_lookup(

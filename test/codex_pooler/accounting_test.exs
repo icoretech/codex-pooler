@@ -478,6 +478,106 @@ defmodule CodexPooler.AccountingTest do
       assert fact.latest_total_tokens == 10
     end
 
+    test "settlement replacement subtracts rollups atomically beside a racing settlement" do
+      setup = accounting_setup()
+      first_timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      known_timestamp = DateTime.add(first_timestamp, 1, :second)
+
+      assert {:ok, replaced_reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 5},
+                 %{correlation_id: "corr-replacement-race-target"}
+               )
+
+      assert {:ok, replaced_attempt} =
+               Accounting.create_attempt(replaced_reserved.request, setup.assignment)
+
+      assert {:ok, failed} =
+               Accounting.finalize_failure(replaced_reserved.request, replaced_attempt, %{
+                 last_error_code: "owner_drained",
+                 now: first_timestamp,
+                 usage: %{status: "usage_unknown", source: "owner_drained"}
+               })
+
+      # An independent settlement for the same pool/date/dimensions lands
+      # between the original settlement and its replacement — the write the
+      # old read-modify-write subtract shape could lose.
+      assert {:ok, racing_reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 5},
+                 %{correlation_id: "corr-replacement-race-neighbor"}
+               )
+
+      assert {:ok, racing_attempt} =
+               Accounting.create_attempt(racing_reserved.request, setup.assignment)
+
+      assert {:ok, _racing} =
+               Accounting.finalize_success(
+                 racing_reserved.request,
+                 racing_attempt,
+                 %{
+                   status: "usage_known",
+                   source: "upstream_headers",
+                   recorded_at: first_timestamp,
+                   input_tokens: 60,
+                   output_tokens: 40,
+                   total_tokens: 100
+                 },
+                 %{now: first_timestamp, response_status_code: 200}
+               )
+
+      {replacement, commands} =
+        count_repo_commands(fn ->
+          Accounting.finalize_success(
+            failed.request,
+            failed.attempt,
+            %{
+              status: "usage_known",
+              source: "late_owner_completion",
+              recorded_at: known_timestamp,
+              input_tokens: 7,
+              output_tokens: 3,
+              total_tokens: 10
+            },
+            %{now: known_timestamp, response_status_code: 200}
+          )
+        end)
+
+      assert {:ok, _reconciled} = replacement
+
+      # The subtract side never reads rollup rows back: it decrements with
+      # relative arithmetic in single UPDATE statements.
+      assert command_count(commands, "daily_rollups", "SELECT") == 0
+      assert command_count(commands, "hourly_model_usage_rollups", "SELECT") == 0
+
+      assert [daily_rollup] =
+               Repo.all(
+                 from rollup in DailyRollup,
+                   where: rollup.pool_id == ^setup.pool.id and rollup.dimension_kind == "pool"
+               )
+
+      assert daily_rollup.request_count == 2
+      assert daily_rollup.success_count == 2
+      assert daily_rollup.failure_count == 0
+      assert daily_rollup.total_tokens == 110
+
+      assert [hourly_rollup] =
+               Repo.all(
+                 from rollup in HourlyModelUsageRollup,
+                   where:
+                     rollup.pool_id == ^setup.pool.id and
+                       rollup.model_code == ^setup.model.exposed_model_id
+               )
+
+      assert hourly_rollup.request_count == 2
+      assert hourly_rollup.success_count == 2
+      assert hourly_rollup.total_tokens == 110
+    end
+
     test "releases stale undispatched reservations without settling usage" do
       setup = accounting_setup()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
