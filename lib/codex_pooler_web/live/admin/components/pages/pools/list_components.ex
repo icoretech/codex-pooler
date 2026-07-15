@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :pool_filter_form, Phoenix.HTML.Form, required: true
   attr :pools, :list, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :compat_panel_views, :map, default: %{}
 
   def pool_inventory(assigns) do
     ~H"""
@@ -57,6 +58,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         :if={@pools != []}
         pools={@pools}
         can_manage_pools?={@can_manage_pools?}
+        compat_panel_views={@compat_panel_views}
       />
     </section>
     """
@@ -356,6 +358,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   attr :pools, :list, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :compat_panel_views, :map, required: true
 
   defp pool_grid(assigns) do
     ~H"""
@@ -367,6 +370,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         :for={pool_row <- @pools}
         pool_row={pool_row}
         can_manage_pools?={@can_manage_pools?}
+        compat_panel_flag={compat_panel_flag(@compat_panel_views, pool_row)}
       />
     </div>
     """
@@ -374,38 +378,49 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   attr :pool_row, :map, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :compat_panel_flag, :any, default: nil
 
   defp pool_card(assigns) do
     ~H"""
     <article id={"pool-row-#{@pool_row.pool.id}"} class="pool-card">
-      <div class="pool-card-header">
-        <div class="pool-card-header-row">
-          <div class="pool-card-identity">
-            <div id={"pool-row-#{@pool_row.pool.id}-title-line"} class="pool-card-title-line">
-              <h2
-                id={"pool-row-#{@pool_row.pool.id}-name"}
-                class="pool-card-title text-base-content"
-              >
-                {@pool_row.pool.name}
-              </h2>
-              <span
+      <div class="min-w-0">
+        <div class="pool-card-header">
+          <div class="pool-card-header-row">
+            <div class="pool-card-identity">
+              <div id={"pool-row-#{@pool_row.pool.id}-title-line"} class="pool-card-title-line">
+                <h2
+                  id={"pool-row-#{@pool_row.pool.id}-name"}
+                  class="pool-card-title text-base-content"
+                >
+                  {@pool_row.pool.name}
+                </h2>
+              </div>
+              <p
                 id={"pool-row-#{@pool_row.pool.id}-routing-strategy"}
-                class={routing_strategy_class()}
+                class="truncate text-xs leading-4 text-base-content/55"
               >
                 {AdminBadges.routing_strategy_label(@pool_row.routing_strategy)}
+              </p>
+            </div>
+            <div id={"pool-row-#{@pool_row.pool.id}-actions"} class="pool-card-actions">
+              <.pool_compat_flag_icons pool_row={@pool_row} open_flag={@compat_panel_flag} />
+              <span
+                id={"pool-row-#{@pool_row.pool.id}-status"}
+                class={AdminBadges.lifecycle_chip_class(@pool_row.pool.status)}
+              >
+                {@pool_row.pool.status}
               </span>
+              <.pool_action_menu pool_row={@pool_row} can_manage_pools?={@can_manage_pools?} />
             </div>
           </div>
-          <div id={"pool-row-#{@pool_row.pool.id}-actions"} class="pool-card-actions">
-            <span
-              id={"pool-row-#{@pool_row.pool.id}-status"}
-              class={AdminBadges.lifecycle_chip_class(@pool_row.pool.status)}
-            >
-              {@pool_row.pool.status}
-            </span>
-            <.pool_action_menu pool_row={@pool_row} can_manage_pools?={@can_manage_pools?} />
-          </div>
         </div>
+        <.pool_compat_flag_panel
+          :if={@compat_panel_flag}
+          pool_row={@pool_row}
+          flag={@compat_panel_flag}
+          enabled={@pool_row.compat_flags[@compat_panel_flag.key] == true}
+          can_manage_pools?={@can_manage_pools?}
+        />
       </div>
       <.pool_activity_panel pool_row={@pool_row} />
       <footer
@@ -644,8 +659,128 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     """
   end
 
-  defp routing_strategy_class do
-    "badge badge-ghost badge-sm shrink-0 max-w-48 truncate text-[0.65rem] text-base-content/50"
+  @compat_flags [
+    %{
+      key: :v1_compatibility_enabled,
+      id_suffix: "v1",
+      icon: "hero-code-bracket",
+      label: "/v1 compatibility",
+      description: "OpenAI-style /v1 compatibility routes."
+    },
+    %{
+      key: :request_compression_enabled,
+      id_suffix: "compression",
+      icon: "hero-arrows-pointing-in",
+      label: "Request compression",
+      description: "Shrinks eligible Responses tool outputs before upstream dispatch."
+    },
+    %{
+      key: :upstream_websocket_bridge_enabled,
+      id_suffix: "ws-bridge",
+      icon: "hero-link",
+      label: "Upstream websocket bridge",
+      description:
+        "Carries public streaming turns upstream over the session's Codex websocket to reuse the provider prompt cache."
+    }
+  ]
+
+  attr :pool_row, :map, required: true
+  attr :open_flag, :any, default: nil
+
+  defp pool_compat_flag_icons(assigns) do
+    assigns = assign(assigns, :flags, @compat_flags)
+
+    ~H"""
+    <span class="flex shrink-0 items-center gap-px" data-role="pool-compat-flags">
+      <button
+        :for={flag <- @flags}
+        id={"pool-row-#{@pool_row.pool.id}-compat-#{flag.id_suffix}"}
+        type="button"
+        phx-click="toggle_pool_compat_panel"
+        phx-value-pool-id={@pool_row.pool.id}
+        phx-value-flag={Atom.to_string(flag.key)}
+        aria-expanded={to_string(open_flag?(@open_flag, flag))}
+        aria-controls={"pool-row-#{@pool_row.pool.id}-compat-panel"}
+        aria-label={compat_flag_state_label(@pool_row, flag)}
+        title={compat_flag_state_label(@pool_row, flag)}
+        class={compat_flag_trigger_class(@pool_row, flag, @open_flag)}
+      >
+        <.icon name={flag.icon} class="size-3.5" />
+      </button>
+    </span>
+    """
+  end
+
+  attr :pool_row, :map, required: true
+  attr :flag, :map, required: true
+  attr :enabled, :boolean, required: true
+  attr :can_manage_pools?, :boolean, required: true
+
+  defp pool_compat_flag_panel(assigns) do
+    ~H"""
+    <div
+      id={"pool-row-#{@pool_row.pool.id}-compat-panel"}
+      data-role="pool-compat-panel"
+      class="pool-compat-panel"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <p class="min-w-0 truncate text-sm font-semibold leading-5 text-base-content">
+          {@flag.label}
+        </p>
+        <input
+          :if={@can_manage_pools?}
+          id={"pool-row-#{@pool_row.pool.id}-compat-#{@flag.id_suffix}-toggle"}
+          type="checkbox"
+          class="toggle toggle-sm shrink-0"
+          checked={@enabled}
+          phx-click="toggle_pool_compat_flag"
+          phx-value-pool-id={@pool_row.pool.id}
+          phx-value-flag={Atom.to_string(@flag.key)}
+          aria-label={"Toggle #{@flag.label} for #{@pool_row.pool.name}"}
+        />
+        <span
+          :if={!@can_manage_pools?}
+          class={AdminBadges.metadata_chip_class(if(@enabled, do: :success, else: :neutral))}
+        >
+          {if @enabled, do: "Enabled", else: "Disabled"}
+        </span>
+      </div>
+      <p class="mt-1 text-xs leading-5 text-base-content/60">
+        {@flag.description}
+      </p>
+    </div>
+    """
+  end
+
+  defp compat_panel_flag(panel_views, %{pool: %{id: pool_id}}) when is_map(panel_views) do
+    case Map.get(panel_views, pool_id) do
+      nil -> nil
+      flag_key -> Enum.find(@compat_flags, &(Atom.to_string(&1.key) == flag_key))
+    end
+  end
+
+  defp compat_panel_flag(_panel_views, _pool_row), do: nil
+
+  defp open_flag?(%{key: open_key}, %{key: key}), do: open_key == key
+  defp open_flag?(_open_flag, _flag), do: false
+
+  defp compat_flag_enabled?(pool_row, flag), do: pool_row.compat_flags[flag.key] == true
+
+  defp compat_flag_state_label(pool_row, flag) do
+    state = if compat_flag_enabled?(pool_row, flag), do: "enabled", else: "disabled"
+    "#{flag.label}: #{state}"
+  end
+
+  defp compat_flag_trigger_class(pool_row, flag, open_flag) do
+    [
+      "inline-flex size-7 cursor-pointer items-center justify-center rounded-field transition-colors",
+      "hover:bg-base-300/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      if(compat_flag_enabled?(pool_row, flag),
+        do: "text-base-content/70 hover:text-base-content",
+        else: "text-base-content/25 hover:text-base-content/45"
+      ),
+      open_flag?(open_flag, flag) && "bg-base-300/60"
+    ]
   end
 
   defp pool_traffic_histogram_card(pool_row) do

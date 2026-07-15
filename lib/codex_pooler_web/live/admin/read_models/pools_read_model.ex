@@ -28,6 +28,11 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:reasoning_tokens) => non_neg_integer(),
           required(:total_tokens) => non_neg_integer()
         }
+  @type compat_flags :: %{
+          required(:v1_compatibility_enabled) => boolean(),
+          required(:request_compression_enabled) => boolean(),
+          required(:upstream_websocket_bridge_enabled) => boolean()
+        }
   @type pool_row :: %{
           required(:pool) => Pool.t(),
           required(:api_key_count) => non_neg_integer(),
@@ -43,7 +48,8 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:settled_cost_micros) => non_neg_integer(),
           required(:traffic_window) => String.t(),
           required(:traffic_window_label) => String.t(),
-          required(:routing_strategy) => String.t()
+          required(:routing_strategy) => String.t(),
+          required(:compat_flags) => compat_flags()
         }
   @type page_state :: %{
           required(:pools) => [pool_row()],
@@ -117,6 +123,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
 
     Enum.map(pools, fn pool ->
       usage = Map.fetch!(usage_metrics, pool.id)
+      settings = Map.get(routing_settings, pool.id)
 
       %{
         pool: pool,
@@ -133,7 +140,12 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         settled_cost_micros: usage.settled_cost_micros,
         traffic_window: traffic_window,
         traffic_window_label: traffic_window_label,
-        routing_strategy: Map.get(routing_settings, pool.id).routing_strategy
+        routing_strategy: settings.routing_strategy,
+        compat_flags: %{
+          v1_compatibility_enabled: settings.v1_compatibility_enabled,
+          request_compression_enabled: settings.request_compression_enabled,
+          upstream_websocket_bridge_enabled: settings.upstream_websocket_bridge_enabled
+        }
       }
     end)
   end

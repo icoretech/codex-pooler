@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
+  alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
@@ -138,6 +139,92 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-empty-create-action")
   end
 
+  test "compat flag icons disclose an inline panel and toggle routing options", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "compat-panel", name: "Compat Panel Pool"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
+
+    view |> element("#pool-row-#{pool.id}-compat-compression") |> render_click()
+
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "Request compression")
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-compression-toggle")
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-compression-toggle[checked]")
+
+    html = view |> element("#pool-row-#{pool.id}-compat-compression-toggle") |> render_click()
+
+    assert html =~ "Request compression enabled on Compat Panel Pool"
+    assert PoolRouting.get_routing_settings(pool.id).request_compression_enabled
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-compression-toggle[checked]")
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "Request compression")
+
+    view |> element("#pool-row-#{pool.id}-compat-v1") |> render_click()
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "/v1 compatibility")
+
+    view |> element("#pool-row-#{pool.id}-compat-v1") |> render_click()
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
+  end
+
+  test "ignores compat toggles outside the whitelist", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "compat-guard", name: "Compat Guard Pool"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    html =
+      render_click(view, "toggle_pool_compat_flag", %{
+        "pool-id" => pool.id,
+        "flag" => "sticky_http_sessions"
+      })
+
+    assert html =~ "unsupported pool option"
+    assert PoolRouting.get_routing_settings(pool.id) == nil
+
+    render_click(view, "toggle_pool_compat_panel", %{
+      "pool-id" => pool.id,
+      "flag" => "sticky_http_sessions"
+    })
+
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
+  end
+
+  test "read-only admins see compat state without toggle controls", %{scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "compat-readonly", name: "Compat Readonly Pool"})
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "compat-readonly-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+
+    view |> element("#pool-row-#{pool.id}-compat-v1") |> render_click()
+
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "/v1 compatibility")
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "Enabled")
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-v1-toggle")
+
+    html =
+      render_click(view, "toggle_pool_compat_flag", %{
+        "pool-id" => pool.id,
+        "flag" => "v1_compatibility_enabled"
+      })
+
+    assert html =~ "Pool management is not available for this session"
+    assert PoolRouting.get_routing_settings(pool.id) == nil
+  end
+
   test "loads row summary data for pools without extra per-row queries", %{
     conn: conn,
     scope: scope
@@ -210,11 +297,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-row-#{pool.id}-title-line #pool-row-#{pool.id}-routing-strategy"
+             "#pool-row-#{pool.id} p#pool-row-#{pool.id}-routing-strategy"
            )
 
     assert render(view) =~
-             ~r/id="pool-row-#{pool.id}-routing-strategy"[^>]*class="badge badge-ghost badge-sm shrink-0 max-w-48 truncate text-\[0\.65rem\] text-base-content\/50"/
+             ~r/id="pool-row-#{pool.id}-routing-strategy"[^>]*class="truncate text-xs leading-4 text-base-content\/55"/
 
     assert has_element?(
              view,
@@ -624,7 +711,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-row-#{pool.id}-title-line #pool-row-#{pool.id}-routing-strategy"
+             "#pool-row-#{pool.id} p#pool-row-#{pool.id}-routing-strategy"
            )
 
     assert has_element?(view, "#pool-row-#{pool.id}-activity")

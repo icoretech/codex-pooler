@@ -309,16 +309,23 @@ body {
   line-height: 1.25rem;
 }
 
+/* overflow stays visible so header popovers (compat flags, action menu) can
+   escape the card; the footer rounds its own bottom corners instead of
+   relying on the card clipping them. */
 .pool-card {
   display: grid;
   min-width: 0;
   gap: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
   border-radius: var(--radius-box);
   background: var(--color-base-100);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+
+.pool-card .pool-card-metrics {
+  border-bottom-left-radius: calc(var(--radius-box) - 1px);
+  border-bottom-right-radius: calc(var(--radius-box) - 1px);
 }
 
 .pool-card .pool-card-header {
@@ -375,6 +382,34 @@ body {
   border-top: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
   background: color-mix(in oklab, var(--color-base-200) 35%, transparent);
   padding: 0.85rem 1rem 1rem;
+}
+
+/* Inline disclosure panel between the pool card header and its body, toggled
+   by the header compat-flag icons. Being in normal flow it needs no anchoring
+   and works at any viewport width. */
+.pool-compat-panel {
+  border-top: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
+  background: color-mix(in oklab, var(--color-base-200) 55%, transparent);
+  padding: 0.75rem 1rem 0.85rem;
+  animation: pool-compat-panel-in 160ms ease-out;
+}
+
+@keyframes pool-compat-panel-in {
+  from {
+    opacity: 0;
+    translate: 0 -0.25rem;
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pool-compat-panel {
+    animation: none;
+  }
 }
 
 .pool-token-histogram {

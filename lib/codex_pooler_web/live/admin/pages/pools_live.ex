@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPooler.Admin.PoolWorkflow
   alias CodexPooler.Events
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolForm
@@ -32,6 +33,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_wizard_step: "details",
        pool_filters: PoolForm.filter(),
        pool_filter_form: PoolForm.filter_form(),
+       pool_compat_panels: %{},
        pool_metrics: PoolsReadModel.empty_metrics(),
        data_load_warnings: [],
        subscribed_pool_events?: false,
@@ -160,6 +162,47 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          socket
          |> put_flash(:error, error_message(reason))
          |> assign(:edit_form, PoolForm.edit_form(socket.assigns.editing_pool, pool_params))}
+    end
+  end
+
+  def handle_event("toggle_pool_compat_panel", %{"pool-id" => pool_id, "flag" => flag}, socket) do
+    with {:ok, _label} <- compat_flag_label(flag),
+         {:ok, _pool_row} <- fetch_pool_row(socket, pool_id) do
+      panels =
+        case Map.get(socket.assigns.pool_compat_panels, pool_id) do
+          ^flag -> Map.delete(socket.assigns.pool_compat_panels, pool_id)
+          _other -> Map.put(socket.assigns.pool_compat_panels, pool_id, flag)
+        end
+
+      {:noreply, assign(socket, :pool_compat_panels, panels)}
+    else
+      {:error, _reason} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_pool_compat_flag", %{"pool-id" => pool_id, "flag" => flag}, socket) do
+    with {:ok, flag_label} <- compat_flag_label(flag),
+         :ok <- ensure_can_manage_pools(socket),
+         {:ok, pool_row} <- fetch_pool_row(socket, pool_id),
+         enabled? = pool_row.compat_flags[String.to_existing_atom(flag)] != true,
+         {:ok, _settings} <-
+           PoolRouting.update_routing_settings(
+             socket.assigns.current_scope,
+             pool_row.pool,
+             %{flag => enabled?}
+           ) do
+      state_label = if enabled?, do: "enabled", else: "disabled"
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "#{flag_label} #{state_label} on #{pool_row.pool.name}")
+       |> load_pools()}
+    else
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, error_message(reason))
+         |> load_pools()}
     end
   end
 
@@ -392,6 +435,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           pool_filter_form={@pool_filter_form}
           pools={@pools}
           can_manage_pools?={@can_manage_pools?}
+          compat_panel_views={@pool_compat_panels}
         />
       </section>
     </AdminComponents.admin_shell>
@@ -440,6 +484,30 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   defp find_pool(_socket, _pool_id), do: nil
+
+  @compat_flag_labels %{
+    "v1_compatibility_enabled" => "/v1 compatibility",
+    "request_compression_enabled" => "Request compression",
+    "upstream_websocket_bridge_enabled" => "Upstream websocket bridge"
+  }
+
+  defp compat_flag_label(flag) do
+    case Map.fetch(@compat_flag_labels, flag) do
+      {:ok, label} -> {:ok, label}
+      :error -> {:error, %{message: "unsupported pool option"}}
+    end
+  end
+
+  defp fetch_pool_row(socket, pool_id) when is_binary(pool_id) do
+    socket.assigns.pools
+    |> Enum.find(&(&1.pool.id == pool_id))
+    |> case do
+      nil -> {:error, %{message: "Pool was not found"}}
+      pool_row -> {:ok, pool_row}
+    end
+  end
+
+  defp fetch_pool_row(_socket, _pool_id), do: {:error, %{message: "Pool was not found"}}
 
   defp close_create_dialog(socket) do
     assign(socket,
