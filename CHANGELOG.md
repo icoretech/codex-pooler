@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.31](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.30...codex-pooler-v0.4.31) (2026-07-15)
+
+
+### Features
+
+* **admin:** add token-burn gated shine to quota meters ([0c1d952](https://github.com/icoretech/codex-pooler/commit/0c1d9521fa100c4e5999c7fdaa2f2c953cc3d2c1))
+* **admin:** backport upstream footer hover to pool card metrics ([b9b53c2](https://github.com/icoretech/codex-pooler/commit/b9b53c285aa3690d0ecce2b67e3348ac7d0d2643))
+* **admin:** collapse the reconciliation banner into a disclosure ([32a60e9](https://github.com/icoretech/codex-pooler/commit/32a60e9c620c7c7b2151ec88404ff328acde6906))
+* **admin:** name the selected window in the leaderboard subtitle ([e7c2192](https://github.com/icoretech/codex-pooler/commit/e7c21927a2df881d13ae0d23d091da41d2f67e4b))
+* **admin:** rank the stats leaderboard by tokens or settled cost ([a841419](https://github.com/icoretech/codex-pooler/commit/a8414192db23420c881c1362b6d3f54c4e88f4f8))
+* **admin:** redesign request log rows with a fixed two-line budget ([0738e24](https://github.com/icoretech/codex-pooler/commit/0738e2429842e9fb78d4dad0bc8e1d1d6e559a28))
+* **admin:** redesign stats dashboard and shared card chrome ([51639e7](https://github.com/icoretech/codex-pooler/commit/51639e78382d39965ffc41939622781d1be049f2))
+* **admin:** render pool route gates as chevron flow ([f2a4156](https://github.com/icoretech/codex-pooler/commit/f2a4156661b0bb818989e9264f2ca10822e0c1ba))
+* **admin:** show styled series legends on stats charts ([2676f66](https://github.com/icoretech/codex-pooler/commit/2676f668555de1d5b7e6ce8b85308f04c366ff6d))
+* **admin:** split API key enforcement into its own wizard step ([d9389b4](https://github.com/icoretech/codex-pooler/commit/d9389b46568ba0d5f7e0911b6fdfbcd045f5a7a3))
+* **admin:** toggle pool compat flags from the pool cards ([f5b757b](https://github.com/icoretech/codex-pooler/commit/f5b757b1b6b46f3b098d6cded6d5d8ecf3b00fd9))
+
+
+### Bug Fixes
+
+* **quota:** harden weekly restart evidence convergence ([0282a7d](https://github.com/icoretech/codex-pooler/commit/0282a7d5685fc97a9171df545229ae5cbd6771d8))
+
 ## [0.4.30](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.29...codex-pooler-v0.4.30) (2026-07-15)
 
 
