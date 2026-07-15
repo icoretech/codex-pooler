@@ -435,6 +435,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             value={@pool_row.upstream_count}
             value_id={"pool-row-#{@pool_row.pool.id}-upstream-account-count"}
             wrapper_class="min-w-0 pr-3"
+            position={:first}
           />
           <.pool_metric_link
             data_role="pool-api-key-count-cell"
@@ -465,17 +466,15 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               {PoolsReadModel.format_metric_rate(@pool_row.tokens_per_second)}
             </span>
           </.pool_metric_link>
-          <div class="min-w-0 pl-3" data-role="pool-cost-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              Cost {@pool_row.traffic_window_label}
-            </dt>
-            <dd
-              id={"pool-row-#{@pool_row.pool.id}-settled-cost"}
-              class="truncate text-base-content/60"
-            >
-              {PoolsReadModel.format_settled_cost_micros(@pool_row.settled_cost_micros)}
-            </dd>
-          </div>
+          <.pool_metric_link
+            data_role="pool-cost-cell"
+            href={~p"/admin/stats?pool_id=#{@pool_row.pool.id}"}
+            label={"Cost #{@pool_row.traffic_window_label}"}
+            value={PoolsReadModel.format_settled_cost_micros(@pool_row.settled_cost_micros)}
+            value_id={"pool-row-#{@pool_row.pool.id}-settled-cost"}
+            wrapper_class="min-w-0 pl-3"
+            position={:last}
+          />
         </dl>
       </footer>
     </article>
@@ -488,20 +487,28 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :value, :any, required: true
   attr :value_id, :string, required: true
   attr :wrapper_class, :string, required: true
+  attr :position, :atom, default: :middle, values: [:first, :middle, :last]
   slot :inner_block
 
   defp pool_metric_link(assigns) do
     ~H"""
-    <div class={@wrapper_class} data-role={@data_role}>
-      <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
+    <div class={["group relative isolate", @wrapper_class]} data-role={@data_role}>
+      <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35 transition-colors group-hover:text-primary/70">
         <.link
           navigate={@href}
-          class="block truncate transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          class={footer_metric_link_class(@position)}
+          aria-label={"Open #{@label}"}
         >
-          {@label}
+          <span class="sr-only">{@label}</span>
         </.link>
+        <span class="pointer-events-none relative z-30 block max-w-full truncate text-left uppercase">
+          {@label}
+        </span>
       </dt>
-      <dd id={@value_id} class="truncate text-base-content/60">
+      <dd
+        id={@value_id}
+        class="pointer-events-none relative z-30 truncate text-base-content/60 transition-colors group-hover:text-base-content/75"
+      >
         <%= if @inner_block != [] do %>
           {render_slot(@inner_block)}
         <% else %>
@@ -511,6 +518,22 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     </div>
     """
   end
+
+  # Mirrors the upstream card footer triggers: the link overlays the whole
+  # cell with a soft primary wash on hover while the visible text sits above
+  # it. The cells carry asymmetric divider padding, so each position needs its
+  # own horizontal insets to read symmetric against dividers and card edges.
+  defp footer_metric_link_class(position) do
+    [
+      "absolute -inset-y-1.5 z-20 cursor-pointer rounded border border-transparent transition-colors",
+      "hover:border-primary/25 hover:bg-primary/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      footer_metric_link_position_class(position)
+    ]
+  end
+
+  defp footer_metric_link_position_class(:first), do: "-left-3 right-1"
+  defp footer_metric_link_position_class(:middle), do: "left-1 right-1"
+  defp footer_metric_link_position_class(:last), do: "left-1 -right-3"
 
   attr :pool_row, :map, required: true
 

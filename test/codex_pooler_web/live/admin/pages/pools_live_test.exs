@@ -349,7 +349,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     for {role, value_id, href, label, value} <- metric_links do
       assert has_element?(
                view,
-               "#pool-row-#{pool.id} > footer [data-role='#{role}'] dt a[href='#{href}'].hover\\:text-primary",
+               "#pool-row-#{pool.id} > footer [data-role='#{role}'] dt a[href='#{href}'].hover\\:bg-primary\\/5",
+               label
+             )
+
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id} > footer [data-role='#{role}'] dt .pointer-events-none",
                label
              )
 
