@@ -320,7 +320,6 @@ body {
   border: 1px solid color-mix(in oklab, var(--color-base-content) 12%, transparent);
   border-radius: var(--radius-box);
   background: var(--color-base-100);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
 }
 
 .pool-card .pool-card-metrics {
