@@ -328,7 +328,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   aria-valuemax="3"
                   aria-valuenow={pool_route_ready_count(assignment)}
                   aria-label={pool_route_aria_label(assignment)}
-                  class="grid grid-cols-3 gap-1"
+                  class="route-chevron-flow"
                 >
                   <span
                     :for={segment <- pool_route_segments(assignment)}
@@ -937,9 +937,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     [pool_route_segment_base_class(), "bg-base-300/70 text-base-content/55"]
   end
 
-  defp pool_route_segment_base_class do
-    "inline-flex h-4 min-w-0 items-center justify-center truncate rounded-full px-1 text-center text-[0.55rem] font-semibold uppercase leading-none tracking-[0.04em]"
-  end
+  defp pool_route_segment_base_class, do: "route-chevron"
 
   defp assignment_state_label("active"), do: "Assignment active"
   defp assignment_state_label("paused"), do: "Assignment paused"

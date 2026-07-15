@@ -383,6 +383,49 @@ body {
   padding: 0.85rem 1rem 1rem;
 }
 
+/* Pool route path on upstream cards: the three gates a request crosses
+   (Assignment → Health → Quota) render as chevron-linked segments so the
+   left-to-right flow is part of the drawing. Tone classes come from the
+   template; the clip-path notches join adjacent segments. */
+.route-chevron-flow {
+  display: flex;
+  gap: 2px;
+}
+
+.route-chevron {
+  display: inline-flex;
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 1.05rem;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0 0.55rem 0 0.7rem;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  clip-path: polygon(
+    0 0,
+    calc(100% - 7px) 0,
+    100% 50%,
+    calc(100% - 7px) 100%,
+    0 100%,
+    7px 50%
+  );
+}
+
+.route-chevron:first-child {
+  padding-left: 0.45rem;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
+}
+
+.route-chevron:last-child {
+  padding-right: 0.45rem;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 7px 50%);
+}
+
 /* Inline disclosure panel between the pool card header and its body, toggled
    by the header compat-flag icons. Being in normal flow it needs no anchoring
    and works at any viewport width. */
