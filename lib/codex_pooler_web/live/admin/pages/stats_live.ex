@@ -58,7 +58,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     {:noreply, push_patch(socket, to: ~p"/admin/stats?#{query_params(params)}")}
   end
 
-  def handle_event("set_leaderboard_sort", %{"sort" => sort}, socket) when sort in ~w(tokens cost) do
+  def handle_event("set_leaderboard_sort", %{"sort" => sort}, socket)
+      when sort in ~w(tokens cost) do
     {:noreply, assign(socket, :leaderboard_sort, String.to_existing_atom(sort))}
   end
 
@@ -182,6 +183,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
             <StatsPresentation.top_api_keys_table
               rows={@dashboard.tables.top_api_keys}
               sort={@leaderboard_sort}
+              window_label={selected_window_filter_label(@filter_form)}
             />
             <StatsPresentation.upstreams_table rows={@dashboard.tables.upstreams} />
           </section>

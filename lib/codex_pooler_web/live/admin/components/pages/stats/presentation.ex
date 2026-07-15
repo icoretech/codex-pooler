@@ -104,6 +104,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
 
   attr :rows, :list, required: true
   attr :sort, :atom, default: :tokens, values: [:tokens, :cost]
+  attr :window_label, :string, default: nil
 
   def top_api_keys_table(assigns) do
     ranked = leaderboard_ranking(assigns.rows, assigns.sort)
@@ -117,7 +118,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     <AdminComponents.admin_surface
       id="stats-api-key-surface"
       title="Leaderboard"
-      description={leaderboard_description(@sort)}
+      description={leaderboard_description(@sort, @window_label)}
     >
       <:header_actions>
         <div
@@ -246,10 +247,17 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     |> Enum.take(5)
   end
 
-  defp leaderboard_description(:cost), do: "Top API keys by settled cost in the selected window"
+  defp leaderboard_description(sort, window_label) do
+    "#{leaderboard_ranking_label(sort)} in the #{leaderboard_window_label(window_label)}"
+  end
 
-  defp leaderboard_description(_sort),
-    do: "Top API keys by token usage in the selected window"
+  defp leaderboard_ranking_label(:cost), do: "Top API keys by settled cost"
+  defp leaderboard_ranking_label(_sort), do: "Top API keys by token usage"
+
+  defp leaderboard_window_label(label) when is_binary(label) and label != "",
+    do: String.downcase(label)
+
+  defp leaderboard_window_label(_label), do: "selected window"
 
   # Segmented pill: the active option reads as a raised thumb, the inactive
   # ones stay muted text. Both carry a border so the thumb never shifts layout.
