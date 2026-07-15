@@ -64,7 +64,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
               </button>
             </div>
           </div>
-
         </div>
 
         <AdminComponents.dialog_footer
