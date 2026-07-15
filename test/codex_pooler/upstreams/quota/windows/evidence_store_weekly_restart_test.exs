@@ -3,9 +3,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.Quota.Windows.Routing
 
   # Production shape while the provider's anchored 5h windows are suspended
   # (announced as temporary on 2026-07-13): a restarted weekly account arrives
@@ -22,15 +25,20 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
   end
 
   defp exhausted_row!(identity, observed_at, opts \\ []) do
-    reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, 5, :day))
+    used_row!(identity, observed_at, "100", opts)
+  end
 
-    Windows.record_evidence(
+  defp used_row!(identity, observed_at, used_percent, opts \\ []) do
+    reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, 5, :day))
+    metadata = Keyword.get(opts, :metadata, %{})
+
+    EvidenceStore.record_evidence(
       identity,
       %{
         quota_key: "account",
         window_kind: "secondary",
         window_minutes: 10_080,
-        used_percent: Decimal.new("100"),
+        used_percent: Decimal.new(used_percent),
         reset_at: reset_at,
         observed_at: observed_at,
         last_sync_at: observed_at,
@@ -38,14 +46,17 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
         source_precision: "observed",
         quota_scope: "account",
         quota_family: "account",
-        freshness_state: "fresh"
+        freshness_state: "fresh",
+        metadata: metadata
       },
+      observed_at,
       observed_at
     )
   end
 
   defp floating_zero(observed_at, opts \\ []) do
     reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, @window_seconds, :second))
+    reset_after_seconds = Keyword.get(opts, :reset_after_seconds, @window_seconds)
 
     %{
       quota_key: "account",
@@ -60,7 +71,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
       quota_scope: "account",
       quota_family: "account",
       freshness_state: "fresh",
-      metadata: %{"reset_after_seconds" => @window_seconds}
+      metadata: %{"reset_after_seconds" => reset_after_seconds}
     }
   end
 
@@ -73,69 +84,22 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     )
   end
 
-  defp model_weekly(observed_at, used_percent, opts \\ []) do
-    reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, @window_seconds, :second))
-
-    %{
-      quota_key: "codex_spark",
-      window_kind: "secondary",
-      window_minutes: 10_080,
-      used_percent: Decimal.new(used_percent),
-      reset_at: reset_at,
-      observed_at: observed_at,
-      last_sync_at: observed_at,
-      source: "codex_usage_api",
-      source_precision: "observed",
-      quota_scope: "model",
-      quota_family: "codex_model",
-      model: "gpt-5.3-codex-spark",
-      freshness_state: "fresh",
-      metadata: %{"reset_after_seconds" => @window_seconds}
-    }
-  end
-
-  defp model_weekly_row(identity) do
-    Repo.one(
-      from w in AccountQuotaWindow,
-        where:
-          w.upstream_identity_id == ^identity.id and w.quota_key == "codex_spark" and
-            w.window_kind == "secondary" and w.source == "codex_usage_api"
-    )
-  end
-
-  defp spark_weekly_payload(used_percent, reset_at) do
-    %{
-      "additional_rate_limits" => [
-        %{
-          "limit_name" => "GPT-5.3-Codex-Spark",
-          "metered_feature" => "codex_bengalfox",
-          "model" => "gpt-5.3-codex-spark",
-          "rate_limit" => %{
-            "primary_window" => %{
-              "used_percent" => used_percent,
-              "limit_window_seconds" => @window_seconds,
-              "reset_after_seconds" => @window_seconds,
-              "reset_at" => DateTime.to_iso8601(reset_at)
-            }
-          }
+  defp explicit_account_weekly_zero!(observed_at, reset_at) do
+    payload = %{
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 0,
+          "limit_window_seconds" => @window_seconds,
+          "reset_at" => DateTime.to_iso8601(reset_at)
         }
-      ]
+      }
     }
-  end
 
-  defp record_spark_payload!(identity, payload, observed_at) do
     assert {:ok, windows} = Windows.codex_usage_quota_windows_from_payload(payload, observed_at)
 
-    assert [spark_weekly] =
-             Enum.filter(
-               windows,
-               &(&1.quota_key == "codex_spark" and &1.window_kind == "secondary")
-             )
-
-    assert spark_weekly.quota_scope == "model"
-    assert spark_weekly.metadata["reset_after_seconds"] == @window_seconds
-    assert {:ok, row} = Windows.record_evidence(identity, spark_weekly, observed_at)
-    row
+    Enum.find(windows, fn window ->
+      window.quota_key == "account" and window.window_kind == "secondary"
+    end)
   end
 
   test "sliding live restart observations converge an exhausted weekly account" do
@@ -272,168 +236,1182 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     assert DateTime.compare(row.reset_at, forward_anchor) == :eq
   end
 
-  test "a non-exhausted row is untouched by the restart path" do
+  test "a forward-anchored restart without provider timing cannot clear exhaustion" do
     t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
+    assert {:ok, _row} = exhausted_row!(identity, t0)
+
+    candidate_at = DateTime.add(t0, 5, :minute)
+    forward_anchor = DateTime.add(candidate_at, @window_seconds, :second)
+
+    resetless_candidate =
+      candidate_at
+      |> floating_zero(reset_at: forward_anchor)
+      |> Map.put(:metadata, %{})
 
     assert {:ok, _row} =
-             Windows.record_evidence(
+             EvidenceStore.record_evidence(
                identity,
-               Map.put(floating_zero(t0), :used_percent, Decimal.new("40")),
-               t0
+               resetless_candidate,
+               candidate_at,
+               candidate_at
              )
+
+    confirmation_at = DateTime.add(candidate_at, 4, :minute)
+
+    resetless_confirmation =
+      confirmation_at
+      |> floating_zero(reset_at: forward_anchor)
+      |> Map.put(:metadata, %{})
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               resetless_confirmation,
+               confirmation_at,
+               confirmation_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("100"))
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  test "sliding live restart observations converge a partially-used weekly account" do
+    # A mid-cycle provider reset on an account that was NOT exhausted (e.g. a
+    # 31%-used row) must converge through the same candidate proofs instead of
+    # waiting days for the old cycle to expire.
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
 
     t1 = DateTime.add(t0, 300, :second)
     assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t1), t1)
-
-    # Pre-existing semantics for non-exhausted rows apply; nothing crashes and
-    # the row still exists with a valid percent.
     row = account_row(identity)
-    assert row
-  end
-
-  test "sliding model weekly zeros become explicitly floating after confirmation" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
-    identity = identity!()
-    stale_reset = DateTime.add(t0, 3, :day)
-
-    assert {:ok, _row} =
-             Windows.record_evidence(
-               identity,
-               model_weekly(t0, "0", reset_at: stale_reset),
-               t0
-             )
-
-    t1 = DateTime.add(t0, 300, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t1, "0"), t1)
-
-    row = model_weekly_row(identity)
-    assert DateTime.compare(row.reset_at, stale_reset) == :eq
-    refute row.metadata["reset_state"] == "floating"
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
 
     t2 = DateTime.add(t1, 240, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t2, "0"), t2)
-
-    row = model_weekly_row(identity)
-    assert row.metadata["reset_state"] == "floating"
-    assert Decimal.equal?(row.used_percent, Decimal.new("0"))
-    assert DateTime.compare(row.reset_at, DateTime.add(t2, @window_seconds, :second)) == :eq
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t2), t2)
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
     assert DateTime.compare(row.observed_at, t2) == :eq
   end
 
-  test "confirmed floating model weekly zero clears prior-cycle usage" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+  test "a cached fixed-reset zero neither lowers nor keeps refreshing a partially-used row" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
-    stale_reset = DateTime.add(t0, 3, :day)
+    same_cycle_reset = DateTime.add(t0, 5, :day)
+    assert {:ok, _row} = used_row!(identity, t0, "31", reset_at: same_cycle_reset)
 
-    assert {:ok, _row} =
-             Windows.record_evidence(
-               identity,
-               model_weekly(t0, "64", reset_at: stale_reset),
-               t0
-             )
-
-    t1 = DateTime.add(t0, 300, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t1, "0"), t1)
-    t2 = DateTime.add(t1, 240, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t2, "0"), t2)
-
-    row = model_weekly_row(identity)
-    assert row.metadata["reset_state"] == "floating"
-    assert Decimal.equal?(row.used_percent, Decimal.new("0"))
-  end
-
-  test "cached model weekly zero never becomes floating or clears prior usage" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
-    identity = identity!()
-    fixed_reset = DateTime.add(t0, 3, :day)
-
-    assert {:ok, _row} =
-             Windows.record_evidence(
-               identity,
-               model_weekly(t0, "64", reset_at: fixed_reset),
-               t0
-             )
-
-    for offset <- [300, 540] do
-      observed_at = DateTime.add(t0, offset, :second)
+    # The replayed body keeps the same fixed reset: no sliding, no forward
+    # anchor, no expired cycle — quarantined no matter how often it repeats,
+    # and it no longer stamps the contradicted row fresh on every replay.
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
 
       assert {:ok, _row} =
-               Windows.record_evidence(
+               EvidenceStore.record_evidence(
                  identity,
-                 model_weekly(observed_at, "0", reset_at: fixed_reset),
+                 floating_zero(observed_at, reset_at: same_cycle_reset),
+                 observed_at,
                  observed_at
                )
     end
 
-    row = model_weekly_row(identity)
-    refute row.metadata["reset_state"] == "floating"
-    assert Decimal.equal?(row.used_percent, Decimal.new("64"))
-    assert DateTime.compare(row.reset_at, fixed_reset) == :eq
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "stale"
   end
 
-  test "positive model usage anchors a previously floating weekly window" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+  test "a restart candidate expires before a later sliding sequence can confirm it" do
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
 
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t0, "0"), t0)
-
-    t1 = DateTime.add(t0, 60, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t1, "0"), t1)
-    t2 = DateTime.add(t1, 240, :second)
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t2, "0"), t2)
-    assert model_weekly_row(identity).metadata["reset_state"] == "floating"
-
-    anchored_reset = DateTime.add(t2, @window_seconds, :second)
-    t3 = DateTime.add(t2, 60, :second)
+    first_candidate_at = DateTime.add(t0, 60, :second)
 
     assert {:ok, _row} =
-             Windows.record_evidence(
+             EvidenceStore.record_evidence(
                identity,
-               model_weekly(t3, "2", reset_at: anchored_reset),
-               t3
+               floating_zero(first_candidate_at),
+               first_candidate_at,
+               first_candidate_at
              )
 
-    row = model_weekly_row(identity)
-    refute Map.has_key?(row.metadata, "reset_state")
-    assert Decimal.equal?(row.used_percent, Decimal.new("2"))
-    assert DateTime.compare(row.reset_at, anchored_reset) == :eq
+    expired_candidate_at = DateTime.add(first_candidate_at, 16, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(expired_candidate_at),
+               expired_candidate_at,
+               expired_candidate_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+
+    confirmed_at = DateTime.add(expired_candidate_at, 4, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(confirmed_at),
+               confirmed_at,
+               confirmed_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.compare(row.observed_at, confirmed_at) == :eq
   end
 
-  test "parsed Spark payload requires a moving absolute reset before marking it floating" do
-    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+  test "a fixed forward reset cannot clear a partially-used row without runtime evidence" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
-    fixed_reset = DateTime.add(t0, 3, :day)
+    assert {:ok, _row} = used_row!(identity, t0, "31")
 
-    record_spark_payload!(identity, spark_weekly_payload(64, fixed_reset), t0)
+    t1 = DateTime.add(t0, 300, :second)
+    forward_anchor = DateTime.add(t1, @window_seconds, :second)
 
-    cached_zero = spark_weekly_payload(0, fixed_reset)
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t1, reset_at: forward_anchor), t1)
 
-    for offset <- [300, 540] do
-      observed_at = DateTime.add(t0, offset, :second)
-      record_spark_payload!(identity, cached_zero, observed_at)
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t2, reset_at: forward_anchor), t2)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  test "an expired partially-used row converges through the candidate span" do
+    # Previously an expired non-exhausted row took the single-observation
+    # :incoming fast path; the widened chokepoint deliberately trades that
+    # immediacy for the same cache-safe confirmation the exhausted family has.
+    t0 = DateTime.utc_now() |> DateTime.add(-2, :hour) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31", reset_at: DateTime.add(t0, 1, :hour))
+
+    t1 = DateTime.utc_now() |> DateTime.add(-6, :minute) |> DateTime.truncate(:microsecond)
+    anchored_reset = DateTime.add(t1, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t1, reset_at: anchored_reset), t1)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t2, reset_at: anchored_reset), t2)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+  end
+
+  test "an anchored idle zero row keeps refreshing through the same-cycle sync" do
+    # The chokepoint must NOT capture zero-over-zero observations: an anchored
+    # idle account produces identical bodies (fixed reset, no usage), no
+    # sliding proof can ever fire, and losing the same-cycle sync would starve
+    # the row stale and fail routing closed on a perfectly healthy account.
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    anchored_reset = DateTime.add(t0, 5, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: anchored_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(anchored_reset, t0, :second)
+               }
+             )
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+      response_latency_seconds = 180
+      persisted_at = DateTime.add(observed_at, response_latency_seconds, :second)
+
+      remaining_seconds =
+        DateTime.diff(anchored_reset, observed_at, :second) - response_latency_seconds
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at,
+                   reset_at: anchored_reset,
+                   reset_after_seconds: remaining_seconds
+                 ),
+                 observed_at,
+                 persisted_at
+               )
     end
 
-    cached_row = model_weekly_row(identity)
-    refute cached_row.metadata["reset_state"] == "floating"
-    assert Decimal.equal?(cached_row.used_percent, Decimal.new("64"))
-    assert DateTime.compare(cached_row.reset_at, fixed_reset) == :eq
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.compare(row.observed_at, DateTime.add(t0, 16, :minute)) == :eq
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "fresh"
+    assert row.freshness_state == "fresh"
 
-    t3 = DateTime.add(t0, 600, :second)
+    assert %{eligible?: true, routing_state: :weekly_only_probe} =
+             Routing.eligibility_from_windows([row], at: row.observed_at)
+  end
 
-    record_spark_payload!(
-      identity,
-      spark_weekly_payload(0, DateTime.add(t3, @window_seconds)),
-      t3
+  test "a cached superseded reset cannot keep an accepted weekly zero fresh" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    new_cycle_reset = DateTime.add(t0, 5, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: new_cycle_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(new_cycle_reset, t0, :second)
+               }
+             )
+
+    # The superseded reset is still future-dated and only two days behind the
+    # canonical, so freshness and the broad same-cycle drift bound alone cannot
+    # identify the replay. Its fixed reset_after_seconds signature can: it no
+    # longer agrees with reset_at - observed_at as wall time advances.
+    cached_reset = DateTime.add(t0, 3, :day)
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at, reset_at: cached_reset),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "stale"
+
+    fresh_identity = identity!()
+    assert {:ok, _row} = used_row!(fresh_identity, t0, "0", reset_at: new_cycle_reset)
+
+    # Same-cycle backward drift (well inside the window duration) still
+    # refreshes when its relative timing agrees with the observation.
+    drifted_reset = DateTime.add(new_cycle_reset, -3600, :second)
+    observed_at = DateTime.add(t0, 600, :second)
+    remaining_seconds = DateTime.diff(drifted_reset, observed_at, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               fresh_identity,
+               floating_zero(observed_at,
+                 reset_at: drifted_reset,
+                 reset_after_seconds: remaining_seconds
+               ),
+               observed_at,
+               observed_at
+             )
+
+    row = account_row(fresh_identity)
+    assert DateTime.compare(row.observed_at, observed_at) == :eq
+    assert row.freshness_state == "fresh"
+  end
+
+  test "advancing cached provider timestamps cannot revive stale weekly zero evidence" do
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: canonical_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(canonical_reset, t0, :second)
+               }
+             )
+
+    replayed_at = DateTime.add(t0, 20, :minute)
+    cached_provider_at = DateTime.add(t0, 1, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(replayed_at,
+                 reset_at: canonical_reset,
+                 reset_after_seconds: DateTime.diff(canonical_reset, cached_provider_at, :second)
+               ),
+               replayed_at,
+               replayed_at
+             )
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert Evidence.current_freshness_state(row, replayed_at) == "stale"
+  end
+
+  test "a future provider timestamp cannot poison later weekly zero refreshes" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: canonical_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(canonical_reset, t0, :second)
+               }
+             )
+
+    malformed_at = DateTime.add(t0, 60, :second)
+    future_provider_at = DateTime.add(malformed_at, 10, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(malformed_at,
+                 reset_at: canonical_reset,
+                 reset_after_seconds: DateTime.diff(canonical_reset, future_provider_at, :second)
+               ),
+               malformed_at,
+               malformed_at
+             )
+
+    assert DateTime.compare(account_row(identity).observed_at, t0) == :eq
+
+    healthy_at = DateTime.add(t0, 2, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(healthy_at,
+                 reset_at: canonical_reset,
+                 reset_after_seconds: DateTime.diff(canonical_reset, healthy_at, :second)
+               ),
+               healthy_at,
+               healthy_at
+             )
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, healthy_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(healthy_at)
+  end
+
+  test "a valid provider timestamp recovers from an invalid stored liveness marker" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+    poisoned_provider_at = DateTime.add(t0, 1, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: canonical_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(canonical_reset, t0, :second),
+                 "__quota_relative_liveness_v1" => DateTime.to_iso8601(poisoned_provider_at)
+               }
+             )
+
+    healthy_at = DateTime.add(t0, 60, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(healthy_at,
+                 reset_at: canonical_reset,
+                 reset_after_seconds: DateTime.diff(canonical_reset, healthy_at, :second)
+               ),
+               healthy_at,
+               healthy_at
+             )
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, healthy_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(healthy_at)
+  end
+
+  test "a first weekly row with present invalid relative timing is rejected" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for reset_after_seconds <- [
+          "invalid",
+          @window_seconds + 20 * 60,
+          @window_seconds - 10 * 60
+        ] do
+      identity = identity!()
+
+      attrs =
+        observed_at
+        |> floating_zero(reset_after_seconds: reset_after_seconds)
+        |> Map.put(:used_percent, Decimal.new("31"))
+
+      assert {:error, %{code: :invalid_relative_weekly_timing}} =
+               EvidenceStore.record_evidence(identity, attrs, observed_at, observed_at)
+
+      assert account_row(identity) == nil
+    end
+  end
+
+  test "a cached explicit weekly zero without relative timing cannot keep the row fresh" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+    cached_reset = DateTime.add(t0, 3, :day)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0",
+               reset_at: canonical_reset,
+               metadata: %{
+                 "reset_after_seconds" => DateTime.diff(canonical_reset, t0, :second)
+               }
+             )
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+      evidence = explicit_account_weekly_zero!(observed_at, cached_reset)
+      refute Map.has_key?(evidence.metadata, "reset_after_seconds")
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(identity, evidence, observed_at, observed_at)
+    end
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "stale"
+  end
+
+  test "sliding live zeroes keep an accepted weekly zero fresh beyond the ttl" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0", reset_at: DateTime.add(t0, @window_seconds, :second))
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert DateTime.diff(row.observed_at, t0, :minute) >= 12
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "fresh"
+  end
+
+  test "sliding live zeroes recover an accepted weekly zero after it becomes stale" do
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "0", reset_at: DateTime.add(t0, @window_seconds, :second))
+
+    stale_at = DateTime.add(t0, 16, :minute)
+    assert Evidence.current_freshness_state(account_row(identity), stale_at) == "stale"
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(stale_at),
+               stale_at,
+               stale_at
+             )
+
+    assert DateTime.compare(account_row(identity).observed_at, t0) == :eq
+
+    confirmed_at = DateTime.add(stale_at, 4, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(confirmed_at),
+               confirmed_at,
+               confirmed_at
+             )
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, confirmed_at) == :eq
+    assert Evidence.current_freshness_state(row, confirmed_at) == "fresh"
+  end
+
+  test "delayed sliding zeroes cannot clear a newer partially-used observation" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_at = DateTime.add(t0, 10, :minute)
+    assert {:ok, _row} = used_row!(identity, canonical_at, "31")
+
+    delayed_first_at = DateTime.add(t0, 2, :minute)
+    delayed_second_at = DateTime.add(t0, 6, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               delayed_first_at
+               |> floating_zero()
+               |> Map.put(:active_limit, 100)
+               |> Map.put(:credits, 100),
+               delayed_first_at,
+               canonical_at
+             )
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               delayed_second_at
+               |> floating_zero()
+               |> Map.put(:active_limit, 100)
+               |> Map.put(:credits, 100),
+               delayed_second_at,
+               canonical_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+    assert DateTime.compare(row.observed_at, canonical_at) == :eq
+  end
+
+  test "two stale sliding snapshots cannot confirm an account weekly restart" do
+    t0 = DateTime.utc_now() |> DateTime.add(-40, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
+
+    first_replay_at = DateTime.add(t0, 30, :minute)
+    first_provider_at = DateTime.add(t0, 1, :minute)
+    first_reset = DateTime.add(first_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(first_replay_at,
+                 reset_at: first_reset,
+                 reset_after_seconds: @window_seconds
+               ),
+               first_replay_at,
+               first_replay_at
+             )
+
+    second_replay_at = DateTime.add(first_replay_at, 4, :minute)
+    second_provider_at = DateTime.add(first_provider_at, 4, :minute)
+    second_reset = DateTime.add(second_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(second_replay_at,
+                 reset_at: second_reset,
+                 reset_after_seconds: @window_seconds
+               ),
+               second_replay_at,
+               second_replay_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("31"))
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  test "an invalid second snapshot cannot confirm a valid account restart candidate" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
+
+    candidate_at = DateTime.add(t0, 5, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(candidate_at),
+               candidate_at,
+               candidate_at
+             )
+
+    assert {:ok, _candidate} = EvidenceStore.parse_candidate(account_row(identity).metadata)
+
+    invalid_at = DateTime.add(candidate_at, 4, :minute)
+    stale_provider_at = DateTime.add(t0, -20, :minute)
+    stale_reset = DateTime.add(stale_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(invalid_at,
+                 reset_at: stale_reset,
+                 reset_after_seconds: @window_seconds
+               ),
+               invalid_at,
+               invalid_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("31"))
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  test "advancing account candidates older than canonical provider time cannot rewind it" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+    canonical_remaining = DateTime.diff(canonical_reset, t0, :second)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "31",
+               reset_at: canonical_reset,
+               metadata: %{"reset_after_seconds" => canonical_remaining}
+             )
+
+    first_observed_at = DateTime.add(t0, 60, :second)
+    first_provider_at = DateTime.add(t0, -5, :minute)
+    first_reset = DateTime.add(first_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(first_observed_at, reset_at: first_reset),
+               first_observed_at,
+               first_observed_at
+             )
+
+    second_observed_at = DateTime.add(first_observed_at, 4, :minute)
+    second_provider_at = DateTime.add(first_provider_at, 4, :minute)
+    second_reset = DateTime.add(second_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(second_observed_at, reset_at: second_reset),
+               second_observed_at,
+               second_observed_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("31"))
+    assert DateTime.compare(row.reset_at, canonical_reset) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert row.metadata["reset_after_seconds"] == canonical_remaining
+    refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+  end
+
+  test "positive account refresh advances the canonical provider watermark" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             used_row!(identity, t0, "31",
+               reset_at: canonical_reset,
+               metadata: %{"reset_after_seconds" => @window_seconds}
+             )
+
+    canonical_provider_at = DateTime.add(t0, 6, :minute)
+    canonical_remaining = DateTime.diff(canonical_reset, canonical_provider_at, :second)
+
+    positive_refresh =
+      canonical_provider_at
+      |> floating_zero(
+        reset_at: canonical_reset,
+        reset_after_seconds: canonical_remaining
+      )
+      |> Map.put(:used_percent, Decimal.new("40"))
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               positive_refresh,
+               canonical_provider_at,
+               canonical_provider_at
+             )
+
+    first_observed_at = DateTime.add(canonical_provider_at, 60, :second)
+    first_provider_at = DateTime.add(t0, 2, :minute)
+    first_reset = DateTime.add(first_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(first_observed_at, reset_at: first_reset),
+               first_observed_at,
+               first_observed_at
+             )
+
+    second_observed_at = DateTime.add(first_observed_at, 3, :minute)
+    second_provider_at = DateTime.add(first_provider_at, 3, :minute)
+    second_reset = DateTime.add(second_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(second_observed_at, reset_at: second_reset),
+               second_observed_at,
+               second_observed_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("40"))
+    assert DateTime.compare(row.reset_at, canonical_reset) == :eq
+    assert DateTime.compare(row.observed_at, canonical_provider_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(canonical_provider_at)
+
+    refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+  end
+
+  test "invalid capacity-bearing positive timing cannot stale the canonical watermark" do
+    for timing <- [:stale, :future, :malformed] do
+      t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+      identity = identity!()
+      canonical_reset = DateTime.add(t0, @window_seconds, :second)
+
+      assert {:ok, _row} =
+               used_row!(identity, t0, "31",
+                 reset_at: canonical_reset,
+                 metadata: %{"reset_after_seconds" => @window_seconds}
+               )
+
+      invalid_at = DateTime.add(t0, 6, :minute)
+
+      invalid_metadata =
+        case timing do
+          :stale ->
+            stale_provider_at = DateTime.add(t0, -20, :minute)
+
+            %{
+              "reset_after_seconds" => DateTime.diff(canonical_reset, stale_provider_at, :second)
+            }
+
+          :future ->
+            future_provider_at = DateTime.add(invalid_at, 10, :minute)
+
+            %{
+              "reset_after_seconds" => DateTime.diff(canonical_reset, future_provider_at, :second)
+            }
+
+          :malformed ->
+            %{"reset_after_seconds" => "invalid"}
+        end
+
+      invalid_positive =
+        invalid_at
+        |> floating_zero(reset_at: canonical_reset)
+        |> Map.merge(%{
+          active_limit: 100,
+          credits: 60,
+          used_percent: Decimal.new("40"),
+          metadata: invalid_metadata
+        })
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 invalid_positive,
+                 invalid_at,
+                 invalid_at
+               )
+
+      rejected = account_row(identity)
+      assert Decimal.equal?(rejected.used_percent, Decimal.new("31"))
+      assert DateTime.compare(rejected.observed_at, t0) == :eq
+
+      recovery_at = DateTime.add(invalid_at, 60, :second)
+      recovery_remaining = DateTime.diff(canonical_reset, recovery_at, :second)
+
+      valid_positive =
+        recovery_at
+        |> floating_zero(
+          reset_at: canonical_reset,
+          reset_after_seconds: recovery_remaining
+        )
+        |> Map.merge(%{
+          active_limit: 100,
+          credits: 60,
+          used_percent: Decimal.new("40")
+        })
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 valid_positive,
+                 recovery_at,
+                 recovery_at
+               )
+
+      first_observed_at = DateTime.add(recovery_at, 60, :second)
+      first_provider_at = DateTime.add(t0, 2, :minute)
+      first_reset = DateTime.add(first_provider_at, @window_seconds, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(first_observed_at, reset_at: first_reset),
+                 first_observed_at,
+                 first_observed_at
+               )
+
+      second_observed_at = DateTime.add(first_observed_at, 3, :minute)
+      second_provider_at = DateTime.add(first_provider_at, 3, :minute)
+      second_reset = DateTime.add(second_provider_at, @window_seconds, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(second_observed_at, reset_at: second_reset),
+                 second_observed_at,
+                 second_observed_at
+               )
+
+      row = account_row(identity)
+      assert Decimal.equal?(row.used_percent, Decimal.new("40"))
+      assert DateTime.compare(row.observed_at, recovery_at) == :eq
+      assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(recovery_at)
+    end
+  end
+
+  test "a restart candidate older than newer positive usage cannot clear it" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
+
+    candidate_at = DateTime.add(t0, 60, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(candidate_at),
+               candidate_at,
+               candidate_at
+             )
+
+    newer_positive_at = DateTime.add(t0, 120, :second)
+
+    resetless_positive =
+      newer_positive_at
+      |> floating_zero()
+      |> Map.put(:used_percent, Decimal.new("40"))
+      |> Map.put(:reset_at, nil)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               resetless_positive,
+               newer_positive_at,
+               newer_positive_at
+             )
+
+    positive_row = account_row(identity)
+    refute Map.has_key?(positive_row.metadata, "__quota_confirmed_candidate_v1")
+    refute Map.has_key?(positive_row.metadata, "__quota_relative_candidate_liveness_v1")
+
+    confirmation_at = DateTime.add(candidate_at, 240, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(confirmation_at),
+               confirmation_at,
+               confirmation_at
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("40")) == :eq
+    assert DateTime.compare(row.observed_at, newer_positive_at) == :eq
+  end
+
+  test "a first positive without provider timing blocks provider-older restart candidates" do
+    positive_at =
+      DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+
+    identity = identity!()
+
+    positive =
+      positive_at
+      |> floating_zero()
+      |> Map.put(:used_percent, Decimal.new("70"))
+      |> Map.put(:reset_at, nil)
+      |> Map.put(:metadata, %{})
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(identity, positive, positive_at, positive_at)
+
+    for {provider_delta, observed_delta} <- [{-300, 60}, {-60, 300}] do
+      provider_at = DateTime.add(positive_at, provider_delta, :second)
+      observed_at = DateTime.add(positive_at, observed_delta, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at,
+                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
+                 ),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("70"))
+    assert DateTime.compare(row.observed_at, positive_at) == :eq
+    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(positive_at)
+  end
+
+  test "a markerless legacy positive blocks provider-older restart candidates" do
+    positive_at =
+      DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, positive_at, "31")
+
+    legacy_row = account_row(identity)
+
+    legacy_row
+    |> Ecto.Changeset.change(metadata: %{})
+    |> Repo.update!()
+
+    for {provider_delta, observed_delta} <- [{-300, 60}, {-60, 300}] do
+      provider_at = DateTime.add(positive_at, provider_delta, :second)
+      observed_at = DateTime.add(positive_at, observed_delta, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at,
+                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
+                 ),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("31"))
+    assert DateTime.compare(row.observed_at, positive_at) == :eq
+    refute Map.has_key?(row.metadata, "__quota_confirmed_candidate_v1")
+  end
+
+  test "confirmed account restart stores its provider watermark monotonically" do
+    p0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, p0, "31")
+
+    p1 = DateTime.add(p0, 5, :minute)
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(p1), p1)
+
+    p2 = DateTime.add(p1, 4, :minute)
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(p2), p2)
+
+    accepted = account_row(identity)
+    assert Decimal.equal?(accepted.used_percent, Decimal.new("0"))
+    assert DateTime.compare(accepted.observed_at, p2) == :eq
+    assert accepted.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(p2)
+
+    stale_provider_at = DateTime.add(p0, 7, :minute)
+    replayed_at = DateTime.add(p2, 60, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               floating_zero(replayed_at,
+                 reset_at: DateTime.add(stale_provider_at, @window_seconds, :second)
+               ),
+               replayed_at,
+               replayed_at
+             )
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, p2) == :eq
+    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(p2)
+  end
+
+  test "an accepted cached positive cannot rewind the provider watermark" do
+    base = DateTime.utc_now() |> DateTime.add(-14, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_provider_at = DateTime.add(base, 6, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               canonical_provider_at
+               |> floating_zero()
+               |> Map.put(:used_percent, Decimal.new("31")),
+               canonical_provider_at,
+               canonical_provider_at
+             )
+
+    cached_positive_at = DateTime.add(base, 7, :minute)
+
+    cached_positive =
+      cached_positive_at
+      |> floating_zero(reset_at: DateTime.add(base, @window_seconds, :second))
+      |> Map.put(:used_percent, Decimal.new("40"))
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               cached_positive,
+               cached_positive_at,
+               cached_positive_at
+             )
+
+    assert account_row(identity).metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(canonical_provider_at)
+
+    for {provider_delta, observed_delta} <- [{60, 8 * 60}, {5 * 60, 12 * 60}] do
+      provider_at = DateTime.add(base, provider_delta, :second)
+      observed_at = DateTime.add(base, observed_delta, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at,
+                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
+                 ),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("40"))
+    assert DateTime.compare(row.observed_at, cached_positive_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(canonical_provider_at)
+  end
+
+  test "a cached positive cannot rewind a legacy reset-derived provider watermark" do
+    base = DateTime.utc_now() |> DateTime.add(-14, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    legacy_provider_at = DateTime.add(base, 6, :minute)
+    legacy_reset_at = DateTime.add(legacy_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             used_row!(identity, legacy_provider_at, "31",
+               reset_at: legacy_reset_at,
+               metadata: %{"reset_after_seconds" => @window_seconds}
+             )
+
+    legacy_row = account_row(identity)
+
+    legacy_row
+    |> Ecto.Changeset.change(
+      metadata: Map.delete(legacy_row.metadata, "__quota_relative_liveness_v1")
     )
+    |> Repo.update!()
 
-    t4 = DateTime.add(t3, 240, :second)
-    moving_reset = DateTime.add(t4, @window_seconds)
-    record_spark_payload!(identity, spark_weekly_payload(0, moving_reset), t4)
+    cached_positive_at = DateTime.add(base, 7, :minute)
 
-    live_row = model_weekly_row(identity)
-    assert live_row.metadata["reset_state"] == "floating"
-    assert Decimal.equal?(live_row.used_percent, Decimal.new("0"))
-    assert DateTime.compare(live_row.reset_at, moving_reset) == :eq
+    cached_positive =
+      cached_positive_at
+      |> floating_zero(reset_at: DateTime.add(base, @window_seconds, :second))
+      |> Map.put(:used_percent, Decimal.new("40"))
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               cached_positive,
+               cached_positive_at,
+               cached_positive_at
+             )
+
+    assert account_row(identity).metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(legacy_provider_at)
+
+    for {provider_delta, observed_delta} <- [{60, 8 * 60}, {5 * 60, 12 * 60}] do
+      provider_at = DateTime.add(base, provider_delta, :second)
+      observed_at = DateTime.add(base, observed_delta, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(observed_at,
+                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
+                 ),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert Decimal.equal?(row.used_percent, Decimal.new("40"))
+    assert DateTime.compare(row.observed_at, cached_positive_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(legacy_provider_at)
+  end
+
+  test "provider-time freshness and future-skew boundaries are inclusive" do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    cases = [
+      {-Evidence.freshness_ttl_seconds(), true},
+      {Evidence.future_observed_skew_seconds(), true},
+      {-Evidence.freshness_ttl_seconds() - 1, false},
+      {Evidence.future_observed_skew_seconds() + 1, false}
+    ]
+
+    for {provider_delta, candidate?} <- cases do
+      identity = identity!()
+      existing_at = DateTime.add(timestamp, -30, :minute)
+      assert {:ok, _row} = used_row!(identity, existing_at, "31")
+      provider_at = DateTime.add(timestamp, provider_delta, :second)
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 floating_zero(timestamp,
+                   reset_at: DateTime.add(provider_at, @window_seconds, :second)
+                 ),
+                 timestamp,
+                 timestamp
+               )
+
+      if candidate? do
+        assert Map.has_key?(account_row(identity).metadata, "__quota_confirmed_candidate_v1")
+      else
+        refute Map.has_key?(account_row(identity).metadata, "__quota_confirmed_candidate_v1")
+      end
+    end
+  end
+
+  test "a resetless weekly zero cannot crash or clear a partially-used observation" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = used_row!(identity, t0, "31")
+    observed_at = DateTime.add(t0, 5, :minute)
+
+    malformed_zero =
+      observed_at
+      |> floating_zero()
+      |> Map.put(:reset_at, nil)
+      |> Map.put(:metadata, "invalid")
+
+    assert {:ok, normalized} = Evidence.new(malformed_zero, observed_at)
+    assert normalized.metadata == %{}
+
+    resetless_zero =
+      malformed_zero
+      |> Map.put(:metadata, %{"reset_after_seconds" => @window_seconds})
+      |> Map.put(:active_limit, 100)
+      |> Map.put(:credits, 100)
+
+    assert {:ok, _row} = Windows.record_evidence(identity, resetless_zero, observed_at)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
   end
 end

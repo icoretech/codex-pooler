@@ -344,7 +344,7 @@ defmodule CodexPooler.Quotas.Evidence do
           fetch(attrs, :source_precision)
         )
     )
-    |> put(:metadata, fetch(attrs, :metadata) || %{})
+    |> put(:metadata, metadata_or_empty(fetch(attrs, :metadata)))
   end
 
   defp freshness_state(attrs, timestamp) do
@@ -380,6 +380,9 @@ defmodule CodexPooler.Quotas.Evidence do
   defp exhausted?(_evidence), do: false
 
   defp fetch(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
+
+  defp metadata_or_empty(%{} = metadata), do: metadata
+  defp metadata_or_empty(_invalid), do: %{}
 
   defp put(map, _key, nil), do: map
   defp put(map, key, value), do: Map.put(map, key, value)

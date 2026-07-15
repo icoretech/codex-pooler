@@ -4211,7 +4211,7 @@ defmodule CodexPooler.UpstreamsTest do
 
     test "honors explicit weekly usage reset_at while ignoring full-window reset_after refreshes" do
       identity = active_identity_fixture()
-      observed_at = ~U[2026-04-27 13:00:00Z]
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       explicit_reset_at = DateTime.add(observed_at, 3 * 24 * 60 * 60, :second)
 
       assert {:ok, [weekly]} =
@@ -4222,7 +4222,7 @@ defmodule CodexPooler.UpstreamsTest do
                      "primary_window" => %{
                        "used_percent" => 67,
                        "limit_window_seconds" => 604_800,
-                       "reset_after_seconds" => 604_800,
+                       "reset_after_seconds" => 3 * 24 * 60 * 60,
                        "reset_at" => DateTime.to_iso8601(explicit_reset_at)
                      }
                    }
@@ -9061,6 +9061,75 @@ defmodule CodexPooler.UpstreamsTest do
           %{canonical: canonical, candidate: candidate}
         end
 
+      unrelated_candidates =
+        for attrs <- [
+              :model
+              |> confirmed_convergence_attrs("primary", "22", reset_at, canonical_at)
+              |> Map.merge(%{
+                model: "example-model-sibling",
+                raw_limit_id: "provider-limit-sibling",
+                raw_limit_name: "Provider limit sibling",
+                raw_metered_feature: "provider-meter-sibling"
+              }),
+              confirmed_convergence_attrs(
+                :account,
+                "primary",
+                "22",
+                reset_at,
+                canonical_at
+              )
+            ] do
+          assert {:ok, canonical} = QuotaWindows.record_evidence(identity, attrs, canonical_at)
+
+          candidate_at = DateTime.add(canonical_at, 10, :second)
+
+          lower_attrs =
+            attrs
+            |> Map.put(:used_percent, Decimal.new("1"))
+            |> Map.put(:observed_at, candidate_at)
+            |> Map.put(:last_sync_at, candidate_at)
+
+          assert {:ok, candidate} =
+                   QuotaWindows.record_evidence(identity, lower_attrs, candidate_at)
+
+          assert candidate.id == canonical.id
+          assert_confirmed_candidate(candidate, "1", reset_at, candidate_at)
+          candidate
+        end
+
+      source_attrs =
+        :model
+        |> confirmed_convergence_attrs("primary", "22", reset_at, canonical_at)
+        |> Map.merge(%{
+          raw_limit_id: "runtime-source-limit",
+          raw_limit_name: "Runtime source limit",
+          raw_metered_feature: "runtime-source-meter"
+        })
+
+      assert {:ok, source_canonical} =
+               QuotaWindows.record_evidence(identity, source_attrs, canonical_at)
+
+      candidate_at = DateTime.add(canonical_at, 10, :second)
+
+      source_lower_attrs =
+        source_attrs
+        |> Map.put(:used_percent, Decimal.new("1"))
+        |> Map.put(:observed_at, candidate_at)
+        |> Map.put(:last_sync_at, candidate_at)
+
+      assert {:ok, source_candidate} =
+               QuotaWindows.record_evidence(identity, source_lower_attrs, candidate_at)
+
+      assert source_candidate.id == source_canonical.id
+      assert_confirmed_candidate(source_candidate, "1", reset_at, candidate_at)
+
+      source_candidate =
+        source_candidate
+        |> Ecto.Changeset.change(source: "codex_response_headers")
+        |> Repo.update!()
+
+      unrelated_candidates = [source_candidate | unrelated_candidates]
+
       runtime_at = DateTime.add(canonical_at, 20, :second)
 
       runtime_attrs =
@@ -9079,13 +9148,24 @@ defmodule CodexPooler.UpstreamsTest do
       assert Enum.all?(provider_rows, &(&1.candidate.id != runtime.id))
 
       persisted = QuotaWindows.list_evidence(identity)
-      assert Enum.count(persisted, &(&1.source == "codex_usage_api")) == 2
+      assert Enum.count(persisted, &(&1.source == "codex_usage_api")) == 4
       assert Enum.count(persisted, &(&1.source == "codex_rate_limit_event")) == 1
-      refute Enum.any?(persisted, &confirmed_candidate/1)
 
       for %{canonical: canonical} <- provider_rows do
         provider = Enum.find(persisted, &(&1.id == canonical.id))
         assert_provider_canonical_snapshot(provider, canonical)
+        refute confirmed_candidate(provider)
+      end
+
+      for candidate <- unrelated_candidates do
+        preserved = Enum.find(persisted, &(&1.id == candidate.id))
+
+        assert_confirmed_candidate(
+          preserved,
+          "1",
+          reset_at,
+          DateTime.add(canonical_at, 10, :second)
+        )
       end
     end
 
@@ -11107,7 +11187,7 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
-    test "weak zero usage refresh keeps stronger model percent evidence visible" do
+    test "weak zero usage refresh does not restamp weekly model evidence without timing" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       primary_reset_at = DateTime.add(observed_at, 2, :hour)
@@ -11202,7 +11282,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert DateTime.compare(primary_window.reset_at, primary_reset_at) == :eq
       assert DateTime.compare(weekly_window.reset_at, weekly_reset_at) == :eq
       assert DateTime.compare(primary_window.observed_at, weak_observed_at) == :eq
-      assert DateTime.compare(weekly_window.observed_at, weak_observed_at) == :eq
+      assert DateTime.compare(weekly_window.observed_at, observed_at) == :eq
       assert Decimal.equal?(primary_window.used_percent, Decimal.new("1"))
       assert Decimal.equal?(weekly_window.used_percent, Decimal.new("15"))
     end
