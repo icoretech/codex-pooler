@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.30](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.29...codex-pooler-v0.4.30) (2026-07-15)
+
+
+### Features
+
+* **gateway:** bridge public streaming turns over upstream websocket sessions ([3d9a423](https://github.com/icoretech/codex-pooler/commit/3d9a4232d3b6fc5991d2a98f219e1674e43157ec))
+* **pools:** add the upstream websocket bridge routing toggle ([c8bc559](https://github.com/icoretech/codex-pooler/commit/c8bc559806debe30c90124dd47564f825d2d1314))
+
+
+### Bug Fixes
+
+* **admin:** break token leaderboard ties by descending model name ([b139878](https://github.com/icoretech/codex-pooler/commit/b139878260144786dfdef5bbabae02db4b2af531))
+* **admin:** compact the API key rows below the columnar breakpoint ([0c4ed56](https://github.com/icoretech/codex-pooler/commit/0c4ed5691bd8f0408978b90e25d75b25863f232c))
+* **admin:** line up the API key pool header elements ([da477bb](https://github.com/icoretech/codex-pooler/commit/da477bb1aa7fc1b98634223cf66213ac547e2e73))
+* **admin:** make the API key group sort a total order ([b4c25f4](https://github.com/icoretech/codex-pooler/commit/b4c25f4b94a177f1e6641162810491741cbec581))
+* **admin:** order API keys by lifecycle within each pool group ([b32348c](https://github.com/icoretech/codex-pooler/commit/b32348cef41aed68ceaf8de7b28745434516a781))
+* **admin:** pin the API key status badge and label the prefix block ([baa3d4c](https://github.com/icoretech/codex-pooler/commit/baa3d4c7f4b2bd0feabb367daf8614d723f7bd08))
+* **admin:** plain-face the key prefix and shorten the pool eyebrow ([27683e0](https://github.com/icoretech/codex-pooler/commit/27683e0f673b6f3ea893dcf12acc8e8b8274ad27))
+* **admin:** size the key prefix value like its sibling facts ([9177d9f](https://github.com/icoretech/codex-pooler/commit/9177d9fb3a1a48b246bc661b0bf360e5bd24d5d3))
+* **admin:** summarize the tokens panel with spend instead of tokens ([62df862](https://github.com/icoretech/codex-pooler/commit/62df8629438023f1f8994a8845e08d681c2332f9))
+* **deps:** update dependency astro to v7.0.9 ([#172](https://github.com/icoretech/codex-pooler/issues/172)) ([315a7cd](https://github.com/icoretech/codex-pooler/commit/315a7cd7b0eda1bd7754eee3fe6801ce48c48806))
+* **gateway:** fall back on failed incomplete bridge terminals ([d866df6](https://github.com/icoretech/codex-pooler/commit/d866df6f6044041b81e332e3020ee413fde51a37))
+* **gateway:** preserve web tool outputs during compression ([b0bce21](https://github.com/icoretech/codex-pooler/commit/b0bce21f78f75ad9557f24bab8a088ea92d9fece))
+* **upstreams:** harden quota reconciliation state transitions ([d3be184](https://github.com/icoretech/codex-pooler/commit/d3be1849357fa18ff2e0832742ca5a79c6a00889))
+* **upstreams:** reuse fresh weekly quota when the usage probe blips ([7df8c58](https://github.com/icoretech/codex-pooler/commit/7df8c5881f1f64bab50404521d21553d01e742de))
+
 ## [0.4.29](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.28...codex-pooler-v0.4.29) (2026-07-14)
 
 
