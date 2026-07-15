@@ -29,7 +29,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   @type job_insert_result ::
           {:ok, Oban.Job.t()} | {:error, Ecto.Changeset.t() | missing_ref_error()}
 
-  @automatic_reconciliation_unique [
+  @identity_reconciliation_unique [
     fields: [:args, :queue, :worker],
     keys: [:upstream_identity_id],
     states: :successful,
@@ -112,33 +112,42 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         %PoolUpstreamAssignment{} = assignment,
         opts \\ []
       ) do
-    enqueue_automatic_identity_account_reconciliation(
+    enqueue_identity_account_reconciliation(
       assignment.pool_id,
       assignment,
       Keyword.put_new(opts, :trigger_kind, "scheduled")
     )
   end
 
-  @spec enqueue_gateway_account_reconciliation(pool_ref(), PoolUpstreamAssignment.t()) ::
-          job_insert_result()
-  def enqueue_gateway_account_reconciliation(pool_or_id, %PoolUpstreamAssignment{} = assignment) do
+  @spec enqueue_identity_account_reconciliation(
+          pool_ref(),
+          PoolUpstreamAssignment.t(),
+          keyword()
+        ) :: job_insert_result()
+  def enqueue_identity_account_reconciliation(
+        pool_or_id,
+        %PoolUpstreamAssignment{} = assignment,
+        opts \\ []
+      ) do
     with {:ok, pool_id} <- pool_id(pool_or_id) do
-      enqueue_automatic_identity_account_reconciliation(
-        pool_id,
-        assignment,
-        trigger_kind: "gateway"
-      )
+      enqueue_identity_scoped_account_reconciliation(pool_id, assignment, opts)
     end
   end
 
-  # Scheduled and gateway triggers share one automatic dedup boundary per
-  # upstream identity: an incomplete job of either shape blocks a new insert
+  @spec enqueue_gateway_account_reconciliation(pool_ref(), PoolUpstreamAssignment.t()) ::
+          job_insert_result()
+  def enqueue_gateway_account_reconciliation(pool_or_id, %PoolUpstreamAssignment{} = assignment) do
+    enqueue_identity_account_reconciliation(pool_or_id, assignment, trigger_kind: "gateway")
+  end
+
+  # Scheduled, gateway, and admin triggers share one dedup boundary per
+  # upstream identity: an incomplete job of any shape blocks a new insert
   # regardless of age, a completed job imposes the 60-second inserted-at
   # cooldown from the Oban unique config, and cancelled/discarded jobs are
   # replaceable immediately. The check-then-insert pair is deliberately not
   # serialized here: a racing enqueue falls through to Oban's advisory-locked
   # unique insert and resolves as conflict?: true.
-  defp enqueue_automatic_identity_account_reconciliation(pool_id, assignment, opts) do
+  defp enqueue_identity_scoped_account_reconciliation(pool_id, assignment, opts) do
     args =
       pool_id
       |> account_reconciliation_args(assignment.id, opts)
@@ -148,19 +157,19 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
       })
       |> maybe_put_recovery_fence(assignment)
 
-    case incomplete_automatic_reconciliation_job(assignment.upstream_identity_id) do
+    case incomplete_identity_reconciliation_job(assignment.upstream_identity_id) do
       %Oban.Job{} = job ->
         {:ok, %{job | conflict?: true}}
 
       nil ->
         args
-        |> AccountReconciliationWorker.new(automatic_reconciliation_job_options(opts))
+        |> AccountReconciliationWorker.new(identity_reconciliation_job_options(opts))
         |> Oban.insert()
     end
     |> tap_job_status_event(pool_id, "account_reconciliation", "scheduled")
   end
 
-  defp incomplete_automatic_reconciliation_job(identity_id) do
+  defp incomplete_identity_reconciliation_job(identity_id) do
     worker = Oban.Worker.to_string(AccountReconciliationWorker)
 
     Oban.Job
@@ -189,10 +198,22 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
     |> Repo.one()
   end
 
-  defp automatic_reconciliation_job_options(opts) do
+  defp identity_reconciliation_job_options(opts) do
     opts
     |> Keyword.take([:scheduled_at, :schedule_in])
-    |> Keyword.put(:unique, @automatic_reconciliation_unique)
+    |> Keyword.put(:unique, identity_reconciliation_unique(opts))
+  end
+
+  # A quota confirmation must run after its evidence span even when another
+  # reconciliation completed inside the normal 60-second enqueue cooldown.
+  # The explicit incomplete-job query above still prevents overlap, while this
+  # narrower Oban boundary retains advisory-lock protection for enqueue races.
+  defp identity_reconciliation_unique(opts) do
+    if Keyword.get(opts, :bypass_successful_cooldown?, false) do
+      Keyword.put(@identity_reconciliation_unique, :states, :incomplete)
+    else
+      @identity_reconciliation_unique
+    end
   end
 
   defp tap_job_status_event(

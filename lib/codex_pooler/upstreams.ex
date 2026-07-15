@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams do
     Assignments,
     Import,
     OAuth,
+    QuotaReconciliationEnqueue,
     SavedResetPolicy,
     SavedResetRedemptionEnqueue,
     SecretStore,
@@ -171,6 +172,12 @@ defmodule CodexPooler.Upstreams do
           {:ok, map()} | {:error, lifecycle_error() | Ecto.Changeset.t()}
   defdelegate enqueue_token_refresh_for_scope(scope, identity_or_id, opts \\ []),
     to: TokenRefreshEnqueue,
+    as: :enqueue_for_scope
+
+  @spec enqueue_quota_reconciliation_for_scope(Scope.t(), identity_ref(), keyword()) ::
+          {:ok, map()} | {:error, lifecycle_error() | Ecto.Changeset.t()}
+  defdelegate enqueue_quota_reconciliation_for_scope(scope, identity_or_id, opts \\ []),
+    to: QuotaReconciliationEnqueue,
     as: :enqueue_for_scope
 
   @spec update_saved_reset_policy_for_scope(Scope.t(), identity_ref(), map()) ::

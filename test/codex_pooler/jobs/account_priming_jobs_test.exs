@@ -80,6 +80,48 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
       assert QuotaWindows.usable_window?(window)
     end
 
+    test "manual quota refresh updates priming state for every assignment of the identity" do
+      future_reset = DateTime.add(DateTime.utc_now(), 900, :second)
+
+      upstream =
+        start_path_upstream(%{
+          "/backend-api/wham/usage" =>
+            {200,
+             %{
+               "rate_limit" => %{
+                 "primary_window" => %{
+                   "used_percent" => 25,
+                   "limit_window_seconds" => 18_000,
+                   "reset_at" => DateTime.to_iso8601(future_reset)
+                 }
+               }
+             }}
+        })
+
+      {pool, assignment, identity} = codex_assignment_fixture(upstream)
+      second_pool = pool_fixture(%{name: "Shared identity quota pool"})
+
+      assert {:ok, sibling_assignment} =
+               PoolAssignments.assign_pool_assignment(second_pool, identity)
+
+      assert {:ok, result} =
+               AccountReconciliation.run(pool.id, assignment.id, "admin_upstreams_live")
+
+      assert result.catalog.code == "catalog_sync_skipped"
+
+      primary_priming =
+        Repo.get!(PoolUpstreamAssignment, assignment.id).metadata["quota_priming"]
+
+      sibling_priming =
+        Repo.get!(PoolUpstreamAssignment, sibling_assignment.id).metadata["quota_priming"]
+
+      assert primary_priming["status"] == "known"
+      assert sibling_priming == primary_priming
+
+      assert [usage_request] = FakeUpstream.requests(upstream)
+      assert usage_request.path == "/backend-api/wham/usage"
+    end
+
     test "account reconciliation refreshes an expired access token before quota priming" do
       future_reset = DateTime.add(DateTime.utc_now(), 900, :second)
       refresh_token = "refresh-token-#{System.unique_integer([:positive])}"

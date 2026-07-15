@@ -230,6 +230,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     end
   end
 
+  test "pending reset confirmation overrides the old canonical quota readiness" do
+    assignment = %{
+      metadata: %{"quota_priming" => %{"status" => "confirmation_pending"}}
+    }
+
+    projected = QuotaProjection.put_current_quota_priming(assignment, %{state: "ready"})
+
+    assert projected.quota_priming_status == "confirmation_pending"
+    assert projected.quota_priming_label == "Reset confirmation pending"
+  end
+
   test "later persisted successful priming overrides an earlier terminal state" do
     assignment = %{metadata: %{"quota_priming" => %{"status" => "known"}}}
 

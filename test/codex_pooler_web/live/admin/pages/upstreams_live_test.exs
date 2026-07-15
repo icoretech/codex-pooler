@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Events.Event
   alias CodexPooler.Events.PostgresBridge
   alias CodexPooler.FakeOpenAIAuthProvider
+  alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Mailer
@@ -2031,6 +2032,41 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#upstream-account-#{deleted_identity.id}")
   end
 
+  test "manually enqueues account reconciliation for an identity from the upstreams page", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "manual-reconcile", name: "Manual Reconcile"})
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Manual Reconcile Codex"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#reconcile-upstream-account-#{identity.id}")
+
+    # Trigger reconcile
+    view
+    |> element("#reconcile-upstream-account-#{identity.id}")
+    |> render_click()
+
+    assert render(view) =~
+             "Quota refresh queued; reset changes, if detected, are confirmed automatically after about 3 minutes"
+
+    assert %Oban.Job{} =
+             job =
+             Repo.all(Oban.Job)
+             |> Enum.find(fn j ->
+               j.worker == worker_name(AccountReconciliationWorker) and
+                 j.args["trigger_kind"] == "admin_upstreams_live" and
+                 j.args["pool_upstream_assignment_id"] == assignment.id
+             end)
+
+    assert job.args["pool_id"] == pool.id
+  end
+
   @tag :upstream_filters
   test "malformed nested URL params normalize to default filters without crashing", %{
     conn: conn,
@@ -3326,6 +3362,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     cases = [
       {"unknown", "Quota missing", "Quota missing", "Priming pending"},
       {"refreshing", "Quota missing", "Quota missing", "Reconciling quota"},
+      {"confirmation_pending", "Quota missing", "Quota missing", "Reset confirmation pending"},
       {"known", "Routing ready", "Quota ready", "Quota known"},
       {"weekly_only_probe", "Routing ready", "Weekly quota probe", "Weekly-only probe"},
       {"stale", "Quota missing", "Quota missing", "Quota stale"},
@@ -6173,7 +6210,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
-  defp assert_single_element(view, selector, text \\ nil) do
+  defp assert_single_element(view, selector, text) do
     rendered = view |> element(selector, text) |> render()
     assert rendered != ""
   end

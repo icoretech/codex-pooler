@@ -11,16 +11,24 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @stale_after_seconds 25 * 60
   @successful_partial_codes ~w(catalog_sync_failed catalog_sync_in_progress)
-  @catalog_sync_skipped_triggers ~w(scheduled gateway)
+  @catalog_sync_skipped_triggers ~w(
+    scheduled
+    gateway
+    admin_upstreams_live
+    admin_upstream_cockpit_live
+    admin_quota_confirmation
+  )
   @paused UpstreamIdentity.paused_status()
   @reauth_required UpstreamIdentity.reauth_required_status()
   @assignment_paused PoolUpstreamAssignment.paused_status()
   @assignment_reauth_required PoolUpstreamAssignment.reauth_required_status()
+  @assignment_deleted PoolUpstreamAssignment.deleted_status()
 
   @type orchestration_result :: {:ok, map()} | {:error, term()}
 
@@ -296,15 +304,29 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
 
     {:ok, assignment} = Quota.PrimingState.record(assignment.pool_id, assignment, details)
 
+    identity.id
+    |> PoolAssignments.list_pool_assignments_for_identity()
+    |> Enum.reject(&(&1.id == assignment.id or &1.status == @assignment_deleted))
+    |> Enum.each(fn sibling ->
+      {:ok, _sibling} = Quota.PrimingState.record(sibling.pool_id, sibling, details)
+    end)
+
     assignment
   end
 
   defp quota_priming_summary(identity, timestamp) do
     windows = QuotaWindows.list_quota_windows(identity)
 
+    pending_confirmations =
+      identity
+      |> QuotaWindows.list_evidence()
+      |> pending_weekly_zero_confirmations(timestamp)
+
     %{
       timestamp: timestamp,
       windows: windows,
+      confirmation_pending_count: length(pending_confirmations),
+      confirmation_due_at: earliest_confirmation_due_at(pending_confirmations),
       account_primary_usable_count:
         Enum.count(windows, &account_primary_usable_window?(&1, timestamp)),
       usable_count: Enum.count(windows, &QuotaWindows.usable_window?(&1, timestamp)),
@@ -330,8 +352,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       "usable_window_count" => summary.usable_count,
       "reset_bearing_window_count" => summary.reset_bearing_count,
       "stale_window_count" => summary.stale_count,
-      "expired_window_count" => summary.expired_count
+      "expired_window_count" => summary.expired_count,
+      "confirmation_pending_count" => summary.confirmation_pending_count
     }
+    |> maybe_put_confirmation_due_at(summary.confirmation_due_at)
   end
 
   defp quota_priming_status(_status, %{status: :failed}, _summary),
@@ -339,6 +363,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
 
   defp quota_priming_status(:failed, _quota_step, _summary),
     do: "failed"
+
+  defp quota_priming_status(
+         _status,
+         _quota_step,
+         %{confirmation_pending_count: count}
+       )
+       when count > 0,
+       do: "confirmation_pending"
 
   defp quota_priming_status(_status, _quota_step, %{account_primary_usable_count: count})
        when count > 0,
@@ -366,6 +398,29 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
 
   defp quota_priming_status(_status, _quota_step, %{windows: []}),
     do: "unprimed"
+
+  defp pending_weekly_zero_confirmations(windows, timestamp) do
+    Enum.flat_map(windows, fn window ->
+      case EvidenceStore.pending_weekly_zero_confirmation(window, timestamp) do
+        {:ok, confirmation} -> [confirmation]
+        :none -> []
+      end
+    end)
+  end
+
+  defp earliest_confirmation_due_at([]), do: nil
+
+  defp earliest_confirmation_due_at(confirmations) do
+    confirmations
+    |> Enum.min_by(&DateTime.to_unix(&1.due_at, :microsecond))
+    |> Map.fetch!(:due_at)
+  end
+
+  defp maybe_put_confirmation_due_at(details, %DateTime{} = due_at) do
+    Map.put(details, "confirmation_due_at", DateTime.to_iso8601(due_at))
+  end
+
+  defp maybe_put_confirmation_due_at(details, nil), do: details
 
   defp account_primary_usable_window?(window, timestamp) do
     (WindowClassifier.primary_5h?(window) or WindowClassifier.monthly_primary?(window)) and

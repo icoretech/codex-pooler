@@ -103,6 +103,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:pause) => action(),
           required(:reactivate) => action(),
           required(:refresh_token) => action(),
+          required(:reconcile_quota) => action(),
           required(:redeem_saved_reset) => action(),
           required(:replace_auth_json) => action(),
           required(:oauth_relink) => action(),
@@ -485,6 +486,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
         action(
           status in ["active", "refresh_due", "refresh_failed"],
           "token refresh is unavailable"
+        ),
+      reconcile_quota:
+        action(
+          status in ["active", "refresh_due", "refresh_failed"],
+          "quota refresh is unavailable"
         ),
       redeem_saved_reset: redeem_saved_reset,
       replace_auth_json: action(recovery_eligible?, "credential replacement is not needed"),

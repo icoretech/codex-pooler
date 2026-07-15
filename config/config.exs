@@ -49,6 +49,7 @@ jobs_schedule = [
     icon: "hero-arrow-path-rounded-square",
     workers: [
       CodexPooler.Jobs.AccountReconciliationWorker,
+      CodexPooler.Jobs.AccountQuotaConfirmationWorker,
       CodexPooler.Jobs.AccountReconciliationEnqueueWorker
     ],
     scheduled_worker: CodexPooler.Jobs.AccountReconciliationEnqueueWorker,

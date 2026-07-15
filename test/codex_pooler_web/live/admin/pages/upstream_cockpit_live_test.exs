@@ -8,7 +8,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Audit
   alias CodexPooler.Events
   alias CodexPooler.FakeOpenAIAuthProvider
-  alias CodexPooler.Jobs.SavedResetRedemptionWorker
+
+  alias CodexPooler.Jobs.{
+    AccountReconciliationWorker,
+    SavedResetRedemptionWorker,
+    TokenRefreshWorker
+  }
+
   alias CodexPooler.Pools
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -3456,12 +3462,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
+             "#cockpit-reconcile-upstream-account-#{identity.id}",
+             "Refresh quota"
+           )
+
+    assert has_element?(
+             view,
              "#cockpit-replace-auth-json-upstream-account-#{identity.id}",
              "Replace auth.json"
            )
 
     assert has_element?(view, "#cockpit-delete-upstream-account-#{identity.id}", "Delete")
     assert has_element?(view, "#cockpit-reactivate-upstream-account-#{identity.id}", "Reactivate")
+
+    view |> element("#cockpit-reconcile-upstream-account-#{identity.id}") |> render_click()
+
+    assert render(view) =~
+             "Quota refresh queued; reset changes, if detected, are confirmed automatically after about 3 minutes"
+
+    assert %Oban.Job{} =
+             reconcile_job =
+             Repo.all(Oban.Job)
+             |> Enum.find(fn j ->
+               j.worker == worker_name(AccountReconciliationWorker) and
+                 j.args["trigger_kind"] == "admin_upstream_cockpit_live" and
+                 j.args["pool_id"] == pool.id
+             end)
+
+    assert is_binary(reconcile_job.args["pool_upstream_assignment_id"])
 
     assert has_element?(
              view,
@@ -3518,9 +3546,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert %Oban.Job{} =
              job =
              Repo.all(Oban.Job)
-             |> Enum.find(&(&1.args["trigger_kind"] == "admin_upstream_cockpit_live"))
+             |> Enum.find(fn j ->
+               j.worker == worker_name(TokenRefreshWorker) and
+                 j.args["upstream_identity_id"] == identity.id
+             end)
 
-    assert job.args["upstream_identity_id"] == identity.id
+    assert job.args["trigger_kind"] == "admin_upstream_cockpit_live"
 
     rendered_before_delete = render(view)
 

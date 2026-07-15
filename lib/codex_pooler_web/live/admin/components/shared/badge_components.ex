@@ -76,7 +76,8 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
            ] ->
         chip_class(:error)
 
-      status when status in ["in_progress", "pending", "refreshing", "stale"] ->
+      status
+      when status in ["in_progress", "pending", "refreshing", "confirmation_pending", "stale"] ->
         chip_class(:info)
 
       _status ->

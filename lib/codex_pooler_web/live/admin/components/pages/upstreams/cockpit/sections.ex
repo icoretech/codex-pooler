@@ -233,6 +233,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           phx-value-id={@cockpit.identity.id}
         />
         <.cockpit_action_button
+          id={"cockpit-reconcile-upstream-account-#{@cockpit.identity.id}"}
+          label="Refresh quota"
+          icon="hero-arrow-path"
+          action={@cockpit.actions.reconcile_quota}
+          phx-click="reconcile_account"
+          phx-value-id={@cockpit.identity.id}
+        />
+        <.cockpit_action_button
           id={"cockpit-redeem-saved-reset-upstream-account-#{@cockpit.identity.id}"}
           label="Redeem saved reset"
           action={@cockpit.actions.redeem_saved_reset}

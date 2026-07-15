@@ -114,6 +114,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     {:noreply, AccountLifecycleWorkflow.refresh(socket, identity_id, &load_cockpit/1)}
   end
 
+  def handle_event("reconcile_account", %{"id" => identity_id}, socket) do
+    {:noreply, AccountLifecycleWorkflow.reconcile(socket, identity_id, &load_cockpit/1)}
+  end
+
   def handle_event("open_import_auth_json", params, socket) do
     identity_id = Map.get(params, "id", socket.assigns.cockpit.identity.id)
 

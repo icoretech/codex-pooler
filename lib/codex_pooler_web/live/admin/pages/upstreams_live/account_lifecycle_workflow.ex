@@ -56,6 +56,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive.AccountLifecycleWorkflow do
     end
   end
 
+  @spec reconcile(Phoenix.LiveView.Socket.t(), Ecto.UUID.t(), (Phoenix.LiveView.Socket.t() ->
+                                                                 Phoenix.LiveView.Socket.t())) ::
+          Phoenix.LiveView.Socket.t()
+  def reconcile(socket, identity_id, reload_fun) do
+    case Upstreams.enqueue_quota_reconciliation_for_scope(
+           socket.assigns.current_scope,
+           identity_id,
+           trigger_kind: "admin_upstreams_live"
+         ) do
+      {:ok, %{status: status}} ->
+        message =
+          if status == :already_queued,
+            do: "Quota refresh is already queued",
+            else:
+              "Quota refresh queued; reset changes, if detected, are confirmed automatically after about 3 minutes"
+
+        socket
+        |> put_flash(:info, message)
+        |> reload_fun.()
+
+      {:error, reason} ->
+        put_flash(socket, :error, WorkflowError.message(reason))
+    end
+  end
+
   @spec open_delete(Phoenix.LiveView.Socket.t(), Ecto.UUID.t()) :: Phoenix.LiveView.Socket.t()
   def open_delete(socket, identity_id) do
     case find_account(socket, identity_id) do

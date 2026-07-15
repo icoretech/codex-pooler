@@ -29,6 +29,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           required(:reset_at) => DateTime.t(),
           required(:observed_at) => DateTime.t()
         }
+  @type pending_confirmation :: %{
+          required(:used_percent) => Decimal.t(),
+          required(:reset_at) => DateTime.t(),
+          required(:observed_at) => DateTime.t(),
+          required(:due_at) => DateTime.t()
+        }
+
+  @spec weekly_restart_confirmation_span_seconds() :: pos_integer()
+  def weekly_restart_confirmation_span_seconds,
+    do: @weekly_restart_confirmation_span_seconds
 
   @spec evidence_changeset(identity_ref(), map(), DateTime.t()) ::
           {:ok, Ecto.Changeset.t()} | {:error, Evidence.errors() | map()}
@@ -197,6 +207,34 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   def candidate_valid?(_candidate, _timestamp), do: false
 
+  @spec pending_weekly_zero_confirmation(Quota.AccountQuotaWindow.t(), DateTime.t()) ::
+          {:ok, pending_confirmation()} | :none
+  def pending_weekly_zero_confirmation(
+        %Quota.AccountQuotaWindow{} = window,
+        %DateTime{} = timestamp
+      ) do
+    with true <- account_weekly_evidence?(window),
+         {:ok, %{used_percent: used_percent} = candidate} <-
+           parse_candidate(window.metadata || %{}),
+         true <- zero_percent?(used_percent),
+         true <- candidate_valid?(candidate, timestamp) do
+      {:ok,
+       Map.put(
+         candidate,
+         :due_at,
+         DateTime.add(
+           candidate.observed_at,
+           @weekly_restart_confirmation_span_seconds,
+           :second
+         )
+       )}
+    else
+      _not_pending -> :none
+    end
+  end
+
+  def pending_weekly_zero_confirmation(_window, _timestamp), do: :none
+
   @spec clear_candidate(map()) :: map()
   def clear_candidate(metadata) when is_map(metadata),
     do: Map.delete(metadata, @candidate_metadata_key)
@@ -301,7 +339,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{} = evidence,
          timestamp
        ) do
-    if uncorroborated_zero_reenable_attempt?(evidence, existing, timestamp) do
+    if unconfirmed_weekly_zero_transition?(evidence, existing, timestamp) do
       sliding_restart_attrs(existing, attrs, evidence, timestamp)
     else
       merge_attrs_by_decision(existing, attrs, evidence, timestamp)
@@ -319,9 +357,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   # with observation time, while a cached body keeps a fixed reset. Accept the
   # zero only when a stored candidate and the incoming observation prove that
   # sliding-live shape across the confirmation span; otherwise keep the
-  # exhausted row and let the candidate age or restart. Anchored resets (the 5h
-  # shape, should it return) never slide, so they keep taking the pre-existing
-  # anchored + corroboration path untouched.
+  # canonical row and let the candidate age or restart. This applies after the
+  # zero is accepted too: periodically reconfirming live zeroes advances their
+  # observation time before the freshness TTL, while cached fixed-reset bodies
+  # fail the sliding proof and age out. Anchored resets (the 5h shape, should it
+  # return) never slide, so they keep taking the pre-existing anchored +
+  # corroboration path untouched.
   defp sliding_restart_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
     decision = restart_candidate_decision(metadata, existing, evidence, timestamp)
@@ -396,7 +437,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           nil
       end
 
-    Logger.info(
+    Logger.debug(
       "quota_restart_decision decision=#{decision} " <>
         "upstream_identity_id=#{existing.upstream_identity_id} " <>
         "quota_key=#{evidence.quota_key} window_kind=#{evidence.window_kind} " <>
@@ -471,26 +512,24 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp sliding_live_reset?(_candidate, _evidence), do: false
 
-  # A usage-endpoint zero must never re-enable exhausted weekly quota on its
-  # own: without this chokepoint guard, an expired or stale canonical takes
-  # the `:incoming` fast paths, and capacity- or credit-bearing shapes exit
-  # the weak-capacity quarantine as `:continue` into the generic merge — all
-  # single-observation routes around the corroboration requirement. Any
-  # account-weekly zero replacing an exhausted canonical needs independent
-  # runtime corroboration first, regardless of freshness or capacity shape.
-  defp uncorroborated_zero_reenable_attempt?(
+  # A usage-endpoint zero must never lower or refresh canonical weekly quota on
+  # its own. Without this chokepoint, non-exhausted rows can reject live zeroes
+  # forever, while an accepted zero stops advancing `observed_at` and becomes
+  # stale exactly one freshness TTL later. Route every account-weekly zero
+  # through the same cache-safe candidate confirmation unless independent
+  # runtime evidence already corroborates the transition.
+  defp unconfirmed_weekly_zero_transition?(
          %Evidence{source: "codex_usage_api", used_percent: %Decimal{}} = evidence,
          %Quota.AccountQuotaWindow{used_percent: %Decimal{}} = existing,
          timestamp
        ) do
     account_weekly_evidence?(evidence) and
       zero_percent?(evidence.used_percent) and
-      exhausted_by_used_percent?(existing) and
       same_evidence_identity?(evidence, existing) and
       not runtime_weekly_restart_corroborated?(evidence, existing, timestamp)
   end
 
-  defp uncorroborated_zero_reenable_attempt?(_evidence, _existing, _timestamp), do: false
+  defp unconfirmed_weekly_zero_transition?(_evidence, _existing, _timestamp), do: false
 
   defp account_weekly_evidence?(evidence) do
     account_quota_identity?(evidence) and Map.get(evidence, :window_kind) == "secondary" and

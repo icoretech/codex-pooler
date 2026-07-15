@@ -598,6 +598,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
         </li>
         <li>
           <AdminComponents.dropdown_action_item
+            id={"reconcile-upstream-account-#{@account.identity.id}"}
+            icon="hero-arrow-path"
+            label="Refresh quota"
+            phx-click="reconcile_account"
+            phx-value-id={@account.identity.id}
+            disabled={!refreshable?(@account.identity.status)}
+          />
+        </li>
+        <li>
+          <AdminComponents.dropdown_action_item
             id={"saved-reset-policy-upstream-account-#{@account.identity.id}"}
             icon="hero-battery-100"
             label="Saved resets"

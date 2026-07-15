@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @quota_priming_labels %{
     "unknown" => "Priming pending",
     "refreshing" => "Reconciling quota",
+    "confirmation_pending" => "Reset confirmation pending",
     "known" => "Quota known",
     "weekly_only_probe" => "Weekly-only probe",
     "stale" => "Quota stale",
@@ -68,7 +69,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @spec put_current_quota_priming(map(), map()) :: map()
   def put_current_quota_priming(assignment, quota_readiness) do
     case assignment_priming_status(assignment) do
-      status when status in ["failed", "blocked"] ->
+      status when status in ["failed", "blocked", "refreshing", "confirmation_pending"] ->
         put_quota_priming(assignment, status)
 
       _status ->

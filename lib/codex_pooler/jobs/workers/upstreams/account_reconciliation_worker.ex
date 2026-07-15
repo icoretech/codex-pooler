@@ -17,6 +17,7 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
       period: {7, :days}
     ]
 
+  alias CodexPooler.Jobs.AccountQuotaConfirmationWorker
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
 
@@ -62,7 +63,8 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
     if recovery_probe_required?(args) do
       trigger_kind = Map.get(args, "trigger_kind", "manual")
 
-      with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind) do
+      with {:ok, result} <- AccountReconciliation.run(pool_id, assignment_id, trigger_kind),
+           :ok <- enqueue_quota_confirmation(result, trigger_kind) do
         reconciliation_outcome(result)
       end
     else
@@ -80,6 +82,14 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
   end
 
   defp recovery_probe_required?(_args), do: true
+
+  defp enqueue_quota_confirmation(result, trigger_kind) do
+    case AccountQuotaConfirmationWorker.enqueue_if_pending(result, trigger_kind) do
+      :not_needed -> :ok
+      {:ok, %Oban.Job{}} -> :ok
+      {:error, _changeset} -> {:error, "quota confirmation enqueue failed"}
+    end
+  end
 
   @impl Oban.Worker
   def backoff(%Oban.Job{attempt: attempt}) do

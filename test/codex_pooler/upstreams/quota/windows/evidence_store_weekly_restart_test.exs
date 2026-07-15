@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
@@ -21,7 +22,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     identity
   end
 
-  defp exhausted_row!(identity, observed_at, opts \\ []) do
+  defp usage_row!(identity, observed_at, used_percent, opts \\ []) do
     reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, 5, :day))
 
     Windows.record_evidence(
@@ -30,7 +31,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
         quota_key: "account",
         window_kind: "secondary",
         window_minutes: 10_080,
-        used_percent: Decimal.new("100"),
+        used_percent: Decimal.new(to_string(used_percent)),
         reset_at: reset_at,
         observed_at: observed_at,
         last_sync_at: observed_at,
@@ -43,6 +44,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
       observed_at
     )
   end
+
+  defp exhausted_row!(identity, observed_at, opts \\ []),
+    do: usage_row!(identity, observed_at, 100, opts)
 
   defp floating_zero(observed_at, opts \\ []) do
     reset_at = Keyword.get(opts, :reset_at, DateTime.add(observed_at, @window_seconds, :second))
@@ -207,23 +211,122 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     assert DateTime.compare(row.reset_at, forward_anchor) == :eq
   end
 
-  test "a non-exhausted row is untouched by the restart path" do
+  test "sliding live zeroes converge a non-exhausted weekly account" do
     t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
+    assert {:ok, _row} = usage_row!(identity, t0, 31)
 
-    assert {:ok, _row} =
-             Windows.record_evidence(
-               identity,
-               Map.put(floating_zero(t0), :used_percent, Decimal.new("40")),
-               t0
-             )
-
+    # The first provider zero starts confirmation without immediately lowering
+    # a still-usable canonical row.
     t1 = DateTime.add(t0, 300, :second)
     assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t1), t1)
+    assert Decimal.compare(account_row(identity).used_percent, Decimal.new("31")) == :eq
 
-    # Pre-existing semantics for non-exhausted rows apply; nothing crashes and
-    # the row still exists with a valid percent.
+    # Repeated live evidence inside the confirmation span keeps waiting.
+    t2 = DateTime.add(t1, 60, :second)
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t2), t2)
+    assert Decimal.compare(account_row(identity).used_percent, Decimal.new("31")) == :eq
+
+    # Once the floating reset advances with observations across the span, the
+    # same transition that production reported converges to 0% used.
+    t3 = DateTime.add(t1, 240, :second)
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t3), t3)
+
     row = account_row(identity)
-    assert row
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.compare(row.observed_at, t3) == :eq
+  end
+
+  test "repeated cached zeroes cannot lower a non-exhausted weekly account" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    fixed_reset = DateTime.add(t0, 5, :day)
+    assert {:ok, _row} = usage_row!(identity, t0, 31, reset_at: fixed_reset)
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, _row} =
+               Windows.record_evidence(
+                 identity,
+                 floating_zero(observed_at, reset_at: fixed_reset),
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  test "repeated live zeroes keep an accepted weekly reset fresh beyond the ttl" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t0), t0)
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, _row} =
+               Windows.record_evidence(identity, floating_zero(observed_at), observed_at)
+
+      assert Evidence.current_freshness_state(account_row(identity), observed_at) == "fresh"
+    end
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.diff(row.observed_at, t0, :minute) >= 12
+  end
+
+  test "live zeroes recover an already stale accepted weekly reset" do
+    t0 = DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t0), t0)
+
+    stale_at = DateTime.add(t0, 16, :minute)
+    assert Evidence.current_freshness_state(account_row(identity), stale_at) == "stale"
+
+    # The first live response starts a new confirmation without trusting one
+    # weak zero enough to refresh routing immediately.
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(stale_at), stale_at)
+
+    assert DateTime.compare(account_row(identity).observed_at, t0) == :eq
+
+    # A later response whose reset advanced with wall time proves the endpoint
+    # is live and makes the already-zero canonical usable again.
+    confirmed_at = DateTime.add(stale_at, 4, :minute)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(confirmed_at), confirmed_at)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.compare(row.observed_at, confirmed_at) == :eq
+    assert Evidence.current_freshness_state(row, confirmed_at) == "fresh"
+  end
+
+  test "repeated cached zeroes cannot keep an accepted weekly reset fresh" do
+    t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    fixed_reset = DateTime.add(t0, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, floating_zero(t0, reset_at: fixed_reset), t0)
+
+    for minute <- 1..16 do
+      observed_at = DateTime.add(t0, minute, :minute)
+
+      assert {:ok, _row} =
+               Windows.record_evidence(
+                 identity,
+                 floating_zero(observed_at, reset_at: fixed_reset),
+                 observed_at
+               )
+    end
+
+    row = account_row(identity)
+    assert DateTime.compare(row.observed_at, t0) == :eq
+    assert Evidence.current_freshness_state(row, DateTime.add(t0, 16, :minute)) == "stale"
   end
 end

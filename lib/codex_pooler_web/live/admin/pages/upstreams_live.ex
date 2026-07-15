@@ -344,6 +344,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply, AccountLifecycleWorkflow.refresh(socket, identity_id, &reload_upstreams/1)}
   end
 
+  def handle_event("reconcile_account", %{"id" => identity_id}, socket) do
+    {:noreply, AccountLifecycleWorkflow.reconcile(socket, identity_id, &reload_upstreams/1)}
+  end
+
   defp refresh_editing_saved_reset_policy(socket, identity_id) do
     case find_account(socket.assigns.upstream_accounts, identity_id) do
       nil -> close_saved_reset_policy_dialog(socket)

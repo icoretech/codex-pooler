@@ -102,6 +102,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
     end
   end
 
+  @spec reconcile(Phoenix.LiveView.Socket.t(), Ecto.UUID.t(), (Phoenix.LiveView.Socket.t() ->
+                                                                 Phoenix.LiveView.Socket.t())) ::
+          Phoenix.LiveView.Socket.t()
+  def reconcile(socket, identity_id, reload_fun) do
+    cond do
+      identity_id != socket.assigns.cockpit.identity.id ->
+        put_flash(socket, :error, "Upstream account was not found")
+
+      action_available?(socket, :reconcile_quota, identity_id) ->
+        enqueue_quota_reconciliation(socket, identity_id, reload_fun)
+
+      true ->
+        put_unavailable_action_error(socket, :reconcile_quota)
+    end
+  end
+
   @spec open_delete(Phoenix.LiveView.Socket.t(), Ecto.UUID.t()) :: Phoenix.LiveView.Socket.t()
   def open_delete(socket, identity_id) do
     if action_available?(socket, :delete, identity_id) do
@@ -203,6 +219,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
     end
   end
 
+  defp enqueue_quota_reconciliation(socket, identity_id, reload_fun) do
+    case Upstreams.enqueue_quota_reconciliation_for_scope(
+           socket.assigns.current_scope,
+           identity_id,
+           trigger_kind: @reason
+         ) do
+      {:ok, %{status: status}} ->
+        message =
+          if status == :already_queued,
+            do: "Quota refresh is already queued",
+            else:
+              "Quota refresh queued; reset changes, if detected, are confirmed automatically after about 3 minutes"
+
+        socket
+        |> put_flash(:info, message)
+        |> reload_fun.()
+
+      {:error, reason} ->
+        put_flash(socket, :error, error_message(reason))
+    end
+  end
+
   defp validate_delete_confirmation(%{id: id, label: label}, %{
          "id" => id,
          "confirmation_label" => confirmation
@@ -244,6 +282,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.AccountLifecycleWorkflow do
   end
 
   defp action_label(:refresh_token), do: "Refresh token"
+  defp action_label(:reconcile_quota), do: "Refresh quota"
 
   defp action_label(action_key),
     do: action_key |> to_string() |> String.replace("_", " ") |> String.capitalize()
