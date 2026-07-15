@@ -38,6 +38,49 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     Agent.get(upstream_pid, fn state -> Enum.reverse(state.frames) end)
   end
 
+  def fake_persistence_boundary do
+    %{
+      renew_owner_token: fn _session_id, _owner_lease_token, _opts ->
+        {:error, :stale_owner}
+      end,
+      release_owner_lease: fn _session_id, _owner_lease_token, _reason -> :ok end,
+      interrupt_codex_session: fn _session_id, _opts -> :ok end
+    }
+  end
+
+  def start_owner_runtime do
+    caller = self()
+    ready_ref = make_ref()
+
+    runtime =
+      spawn(fn ->
+        Mix.start()
+
+        {:ok, _registry} =
+          Registry.start_link(
+            keys: :unique,
+            name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry
+          )
+
+        {:ok, _task_supervisor} =
+          Task.Supervisor.start_link(
+            name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor
+          )
+
+        send(caller, {ready_ref, :ready})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    receive do
+      {^ready_ref, :ready} -> {:ok, runtime}
+    after
+      2_000 -> {:error, :owner_runtime_start_timeout}
+    end
+  end
+
   defp start_fake_upstream(test_pid) do
     Agent.start_link(fn -> %{frames: [], closed?: false} end)
     |> tap(fn

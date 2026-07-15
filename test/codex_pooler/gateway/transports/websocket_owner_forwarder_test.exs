@@ -123,6 +123,73 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_frame, "corr-recovered-owner", 1, :complete}
   end
 
+  test "guarded bridge attach and request traverse the remote owner boundary", %{auth: auth} do
+    remote_node = :"codex_pooler@bridge-owner-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+    %{session: session, token: token} = owner_session_fixture(auth, remote_node_string)
+
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_remote_bridge", "status" => "completed"}
+      })
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    {:ok, _owner} = start_owner(session, upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    attach_args =
+      WebsocketOwnerForwarder.remote_attach_args(
+        session.id,
+        downstream("corr-remote-bridge"),
+        reject_if_busy: true
+      )
+
+    assert {:ok, %{correlation_id: "corr-remote-bridge", epoch: epoch} = attached} =
+             WebsocketOwnerForwarder.call_remote(
+               remote_node,
+               :remote_attach_downstream,
+               attach_args,
+               opts
+             )
+
+    assert is_integer(epoch)
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "bridge-request-frame",
+      timeouts: %{}
+    }
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             WebsocketOwnerForwarder.submit_request(session, token, attached, request, opts)
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_attach_downstream, arity: 3}}
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+
+    assert [%UpstreamWebsocketSession.Request{payload: "bridge-request-frame"}] =
+             WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
+
+    assert_receive {:websocket_owner_frame, "corr-remote-bridge", ^epoch,
+                    {:data, ^terminal_frame}}
+
+    assert_receive {:websocket_owner_frame, "corr-remote-bridge", ^epoch, :complete}
+  end
+
   test "remote request preserves structured upstream failure maps", %{auth: auth} do
     remote_node = :"codex_pooler@structured-error-app.example"
     remote_node_string = Atom.to_string(remote_node)
@@ -400,6 +467,151 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
   end
 
+  test "a real peer running the previous attach API accepts native arity and rejects bridge arity" do
+    started_distribution? = node() == :nonode@nohost
+
+    if started_distribution? do
+      node_name = String.to_atom("codex_pooler_test_#{System.unique_integer([:positive])}")
+      assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
+    end
+
+    peer_name = String.to_atom("old_owner_#{System.unique_integer([:positive])}")
+    assert {:ok, peer_pid, peer_node} = :peer.start_link(%{name: peer_name})
+    Process.unlink(peer_pid)
+
+    on_exit(fn ->
+      stop_peer(peer_pid)
+      if started_distribution?, do: :net_kernel.stop()
+    end)
+
+    module = WebsocketOwnerForwarder
+    {:ok, ^module, beam} = previous_release_forwarder_beam(module)
+
+    assert {:module, ^module} =
+             :erpc.call(peer_node, :code, :load_binary, [module, ~c"previous_release.ex", beam])
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+    downstream = downstream("corr-real-peer")
+
+    assert {:ok, :old_release_attach_ok} =
+             client.call_owner(
+               peer_node,
+               module,
+               :remote_attach_downstream,
+               ["session-real-peer", downstream],
+               2_000
+             )
+
+    assert {:error, :owner_crashed} =
+             client.call_owner(
+               peer_node,
+               module,
+               :remote_attach_downstream,
+               ["session-real-peer", downstream, [reject_if_busy: true]],
+               2_000
+             )
+  end
+
+  test "guarded bridge attach and request relay across a real current-release peer" do
+    started_distribution? = node() == :nonode@nohost
+
+    if started_distribution? do
+      node_name = String.to_atom("codex_pooler_test_#{System.unique_integer([:positive])}")
+      assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
+    end
+
+    peer_name = String.to_atom("current_owner_#{System.unique_integer([:positive])}")
+    assert {:ok, peer_pid, peer_node} = :peer.start_link(%{name: peer_name})
+    Process.unlink(peer_pid)
+
+    on_exit(fn ->
+      stop_peer(peer_pid)
+      if started_distribution?, do: :net_kernel.stop()
+    end)
+
+    assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
+
+    assert {:ok, runtime_pid} =
+             :erpc.call(peer_node, WebsocketOwnerNodeHarness, :start_owner_runtime, [])
+
+    assert node(runtime_pid) == peer_node
+
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_real_peer_bridge", "status" => "completed"}
+      })
+
+    upstream =
+      :erpc.call(
+        peer_node,
+        WebsocketOwnerNodeHarness,
+        :fake_upstream_boundary,
+        [self(), [messages: [terminal_frame], return_request_result?: true]]
+      )
+
+    persistence =
+      :erpc.call(
+        peer_node,
+        WebsocketOwnerNodeHarness,
+        :fake_persistence_boundary,
+        []
+      )
+
+    session_id = "real-peer-bridge-session"
+
+    assert {:ok, owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "real-peer-owner-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 upstream: upstream,
+                 persistence: persistence
+               ]
+             ])
+
+    assert node(owner_pid) == peer_node
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+    assert node(upstream_pid) == peer_node
+
+    downstream = downstream("corr-real-peer-bridge")
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, %{epoch: epoch} = attached} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream, [reject_if_busy: true]],
+               2_000
+             )
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "real-peer-bridge-request",
+      timeouts: %{}
+    }
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_submit_request,
+               [session_id, attached, request, []],
+               2_000
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_pid}
+
+    assert_receive {:websocket_owner_frame, "corr-real-peer-bridge", ^epoch,
+                    {:data, ^terminal_frame}}
+
+    assert_receive {:websocket_owner_frame, "corr-real-peer-bridge", ^epoch, :complete}
+  end
+
   test "attaching through an old-release owner node fails closed for the bridge and still serves native attaches",
        %{auth: auth} do
     remote_node = :"codex_pooler@old-release-owner.example"
@@ -558,6 +770,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     true
   rescue
     ArgumentError -> false
+  end
+
+  defp previous_release_forwarder_beam(module) do
+    forms = [
+      {:attribute, 1, :module, module},
+      {:attribute, 1, :export, [remote_attach_downstream: 2]},
+      {:function, 1, :remote_attach_downstream, 2,
+       [
+         {:clause, 1, [{:var, 1, :_Session}, {:var, 1, :_Downstream}], [],
+          [{:tuple, 1, [{:atom, 1, :ok}, {:atom, 1, :old_release_attach_ok}]}]}
+       ]}
+    ]
+
+    :compile.forms(forms, [:binary])
+  end
+
+  defp stop_peer(peer_pid) do
+    if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
+    :ok
+  catch
+    :exit, _reason -> :ok
   end
 
   defp cleanup_local_owner_sessions do
