@@ -187,7 +187,10 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
                   </p>
                 </div>
               </div>
-              <div class="modal-action mt-0">
+            </.form>
+
+            <AdminComponents.dialog_footer id="alert-rule-delete-dialog-footer">
+              <:actions>
                 <AdminComponents.action_button
                   id="alert-rule-delete-cancel"
                   icon="hero-x-mark"
@@ -199,10 +202,11 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
                   icon="hero-trash"
                   label="Delete rule"
                   type="submit"
+                  form="alert-rule-delete-form"
                   variant={:danger}
                 />
-              </div>
-            </.form>
+              </:actions>
+            </AdminComponents.dialog_footer>
           </div>
           <form method="dialog" class="modal-backdrop">
             <button type="button" phx-click="cancel_delete_rule">close</button>
@@ -236,7 +240,10 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
                   </p>
                 </div>
               </div>
-              <div class="modal-action mt-0">
+            </.form>
+
+            <AdminComponents.dialog_footer id="alert-channel-delete-dialog-footer">
+              <:actions>
                 <AdminComponents.action_button
                   id="alert-channel-delete-cancel"
                   icon="hero-x-mark"
@@ -248,10 +255,11 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
                   icon="hero-trash"
                   label="Delete channel"
                   type="submit"
+                  form="alert-channel-delete-form"
                   variant={:danger}
                 />
-              </div>
-            </.form>
+              </:actions>
+            </AdminComponents.dialog_footer>
           </div>
           <form method="dialog" class="modal-backdrop">
             <button type="button" phx-click="cancel_delete_channel">close</button>

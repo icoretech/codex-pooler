@@ -105,7 +105,13 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             placeholder={@deleting_pool.slug}
             required
           />
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer
+          id="pool-delete-dialog-footer"
+          docs_url="https://docs.codex-pooler.com/operators/pools/"
+        >
+          <:actions>
             <AdminComponents.action_button
               id="pool-delete-cancel"
               icon="hero-x-mark"
@@ -117,14 +123,15 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               icon="hero-trash"
               label="Delete Pool"
               type="submit"
+              form="pool-delete-form"
               variant={:danger}
               phx-click={
                 JS.dispatch("blur", to: "#pool_delete_confirmation_slug_#{@delete_form_version}")
               }
               disabled={@deleting_pool.status != "archived"}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_delete">close</button>

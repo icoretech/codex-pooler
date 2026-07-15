@@ -281,7 +281,10 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </button>
             </div>
           </div>
-          <div class="modal-action mt-0">
+        </div>
+
+        <AdminComponents.dialog_footer id="settings-mcp-created-token-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="settings-mcp-created-token-close"
               icon="hero-check"
@@ -289,8 +292,8 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               phx-click="close_mcp_created_token"
               variant={:primary}
             />
-          </div>
-        </div>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="close_mcp_created_token">close</button>
@@ -333,7 +336,10 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </p>
             </div>
           </div>
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer id="settings-mcp-delete-dialog-footer">
+          <:actions>
             <AdminComponents.action_button
               id="settings-mcp-delete-cancel"
               icon="hero-x-mark"
@@ -345,10 +351,11 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               icon="hero-trash"
               label="Delete MCP key"
               type="submit"
+              form="settings-mcp-delete-form"
               variant={:danger}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_delete_mcp_key">close</button>

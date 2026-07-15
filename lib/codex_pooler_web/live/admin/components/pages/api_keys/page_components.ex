@@ -8,9 +8,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
+  @api_key_docs_url "https://docs.codex-pooler.com/operators/api-keys/"
+
   attr :created_secret, :map, required: true
 
   def created_secret_dialog(assigns) do
+    assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
+
     ~H"""
     <dialog id="api-key-created-secret-dialog" class="modal" open>
       <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
@@ -61,7 +65,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             </div>
           </div>
 
-          <div class="modal-action mt-0">
+        </div>
+
+        <AdminComponents.dialog_footer
+          id="api-key-created-secret-dialog-footer"
+          docs_url={@api_key_docs_url}
+        >
+          <:actions>
             <button
               id="api-key-secret-dialog-close"
               type="button"
@@ -70,8 +80,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             >
               Close
             </button>
-          </div>
-        </div>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="close_secret">close</button>
@@ -85,6 +95,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
   attr :form_version, :integer, required: true
 
   def delete_api_key_dialog(assigns) do
+    assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
+
     ~H"""
     <dialog id="api-key-delete-dialog" class="modal" open>
       <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
@@ -123,7 +135,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             placeholder={@api_key.key_prefix}
             required
           />
-          <div class="modal-action mt-0">
+        </.form>
+
+        <AdminComponents.dialog_footer
+          id="api-key-delete-dialog-footer"
+          docs_url={@api_key_docs_url}
+        >
+          <:actions>
             <AdminComponents.action_button
               id="api-key-delete-cancel"
               icon="hero-x-mark"
@@ -135,10 +153,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
               icon="hero-trash"
               label="Delete API key"
               type="submit"
+              form="api-key-delete-form"
               variant={:danger}
             />
-          </div>
-        </.form>
+          </:actions>
+        </AdminComponents.dialog_footer>
       </div>
       <form method="dialog" class="modal-backdrop">
         <button type="button" phx-click="cancel_delete_api_key">close</button>

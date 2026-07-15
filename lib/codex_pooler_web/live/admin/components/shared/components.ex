@@ -185,7 +185,8 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :id, :string, required: true
 
   attr :class, :any,
-    default: "modal-action mt-0 w-full border-t border-base-300 bg-base-200/80 px-6 py-3"
+    default:
+      "modal-action mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
 
   attr :docs_link_role, :string, default: "admin-dialog-docs-link"
   attr :docs_link_id, :string, default: nil

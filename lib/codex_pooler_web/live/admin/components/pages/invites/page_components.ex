@@ -265,7 +265,6 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
 
         <AdminComponents.dialog_footer
           id="invite-revoke-dialog-footer"
-          class="modal-action mt-0 w-full border-t border-base-300 bg-base-200/80 px-5 py-4"
           docs_url={@invite_docs_url}
         >
           <:actions>

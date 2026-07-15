@@ -136,7 +136,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
 
         <AdminComponents.dialog_footer
           id={"#{@id}-footer"}
-          class="modal-action sticky bottom-0 mt-0 shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
+          class="modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
           docs_link_role="policy-editor-docs-link"
           docs_link_id={"#{@id}-docs-link"}
           docs_icon_role="policy-editor-docs-icon"
