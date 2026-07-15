@@ -347,7 +347,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       <details
         :if={@advanced != []}
         id={"#{@id}-advanced"}
-        class="mt-2 border-t border-base-300/60 pt-2"
+        class="mt-2 pt-2"
         open={@advanced_open}
       >
         <summary class="cursor-pointer px-1 py-1 text-xs font-semibold uppercase tracking-wide text-base-content/55 transition-colors hover:text-base-content">
