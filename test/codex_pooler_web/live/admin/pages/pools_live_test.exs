@@ -845,7 +845,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-create-dialog")
   end
 
-  test "creates pools with routing strategy, compatibility toggle, compression toggle, and selected upstream identities",
+  test "creates pools with routing strategy, compatibility, compression, websocket bridge, and upstream identities",
        %{conn: conn} do
     first_identity =
       active_identity_fixture(account_label: "First create account", plan_label: "pro")
@@ -882,6 +882,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "request_compression_enabled" => "true",
+        "upstream_websocket_bridge_enabled" => "true",
         "upstream_identity_ids" => [first_identity.id, second_identity.id]
       }
     })
@@ -895,6 +896,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert settings.request_compression_enabled == true
+    assert settings.upstream_websocket_bridge_enabled == true
 
     assert Enum.map(assignments, & &1.upstream_identity_id) |> Enum.sort() ==
              [first_identity.id, second_identity.id] |> Enum.sort()
@@ -1067,6 +1069,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-edit-routing-controls #pool_edit_request_compression_enabled"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls #pool_edit_upstream_websocket_bridge_enabled"
            )
 
     assert has_element?(view, "#pool_edit_routing_strategy")
@@ -1618,7 +1625,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "sticky_websocket_sessions" => false,
         "sticky_http_sessions" => true,
         "prompt_cache_affinity_enabled" => false,
-        "request_compression_enabled" => true
+        "request_compression_enabled" => true,
+        "upstream_websocket_bridge_enabled" => true
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
@@ -1627,6 +1635,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_edit_request_compression_enabled[checked]")
+    assert has_element?(view, "#pool_edit_upstream_websocket_bridge_enabled[checked]")
 
     view
     |> element("#pool-edit-form")
@@ -1639,6 +1648,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "request_compression_enabled" => "false",
+        "upstream_websocket_bridge_enabled" => "false",
         "upstream_identity_ids" => []
       }
     })
@@ -1652,6 +1662,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert settings.request_compression_enabled == false
+    assert settings.upstream_websocket_bridge_enabled == false
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
     refute has_element?(view, "#pool-edit-dialog")
   end

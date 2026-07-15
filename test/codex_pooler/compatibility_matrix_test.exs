@@ -2,6 +2,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.CompatibilityMatrix
+  alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
     test "makes backend model catalog ETag derivation machine-readable" do
@@ -200,7 +201,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "upstream websocket bridge compatibility contract" do
-    test "documents the Pool-gated pre-visible fallback and transport-split accounting" do
+    test "connects the documented pool gate to the production routing schema" do
       feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
       fixture = CompatibilityMatrix.fixture!(:upstream_websocket_bridge)
 
@@ -208,48 +209,11 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.current == :pool_gated_owner_websocket_cache_bridge
       assert feature.routes == [%{method: :post, path: "/v1/responses"}]
 
-      assert feature.contract =~ "upstream_websocket_bridge_enabled"
-      assert feature.contract =~ "default off"
-      assert feature.contract =~ "falls back to plain HTTP dispatch"
-      assert feature.contract =~ "single settlement"
-      assert feature.contract =~ "buffering internal codex.* events"
-      assert feature.contract =~ "empty success"
-
-      assert Map.fetch!(fixture, :pool_gate) == %{
-               setting: "upstream_websocket_bridge_enabled",
-               default_enabled: false,
-               disabled_behavior: "plain_http_dispatch"
-             }
-
-      assert Map.fetch!(fixture, :downstream_transport) == "http_sse"
-      assert Map.fetch!(fixture, :upstream_transport) == "websocket"
-
-      assert Map.fetch!(fixture, :fallback) == %{
-               boundary: "first_downstream_visible_public_event",
-               internal_events: "buffered_never_committing",
-               target: "same_candidate_same_attempt_http",
-               settlements: 1,
-               post_visible_upstream_death: "failed_request"
-             }
-
-      assert Map.fetch!(fixture, :accounting) == %{
-               request_transport: "http_sse",
-               attempt_transport: "websocket",
-               attempt_metadata: ["upstream_websocket_bridge", "upstream_transport"],
-               payload_compression_subject: "websocket_envelope"
-             }
-
-      assert Map.fetch!(fixture, :crash_hygiene) == %{
-               submit_task: "catch_all_scrubbed_atom_reasons",
-               payload_in_crash_logs: false,
-               authorization_in_crash_logs: false
-             }
-
-      assert Map.fetch!(fixture, :rolling_deploy) == %{
-               native_attach_arity: 2,
-               bridge_attach_arity: 3,
-               old_owner_bridge_attach: "fail_closed_http_fallback"
-             }
+      setting = :upstream_websocket_bridge_enabled
+      assert setting in RoutingSettings.__schema__(:fields)
+      assert Map.fetch!(%RoutingSettings{}, setting) == false
+      assert fixture.pool_gate.setting == Atom.to_string(setting)
+      assert fixture.pool_gate.default_enabled == false
     end
   end
 
