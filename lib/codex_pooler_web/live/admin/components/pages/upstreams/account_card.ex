@@ -60,8 +60,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       data-role="upstream-account-card"
       class={[
         "min-w-0 rounded-box border border-l border-base-300 bg-base-100 transition-colors",
-        @routing_readiness.border_class
+        @routing_readiness.border_class,
+        token_burn_active?(@account) && "admin-token-burn-active"
       ]}
+      style={quota_shine_style(@account, @account_index)}
     >
       <header
         data-role="upstream-account-card-header"
@@ -988,6 +990,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp recent_request_count_label(_account), do: "0"
+
+  defp token_burn_active?(%{token_burn: %{level: level}}), do: is_integer(level) and level > 0
+  defp token_burn_active?(_account), do: false
+
+  defp quota_shine_style(account, account_index) do
+    delay = "--shine-delay: #{rem(account_index, 7) * 400}ms"
+
+    case account do
+      %{token_burn: %{level: level}} when is_integer(level) and level > 0 ->
+        "#{delay}; --shine-period: #{3400 - min(level, 5) * 400}ms"
+
+      _account ->
+        delay
+    end
+  end
 
   @spec recovery_eligible?(map()) :: boolean()
   defp recovery_eligible?(%{identity: %{status: status}} = account) do
