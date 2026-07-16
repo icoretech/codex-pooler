@@ -258,6 +258,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       },
       %{
         type: :number,
+        id: "instance-settings-websocket-owner-idle-timeout-ms",
+        field: :websocket_owner_idle_timeout_ms,
+        label: "Websocket owner post-detach retention (ms)",
+        hint:
+          "Post-detach retention for websocket owners. Running owners keep the value captured when they were created. This is separate from the downstream websocket idle timeout."
+      },
+      %{
+        type: :number,
         id: "instance-settings-upstream-connect-timeout-ms",
         field: :upstream_connect_timeout_ms,
         label: "Connect timeout (ms)",

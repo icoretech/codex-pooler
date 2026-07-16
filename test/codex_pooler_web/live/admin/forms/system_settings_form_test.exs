@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
 
     assert %Phoenix.HTML.Form{} = SystemSettingsForm.forms(settings, params)["ingress"]
     assert get_in(params, ["gateway", "websocket_idle_timeout_ms"]) == 1_800_000
+    assert get_in(params, ["gateway", "websocket_owner_idle_timeout_ms"]) == 1_800_000
 
     forms = SystemSettingsForm.forms(settings, params)
     card_statuses = SystemSettingsForm.initial_card_statuses()
@@ -44,6 +45,9 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
 
     assert html =~ ~s(id="instance-settings-websocket-idle-timeout-ms")
     assert html =~ "Websocket idle timeout (ms)"
+    assert html =~ ~s(id="instance-settings-websocket-owner-idle-timeout-ms")
+    assert html =~ "Websocket owner post-detach retention (ms)"
+    assert html =~ "Running owners keep the value captured when they were created."
 
     submitted_params = %{
       "_group" => "ingress",

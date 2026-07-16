@@ -131,6 +131,36 @@ defmodule CodexPooler.InstanceSettingsSecurityTest do
     refute inspect(event.details) =~ "key_prefix"
   end
 
+  test "websocket owner idle timeout is audited as a non-secret gateway setting", %{
+    scope: scope
+  } do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, updated} =
+             InstanceSettings.update(scope, settings, %{
+               "gateway" => %{"websocket_owner_idle_timeout_ms" => 1_800_001}
+             })
+
+    assert Map.get(updated.gateway, :websocket_owner_idle_timeout_ms) == 1_800_001
+
+    event =
+      Repo.one!(
+        from audit in AuditEvent,
+          where: audit.action == "instance_settings.update",
+          order_by: [desc: audit.occurred_at],
+          limit: 1
+      )
+
+    assert get_in(event.details, ["changed_keys"]) == [
+             "gateway.websocket_owner_idle_timeout_ms"
+           ]
+
+    assert get_in(event.details, ["changed_categories"]) == ["gateway"]
+    refute inspect(event.details) =~ "bearer_token"
+    refute inspect(event.details) =~ "password"
+    refute inspect(event.details) =~ "ciphertext"
+  end
+
   test "system save, remount, and audit details keep metrics and smtp secrets redacted", %{
     conn: conn,
     scope: scope,

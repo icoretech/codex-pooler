@@ -214,6 +214,18 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert Map.fetch!(%RoutingSettings{}, setting) == false
       assert fixture.pool_gate.setting == Atom.to_string(setting)
       assert fixture.pool_gate.default_enabled == false
+
+      assert fixture.owner_retention == %{
+               setting: "websocket_owner_idle_timeout_ms",
+               default_ms: 1_800_000,
+               min_ms: 60_000,
+               max_ms: 3_600_000,
+               starts_after: "final_downstream_detach_without_active_turn",
+               capture: "node_local_at_new_or_recovered_owner_start",
+               existing_owner_update: "retains_captured_value",
+               previous_release_default_ms: 300_000
+             }
+
     end
   end
 

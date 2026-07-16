@@ -20,6 +20,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
     :gateway_debug,
     :sse_keepalive_interval_ms,
     :websocket_idle_timeout_ms,
+    :websocket_owner_idle_timeout_ms,
     :upstream_connect_timeout_ms,
     :upstream_pool_timeout_ms,
     :upstream_receive_timeout_ms,
@@ -41,6 +42,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       field :gateway_debug, :boolean
       field :sse_keepalive_interval_ms, :integer
       field :websocket_idle_timeout_ms, :integer
+      field :websocket_owner_idle_timeout_ms, :integer
       field :upstream_connect_timeout_ms, :integer
       field :upstream_pool_timeout_ms, :integer
       field :upstream_receive_timeout_ms, :integer
@@ -219,6 +221,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :gateway_debug,
       :sse_keepalive_interval_ms,
       :websocket_idle_timeout_ms,
+      :websocket_owner_idle_timeout_ms,
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
@@ -236,6 +239,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
       :gateway_debug,
       :sse_keepalive_interval_ms,
       :websocket_idle_timeout_ms,
+      :websocket_owner_idle_timeout_ms,
       :upstream_connect_timeout_ms,
       :upstream_pool_timeout_ms,
       :upstream_receive_timeout_ms,
@@ -251,6 +255,10 @@ defmodule CodexPooler.InstanceSettings.Settings do
     ])
     |> validate_number(:sse_keepalive_interval_ms, greater_than_or_equal_to: 0)
     |> validate_number(:websocket_idle_timeout_ms,
+      greater_than_or_equal_to: 60_000,
+      less_than_or_equal_to: 3_600_000
+    )
+    |> validate_number(:websocket_owner_idle_timeout_ms,
       greater_than_or_equal_to: 60_000,
       less_than_or_equal_to: 3_600_000
     )

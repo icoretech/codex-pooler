@@ -382,7 +382,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :upstream_websocket_bridge,
       contract:
-        "the upstream websocket bridge is Pool-gated by upstream_websocket_bridge_enabled (default off) and applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket to reuse provider prompt-cache locality; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape"
+        "the upstream websocket bridge is Pool-gated by upstream_websocket_bridge_enabled (default off) and applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket to reuse provider prompt-cache locality; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape"
     },
     %{
       slug: :function_tool_schema_lowering,
@@ -1180,6 +1180,16 @@ defmodule CodexPooler.CompatibilityMatrix do
         owner_forwarding: "required",
         websocket_writer: "absent",
         session: "unpinned_or_selected_assignment"
+      },
+      owner_retention: %{
+        setting: "websocket_owner_idle_timeout_ms",
+        default_ms: 1_800_000,
+        min_ms: 60_000,
+        max_ms: 3_600_000,
+        starts_after: "final_downstream_detach_without_active_turn",
+        capture: "node_local_at_new_or_recovered_owner_start",
+        existing_owner_update: "retains_captured_value",
+        previous_release_default_ms: 300_000
       },
       fallback: %{
         boundary: "first_downstream_visible_public_event",

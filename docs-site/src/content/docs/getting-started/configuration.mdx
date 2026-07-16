@@ -112,7 +112,16 @@ After the app boots, manage operational settings from the admin UI instead of ed
 
 Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
 
-Gateway websocket upgrades use the admin-managed `websocket_idle_timeout_ms` setting for downstream idle close behavior. The default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms. This setting applies to new websocket upgrades on the backend Codex route and the narrow public `/v1/responses` websocket route. It also bounds cross-pod owner-forwarded full-turn submit waits for new websocket requests, and it is separate from upstream receive timeouts.
+Gateway websocket upgrades use two separate admin-managed idle settings:
+
+- `websocket_idle_timeout_ms` controls downstream idle close behavior for new backend Codex websocket upgrades and the narrow public `/v1/responses` websocket route. It also bounds owner-forwarded full-turn submit waits for new websocket requests. It is separate from upstream receive timeouts.
+- `websocket_owner_idle_timeout_ms` controls how long an owner and its upstream websocket may remain available after the final downstream detaches and no turn is active. Reattaching before expiry cancels that owner's retention timer.
+
+Both settings default to `1_800_000` ms and accept `60_000..3_600_000` ms. Each new or recovered owner captures `websocket_owner_idle_timeout_ms` from the node where it starts. An existing owner retains its captured value when the setting changes; later owners capture the new value.
+
+A longer owner-retention window can improve the chance of reusing an upstream connection, but keeps owner processes and connections allocated longer after clients detach. A shorter window releases those resources sooner, with less opportunity for reuse. To roll back a change, restore the previous value in the admin UI. New and recovered owners use the restored value; replace existing owners as part of the rollback only when immediate convergence is required.
+
+During a mixed-release transition, owners started by the previous release retain the legacy five-minute behavior. Owners started or recovered by the current release use the 30-minute default.
 
 ## Runtime URLs
 

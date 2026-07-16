@@ -83,6 +83,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_pool_timeout_ms == 15_000
     assert settings.upstream_receive_timeout_ms == 300_000
     assert settings.websocket_idle_timeout_ms == 1_800_000
+    assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert settings.model_context_window_overrides == %{}
   end
 
@@ -116,6 +117,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
                  "upstream_pool_timeout_ms" => 222,
                  "upstream_receive_timeout_ms" => 333,
                  "websocket_idle_timeout_ms" => 444_000,
+                 "websocket_owner_idle_timeout_ms" => 333_000,
                  "expired_alias_ttl_seconds" => 120,
                  "bridge_owner_lease_ttl_seconds" => 45,
                  "bridge_owner_lease_renewal_seconds" => 15,
@@ -162,6 +164,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upstream_pool_timeout_ms == 222
     assert settings.upstream_receive_timeout_ms == 333
     assert settings.websocket_idle_timeout_ms == 444_000
+    assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 333_000
     assert settings.model_context_window_overrides == %{"gpt-test-model" => 131_072}
   end
 
@@ -199,6 +202,47 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
 
     assert OperationalSettings.current().websocket_idle_timeout_ms == 60_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 0
+  end
+
+  test "current/0 defaults a missing owner idle timeout without changing downstream idle timeout" do
+    defaults = Settings.default()
+
+    stale_settings = %{
+      defaults
+      | gateway: Map.delete(defaults.gateway, :websocket_owner_idle_timeout_ms)
+    }
+
+    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+
+    settings = OperationalSettings.current()
+
+    assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 1_800_000
+    assert settings.websocket_idle_timeout_ms == 1_800_000
+
+    assert Map.get(InstanceSettings.current().gateway, :websocket_owner_idle_timeout_ms) ==
+             1_800_000
+  end
+
+  test "current/0 clamps malformed and out-of-range owner idle timeout values" do
+    defaults = Settings.default()
+
+    for {value, expected} <- [
+          {59_999, 60_000},
+          {3_600_001, 3_600_000},
+          {"not-a-number", 1_800_000}
+        ] do
+      stale_settings = %{
+        defaults
+        | gateway: Map.put(defaults.gateway, :websocket_owner_idle_timeout_ms, value)
+      }
+
+      :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+
+      settings = OperationalSettings.current()
+
+      assert Map.get(settings, :websocket_owner_idle_timeout_ms) == expected
+      assert settings.websocket_idle_timeout_ms == 1_800_000
+    end
   end
 
   test "from_instance_settings/1 accepts atom-keyed bulkhead config maps" do

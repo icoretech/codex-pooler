@@ -605,6 +605,8 @@ Prompt-cache routing locality is a local routing hint. It can apply on `POST /ba
 
 Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. It also bounds cross-pod owner-forwarded full-turn submit waits for new websocket requests, so healthy long turns are not limited by upstream receive timeout. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
 
+`websocket_owner_idle_timeout_ms` is separate. It controls post-detach owner retention after no downstream or active turn remains, not downstream idle closure. It has the same `1_800_000` ms default and `60_000..3_600_000` ms bounds. Each new or recovered owner captures its node-local value at startup, and existing owners retain the value they captured.
+
 Inbound websocket frames are also bounded by the configured gateway request body limit. Operators should treat `reason_class=max_frame_size_exceeded` as an oversized client frame, `reason_class=timeout` as downstream websocket idle close, and upstream receive timeout errors as separate upstream-side failures. These classifications are metadata-only and must not include raw websocket frames or request bodies.
 
 ## Request compression boundaries

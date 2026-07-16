@@ -46,6 +46,7 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.gateway.circuit_half_open_probe_limit == 1
     assert settings.gateway.circuit_success_threshold == 1
     assert settings.gateway.websocket_idle_timeout_ms == 1_800_000
+    assert Map.get(settings.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert settings.files.max_size_bytes == 25 * 1024 * 1024
     assert settings.transcription.max_upload_bytes == 26_214_400
 
@@ -57,6 +58,22 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.metrics.bearer_token_status == :intentionally_unset
     assert settings.smtp.password_status == :intentionally_unset
     assert Repo.aggregate(Settings, :count) == 1
+  end
+
+  test "baseline characterization preserves downstream websocket idle timeout and persistence round-trip" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 1_800_000
+    assert settings.gateway.websocket_idle_timeout_ms == 1_800_000
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"websocket_idle_timeout_ms" => 444_000}
+             })
+
+    assert updated.gateway.websocket_idle_timeout_ms == 444_000
+    assert InstanceSettings.get!().gateway.websocket_idle_timeout_ms == 444_000
+    assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 444_000
   end
 
   test "duplicate singleton rows are rejected by the database and ensure_singleton!/0 is idempotent" do
@@ -127,6 +144,42 @@ defmodule CodexPooler.InstanceSettingsTest do
                })
 
       assert errors_on(changeset).gateway.websocket_idle_timeout_ms != []
+    end
+  end
+
+  test "changeset accepts inclusive owner idle timeout bounds independently of downstream idle timeout" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, minimum} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{
+                 "websocket_idle_timeout_ms" => 444_000,
+                 "websocket_owner_idle_timeout_ms" => 60_000
+               }
+             })
+
+    assert Map.get(minimum.gateway, :websocket_owner_idle_timeout_ms) == 60_000
+    assert minimum.gateway.websocket_idle_timeout_ms == 444_000
+
+    assert {:ok, maximum} =
+             InstanceSettings.update_system_settings(InstanceSettings.get!(), %{
+               "gateway" => %{"websocket_owner_idle_timeout_ms" => 3_600_000}
+             })
+
+    assert Map.get(maximum.gateway, :websocket_owner_idle_timeout_ms) == 3_600_000
+    assert maximum.gateway.websocket_idle_timeout_ms == 444_000
+  end
+
+  test "changeset rejects owner idle timeout values outside the bounded range" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    for invalid <- [59_999, 3_600_001, "not-a-number"] do
+      assert {:error, changeset} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"websocket_owner_idle_timeout_ms" => invalid}
+               })
+
+      assert Map.get(errors_on(changeset).gateway, :websocket_owner_idle_timeout_ms) != []
     end
   end
 
@@ -274,6 +327,29 @@ defmodule CodexPooler.InstanceSettingsTest do
              })
 
     assert updated.files.upload_ttl_seconds == 600
+    assert updated.gateway.websocket_idle_timeout_ms == 1_800_000
+  end
+
+  test "legacy singleton settings rows backfill the websocket owner idle timeout without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!(
+      "UPDATE instance_settings SET gateway = gateway - 'websocket_owner_idle_timeout_ms'"
+    )
+
+    InstanceSettings.reset_cache_for_test()
+
+    current = InstanceSettings.current()
+    assert Map.get(current.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
+    assert current.gateway.websocket_idle_timeout_ms == 1_800_000
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert Map.get(updated.gateway, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert updated.gateway.websocket_idle_timeout_ms == 1_800_000
   end
 

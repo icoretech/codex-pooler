@@ -80,6 +80,17 @@ defmodule CodexPooler.InstanceSettingsClassificationTest do
     assert Classification.bucket_for!(:mcp_service_enabled) == :db_runtime_cached
   end
 
+  test "classifies websocket owner idle timeout as cached non-secret DB state" do
+    setting = Classification.fetch!(:websocket_owner_idle_timeout)
+
+    assert setting.bucket == :db_runtime_cached
+    assert setting.group == :gateway
+    assert setting.env_names == []
+    assert setting.storage == :database
+    assert setting.reloadability == :cached
+    refute Map.get(setting, :sensitive?, false)
+  end
+
   test "classifies metrics bearer token as HMAC-only DB secret" do
     setting = Classification.fetch!(:metrics_bearer_token)
 

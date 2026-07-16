@@ -295,6 +295,17 @@ defmodule CodexPooler.InstanceSettings.Classification do
       notes: "New downstream websocket upgrades can use the bounded idle timeout."
     },
     %{
+      key: :websocket_owner_idle_timeout,
+      bucket: :db_runtime_cached,
+      group: :gateway,
+      label: "Websocket owner idle retention",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes:
+        "New websocket owners capture the bounded post-detach retention window from cached instance settings."
+    },
+    %{
       key: :upstream_timeouts,
       bucket: :db_runtime_live,
       group: :gateway,

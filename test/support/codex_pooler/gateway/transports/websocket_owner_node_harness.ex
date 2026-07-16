@@ -1,6 +1,9 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   @moduledoc false
 
+  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+
   def fake_upstream_boundary(test_pid, opts \\ []) when is_pid(test_pid) do
     block_ref = Keyword.get(opts, :block_ref)
     messages = Keyword.get(opts, :messages, [])
@@ -55,6 +58,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     runtime =
       spawn(fn ->
         Mix.start()
+        Mix.env(:test)
 
         {:ok, _registry} =
           Registry.start_link(
@@ -79,6 +83,24 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     after
       2_000 -> {:error, :owner_runtime_start_timeout}
     end
+  end
+
+  def put_owner_idle_timeout(timeout) when is_integer(timeout) do
+    settings = OperationalSettings.current()
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %{settings | websocket_owner_idle_timeout_ms: timeout}
+    )
+  end
+
+  def start_owner_with_local_idle_timeout(opts) when is_list(opts) do
+    timeout = OperationalSettings.current().websocket_owner_idle_timeout_ms
+
+    WebsocketOwnerSession.start_owner(Keyword.put(opts, :idle_shutdown_ms, timeout))
+  end
+
+  def owner_idle_timeout(owner_pid) when is_pid(owner_pid) do
+    :sys.get_state(owner_pid).idle_shutdown_ms
   end
 
   defp start_fake_upstream(test_pid) do

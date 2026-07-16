@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -122,6 +123,98 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     owner_ref = Process.monitor(owner)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
     assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
+  end
+
+  test "reattach cancels the captured idle timer before the final detach", context do
+    idle_shutdown_ms = 100
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(), messages: ["reattached-delta"])
+
+    assert {:ok, owner} =
+             start_owner(context, upstream: upstream, idle_shutdown_ms: idle_shutdown_ms)
+
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    assert {:ok, first_downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("idle-first"))
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, first_downstream)
+
+    assert %{idle_shutdown_ms: ^idle_shutdown_ms, idle_shutdown_ref: first_timer_ref} =
+             :sys.get_state(owner)
+
+    assert is_reference(first_timer_ref)
+    timer_remaining_ms = Process.read_timer(first_timer_ref)
+    assert is_integer(timer_remaining_ms)
+    assert timer_remaining_ms in 0..idle_shutdown_ms
+
+    assert {:ok, second_downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("idle-second"))
+
+    assert %{idle_shutdown_ms: ^idle_shutdown_ms, idle_shutdown_ref: nil} =
+             :sys.get_state(owner)
+
+    assert Process.read_timer(first_timer_ref) == false
+    assert :ok = WebsocketOwnerSession.submit_frame(owner, second_downstream, @sentinel)
+    assert_receive {:websocket_owner_frame, "idle-second", 1, {:data, "reattached-delta"}}
+    assert_receive {:websocket_owner_frame, "idle-second", 1, :complete}
+
+    owner_ref = Process.monitor(owner)
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, second_downstream)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}, 1_000
+    assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
+  end
+
+  test "local gateway owners capture node settings only when each owner starts" do
+    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
+
+    previous_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    on_exit(fn ->
+      restore_operational_settings(previous_operational_settings)
+      restore_owner_forwarding(previous_forwarding)
+    end)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    auth = auth_context()
+    first_timeout = 80
+    second_timeout = 160
+    put_owner_idle_timeout(first_timeout)
+
+    first_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    assert {:ok, first_runtime} =
+             Gateway.prepare_websocket_session(auth, %{
+               accepted_turn_state: "owner-idle-first-#{System.unique_integer([:positive])}",
+               websocket_owner_forwarder_opts: [upstream: first_upstream]
+             })
+
+    first_session_id = first_runtime.codex_session.id
+    on_exit(fn -> cleanup_owner_session(first_session_id) end)
+    assert_receive {:websocket_owner_harness_upstream_started, _first_upstream_pid}
+    assert {:ok, first_owner} = WebsocketOwnerSession.lookup(first_session_id)
+    assert %{idle_shutdown_ms: ^first_timeout} = :sys.get_state(first_owner)
+
+    put_owner_idle_timeout(second_timeout)
+
+    assert %{idle_shutdown_ms: ^first_timeout} = :sys.get_state(first_owner)
+
+    second_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    assert {:ok, second_runtime} =
+             Gateway.prepare_websocket_session(auth, %{
+               accepted_turn_state: "owner-idle-second-#{System.unique_integer([:positive])}",
+               websocket_owner_forwarder_opts: [upstream: second_upstream]
+             })
+
+    second_session_id = second_runtime.codex_session.id
+    on_exit(fn -> cleanup_owner_session(second_session_id) end)
+    assert_receive {:websocket_owner_harness_upstream_started, _second_upstream_pid}
+    assert {:ok, second_owner} = WebsocketOwnerSession.lookup(second_session_id)
+    assert %{idle_shutdown_ms: ^second_timeout} = :sys.get_state(second_owner)
   end
 
   test "owner lifecycle logs start reuse lookup miss and terminate metadata", context do
@@ -569,6 +662,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Process.exit(target, :shutdown)
     assert_receive {:DOWN, ^target_ref, :process, ^target, :shutdown}
 
+    assert %{active_turn: active_turn, downstream: nil, idle_shutdown_ref: nil} =
+             :sys.get_state(owner)
+
+    assert is_map(active_turn)
+    assert Process.alive?(owner)
+
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
     assert :ok = Task.await(submit_task, 1_000)
 
@@ -719,6 +818,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       )
     )
   end
+
+  defp auth_context do
+    %{user: owner} = bootstrap_owner_fixture()
+    pool = pool_fixture(%{created_by_user_id: owner.id})
+    %{api_key: api_key} = active_api_key_fixture(pool, %{created_by_user_id: owner.id})
+    %{pool: pool, api_key: api_key}
+  end
+
+  defp put_owner_idle_timeout(timeout) do
+    settings = OperationalSettings.current()
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %{settings | websocket_owner_idle_timeout_ms: timeout}
+    )
+  end
+
+  defp restore_operational_settings(nil),
+    do: Application.delete_env(:codex_pooler, OperationalSettings)
+
+  defp restore_operational_settings(previous_settings),
+    do: Application.put_env(:codex_pooler, OperationalSettings, previous_settings)
+
+  defp restore_owner_forwarding(nil),
+    do: Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+  defp restore_owner_forwarding(previous_forwarding),
+    do:
+      Application.put_env(
+        :codex_pooler,
+        :websocket_owner_forwarding_enabled,
+        previous_forwarding
+      )
 
   defp db_owner_context do
     %{user: owner} = bootstrap_owner_fixture()

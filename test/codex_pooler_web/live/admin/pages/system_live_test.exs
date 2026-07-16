@@ -744,6 +744,90 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     end
   end
 
+  test "saves and reloads owner retention independently from downstream websocket idle timeout",
+       %{
+         conn: conn
+       } do
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "gateway" => %{
+                 "websocket_idle_timeout_ms" => 444_000,
+                 "websocket_owner_idle_timeout_ms" => 900_000
+               }
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#instance-settings-websocket-owner-idle-timeout-ms[value='900000']"
+           )
+
+    assert has_element?(view, "#instance-settings-websocket-idle-timeout-ms[value='444000']")
+
+    saved_html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"websocket_owner_idle_timeout_ms" => "1800000"}
+        }
+      })
+
+    assert saved_html =~ "Gateway controls saved"
+
+    saved = InstanceSettings.get!()
+    assert saved.gateway.websocket_owner_idle_timeout_ms == 1_800_000
+    assert saved.gateway.websocket_idle_timeout_ms == 444_000
+
+    {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-websocket-owner-idle-timeout-ms[value='1800000']"
+           )
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-websocket-idle-timeout-ms[value='444000']"
+           )
+  end
+
+  test "renders an inline owner-retention validation error without persisting invalid input", %{
+    conn: conn
+  } do
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "gateway" => %{
+                 "websocket_idle_timeout_ms" => 444_000,
+                 "websocket_owner_idle_timeout_ms" => 900_000
+               }
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "gateway" => %{"websocket_owner_idle_timeout_ms" => "59999"}
+        }
+      })
+
+    assert html =~ "Gateway controls could not be saved"
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-errors",
+             "must be greater than or equal to 60000"
+           )
+
+    persisted = InstanceSettings.get!()
+    assert persisted.gateway.websocket_owner_idle_timeout_ms == 900_000
+    assert persisted.gateway.websocket_idle_timeout_ms == 444_000
+  end
+
   test "renders constrained compressed JSON encoding controls and help copy", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 

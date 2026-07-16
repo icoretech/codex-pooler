@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   local upstream websocket behavior remains active.
   """
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -306,7 +307,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       codex_session_id: session.id,
       owner_lease_token: session.owner_lease_token,
       owner_instance_id: session.owner_instance_id,
-      request_id: Keyword.get(opts, :request_id)
+      request_id: Keyword.get(opts, :request_id),
+      idle_shutdown_ms: OperationalSettings.current().websocket_owner_idle_timeout_ms
     ]
 
     start_opts = maybe_put_recovery_upstream(start_opts, opts)

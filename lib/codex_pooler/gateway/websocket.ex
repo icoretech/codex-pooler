@@ -670,7 +670,8 @@ defmodule CodexPooler.Gateway.Websocket do
         codex_session_id: session.id,
         owner_lease_token: session.owner_lease_token,
         owner_instance_id: owner_instance_id,
-        request_id: request_id(opts)
+        request_id: request_id(opts),
+        idle_shutdown_ms: OperationalSettings.current().websocket_owner_idle_timeout_ms
       ]
 
       start_opts = maybe_put_owner_upstream(start_opts, opts)
