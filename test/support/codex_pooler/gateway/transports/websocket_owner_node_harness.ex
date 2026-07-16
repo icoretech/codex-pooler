@@ -8,13 +8,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     block_ref = Keyword.get(opts, :block_ref)
     messages = Keyword.get(opts, :messages, [])
     return_request_result? = Keyword.get(opts, :return_request_result?, false)
+    connection = Keyword.get(opts, :upstream_websocket_connection)
 
     %{
       start: fn -> start_fake_upstream(test_pid) end,
       send: fn upstream_pid, payload, writer ->
         record_frame(upstream_pid, payload, test_pid)
         emit_messages(messages, writer, block_ref, test_pid)
-        maybe_request_result(payload, messages, return_request_result?)
+        maybe_request_result(payload, messages, return_request_result?, connection)
       end,
       close: fn upstream_pid -> stop_fake_upstream(upstream_pid, test_pid) end
     }
@@ -23,19 +24,25 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   defp maybe_request_result(
          %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{},
          messages,
-         true
+         true,
+         connection
        ) do
-    {:ok,
-     %{
-       body: Enum.join(messages, "\n"),
-       terminal: "response.completed",
-       status: 200,
-       headers: [],
-       websocket_frame_headers: %{}
-     }}
+    result = %{
+      body: Enum.join(messages, "\n"),
+      terminal: "response.completed",
+      status: 200,
+      headers: [],
+      websocket_frame_headers: %{}
+    }
+
+    if is_map(connection) do
+      {:ok, Map.put(result, :upstream_websocket_connection, connection)}
+    else
+      {:ok, result}
+    end
   end
 
-  defp maybe_request_result(_payload, _messages, _return_request_result?), do: :ok
+  defp maybe_request_result(_payload, _messages, _return_request_result?, _connection), do: :ok
 
   def fake_upstream_frames(upstream_pid) when is_pid(upstream_pid) do
     Agent.get(upstream_pid, fn state -> Enum.reverse(state.frames) end)
@@ -102,6 +109,37 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def owner_idle_timeout(owner_pid) when is_pid(owner_pid) do
     :sys.get_state(owner_pid).idle_shutdown_ms
   end
+
+  def owner_count(codex_session_id) when is_binary(codex_session_id) do
+    Registry.lookup(
+      WebsocketOwnerSession.Registry,
+      codex_session_id
+    )
+    |> length()
+  end
+
+  def previous_release_attach(codex_session_id, downstream) do
+    with {:ok, owner_pid} <-
+           WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.attach_downstream(owner_pid, downstream)
+    end
+  end
+
+  def previous_release_submit_request(codex_session_id, downstream, request, _opts) do
+    with {:ok, owner_pid} <-
+           WebsocketOwnerSession.lookup(codex_session_id) do
+      owner_pid
+      |> WebsocketOwnerSession.submit_request(downstream, request)
+      |> drop_connection_metadata()
+    end
+  end
+
+  defp drop_connection_metadata({status, result})
+       when status in [:ok, :error] and is_map(result) do
+    {status, Map.delete(result, :upstream_websocket_connection)}
+  end
+
+  defp drop_connection_metadata(result), do: result
 
   defp start_fake_upstream(test_pid) do
     Agent.start_link(fn -> %{frames: [], closed?: false} end)
@@ -298,5 +336,42 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
         mode: mode
       }
     })
+  end
+end
+
+defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller do
+  @moduledoc false
+
+  @old_result_keys [:body, :headers, :status, :terminal, :websocket_frame_headers]
+
+  def attach_and_submit(owner_node, codex_session_id, downstream, request) do
+    forwarder =
+      CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+
+    with {:ok, attached} <-
+           :erpc.call(owner_node, forwarder, :remote_attach_downstream, [
+             codex_session_id,
+             downstream
+           ]),
+         {:ok, result} <-
+           :erpc.call(owner_node, forwarder, :remote_submit_request, [
+             codex_session_id,
+             attached,
+             request,
+             []
+           ]) do
+      connection_keys =
+        result
+        |> Map.get(:upstream_websocket_connection, %{})
+        |> Map.keys()
+        |> Enum.sort()
+
+      send(
+        downstream.pid,
+        {:websocket_owner_previous_release_caller, node(), connection_keys}
+      )
+
+      {:ok, Map.take(result, @old_result_keys)}
+    end
   end
 end

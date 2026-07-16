@@ -382,7 +382,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :upstream_websocket_bridge,
       contract:
-        "the upstream websocket bridge is Pool-gated by upstream_websocket_bridge_enabled (default off) and applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket to reuse provider prompt-cache locality; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape"
+        "the upstream websocket bridge is Pool-gated by upstream_websocket_bridge_enabled (default off) and applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket as a cache-locality heuristic, never a cache guarantee; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt-only upstream_websocket_connection namespace contains exactly lifecycle_id, generation, reused, and reconnected; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape and previous-release owners retain legacy five-minute behavior without connection metadata"
     },
     %{
       slug: :function_tool_schema_lowering,
@@ -1196,13 +1196,21 @@ defmodule CodexPooler.CompatibilityMatrix do
         internal_events: "buffered_never_committing",
         target: "same_candidate_same_attempt_http",
         settlements: 1,
-        post_visible_upstream_death: "failed_request"
+        post_visible_upstream_death: "failed_request",
+        cache_locality: "heuristic_never_guarantee"
       },
       accounting: %{
         request_transport: "http_sse",
         attempt_transport: "websocket",
         attempt_metadata: ["upstream_websocket_bridge", "upstream_transport"],
-        payload_compression_subject: "websocket_envelope"
+        payload_compression_subject: "websocket_envelope",
+        upstream_websocket_connection: %{
+          exact_fields: ["lifecycle_id", "generation", "reused", "reconnected"],
+          lifecycle_id: "canonical_uuid_per_upstream_websocket_session_lifecycle",
+          generation: "positive_successful_connection_ordinal_within_lifecycle",
+          reused: "request_started_on_already_established_connection",
+          reconnected: "request_retried_on_new_connection_after_pre_response_reuse_failure",
+        }
       },
       crash_hygiene: %{
         submit_task: "catch_all_scrubbed_atom_reasons",
@@ -1212,6 +1220,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       rolling_deploy: %{
         native_attach_arity: 2,
         bridge_attach_arity: 3,
+        old_owner_native_attach: "compatible_without_connection_metadata",
         old_owner_bridge_attach: "fail_closed_http_fallback"
       }
     },

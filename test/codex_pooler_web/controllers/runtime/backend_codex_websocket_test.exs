@@ -418,6 +418,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert request.transport == "websocket"
       assert request.status == "succeeded"
 
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      upstream_websocket_connection = attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id} = upstream_websocket_connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+      assert upstream_websocket_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 1,
+               "reused" => false,
+               "reconnected" => false
+             }
+
+      assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+      assert is_reference(connection_id)
+
+      assert [settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.request_id == request.id
+
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
       assert captured.path == "/backend-api/codex/responses"
@@ -6882,6 +6908,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
     assert second_attempt.status == "succeeded"
+
+    first_connection = first_attempt.response_metadata["upstream_websocket_connection"]
+    second_connection = second_attempt.response_metadata["upstream_websocket_connection"]
+
+    assert %{"lifecycle_id" => first_lifecycle_id} = first_connection
+    assert {:ok, ^first_lifecycle_id} = Ecto.UUID.cast(first_lifecycle_id)
+
+    assert %{"lifecycle_id" => second_lifecycle_id} = second_connection
+    assert {:ok, ^second_lifecycle_id} = Ecto.UUID.cast(second_lifecycle_id)
+    refute first_lifecycle_id == second_lifecycle_id
+
+    assert first_connection == %{
+             "lifecycle_id" => first_lifecycle_id,
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           }
+
+    assert second_connection == %{
+             "lifecycle_id" => second_lifecycle_id,
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           }
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"

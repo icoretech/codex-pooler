@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -172,6 +173,143 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+  end
+
+  test "direct websocket request preserves exact connection metadata through result recording" do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [
+           websocket_success("direct-initial"),
+           websocket_success("direct-reused"),
+           FakeUpstream.websocket_sse_then_close([]),
+           websocket_success("direct-reconnected")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    request_options = websocket_request_options(session)
+    request = websocket_dispatch_request(upstream, request_options)
+
+    assert {:ok, initial} = UpstreamDispatch.websocket_request(request)
+    initial_connection = Map.fetch!(initial, :upstream_websocket_connection)
+
+    assert initial_connection == %{
+             lifecycle_id: initial_connection.lifecycle_id,
+             generation: 1,
+             reused: false,
+             reconnected: false
+           }
+
+    assert {:ok, reused} = UpstreamDispatch.websocket_request(request)
+
+    assert Map.fetch!(reused, :upstream_websocket_connection) == %{
+             lifecycle_id: initial_connection.lifecycle_id,
+             generation: 1,
+             reused: true,
+             reconnected: false
+           }
+
+    assert {:ok, reconnected} = UpstreamDispatch.websocket_request(request)
+
+    assert Map.fetch!(reconnected, :upstream_websocket_connection) == %{
+             lifecycle_id: initial_connection.lifecycle_id,
+             generation: 2,
+             reused: false,
+             reconnected: true
+           }
+
+    FakeUpstream.set_mode(
+      upstream,
+      {:sequence,
+       [
+         FakeUpstream.websocket_sse_then_close([]),
+         FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "reconnect_rejected"}},
+           status: 503
+         )
+       ]}
+    )
+
+    assert {:error, failed_reconnect} = UpstreamDispatch.websocket_request(request)
+    assert %{body: "", reason: {:websocket_upgrade_failed, 503, _headers}} = failed_reconnect
+
+    assert Map.fetch!(failed_reconnect, :upstream_websocket_connection) == %{
+             lifecycle_id: initial_connection.lifecycle_id,
+             generation: 2,
+             reused: true,
+             reconnected: false
+           }
+  end
+
+  test "one-shot websocket request preserves success metadata and omits it on initial upgrade failure" do
+    {:ok, success_upstream} = FakeUpstream.start_link(websocket_success("one-shot-success"))
+    on_exit(fn -> FakeUpstream.stop(success_upstream) end)
+
+    success_request =
+      websocket_dispatch_request(
+        success_upstream,
+        websocket_request_options()
+      )
+
+    assert {:ok, success} = UpstreamDispatch.websocket_request(success_request)
+    success_connection = Map.fetch!(success, :upstream_websocket_connection)
+
+    assert success_connection == %{
+             lifecycle_id: success_connection.lifecycle_id,
+             generation: 1,
+             reused: false,
+             reconnected: false
+           }
+
+    {:ok, failed_upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "initial_rejected"}},
+          status: 401
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(failed_upstream) end)
+
+    failure_request =
+      websocket_dispatch_request(
+        failed_upstream,
+        websocket_request_options()
+      )
+
+    assert {:error, failure} = UpstreamDispatch.websocket_request(failure_request)
+    assert %{body: "", reason: {:websocket_upgrade_failed, 401, _headers}} = failure
+    refute Map.has_key?(failure, :upstream_websocket_connection)
+  end
+
+  defp websocket_request_options(session \\ nil) do
+    opts = %{receive_timeout_ms: 1_000}
+    opts = if is_pid(session), do: Map.put(opts, :upstream_websocket_session, session), else: opts
+    RequestOptions.for_websocket(opts, %{"model" => "example-model"})
+  end
+
+  defp websocket_dispatch_request(upstream, request_options) do
+    %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: "{}",
+      identity: upstream_identity(),
+      accounting_request: nil,
+      writer: fn _message -> :ok end,
+      assignment_advertised?: false,
+      request_options: request_options
+    }
+  end
+
+  defp websocket_success(id) do
+    FakeUpstream.websocket_text_frames([
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => id}
+      })
+    ])
   end
 
   defp websocket_owner_request_options(session, lease_token, downstream, forwarder_opts) do

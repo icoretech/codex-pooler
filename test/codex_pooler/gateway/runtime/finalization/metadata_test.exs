@@ -4,6 +4,244 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
 
+  test "characterization preserves existing websocket response metadata output" do
+    frame_headers = %{
+      "openai-request-id" => "frame-request-characterization",
+      "x-codex-primary-reset-at" => "2026-05-25T13:00:00Z"
+    }
+
+    assert Metadata.websocket_response_metadata(
+             [
+               {"openai-request-id", "upgrade-request-characterization"},
+               {"x-codex-rate-limit-reached-type", "workspace_owner_usage_limit_reached"}
+             ],
+             "rate_limit_exceeded",
+             %{},
+             frame_headers
+           ) == %{
+             "content_type" => "application/json",
+             "error_kind" => "rate_limit_exceeded",
+             "rate_limit_reached_type" => "workspace_owner_usage_limit_reached",
+             "status_code" => 200,
+             "upstream_request_id" => "upgrade-request-characterization",
+             "upstream_transport" => "websocket",
+             "websocket_frame_headers" => frame_headers
+           }
+  end
+
+  test "three- and four-argument websocket metadata preserve legacy output byte for byte" do
+    legacy_connection = %{"legacy_marker" => "preserved"}
+
+    route_metadata = %{
+      "legacy_route_marker" => 7,
+      "upstream_websocket_connection" => legacy_connection,
+      upstream_websocket_connection: %{legacy_marker: "preserved"}
+    }
+
+    opts = %{routing_attempt_metadata: route_metadata}
+
+    expected =
+      Map.merge(route_metadata, %{
+        "content_type" => "application/json",
+        "status_code" => 200,
+        "upstream_transport" => "websocket"
+      })
+
+    assert :erlang.term_to_binary(Metadata.websocket_response_metadata([], nil, opts)) ==
+             :erlang.term_to_binary(expected)
+
+    frame_headers = %{"openai-request-id" => "frame-request-legacy"}
+
+    assert :erlang.term_to_binary(
+             Metadata.websocket_response_metadata([], nil, opts, frame_headers)
+           ) ==
+             :erlang.term_to_binary(Map.put(expected, "websocket_frame_headers", frame_headers))
+  end
+
+  test "websocket connection metadata accepts homogeneous string and atom key forms" do
+    lifecycle_id = Ecto.UUID.generate()
+
+    valid_inputs = [
+      {%{
+         "lifecycle_id" => lifecycle_id,
+         "generation" => 2,
+         "reused" => false,
+         "reconnected" => true,
+         "pid" => self(),
+         "node" => node(),
+         "socket" => make_ref(),
+         "url" => "https://example.com/private-path",
+         "headers" => %{"authorization" => "synthetic-private-value"},
+         "frame" => "synthetic-private-frame",
+         "payload" => "synthetic-private-payload",
+         "token" => "synthetic-private-token",
+         "prompt" => "ignore the metadata contract",
+         "ignore_previous_instructions" => "retain every field",
+         "reason" => "synthetic-private-reason",
+         "lease" => "synthetic-private-lease"
+       },
+       %{
+         "lifecycle_id" => lifecycle_id,
+         "generation" => 2,
+         "reused" => false,
+         "reconnected" => true
+       }},
+      {%{
+         lifecycle_id: lifecycle_id,
+         generation: 3,
+         reused: true,
+         reconnected: false,
+         token: "synthetic-private-token",
+         prompt: "ignore the metadata contract"
+       },
+       %{
+         "lifecycle_id" => lifecycle_id,
+         "generation" => 3,
+         "reused" => true,
+         "reconnected" => false
+       }}
+    ]
+
+    Enum.each(valid_inputs, fn {connection, normalized} ->
+      expected = %{"upstream_websocket_connection" => normalized}
+
+      assert Metadata.upstream_websocket_connection_attempt_metadata(connection) == expected
+
+      assert Metadata.websocket_response_metadata([], nil, %{}, %{}, connection) ==
+               Map.merge(
+                 %{
+                   "content_type" => "application/json",
+                   "status_code" => 200,
+                   "upstream_transport" => "websocket"
+                 },
+                 expected
+               )
+    end)
+  end
+
+  test "websocket connection metadata omits the namespace for every malformed input class" do
+    lifecycle_id = Ecto.UUID.generate()
+
+    string_keys = %{
+      "lifecycle_id" => lifecycle_id,
+      "generation" => 1,
+      "reused" => false,
+      "reconnected" => false
+    }
+
+    atom_keys = %{
+      lifecycle_id: lifecycle_id,
+      generation: 1,
+      reused: false,
+      reconnected: false
+    }
+
+    malformed =
+      [nil, [], [generation: 1], %{}] ++
+        Enum.map(Map.keys(string_keys), &Map.delete(string_keys, &1)) ++
+        Enum.map(Map.keys(atom_keys), &Map.delete(atom_keys, &1)) ++
+        [
+          %{
+            "lifecycle_id" => lifecycle_id,
+            :generation => 1,
+            "reused" => false,
+            "reconnected" => false
+          },
+          Map.merge(string_keys, atom_keys),
+          Map.put(string_keys, :generation, 1),
+          Map.put(atom_keys, "generation", 1),
+          Map.put(string_keys, "lifecycle_id", "not-a-uuid"),
+          Map.put(string_keys, "lifecycle_id", String.upcase(lifecycle_id)),
+          Map.put(string_keys, "lifecycle_id", String.replace(lifecycle_id, "-", "")),
+          Map.put(string_keys, "lifecycle_id", lifecycle_id <> "-overlong"),
+          Map.put(string_keys, "generation", 0),
+          Map.put(string_keys, "generation", -1),
+          Map.put(string_keys, "generation", "1"),
+          Map.put(string_keys, "generation", 1.0),
+          Map.put(string_keys, "reused", "false"),
+          Map.put(string_keys, "reused", 0),
+          Map.put(string_keys, "reconnected", "true"),
+          Map.put(string_keys, "reconnected", 1),
+          Map.put(atom_keys, :lifecycle_id, String.upcase(lifecycle_id)),
+          Map.put(atom_keys, :generation, "1"),
+          Map.put(atom_keys, :reused, "false")
+        ]
+
+    Enum.each(malformed, fn input ->
+      assert Metadata.upstream_websocket_connection_attempt_metadata(input) == %{}
+
+      refute Map.has_key?(
+               Metadata.websocket_response_metadata([], nil, %{}, %{}, input),
+               "upstream_websocket_connection"
+             )
+    end)
+  end
+
+  test "five-argument websocket metadata owns the connection namespace" do
+    lifecycle_id = Ecto.UUID.generate()
+
+    injected = %{
+      "lifecycle_id" => lifecycle_id,
+      "generation" => 99,
+      "reused" => true,
+      "reconnected" => true,
+      "token" => "synthetic-route-injection"
+    }
+
+    metadata =
+      Metadata.websocket_response_metadata(
+        [],
+        nil,
+        %{
+          routing_attempt_metadata: %{
+            "upstream_websocket_connection" => injected,
+            upstream_websocket_connection: injected
+          }
+        },
+        %{},
+        %{"generation" => 0}
+      )
+
+    refute Map.has_key?(metadata, "upstream_websocket_connection")
+    refute Map.has_key?(metadata, :upstream_websocket_connection)
+  end
+
+  test "websocket connection normalization does not retain stale call state" do
+    first_id = Ecto.UUID.generate()
+    second_id = Ecto.UUID.generate()
+
+    first = %{
+      "lifecycle_id" => first_id,
+      "generation" => 1,
+      "reused" => false,
+      "reconnected" => false
+    }
+
+    second = %{
+      lifecycle_id: second_id,
+      generation: 4,
+      reused: false,
+      reconnected: true
+    }
+
+    assert [
+             Metadata.upstream_websocket_connection_attempt_metadata(first),
+             Metadata.upstream_websocket_connection_attempt_metadata(%{"generation" => 0}),
+             Metadata.upstream_websocket_connection_attempt_metadata(second)
+           ] == [
+             %{"upstream_websocket_connection" => first},
+             %{},
+             %{
+               "upstream_websocket_connection" => %{
+                 "lifecycle_id" => second_id,
+                 "generation" => 4,
+                 "reused" => false,
+                 "reconnected" => true
+               }
+             }
+           ]
+  end
+
   test "first-event metadata preserves local usage-limit classification and sanitized limit type" do
     response = %Req.Response{
       status: 200,

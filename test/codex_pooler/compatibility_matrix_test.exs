@@ -226,6 +226,22 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                previous_release_default_ms: 300_000
              }
 
+      assert fixture.fallback.cache_locality == "heuristic_never_guarantee"
+
+      assert fixture.accounting.upstream_websocket_connection == %{
+               exact_fields: ["lifecycle_id", "generation", "reused", "reconnected"],
+               lifecycle_id: "canonical_uuid_per_upstream_websocket_session_lifecycle",
+               generation: "positive_successful_connection_ordinal_within_lifecycle",
+               reused: "request_started_on_already_established_connection",
+               reconnected: "request_retried_on_new_connection_after_pre_response_reuse_failure",
+             }
+
+      assert fixture.rolling_deploy == %{
+               native_attach_arity: 2,
+               bridge_attach_arity: 3,
+               old_owner_native_attach: "compatible_without_connection_metadata",
+               old_owner_bridge_attach: "fail_closed_http_fallback"
+             }
     end
   end
 

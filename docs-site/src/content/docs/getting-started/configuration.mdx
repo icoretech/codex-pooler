@@ -121,7 +121,7 @@ Both settings default to `1_800_000` ms and accept `60_000..3_600_000` ms. Each 
 
 A longer owner-retention window can improve the chance of reusing an upstream connection, but keeps owner processes and connections allocated longer after clients detach. A shorter window releases those resources sooner, with less opportunity for reuse. To roll back a change, restore the previous value in the admin UI. New and recovered owners use the restored value; replace existing owners as part of the rollback only when immediate convergence is required.
 
-During a mixed-release transition, owners started by the previous release retain the legacy five-minute behavior. Owners started or recovered by the current release use the 30-minute default.
+During a mixed-release transition, owners started by the previous release retain the legacy five-minute behavior and do not provide upstream connection lifecycle metadata. Owners started or recovered by the current release use the 30-minute default. Native websocket attachment remains compatible with previous-release owners, while an HTTP-to-websocket bridge that needs the option-carrying attachment fails closed to plain HTTP when its owner is still on the previous release.
 
 ## Runtime URLs
 

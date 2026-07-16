@@ -20,9 +20,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -74,6 +76,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     |> PoolRouting.ensure_routing_settings()
     |> Ecto.Changeset.change(request_compression_enabled: true)
     |> Repo.update!()
+  end
+
+  defp set_upstream_receive_timeout!(timeout_ms) do
+    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
+    settings = %{OperationalSettings.current() | upstream_receive_timeout_ms: timeout_ms}
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: settings,
+      use_instance_settings?: false
+    )
+
+    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
   defp completed_event(id) do
@@ -151,18 +165,87 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     Repo.all(from a in Attempt, where: a.request_id == ^request.id)
   end
 
-  defp settled_count(request) do
+  defp await_upstream_requests(upstream, expected_count, attempts \\ 100)
+
+  defp await_upstream_requests(upstream, expected_count, attempts) when attempts > 0 do
+    requests = FakeUpstream.requests(upstream)
+
+    if length(requests) == expected_count do
+      requests
+    else
+      yield_once({:await_upstream_requests, expected_count, attempts})
+      await_upstream_requests(upstream, expected_count, attempts - 1)
+    end
+  end
+
+  defp await_upstream_requests(upstream, _expected_count, 0),
+    do: FakeUpstream.requests(upstream)
+
+  defp yield_once(message) do
+    send(self(), message)
+
+    receive do
+      ^message -> :ok
+    end
+  end
+
+  defp settlement_count(request) do
     Repo.aggregate(
       from(l in LedgerEntry,
-        where:
-          l.request_id == ^request.id and l.entry_kind == "settlement" and
-            l.usage_status == "usage_known"
+        where: l.request_id == ^request.id and l.entry_kind == "settlement"
       ),
       :count
     )
   end
 
-  test "bridges sessioned public streaming turns over one reused upstream websocket", %{
+  defp await_rate_limit_window(identity, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+
+    identity
+    |> QuotaWindows.list_quota_windows()
+    |> Enum.find(&(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary"))
+    |> case do
+      nil ->
+        if System.monotonic_time(:millisecond) < deadline do
+          receive do
+          after
+            10 -> await_rate_limit_window(identity, deadline)
+          end
+        else
+          flunk("expected codex.rate_limits quota window for primary")
+        end
+
+      window ->
+        window
+    end
+  end
+
+  defp upstream_connection(%Attempt{} = attempt) do
+    assert %{
+             "lifecycle_id" => lifecycle_id,
+             "generation" => generation,
+             "reused" => reused,
+             "reconnected" => reconnected
+           } = connection = attempt.response_metadata["upstream_websocket_connection"]
+
+    assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+    assert is_integer(generation) and generation > 0
+    assert is_boolean(reused)
+    assert is_boolean(reconnected)
+    assert Map.keys(connection) |> Enum.sort() == ~w(generation lifecycle_id reconnected reused)
+
+    connection
+  end
+
+  defp assert_no_upstream_websocket_metadata(%Attempt{response_metadata: metadata}) do
+    assert Map.take(
+             metadata,
+             ~w(upstream_transport upstream_websocket_bridge upstream_websocket_connection)
+           ) ==
+             %{}
+  end
+
+  test "bridges sessioned turns through reuse and transparent reconnect metadata", %{
     conn: conn
   } do
     upstream =
@@ -171,6 +254,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
          [
            FakeUpstream.sse_stream([completed_event("resp_bridge_t1")]),
            FakeUpstream.sse_stream([completed_event("resp_bridge_t2")]),
+           FakeUpstream.websocket_sse_then_close([]),
            FakeUpstream.sse_stream([completed_event("resp_bridge_t3")])
          ]}
       )
@@ -183,6 +267,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert first.status == 200
     assert completed_id(first.resp_body) == "resp_bridge_t1"
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [first_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert is_reference(first_connection_id)
 
     request = latest_request(setup.pool)
     assert request.status == "succeeded"
@@ -192,23 +278,67 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
     assert attempt.response_metadata["upstream_transport"] == "websocket"
-    assert settled_count(request) == 1
+
+    assert %{
+             "lifecycle_id" => lifecycle_id,
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           } = upstream_connection(attempt)
+
+    assert settlement_count(request) == 1
 
     second = post_stream(conn, setup, session, stream_payload(setup, "turn two"))
     assert second.status == 200
     assert completed_id(second.resp_body) == "resp_bridge_t2"
+    assert [^first_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+
+    second_request = latest_request(setup.pool)
+    assert second_request.id != request.id
+    assert second_request.transport == "http_sse"
+    assert [second_attempt] = attempts_for(second_request)
+    assert second_attempt.transport == "websocket"
+
+    assert %{
+             "lifecycle_id" => ^lifecycle_id,
+             "generation" => 1,
+             "reused" => true,
+             "reconnected" => false
+           } = upstream_connection(second_attempt)
+
+    assert settlement_count(second_request) == 1
 
     third = post_stream(conn, setup, session, stream_payload(setup, "turn three"))
     assert third.status == 200
     assert completed_id(third.resp_body) == "resp_bridge_t3"
 
-    # The whole point of the bridge: follow-up turns reuse the SAME upstream
-    # websocket connection instead of dispatching per-request over HTTP.
-    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [^first_connection_id, second_connection_id] =
+             FakeUpstream.websocket_connection_ids(upstream)
+
+    assert is_reference(second_connection_id)
+    refute second_connection_id == first_connection_id
+
+    third_request = latest_request(setup.pool)
+    assert third_request.id not in [request.id, second_request.id]
+    assert third_request.transport == "http_sse"
+    assert [third_attempt] = attempts_for(third_request)
+    assert third_attempt.transport == "websocket"
+
+    assert %{
+             "lifecycle_id" => ^lifecycle_id,
+             "generation" => 2,
+             "reused" => false,
+             "reconnected" => true
+           } = upstream_connection(third_attempt)
+
+    assert settlement_count(third_request) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert length(FakeUpstream.requests(upstream)) == 4
 
     requests = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
     assert length(requests) == 3
     assert Enum.all?(requests, &(&1.status == "succeeded"))
+    assert Enum.all?(requests, &(&1.transport == "http_sse"))
   end
 
   test "bridged turns produce the same downstream SSE as HTTP dispatch", %{conn: conn} do
@@ -335,10 +465,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     request = latest_request(setup.pool)
     assert request.status == "succeeded"
+    assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
     assert attempt.transport == "http_sse"
-    refute attempt.response_metadata["upstream_websocket_bridge"]
-    assert settled_count(request) == 1
+    assert_no_upstream_websocket_metadata(attempt)
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert FakeUpstream.websocket_connection_ids(upstream) == []
+    assert length(FakeUpstream.requests(upstream)) == 1
+    assert settlement_count(request) == 1
   end
 
   test "keeps HTTP dispatch when the pool toggle is off", %{conn: conn} do
@@ -368,7 +503,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     request = latest_request(setup.pool)
     assert request.status == "failed"
-    assert length(attempts_for(request)) == 1
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+
+    assert %{
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           } = upstream_connection(attempt)
+
+    assert settlement_count(request) == 1
   end
 
   test "an internal-only event followed by websocket death falls back to HTTP pre-visible", %{
@@ -404,11 +551,297 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     request = latest_request(setup.pool)
     assert request.status == "succeeded"
+    assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
     assert attempt.status == "succeeded"
     assert attempt.transport == "http_sse"
+    assert_no_upstream_websocket_metadata(attempt)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert is_reference(connection_id)
+
+    assert [websocket_request, http_fallback_request] = await_upstream_requests(upstream, 2)
+    assert websocket_request.method == "WEBSOCKET"
+    assert websocket_request.path == "/backend-api/codex/responses"
+    assert http_fallback_request.method == "POST"
+    assert http_fallback_request.path == "/backend-api/codex/responses"
+
+    assert settlement_count(request) == 1
+  end
+
+  test "a failed transparent reconnect persists only a scrubbed HTTP fallback failure", %{
+    conn: conn
+  } do
+    close_reason = "synthetic websocket close reason"
+    upgrade_reason = "synthetic reconnect upgrade reason"
+
+    failed_terminal =
+      {"response.failed",
+       %{
+         "type" => "response.failed",
+         "error" => %{
+           "type" => "server_error",
+           "code" => "internal_error",
+           "message" => "synthetic fallback failure"
+         },
+         "response" => %{
+           "id" => "resp_failed_reconnect_fallback",
+           "status" => "failed"
+         }
+       }}
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream([completed_event("resp_reconnect_initial")]),
+           FakeUpstream.websocket_sse_then_close([], reason: close_reason),
+           FakeUpstream.websocket_upgrade_error(
+             %{
+               "error" => %{
+                 "code" => "reconnect_rejected",
+                 "message" => upgrade_reason
+               }
+             },
+             status: 503
+           ),
+           FakeUpstream.sse_stream([failed_terminal])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    enable_bridge!(setup.pool)
+    session = "failed-reconnect-session-#{System.unique_integer([:positive])}"
+
+    initial = post_stream(conn, setup, session, stream_payload(setup, "initial turn"))
+    assert initial.status == 200
+    assert completed_id(initial.resp_body) == "resp_reconnect_initial"
+
+    initial_request = latest_request(setup.pool)
+    assert initial_request.status == "succeeded"
+    assert [initial_attempt] = attempts_for(initial_request)
+    assert initial_attempt.transport == "websocket"
+
+    assert %{
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           } = upstream_connection(initial_attempt)
+
+    assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert is_reference(connection_id)
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "failed reconnect"))
+    assert response.status == 200
+    assert event_types(response.resp_body) == ["response.failed"]
+    refute response.resp_body =~ close_reason
+    refute response.resp_body =~ upgrade_reason
+    refute response.resp_body =~ "synthetic fallback failure"
+
+    request = latest_request(setup.pool)
+
+    assert %{
+             status: "failed",
+             transport: "http_sse",
+             response_status_code: 200,
+             last_error_code: "internal_error"
+           } = request
+
+    assert [attempt] = attempts_for(request)
+
+    assert %{
+             status: "failed",
+             transport: "http_sse",
+             upstream_status_code: 200,
+             network_error_code: "internal_error",
+             error_message: "upstream stream returned terminal event internal_error"
+           } = attempt
+
+    assert_no_upstream_websocket_metadata(attempt)
+    assert byte_size(attempt.error_message) <= 256
+    refute inspect(request) =~ close_reason
+    refute inspect(request) =~ upgrade_reason
+    refute inspect(attempt) =~ close_reason
+    refute inspect(attempt) =~ upgrade_reason
     refute attempt.response_metadata["upstream_websocket_bridge"]
-    assert settled_count(request) == 1
+    refute attempt.response_metadata["upstream_transport"]
+    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [^connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert length(FakeUpstream.requests(upstream)) == 3
+    assert settlement_count(request) == 1
+  end
+
+  test "a websocket bridge completion before public data falls back on the same attempt", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close([]),
+           FakeUpstream.sse_stream([completed_event("resp_complete_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    enable_bridge!(setup.pool)
+    session = "completion-fallback-session-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "completion fallback"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_complete_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_bridge")
+    refute Map.has_key?(attempt.response_metadata, "upstream_transport")
+    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+    assert settlement_count(request) == 1
+  end
+
+  @tag :task_9b_codex_buffering
+  test "buffers codex rate limits until websocket commit and preserves compact accounting", %{
+    conn: conn
+  } do
+    reset_at = ~U[2030-01-01 00:00:00Z]
+
+    rate_limits_event = %{
+      "type" => "codex.rate_limits",
+      "rate_limits" => %{
+        "primary" => %{
+          "used_percent" => 12.5,
+          "window_minutes" => 300,
+          "reset_at" => DateTime.to_unix(reset_at)
+        }
+      }
+    }
+
+    compact_completed =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_codex_buffered",
+           "status" => "completed",
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [%{"type" => "output_text", "text" => "buffered answer"}]
+             }
+           ],
+           "usage" => %{"input_tokens" => 12, "output_tokens" => 5, "total_tokens" => 17}
+         }
+       }}
+
+    created = created_event("resp_codex_buffered")
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_text_frames([
+          Jason.encode!(rate_limits_event),
+          Jason.encode!(elem(created, 1)),
+          Jason.encode!(elem(compact_completed, 1))
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    enable_bridge!(setup.pool)
+    session = "codex-buffered-session-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "codex buffering"))
+
+    assert response.status == 200
+
+    assert event_types(response.resp_body) == [
+             "response.created",
+             "response.output_text.delta",
+             "response.completed"
+           ]
+
+    assert response.resp_body =~ "buffered answer"
+    refute response.resp_body =~ "codex.rate_limits"
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert request.usage_status == "usage_known"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+
+    assert %{
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           } = upstream_connection(attempt)
+
+    assert window = await_rate_limit_window(setup.identity)
+    assert window.source == "codex_rate_limit_event"
+    assert window.window_kind == "primary"
+    assert window.window_minutes == 300
+    assert Decimal.equal?(window.used_percent, Decimal.new("12.5"))
+    assert DateTime.compare(window.reset_at, reset_at) == :eq
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.request_id == request.id
+    assert settlement.attempt_id == attempt.id
+    assert settlement.transport == "http_sse"
+    assert settlement.usage_status == "usage_known"
+    assert settlement.details["usage_source"] == "upstream_usage"
+    assert settlement_count(request) == 1
+  end
+
+  test "a websocket bridge preflight timeout before public data falls back on the same attempt",
+       %{conn: conn} do
+    set_upstream_receive_timeout!(25)
+
+    internal_event =
+      Jason.encode!(%{
+        "type" => "codex.rate_limits",
+        "rate_limits" => %{"primary" => %{"used_percent" => 12.5}}
+      })
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_text_frames([internal_event]),
+           FakeUpstream.sse_stream([completed_event("resp_timeout_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    enable_bridge!(setup.pool)
+    session = "timeout-fallback-session-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "timeout fallback"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_timeout_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_bridge")
+    refute Map.has_key?(attempt.response_metadata, "upstream_transport")
+    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+    assert settlement_count(request) == 1
   end
 
   test "a failure-coded incomplete websocket terminal falls back to HTTP pre-visible", %{
@@ -449,7 +882,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert [attempt] = attempts_for(request)
     assert attempt.transport == "http_sse"
     refute attempt.response_metadata["upstream_websocket_bridge"]
-    assert settled_count(request) == 1
+    refute attempt.response_metadata["upstream_websocket_connection"]
+    assert settlement_count(request) == 1
   end
 
   test "a compact completed-only turn bridges with the synthesized visible prefix", %{conn: conn} do
@@ -494,7 +928,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert [attempt] = attempts_for(request)
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
-    assert settled_count(request) == 1
+    assert %{"generation" => 1} = upstream_connection(attempt)
+    assert settlement_count(request) == 1
   end
 
   test "a downstream disconnect during a bridged turn finalizes as client_disconnected and frees the owner",
@@ -536,6 +971,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     }
 
     assert {:ok, _conn} = stream.(closed_conn)
+    assert [disconnect_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert is_reference(disconnect_connection_id)
 
     request = latest_request(setup.pool)
     assert request.status == "failed"
@@ -544,6 +981,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
     assert attempt.network_error_code == "client_disconnected"
+
+    assert %{
+             "generation" => 1,
+             "reused" => false,
+             "reconnected" => false
+           } = upstream_connection(attempt)
+
+    assert settlement_count(request) == 1
 
     # The owner session must not stay wedged on the interrupted turn: the next
     # turn on the same session bridges again over the SAME upstream websocket.
@@ -556,12 +1001,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert second.status == 200
     assert completed_id(second.resp_body) == "resp_disconnect_t2"
     assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert [^disconnect_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
 
     second_request = latest_request(setup.pool)
     assert second_request.id != request.id
     assert second_request.status == "succeeded"
     assert [second_attempt] = attempts_for(second_request)
     assert second_attempt.transport == "websocket"
+
+    assert %{
+             "lifecycle_id" => lifecycle_id,
+             "generation" => 1,
+             "reused" => true,
+             "reconnected" => false
+           } = upstream_connection(second_attempt)
+
+    assert is_binary(lifecycle_id)
+    assert settlement_count(second_request) == 1
   end
 
   defp compression_log_fixture(omitted_sentinel) do

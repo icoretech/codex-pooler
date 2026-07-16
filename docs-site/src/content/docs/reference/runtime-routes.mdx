@@ -599,11 +599,17 @@ The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP
 
 ## Prompt-cache and continuity boundaries
 
-Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes.
+Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic: it can improve the chance that compatible work reaches a reusable upstream connection, but it never guarantees a provider cache hit or cached-token accounting.
+
+When a Pool enables the upstream websocket bridge, an eligible streaming `POST /v1/responses` request keeps HTTP SSE as its downstream contract while first attempting upstream dispatch through the continuity owner's websocket. Internal upstream events remain buffered and do not commit the bridge. The bridge commits only when the first event that public Responses normalization would expose is forwarded downstream.
+
+Any bridge failure before that commit boundary falls back to plain HTTP on the same candidate and attempt, with one settlement. After a public event has committed the websocket transport, Codex Pooler does not replay the turn over HTTP; a later upstream websocket failure ends the request as failed. Reusing an owner websocket is a cache-locality heuristic, never a cache guarantee.
+
+During a mixed-release transition, native websocket attachment keeps its two-argument compatibility path against a previous-release owner. The bridge's option-carrying three-argument attachment is unavailable there and fails closed to HTTP before commit. Previous-release owners also retain the legacy five-minute post-detach window and omit connection lifecycle metadata; new or recovered owners use the current 30-minute default.
 
 ## Websocket Guardrails
 
-Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. It also bounds cross-pod owner-forwarded full-turn submit waits for new websocket requests, so healthy long turns are not limited by upstream receive timeout. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
+Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. It also bounds owner-forwarded full-turn submit waits for new websocket requests, so healthy long turns are not limited by upstream receive timeout. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
 
 `websocket_owner_idle_timeout_ms` is separate. It controls post-detach owner retention after no downstream or active turn remains, not downstream idle closure. It has the same `1_800_000` ms default and `60_000..3_600_000` ms bounds. Each new or recovered owner captures its node-local value at startup, and existing owners retain the value they captured.
 

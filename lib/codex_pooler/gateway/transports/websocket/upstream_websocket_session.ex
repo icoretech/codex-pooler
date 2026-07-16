@@ -13,13 +13,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
 
   @default_keepalive_interval_ms 25_000
+  @connection_lifecycle_keys [:lifecycle_id, :generation]
   @type response_headers :: [{binary(), binary()}]
   @type message_mapper :: (binary() -> binary()) | nil
+  @type connection_lifecycle_state :: %{
+          required(:lifecycle_id) => Ecto.UUID.t(),
+          required(:generation) => non_neg_integer()
+        }
+  @type connection_usage :: %{
+          required(:reused) => boolean(),
+          required(:reconnected) => boolean()
+        }
+  @type upstream_websocket_connection :: %{
+          required(:lifecycle_id) => Ecto.UUID.t(),
+          required(:generation) => pos_integer(),
+          required(:reused) => boolean(),
+          required(:reconnected) => boolean()
+        }
   @type request_success :: %{
           required(:body) => binary(),
           required(:terminal) => binary(),
           required(:status) => 200,
           required(:headers) => response_headers(),
+          optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
           optional(:upstream_error_param) => String.t()
         }
@@ -27,6 +43,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:body) => binary(),
           required(:reason) => term(),
           required(:headers) => response_headers(),
+          optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
           optional(:upstream_error_param) => String.t(),
           optional(:transport_failure) => TransportFailureReason.transport_failure_metadata()
@@ -36,7 +53,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, %{})
+    GenServer.start_link(__MODULE__, :new)
   end
 
   @spec request(pid(), Request.t()) :: request_result()
@@ -57,8 +74,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   @spec request_once(Request.t()) :: request_result()
   def request_once(%Request{} = request) do
     key = request_key(request)
+    state = new_connection_lifecycle_state()
 
-    case request_once_on_connection(%{}, key, request) do
+    case request_once_on_connection(state, key, request, %{
+           reused: false,
+           reconnected: false
+         }) do
       {:ok, result, state} ->
         close_state(state)
         result
@@ -78,7 +99,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   @impl GenServer
-  def init(state), do: {:ok, state}
+  def init(:new), do: {:ok, new_connection_lifecycle_state()}
+
+  @doc false
+  @spec connection_lifecycle_state(connection_lifecycle_state()) :: connection_lifecycle_state()
+  def connection_lifecycle_state(state), do: Map.take(state, @connection_lifecycle_keys)
+
+  @spec new_connection_lifecycle_state() :: connection_lifecycle_state()
+  defp new_connection_lifecycle_state do
+    %{lifecycle_id: Ecto.UUID.generate(), generation: 0}
+  end
 
   @impl GenServer
   def handle_call({:request, %Request{} = request}, _from, state) do
@@ -88,11 +118,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, result, state} ->
         {:reply, result, maybe_schedule_keepalive(state)}
 
-      {:retry, state} ->
+      {:retry, state, previous_connection} ->
         {:ok, result, state} =
           state
           |> close_state()
-          |> request_on_reconnected(key, request)
+          |> request_on_reconnected(key, request, previous_connection)
 
         {:reply, result, maybe_schedule_keepalive(state)}
     end
@@ -179,18 +209,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp request_on_connection(state, key, %Request{} = request) do
     reused_connection? = reusable_connection?(state, key)
+    connection_usage = %{reused: reused_connection?, reconnected: false}
 
-    case request_once_on_connection(state, key, request) do
+    case request_once_on_connection(state, key, request, connection_usage) do
       {:ok, result, state} ->
         if reused_connection? and pre_response_reconnectable?(result) do
-          {:retry, state}
+          {:retry, state, result_connection_metadata(result)}
         else
           {:ok, result, state}
         end
 
       {:error, reason, state} ->
         if reused_connection? and pre_response_reconnectable?(reason) do
-          {:retry, state}
+          {:retry, state, nil}
         else
           result = request_error(reason, state)
           state = close_state(state)
@@ -202,19 +233,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
 
-  defp request_on_reconnected(state, key, %Request{} = request) do
-    case request_once_on_connection(state, key, request) do
+  defp request_on_reconnected(state, key, %Request{} = request, previous_connection) do
+    connection_usage = %{reused: false, reconnected: true}
+
+    case request_once_on_connection(state, key, request, connection_usage) do
       {:ok, result, state} ->
         {:ok, result, state}
 
       {:error, reason, state} ->
-        result = request_error(reason, state)
+        result =
+          reason
+          |> request_error(state)
+          |> maybe_put_result_connection_metadata(previous_connection)
+
         state = close_state(state)
         {:ok, result, state}
     end
   end
 
-  defp request_once_on_connection(state, key, %Request{} = request) do
+  defp request_once_on_connection(state, key, %Request{} = request, connection_usage) do
     receive_state = %ReceiveState{
       writer: request.writer,
       timeouts: request.timeouts,
@@ -234,24 +271,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       request.headers,
       request.timeouts,
       request.payload,
-      receive_state
+      receive_state,
+      connection_usage
     )
   end
 
-  defp connect_and_send_request(state, key, url, headers, timeouts, payload, receive_state) do
+  defp connect_and_send_request(
+         state,
+         key,
+         url,
+         headers,
+         timeouts,
+         payload,
+         receive_state,
+         connection_usage
+       ) do
     case ensure_connection(state, key, url, headers, timeouts) do
       {:ok, state} ->
-        send_request_payload(state, payload, receive_state)
+        send_request_payload(state, payload, receive_state, connection_usage)
 
       {:error, reason, state} ->
         {:error, reason, Map.put(state, :transport_failure_phase, :connect)}
     end
   end
 
-  defp send_request_payload(state, payload, receive_state) do
+  defp send_request_payload(state, payload, receive_state, connection_usage) do
     case send_text(state, payload) do
       {:ok, state} ->
-        await_sent_request(state, receive_state)
+        {:ok, result, state} = await_sent_request(state, receive_state)
+        {:ok, put_result_connection_metadata(result, state, connection_usage), state}
 
       {:error, reason, state} ->
         {:error, reason, Map.put(state, :transport_failure_phase, :send_payload)}
@@ -273,6 +321,40 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
        websocket_frame_headers: %{},
        transport_failure: request_error_transport_failure(reason, state)
      }}
+  end
+
+  defp put_result_connection_metadata({status, result}, state, connection_usage)
+       when status in [:ok, :error] do
+    {status,
+     Map.put(
+       result,
+       :upstream_websocket_connection,
+       upstream_websocket_connection(state, connection_usage)
+     )}
+  end
+
+  defp maybe_put_result_connection_metadata({status, result}, connection)
+       when status in [:ok, :error] and is_map(connection) do
+    {status, Map.put(result, :upstream_websocket_connection, connection)}
+  end
+
+  defp maybe_put_result_connection_metadata(result, _connection), do: result
+
+  defp result_connection_metadata({_status, result}),
+    do: Map.get(result, :upstream_websocket_connection)
+
+  @spec upstream_websocket_connection(map(), connection_usage()) ::
+          upstream_websocket_connection()
+  defp upstream_websocket_connection(
+         %{lifecycle_id: lifecycle_id, generation: generation},
+         %{reused: reused, reconnected: reconnected}
+       ) do
+    %{
+      lifecycle_id: lifecycle_id,
+      generation: generation,
+      reused: reused,
+      reconnected: reconnected
+    }
   end
 
   defp request_error_transport_failure(reason, state) do
@@ -826,13 +908,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> Map.take([])
+    |> connection_lifecycle_state()
   end
 
   defp close_state(state) do
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> Map.take([])
+    |> connection_lifecycle_state()
   end
 end

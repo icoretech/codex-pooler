@@ -229,9 +229,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, _state} = receive_socket_done(state)
 
       assert FakeUpstream.websocket_connection_count(upstream) == 1
+      assert [opaque_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+      assert is_reference(opaque_connection_id)
 
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
+
+      assert [first_request_log, second_request_log] =
+               Repo.all(
+                 from(r in Request,
+                   where: r.pool_id == ^setup.pool.id,
+                   order_by: [asc: r.admitted_at, asc: r.id]
+                 )
+               )
+
+      assert first_request_log.transport == "websocket"
+      assert second_request_log.transport == "websocket"
+
+      assert [first_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^first_request_log.id))
+
+      assert [second_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^second_request_log.id))
+
+      assert first_attempt.transport == "websocket"
+      assert second_attempt.transport == "websocket"
+
+      first_connection = first_attempt.response_metadata["upstream_websocket_connection"]
+      second_connection = second_attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id, "generation" => generation} = first_connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+      assert generation == 1
+
+      assert first_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => generation,
+               "reused" => false,
+               "reconnected" => false
+             }
+
+      assert second_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => generation,
+               "reused" => true,
+               "reconnected" => false
+             }
+
+      for {request_log, attempt} <- [
+            {first_request_log, first_attempt},
+            {second_request_log, second_attempt}
+          ] do
+        assert [settlement] =
+                 Repo.all(
+                   from(entry in LedgerEntry,
+                     where:
+                       entry.request_id == ^request_log.id and
+                         entry.entry_kind == "settlement"
+                   )
+                 )
+
+        assert settlement.attempt_id == attempt.id
+        assert settlement.transport == "websocket"
+      end
 
       session =
         Repo.get_by!(CodexSession,
@@ -530,6 +590,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_log.id))
       assert attempt.status == "failed"
 
+      connection = attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id} = connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+      assert connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 1,
+               "reused" => false,
+               "reconnected" => false
+             }
+
       assert attempt.response_metadata["transport_failure"] == %{
                "phase" => "upstream_close",
                "pre_visible_output" => false,
@@ -618,6 +690,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_request.websocket_connection_id != retried_request.websocket_connection_id
       assert FakeUpstream.websocket_connection_count(upstream) == 2
 
+      assert [first_opaque_connection_id, second_opaque_connection_id] =
+               FakeUpstream.websocket_connection_ids(upstream)
+
+      assert is_reference(first_opaque_connection_id)
+      assert is_reference(second_opaque_connection_id)
+      assert first_opaque_connection_id != second_opaque_connection_id
+
       assert [request] = request_logs(setup.pool.id)
       assert request.status == "succeeded"
       assert request.retry_count == 1
@@ -636,6 +715,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_attempt.network_error_code == "upstream_unauthorized"
       assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
       assert second_attempt.status == "succeeded"
+
+      first_connection = first_attempt.response_metadata["upstream_websocket_connection"]
+      second_connection = second_attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id} = first_connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+      assert first_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 1,
+               "reused" => false,
+               "reconnected" => false
+             }
+
+      assert second_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 2,
+               "reused" => false,
+               "reconnected" => false
+             }
 
       metadata_text = inspect({request.request_metadata, first_attempt.response_metadata})
       refute metadata_text =~ setup.authorization
@@ -712,6 +811,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert FakeUpstream.count(upstream) == 2
 
+      assert [first_opaque_connection_id, second_opaque_connection_id] =
+               FakeUpstream.websocket_connection_ids(upstream)
+
+      assert is_reference(first_opaque_connection_id)
+      assert is_reference(second_opaque_connection_id)
+      assert first_opaque_connection_id != second_opaque_connection_id
+
       assert [first_attempt, second_attempt] =
                Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
 
@@ -723,6 +829,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_attempt.usage_status == "usage_unknown"
       assert second_attempt.status == "succeeded"
       assert second_attempt.usage_status == "usage_known"
+
+      first_connection = first_attempt.response_metadata["upstream_websocket_connection"]
+      second_connection = second_attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id} = first_connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+      assert first_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 1,
+               "reused" => false,
+               "reconnected" => false
+             }
+
+      assert second_connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 2,
+               "reused" => false,
+               "reconnected" => false
+             }
 
       assert [request] = request_logs(setup.pool.id)
       assert request.status == "succeeded"
@@ -762,6 +888,100 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute persisted =~ "upstream-token-owner-model-fallback"
     after
       CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  test "owner-forwarded remote node-client success records websocket connection metadata" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_owner_remote_node_success",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-remote-success", "owner-remote-success")
+    remote_node = :"codex_pooler@remote-owner-success.example"
+
+    remote_state = %{
+      state
+      | codex_session: %{state.codex_session | owner_instance_id: Atom.to_string(remote_node)},
+        opts:
+          Map.put(
+            state.opts,
+            :websocket_owner_forwarder_opts,
+            WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+              calls: %{remote_node => :success}
+            )
+          )
+    }
+
+    try do
+      opts =
+        Gateway.websocket_owner_response_options(
+          remote_state.opts,
+          remote_state.codex_session,
+          remote_state.websocket_owner_lease_token,
+          remote_state.websocket_owner_downstream
+        )
+
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "owner remote success"),
+                 opts,
+                 fn _data -> :ok end
+               )
+
+      assert {:push, {:text, frame}, remote_state} = receive_owner_socket_push(remote_state)
+      assert %{"id" => "resp_owner_remote_node_success"} = Jason.decode!(frame)
+      assert {:ok, _state} = receive_owner_socket_complete(remote_state)
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{
+                        node: ^remote_node,
+                        function: :remote_submit_request,
+                        arity: 4,
+                        mode: :success
+                      }}
+
+      assert FakeUpstream.count(upstream) == 1
+      assert [opaque_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+      assert is_reference(opaque_connection_id)
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "succeeded"
+      assert request.transport == "websocket"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert attempt.transport == "websocket"
+
+      connection = attempt.response_metadata["upstream_websocket_connection"]
+
+      assert %{"lifecycle_id" => lifecycle_id} = connection
+      assert {:ok, ^lifecycle_id} = Ecto.UUID.cast(lifecycle_id)
+
+      assert connection == %{
+               "lifecycle_id" => lifecycle_id,
+               "generation" => 1,
+               "reused" => false,
+               "reconnected" => false
+             }
+
+      assert [settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.attempt_id == attempt.id
+      assert settlement.transport == "websocket"
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
     end
   end
 

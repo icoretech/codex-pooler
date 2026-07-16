@@ -48,6 +48,7 @@ defmodule CodexPooler.FakeUpstream do
           requests: [],
           route_counts: %{},
           websocket_connection_count: 0,
+          websocket_connection_ids: [],
           websocket_pids: MapSet.new(),
           websocket_control_notify: nil,
           websocket_control_frames: []
@@ -95,6 +96,11 @@ defmodule CodexPooler.FakeUpstream do
 
   def websocket_connection_count(%__MODULE__{pid: pid}) do
     Agent.get(pid, fn state -> Map.get(state, :websocket_connection_count, 0) end)
+  end
+
+  @spec websocket_connection_ids(t()) :: [reference()]
+  def websocket_connection_ids(%__MODULE__{pid: pid}) do
+    Agent.get(pid, fn state -> Enum.reverse(Map.get(state, :websocket_connection_ids, [])) end)
   end
 
   def close_websocket_connections(%__MODULE__{pid: pid}) do
@@ -772,18 +778,22 @@ defmodule CodexPooler.FakeUpstream do
     def init(%{pid: pid} = state) do
       websocket_pid = self()
 
-      connection_id =
+      {connection_id, _opaque_connection_id} =
         Agent.get_and_update(pid, fn agent_state ->
           connection_count = Map.get(agent_state, :websocket_connection_count, 0) + 1
+          opaque_connection_id = make_ref()
 
           agent_state = %{
             agent_state
             | websocket_connection_count: connection_count,
+              websocket_connection_ids: [
+                opaque_connection_id | Map.get(agent_state, :websocket_connection_ids, [])
+              ],
               websocket_pids:
                 MapSet.put(Map.get(agent_state, :websocket_pids, MapSet.new()), websocket_pid)
           }
 
-          {connection_count, agent_state}
+          {{connection_count, opaque_connection_id}, agent_state}
         end)
 
       {:ok, Map.put(state, :connection_id, connection_id)}

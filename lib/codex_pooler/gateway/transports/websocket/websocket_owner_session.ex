@@ -590,6 +590,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       when is_map(transport_failure) and map_size(transport_failure) > 0 ->
         {:error, response}
 
+      {:error, %{upstream_websocket_connection: connection} = response}
+      when is_map(connection) ->
+        {:error, response}
+
       {:error, %{reason: reason}} when is_atom(reason) ->
         {:error, reason}
 

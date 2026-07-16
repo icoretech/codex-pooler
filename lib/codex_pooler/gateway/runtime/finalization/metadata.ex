@@ -7,6 +7,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
+  @canonical_uuid_byte_size 36
+  @upstream_websocket_connection_atom_keys [
+    :lifecycle_id,
+    :generation,
+    :reused,
+    :reconnected
+  ]
+  @upstream_websocket_connection_string_keys ~w(
+    lifecycle_id
+    generation
+    reused
+    reconnected
+  )
   @backend_turn_state_relay_endpoints [
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
@@ -32,6 +45,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     relay_bytes
     passthrough_seen
   )
+
+  @typep raw_upstream_websocket_connection_fields :: {term(), term(), term(), term()}
+  @typep upstream_websocket_connection_metadata :: %{
+           required(String.t()) => Ecto.UUID.t() | pos_integer() | boolean()
+         }
+  @typep upstream_websocket_connection_attempt_metadata :: %{
+           optional(String.t()) => upstream_websocket_connection_metadata()
+         }
 
   @spec response_metadata(Req.Response.t(), String.t() | nil, RequestOptions.t() | map()) ::
           map()
@@ -74,8 +95,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   def response_body_limit_metadata(%Req.Response{} = response),
     do: BoundedResponseBody.metadata(response)
 
-  @spec websocket_response_metadata(list(), String.t() | nil, RequestOptions.t() | map(), map()) ::
+  @spec websocket_response_metadata(list(), String.t() | nil, RequestOptions.t() | map()) :: map()
+  @spec websocket_response_metadata(
+          list(),
+          String.t() | nil,
+          RequestOptions.t() | map(),
           map()
+        ) :: map()
+  @spec websocket_response_metadata(
+          list(),
+          String.t() | nil,
+          RequestOptions.t() | map(),
+          map(),
+          term()
+        ) :: map()
   def websocket_response_metadata(headers, error_kind, opts, websocket_frame_headers \\ %{}) do
     metadata =
       %{
@@ -98,6 +131,43 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(metadata)
     |> maybe_put_websocket_frame_headers(websocket_frame_headers)
   end
+
+  def websocket_response_metadata(
+        headers,
+        error_kind,
+        opts,
+        websocket_frame_headers,
+        upstream_websocket_connection
+      ) do
+    headers
+    |> websocket_response_metadata(error_kind, opts, websocket_frame_headers)
+    |> Map.drop(["upstream_websocket_connection", :upstream_websocket_connection])
+    |> Map.merge(upstream_websocket_connection_attempt_metadata(upstream_websocket_connection))
+  end
+
+  @spec upstream_websocket_connection_attempt_metadata(term()) ::
+          upstream_websocket_connection_attempt_metadata()
+  def upstream_websocket_connection_attempt_metadata(connection) when is_map(connection) do
+    with {:ok, {lifecycle_id, generation, reused, reconnected}} <-
+           upstream_websocket_connection_fields(connection),
+         {:ok, lifecycle_id} <- canonical_uuid(lifecycle_id),
+         true <- is_integer(generation) and generation > 0,
+         true <- is_boolean(reused),
+         true <- is_boolean(reconnected) do
+      %{
+        "upstream_websocket_connection" => %{
+          "lifecycle_id" => lifecycle_id,
+          "generation" => generation,
+          "reused" => reused,
+          "reconnected" => reconnected
+        }
+      }
+    else
+      _invalid -> %{}
+    end
+  end
+
+  def upstream_websocket_connection_attempt_metadata(_connection), do: %{}
 
   @spec request_metadata(RequestOptions.t() | map() | term()) :: map()
   def request_metadata(opts), do: RequestOptions.payload_compression_request_metadata(opts)
@@ -222,6 +292,47 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     metadata
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
+  end
+
+  defp canonical_uuid(value)
+       when is_binary(value) and byte_size(value) == @canonical_uuid_byte_size do
+    case Ecto.UUID.cast(value) do
+      {:ok, ^value} -> {:ok, value}
+      _invalid -> :error
+    end
+  end
+
+  defp canonical_uuid(_value), do: :error
+
+  @spec upstream_websocket_connection_fields(map()) ::
+          {:ok, raw_upstream_websocket_connection_fields()} | :error
+  defp upstream_websocket_connection_fields(connection) do
+    string_fields = Map.take(connection, @upstream_websocket_connection_string_keys)
+    atom_fields = Map.take(connection, @upstream_websocket_connection_atom_keys)
+
+    case {string_fields, atom_fields} do
+      {%{
+         "lifecycle_id" => lifecycle_id,
+         "generation" => generation,
+         "reused" => reused,
+         "reconnected" => reconnected
+       }, atom_fields}
+      when map_size(atom_fields) == 0 ->
+        {:ok, {lifecycle_id, generation, reused, reconnected}}
+
+      {string_fields,
+       %{
+         lifecycle_id: lifecycle_id,
+         generation: generation,
+         reused: reused,
+         reconnected: reconnected
+       }}
+      when map_size(string_fields) == 0 ->
+        {:ok, {lifecycle_id, generation, reused, reconnected}}
+
+      _fields ->
+        :error
+    end
   end
 
   defp maybe_put_websocket_frame_headers(metadata, headers) when map_size(headers) > 0 do

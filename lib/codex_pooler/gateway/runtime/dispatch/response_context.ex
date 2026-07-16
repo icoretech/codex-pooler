@@ -5,11 +5,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.ResponseContext do
 
   defstruct [
     :context,
-    :response
+    :response,
+    upstream_websocket_connection: nil
   ]
 
   @type t :: %__MODULE__{
           context: SelectedCandidateContext.t(),
-          response: Req.Response.t()
+          response: Req.Response.t(),
+          upstream_websocket_connection: map() | nil
         }
 end

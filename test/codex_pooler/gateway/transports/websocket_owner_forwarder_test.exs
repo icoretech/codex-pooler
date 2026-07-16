@@ -6,11 +6,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
+  alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller
   alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @epmd_ready_timeout_ms 2_000
@@ -657,88 +660,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert %{idle_shutdown_ms: ^recovery_timeout} = :sys.get_state(recovered_owner)
   end
 
-  test "a real peer running the previous attach API accepts native arity and rejects bridge arity" do
-    ensure_test_distribution_started!()
-
-    peer_name = String.to_atom("old_owner_#{System.unique_integer([:positive])}")
-    assert {:ok, peer_pid, peer_node} = :peer.start_link(%{name: peer_name})
-    Process.unlink(peer_pid)
-
-    on_exit(fn -> stop_peer(peer_pid) end)
-
-    module = WebsocketOwnerForwarder
-    {:ok, ^module, beam} = previous_release_forwarder_beam(module)
-
-    assert {:module, ^module} =
-             :erpc.call(peer_node, :code, :load_binary, [module, ~c"previous_release.ex", beam])
-
-    client = WebsocketOwnerForwarder.ERPCNodeClient
-    downstream = downstream("corr-real-peer")
-
-    assert {:ok, :old_release_attach_ok} =
-             client.call_owner(
-               peer_node,
-               module,
-               :remote_attach_downstream,
-               ["session-real-peer", downstream],
-               2_000
-             )
-
-    assert {:error, :owner_crashed} =
-             client.call_owner(
-               peer_node,
-               module,
-               :remote_attach_downstream,
-               ["session-real-peer", downstream, [reject_if_busy: true]],
-               2_000
-             )
-  end
-
-  test "guarded bridge attach and request relay across a real current-release peer" do
-    ensure_test_distribution_started!()
-
-    peer_name = String.to_atom("current_owner_#{System.unique_integer([:positive])}")
-    assert {:ok, peer_pid, peer_node} = :peer.start_link(%{name: peer_name})
-    Process.unlink(peer_pid)
-
-    on_exit(fn -> stop_peer(peer_pid) end)
-
-    assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
-
-    assert {:ok, runtime_pid} =
-             :erpc.call(peer_node, WebsocketOwnerNodeHarness, :start_owner_runtime, [])
-
-    assert node(runtime_pid) == peer_node
-
-    terminal_frame =
-      Jason.encode!(%{
-        "type" => "response.completed",
-        "response" => %{"id" => "resp_real_peer_bridge", "status" => "completed"}
-      })
+  test "current proxy serves a native turn from a real previous-release owner and bridge attach fails closed" do
+    peer_node = start_current_peer!("previous_owner")
+    terminal_frame = terminal_frame("resp_previous_owner")
 
     upstream =
-      :erpc.call(
-        peer_node,
-        WebsocketOwnerNodeHarness,
-        :fake_upstream_boundary,
-        [self(), [messages: [terminal_frame], return_request_result?: true]]
-      )
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_upstream_boundary, [
+        self(),
+        [messages: [terminal_frame], return_request_result?: true]
+      ])
 
     persistence =
-      :erpc.call(
-        peer_node,
-        WebsocketOwnerNodeHarness,
-        :fake_persistence_boundary,
-        []
-      )
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
 
-    session_id = "real-peer-bridge-session"
+    session_id = "real-peer-previous-owner"
 
     assert {:ok, owner_pid} =
              :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
                [
                  codex_session_id: session_id,
-                 owner_lease_token: "real-peer-owner-token",
+                 owner_lease_token: "synthetic-previous-owner-token",
                  owner_instance_id: Atom.to_string(peer_node),
                  owner_renewal_ms: 60_000,
                  upstream: upstream,
@@ -746,44 +687,449 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                ]
              ])
 
-    assert node(owner_pid) == peer_node
     assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
-    assert node(upstream_pid) == peer_node
 
-    downstream = downstream("corr-real-peer-bridge")
-    client = WebsocketOwnerForwarder.ERPCNodeClient
-
-    assert {:ok, %{epoch: epoch} = attached} =
-             client.call_owner(
+    assert 300_000 ==
+             :erpc.call(
                peer_node,
-               WebsocketOwnerForwarder,
-               :remote_attach_downstream,
-               [session_id, downstream, [reject_if_busy: true]],
-               2_000
+               WebsocketOwnerNodeHarness,
+               :owner_idle_timeout,
+               [owner_pid]
              )
 
-    request = %UpstreamWebsocketSession.Request{
-      url: "https://example.com/backend-api/codex/responses",
-      headers: [],
-      payload: "real-peer-bridge-request",
-      timeouts: %{}
-    }
+    module = WebsocketOwnerForwarder
+    {:ok, ^module, beam} = previous_release_forwarder_beam(module)
 
-    assert {:ok, %{terminal: "response.completed", status: 200}} =
-             client.call_owner(
+    assert {:module, ^module} =
+             :erpc.call(peer_node, :code, :load_binary, [module, ~c"previous_release.ex", beam])
+
+    assert :erpc.call(peer_node, :erlang, :function_exported, [
+             module,
+             :remote_attach_downstream,
+             2
+           ])
+
+    refute :erpc.call(peer_node, :erlang, :function_exported, [
+             module,
+             :remote_attach_downstream,
+             3
+           ])
+
+    opts = [node_client: WebsocketOwnerForwarder.ERPCNodeClient]
+
+    assert {:ok, %{epoch: epoch} = attached} =
+             WebsocketOwnerForwarder.call_remote(
                peer_node,
-               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream("corr-previous-owner")],
+               opts
+             )
+
+    assert {:ok, old_result} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_node,
                :remote_submit_request,
-               [session_id, attached, request, []],
-               2_000
+               [session_id, attached, request("previous-owner-request"), []],
+               opts
+             )
+
+    assert %{status: 200, terminal: "response.completed"} = old_result
+
+    assert Map.keys(old_result) |> Enum.sort() ==
+             [:body, :headers, :status, :terminal, :websocket_frame_headers]
+
+    refute Map.has_key?(old_result, :upstream_websocket_connection)
+
+    assert %{} ==
+             Metadata.upstream_websocket_connection_attempt_metadata(
+               Map.get(old_result, :upstream_websocket_connection)
              )
 
     assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_pid}
 
-    assert_receive {:websocket_owner_frame, "corr-real-peer-bridge", ^epoch,
-                    {:data, ^terminal_frame}}
+    assert_receive {:websocket_owner_frame, "corr-previous-owner", ^epoch, {:data, _data}}
 
-    assert_receive {:websocket_owner_frame, "corr-real-peer-bridge", ^epoch, :complete}
+    assert_receive {:websocket_owner_frame, "corr-previous-owner", ^epoch, :complete}
+
+    bridge_args =
+      WebsocketOwnerForwarder.remote_attach_args(
+        session_id,
+        downstream("corr-previous-owner-bridge"),
+        reject_if_busy: true
+      )
+
+    assert [_session_id, _downstream, [reject_if_busy: true]] = bridge_args
+
+    assert {:error, :owner_crashed} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_node,
+               :remote_attach_downstream,
+               bridge_args,
+               opts
+             )
+  end
+
+  test "real previous-release peer caller consumes a new owner result without the extra metadata" do
+    caller_node = start_current_peer!("previous_caller")
+
+    connection = %{
+      lifecycle_id: "11111111-1111-4111-8111-111111111111",
+      generation: 2,
+      reused: true,
+      reconnected: false
+    }
+
+    terminal_frame = terminal_frame("resp_previous_caller")
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true,
+        upstream_websocket_connection: connection
+      )
+
+    session_id = "real-peer-current-owner"
+
+    assert {:ok, _owner_pid} =
+             WebsocketOwnerSession.start_owner(
+               codex_session_id: session_id,
+               owner_lease_token: "synthetic-current-owner-token",
+               owner_instance_id: Atom.to_string(node()),
+               owner_renewal_ms: 60_000,
+               upstream: upstream,
+               persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary()
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    Code.ensure_loaded!(WebsocketOwnerForwarder)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_submit_request, 4)
+
+    assert {:ok, old_result} =
+             :erpc.call(
+               caller_node,
+               WebsocketOwnerPreviousReleaseCaller,
+               :attach_and_submit,
+               [
+                 node(),
+                 session_id,
+                 downstream("corr-previous-caller"),
+                 request("previous-caller-request")
+               ]
+             )
+
+    expected_connection_keys = [:generation, :lifecycle_id, :reconnected, :reused]
+
+    assert_receive {:websocket_owner_previous_release_caller, ^caller_node,
+                    ^expected_connection_keys}
+
+    assert %{status: 200, terminal: "response.completed"} = old_result
+
+    assert Map.keys(old_result) |> Enum.sort() ==
+             [:body, :headers, :status, :terminal, :websocket_frame_headers]
+
+    refute Map.has_key?(old_result, :upstream_websocket_connection)
+    assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_pid}
+  end
+
+  test "current proxy relays exact private-safe connection metadata from a real current peer" do
+    peer_node = start_current_peer!("current_owner")
+
+    connection = %{
+      lifecycle_id: "22222222-2222-4222-8222-222222222222",
+      generation: 3,
+      reused: false,
+      reconnected: true
+    }
+
+    terminal_frame = terminal_frame("resp_current_peer")
+
+    upstream =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_upstream_boundary, [
+        self(),
+        [
+          messages: [terminal_frame],
+          return_request_result?: true,
+          upstream_websocket_connection: connection
+        ]
+      ])
+
+    persistence =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    session_id = "real-peer-current-relay"
+
+    assert {:ok, _owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "synthetic-current-relay-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 upstream: upstream,
+                 persistence: persistence
+               ]
+             ])
+
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+    opts = [node_client: WebsocketOwnerForwarder.ERPCNodeClient]
+
+    assert {:ok, attached} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_node,
+               :remote_attach_downstream,
+               [
+                 session_id,
+                 downstream("corr-current-relay"),
+                 [reject_if_busy: true]
+               ],
+               opts
+             )
+
+    assert {:ok, %{upstream_websocket_connection: relayed_connection}} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_node,
+               :remote_submit_request,
+               [session_id, attached, request("current-relay-request"), []],
+               opts
+             )
+
+    assert relayed_connection == connection
+
+    assert Map.keys(relayed_connection) |> Enum.sort() == [
+             :generation,
+             :lifecycle_id,
+             :reconnected,
+             :reused
+           ]
+
+    for forbidden <- [:pid, :node, :socket, :header, :headers, :payload] do
+      refute Map.has_key?(relayed_connection, forbidden)
+    end
+
+    assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_pid}
+  end
+
+  test "real current peers replace a nodedown owner and converge on one recovered owner lease",
+       %{auth: auth} do
+    {peer_a_pid, peer_a} = start_current_peer_process!("replacement_owner_a")
+    {peer_b_pid, peer_b} = start_current_peer_process!("replacement_owner_b")
+    owner_a_timeout = 300_101
+    owner_b_timeout = 420_202
+
+    assert :ok =
+             :erpc.call(peer_a, WebsocketOwnerNodeHarness, :put_owner_idle_timeout, [
+               owner_a_timeout
+             ])
+
+    assert :ok =
+             :erpc.call(peer_b, WebsocketOwnerNodeHarness, :put_owner_idle_timeout, [
+               owner_b_timeout
+             ])
+
+    %{session: session} =
+      owner_session_fixture(auth, Atom.to_string(peer_a), "real-peer-replacement")
+
+    lifecycle_a = Ecto.UUID.generate()
+
+    connection_a = %{
+      lifecycle_id: lifecycle_a,
+      generation: 1,
+      reused: false,
+      reconnected: false
+    }
+
+    upstream_a =
+      :erpc.call(peer_a, WebsocketOwnerNodeHarness, :fake_upstream_boundary, [
+        self(),
+        [
+          messages: [terminal_frame("resp_replacement_a")],
+          return_request_result?: true,
+          upstream_websocket_connection: connection_a
+        ]
+      ])
+
+    persistence_a =
+      :erpc.call(peer_a, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    assert {:ok, owner_a} =
+             :erpc.call(
+               peer_a,
+               WebsocketOwnerNodeHarness,
+               :start_owner_with_local_idle_timeout,
+               [
+                 [
+                   codex_session_id: session.id,
+                   owner_lease_token: session.owner_lease_token,
+                   owner_instance_id: Atom.to_string(peer_a),
+                   owner_renewal_ms: 60_000,
+                   upstream: upstream_a,
+                   persistence: persistence_a
+                 ]
+               ]
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_a_pid}
+
+    assert owner_a_timeout ==
+             :erpc.call(peer_a, WebsocketOwnerNodeHarness, :owner_idle_timeout, [owner_a])
+
+    opts = [node_client: WebsocketOwnerForwarder.ERPCNodeClient]
+
+    assert {:ok, %{epoch: epoch_a} = attached_a} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_a,
+               :remote_attach_downstream,
+               [session.id, downstream("corr-replacement-a")],
+               opts
+             )
+
+    assert {:ok, %{upstream_websocket_connection: ^connection_a}} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_a,
+               :remote_submit_request,
+               [session.id, attached_a, request("replacement-a-request"), []],
+               opts
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_a_pid}
+    assert_receive {:websocket_owner_frame, "corr-replacement-a", ^epoch_a, :complete}
+
+    peer_a_monitor = Process.monitor(peer_a_pid)
+    assert :ok = :peer.stop(peer_a_pid)
+    assert_receive {:DOWN, ^peer_a_monitor, :process, ^peer_a_pid, _reason}, 2_000
+
+    assert {:error, :owner_unavailable} =
+             :erpc.call(
+               peer_b,
+               WebsocketOwnerForwarder.ERPCNodeClient,
+               :call_owner,
+               [
+                 peer_a,
+                 WebsocketOwnerForwarder,
+                 :remote_attach_downstream,
+                 [session.id, downstream("corr-replacement-detect")],
+                 2_000
+               ]
+             )
+
+    replacement_options =
+      RequestOptions.for_websocket(%{owner_instance_id: Atom.to_string(peer_b)})
+
+    assert {:ok, replacement_session} =
+             SessionContinuity.replace_unavailable_owner_lease(
+               session,
+               replacement_options
+             )
+
+    refute replacement_session.owner_lease_token == session.owner_lease_token
+
+    lifecycle_b = Ecto.UUID.generate()
+
+    connection_b = %{
+      lifecycle_id: lifecycle_b,
+      generation: 1,
+      reused: false,
+      reconnected: false
+    }
+
+    upstream_b =
+      :erpc.call(peer_b, WebsocketOwnerNodeHarness, :fake_upstream_boundary, [
+        self(),
+        [
+          messages: [terminal_frame("resp_replacement_b")],
+          return_request_result?: true,
+          upstream_websocket_connection: connection_b
+        ]
+      ])
+
+    persistence_b =
+      :erpc.call(peer_b, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    assert {:ok, owner_b} =
+             :erpc.call(
+               peer_b,
+               WebsocketOwnerNodeHarness,
+               :start_owner_with_local_idle_timeout,
+               [
+                 [
+                   codex_session_id: replacement_session.id,
+                   owner_lease_token: replacement_session.owner_lease_token,
+                   owner_instance_id: Atom.to_string(peer_b),
+                   owner_renewal_ms: 60_000,
+                   upstream: upstream_b,
+                   persistence: persistence_b
+                 ]
+               ]
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_b_pid}
+
+    assert owner_b_timeout ==
+             :erpc.call(peer_b, WebsocketOwnerNodeHarness, :owner_idle_timeout, [owner_b])
+
+    assert {:ok, %{epoch: epoch_b} = attached_b} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_b,
+               :remote_attach_downstream,
+               [replacement_session.id, downstream("corr-replacement-b")],
+               opts
+             )
+
+    assert {:ok, %{upstream_websocket_connection: recovered_connection}} =
+             WebsocketOwnerForwarder.call_remote(
+               peer_b,
+               :remote_submit_request,
+               [
+                 replacement_session.id,
+                 attached_b,
+                 request("replacement-b-request"),
+                 []
+               ],
+               opts
+             )
+
+    assert recovered_connection == connection_b
+    assert lifecycle_b != lifecycle_a
+    assert {:ok, ^lifecycle_a} = Ecto.UUID.cast(lifecycle_a)
+    assert {:ok, ^lifecycle_b} = Ecto.UUID.cast(lifecycle_b)
+
+    assert Map.keys(recovered_connection) |> Enum.sort() == [
+             :generation,
+             :lifecycle_id,
+             :reconnected,
+             :reused
+           ]
+
+    assert_receive {:websocket_owner_harness_upstream_sent, ^upstream_b_pid}
+    assert_receive {:websocket_owner_frame, "corr-replacement-b", ^epoch_b, :complete}
+
+    assert 1 ==
+             :erpc.call(peer_b, WebsocketOwnerNodeHarness, :owner_count, [
+               replacement_session.id
+             ])
+
+    active_status = BridgeOwnerLease.active_status()
+
+    active_lease_query =
+      from lease in BridgeOwnerLease,
+        where:
+          lease.codex_session_id == ^replacement_session.id and
+            lease.status == ^active_status
+
+    assert Repo.aggregate(active_lease_query, :count, :id) == 1
+
+    assert Repo.exists?(
+             from lease in active_lease_query,
+               where:
+                 lease.owner_instance_id == ^Atom.to_string(peer_b) and
+                   lease.lease_token == ^replacement_session.owner_lease_token
+           )
+
+    peer_b_monitor = Process.monitor(peer_b_pid)
+    assert :ok = :peer.stop(peer_b_pid)
+    assert_receive {:DOWN, ^peer_b_monitor, :process, ^peer_b_pid, _reason}, 2_000
   end
 
   test "attaching through an old-release owner node fails closed for the bridge and still serves native attaches",
@@ -948,6 +1294,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     }
   end
 
+  defp terminal_frame(response_id) do
+    Jason.encode!(%{
+      "type" => "response.completed",
+      "response" => %{"id" => response_id, "status" => "completed"}
+    })
+  end
+
   defp put_owner_idle_timeout(timeout) do
     settings = OperationalSettings.current()
 
@@ -1038,13 +1391,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   end
 
   defp previous_release_forwarder_beam(module) do
+    harness = WebsocketOwnerNodeHarness
+
     forms = [
       {:attribute, 1, :module, module},
-      {:attribute, 1, :export, [remote_attach_downstream: 2]},
+      {:attribute, 1, :export, [remote_attach_downstream: 2, remote_submit_request: 4]},
       {:function, 1, :remote_attach_downstream, 2,
        [
-         {:clause, 1, [{:var, 1, :_Session}, {:var, 1, :_Downstream}], [],
-          [{:tuple, 1, [{:atom, 1, :ok}, {:atom, 1, :old_release_attach_ok}]}]}
+         {:clause, 1, [{:var, 1, :Session}, {:var, 1, :Downstream}], [],
+          [
+            {:call, 1, {:remote, 1, {:atom, 1, harness}, {:atom, 1, :previous_release_attach}},
+             [{:var, 1, :Session}, {:var, 1, :Downstream}]}
+          ]}
+       ]},
+      {:function, 1, :remote_submit_request, 4,
+       [
+         {:clause, 1,
+          [
+            {:var, 1, :Session},
+            {:var, 1, :Downstream},
+            {:var, 1, :Request},
+            {:var, 1, :Opts}
+          ], [],
+          [
+            {:call, 1,
+             {:remote, 1, {:atom, 1, harness}, {:atom, 1, :previous_release_submit_request}},
+             [
+               {:var, 1, :Session},
+               {:var, 1, :Downstream},
+               {:var, 1, :Request},
+               {:var, 1, :Opts}
+             ]}
+          ]}
        ]}
     ]
 

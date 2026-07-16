@@ -44,7 +44,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                headers,
                nil,
                request_options,
-               Map.get(finalization, :websocket_frame_headers, %{})
+               Map.get(finalization, :websocket_frame_headers, %{}),
+               Map.get(finalization, :upstream_websocket_connection)
              ),
              started: started
            )
@@ -88,6 +89,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         context,
         metadata_headers,
         websocket_frame_headers,
+        Map.get(finalization, :upstream_websocket_connection),
         code,
         upstream_code,
         Map.get(finalization, :upstream_error_param)
@@ -106,6 +108,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
          context,
          metadata_headers,
          websocket_frame_headers,
+         upstream_websocket_connection,
          code,
          upstream_code,
          upstream_error_param
@@ -114,7 +117,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     |> Metadata.websocket_response_metadata(
       code,
       context.request_options,
-      websocket_frame_headers
+      websocket_frame_headers,
+      upstream_websocket_connection
     )
     |> Metadata.maybe_put_masked_error_metadata(upstream_code, code)
     |> Metadata.maybe_put_upstream_error_param(%{upstream_error_param: upstream_error_param})
@@ -169,7 +173,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                headers,
                code,
                request_options,
-               Map.get(finalization, :websocket_frame_headers, %{})
+               Map.get(finalization, :websocket_frame_headers, %{}),
+               Map.get(finalization, :upstream_websocket_connection)
              ),
              started: started
            )
@@ -210,7 +215,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
                headers,
                owner_payload.code,
                request_options,
-               Map.get(finalization, :websocket_frame_headers, %{})
+               Map.get(finalization, :websocket_frame_headers, %{}),
+               Map.get(finalization, :upstream_websocket_connection)
              ),
              started: started
            )
@@ -237,7 +243,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         headers,
         code,
         request_options,
-        Map.get(finalization, :websocket_frame_headers, %{})
+        Map.get(finalization, :websocket_frame_headers, %{}),
+        Map.get(finalization, :upstream_websocket_connection)
       )
       |> maybe_put_transport_failure_metadata(finalization)
       |> Metadata.maybe_put_upstream_error_param(finalization)

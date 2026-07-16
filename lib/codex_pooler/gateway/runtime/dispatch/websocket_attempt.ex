@@ -340,7 +340,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     |> Metadata.websocket_response_metadata(
       code,
       context.request_options,
-      Map.get(response, :websocket_frame_headers, %{})
+      Map.get(response, :websocket_frame_headers, %{}),
+      Map.get(response, :upstream_websocket_connection)
     )
   end
 
@@ -382,6 +383,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           failure,
           "websocket_auth_refresh_first_event",
           context.request_options
+        )
+        |> Map.merge(
+          Metadata.upstream_websocket_connection_attempt_metadata(
+            response_context.upstream_websocket_connection
+          )
         )
         |> Map.put("auth_refresh_trigger", @auth_refresh_trigger_kind),
       retry_count: context.retry_count
@@ -483,7 +489,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
       response: %Req.Response{
         status: websocket_response_status(response),
         headers: req_response_headers(Map.get(response, :headers, []))
-      }
+      },
+      upstream_websocket_connection: Map.get(response, :upstream_websocket_connection)
     }
   end
 
@@ -586,7 +593,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   defp retryable_websocket_response_context(context, response) do
     %ResponseContext{
       context: context,
-      response: %Req.Response{status: 200, headers: Map.get(response, :headers, [])}
+      response: %Req.Response{status: 200, headers: Map.get(response, :headers, [])},
+      upstream_websocket_connection: Map.get(response, :upstream_websocket_connection)
     }
   end
 

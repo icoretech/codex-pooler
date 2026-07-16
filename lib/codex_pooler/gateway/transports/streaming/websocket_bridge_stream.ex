@@ -31,10 +31,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   # async_nolink under the owner-session task supervisor monitors only.
   @submit_task_supervisor WebsocketOwnerSession.TaskSupervisor
 
-  @enforce_keys [:ref, :relay, :correlation_id]
-  defstruct [:ref, :relay, :correlation_id]
+  @enforce_keys [:ref, :relay, :correlation_id, :settle_timeout_ms]
+  defstruct [:ref, :relay, :correlation_id, :settle_timeout_ms]
 
-  @type t :: %__MODULE__{ref: reference(), relay: pid(), correlation_id: String.t()}
+  @type t :: %__MODULE__{
+          ref: reference(),
+          relay: pid(),
+          correlation_id: String.t(),
+          settle_timeout_ms: non_neg_integer()
+        }
   @type decision :: :stream | {:fallback, term()}
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
 
@@ -56,11 +61,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           settle_timeout_ms: settle_timeout_ms,
           epoch: nil,
           task: nil,
-          pending: []
+          pending: [],
+          upstream_websocket_connection: nil
         })
       end)
 
-    %__MODULE__{ref: ref, relay: relay, correlation_id: correlation_id}
+    %__MODULE__{
+      ref: ref,
+      relay: relay,
+      correlation_id: correlation_id,
+      settle_timeout_ms: settle_timeout_ms
+    }
   end
 
   @doc """
@@ -78,6 +89,31 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   def cancel(%__MODULE__{relay: relay, ref: ref}) do
     send(relay, :cancel)
     flush(ref)
+  end
+
+  @doc "Returns and releases connection metadata retained by a committed bridge stream."
+  @spec take_upstream_websocket_connection(t()) :: map() | nil
+  def take_upstream_websocket_connection(%__MODULE__{
+        relay: relay,
+        settle_timeout_ms: settle_timeout_ms
+      }) do
+    query_ref = make_ref()
+    monitor_ref = Process.monitor(relay)
+    send(relay, {:take_upstream_websocket_connection, self(), query_ref})
+
+    receive do
+      {^query_ref, connection} ->
+        Process.demonitor(monitor_ref, [:flush])
+        connection
+
+      {:DOWN, ^monitor_ref, :process, ^relay, _reason} ->
+        nil
+    after
+      settle_timeout_ms + 1_000 ->
+        Process.demonitor(monitor_ref, [:flush])
+        send(relay, :cancel)
+        nil
+    end
   end
 
   @spec parse_message(t(), term()) :: {:ok, [term()]} | {:error, term()} | :unknown
@@ -189,8 +225,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       {^task_ref, {:error, reason}} ->
         report_fallback(parent, ref, error_reason(reason))
 
-      {^task_ref, _result} ->
-        preflight_after_result(state)
+      {^task_ref, result} ->
+        state
+        |> put_submit_result_connection(result)
+        |> preflight_after_result()
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
         report_fallback(parent, ref, {:task_down, safe_reason(reason)})
@@ -274,7 +312,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp fall_back(state, reason) do
     report_fallback(state.parent, state.ref, reason)
-    settle_task(state.task, state.settle_timeout_ms)
+    _state = settle_task(state)
+    :ok
   end
 
   # Post-commit streaming still watches the submit task so its settlement is
@@ -297,20 +336,30 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
         send(parent, {ref, :done})
-        settle_task(task, state.settle_timeout_ms)
+
+        state
+        |> settle_task()
+        |> metadata_loop()
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
         send(parent, {ref, {:bridge_error, owner_error_reason(error)}})
-        settle_task(task, state.settle_timeout_ms)
+
+        state
+        |> settle_task()
+        |> metadata_loop()
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         relay_loop(state)
 
-      {^task_ref, {:error, reason}} ->
-        relay_after_result(state, {:failed, error_reason(reason)})
+      {^task_ref, {:error, reason} = result} ->
+        state
+        |> put_submit_result_connection(result)
+        |> relay_after_result({:failed, error_reason(reason)})
 
-      {^task_ref, _result} ->
-        relay_after_result(state, :ok)
+      {^task_ref, result} ->
+        state
+        |> put_submit_result_connection(result)
+        |> relay_after_result(:ok)
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
         relay_after_result(state, {:failed, {:task_down, safe_reason(reason)}})
@@ -319,7 +368,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         Task.shutdown(task, :brutal_kill)
 
       :cancel ->
-        Task.shutdown(task, :brutal_kill)
+        state
+        |> settle_task()
+        |> metadata_loop()
     end
   end
 
@@ -343,9 +394,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
         send(parent, {ref, :done})
+        metadata_loop(state)
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
         send(parent, {ref, {:bridge_error, owner_error_reason(error)}})
+        metadata_loop(state)
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         relay_after_result(state, settle)
@@ -354,24 +407,66 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         :ok
 
       :cancel ->
-        :ok
+        metadata_loop(state)
     after
       state.settle_timeout_ms ->
         case settle do
           :ok -> send(parent, {ref, :done})
           {:failed, reason} -> send(parent, {ref, {:bridge_error, reason}})
         end
+
+        metadata_loop(state)
     end
   end
 
-  defp settle_task(task, settle_timeout_ms) do
-    case Task.yield(task, settle_timeout_ms) do
-      nil -> Task.shutdown(task, :brutal_kill)
-      _result -> :ok
+  defp settle_task(%{task: %Task{} = task} = state) do
+    state =
+      case Task.yield(task, state.settle_timeout_ms) do
+        {:ok, result} ->
+          put_submit_result_connection(state, result)
+
+        {:exit, _reason} ->
+          state
+
+        nil ->
+          Task.shutdown(task, :brutal_kill)
+          state
+      end
+
+    %{state | task: nil}
+  end
+
+  defp metadata_loop(state) do
+    receive do
+      {:take_upstream_websocket_connection, caller, query_ref}
+      when is_pid(caller) and is_reference(query_ref) ->
+        send(caller, {query_ref, state.upstream_websocket_connection})
+
+      {:DOWN, parent_monitor, :process, _pid, _reason}
+      when parent_monitor == state.parent_monitor ->
+        :ok
+
+      :cancel ->
+        metadata_loop(state)
+    after
+      state.settle_timeout_ms -> :ok
     end
 
     :ok
   end
+
+  defp put_submit_result_connection(state, {status, result})
+       when status in [:ok, :error] and is_map(result) do
+    case Map.get(result, :upstream_websocket_connection) do
+      connection when is_map(connection) ->
+        %{state | upstream_websocket_connection: connection}
+
+      _connection ->
+        state
+    end
+  end
+
+  defp put_submit_result_connection(state, _result), do: state
 
   # Mirrors PublicResponses.normalize_public_block/3: `codex.*` events and
   # typeless payloads produce no downstream output, so they must not commit

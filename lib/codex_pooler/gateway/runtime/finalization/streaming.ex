@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
@@ -34,7 +35,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           finalization_result()
   def finalize_success(
         body,
-        %ResponseContext{context: context, response: response},
+        %ResponseContext{context: context, response: response} = response_context,
         callbacks,
         stream_state \\ nil
       ) do
@@ -55,7 +56,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
              response.status,
              response
              |> Metadata.response_metadata(nil, request_options)
-             |> Metadata.merge_stream_state_metadata(stream_state),
+             |> Metadata.merge_stream_state_metadata(stream_state)
+             |> merge_upstream_websocket_connection(response_context),
              started: started
            )
          ) do
@@ -79,7 +81,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def record_retryable_first_event_failure(
         body,
         failure,
-        %ResponseContext{context: context, response: response},
+        %ResponseContext{context: context, response: response} = response_context,
         opts \\ []
       ) do
     code = stream_failure_code(failure, context)
@@ -109,11 +111,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           latency_ms: elapsed_ms(context.started),
           usage_status: ResponseUsage.from_sse(body)[:status] || "usage_unknown",
           attempt_metadata:
-            Metadata.first_event_stream_metadata(
-              response,
+            first_event_attempt_metadata(
+              response_context,
               failure,
-              "retryable_first_event",
-              context.request_options
+              "retryable_first_event"
             ),
           retry_count: context.retry_count
         }
@@ -126,7 +127,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def finalize_first_event_failure(
         body,
         failure,
-        %ResponseContext{context: context, response: response}
+        %ResponseContext{context: context, response: response} = response_context
       ) do
     code = stream_failure_code(failure, context)
     health_code = stream_health_code(failure, code)
@@ -147,15 +148,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           response.status,
           code,
           "upstream stream returned first event #{code}",
-          Metadata.first_event_stream_metadata(
-            response,
+          first_event_attempt_metadata(
+            response_context,
             failure,
-            "first_event_stream_failure",
-            context.request_options
+            "first_event_stream_failure"
           )
         )
       )
     end
+  end
+
+  @spec first_event_attempt_metadata(ResponseContext.t(), map(), String.t()) :: map()
+  defp first_event_attempt_metadata(
+         %ResponseContext{context: context, response: response} = response_context,
+         failure,
+         error_kind
+       ) do
+    response
+    |> Metadata.first_event_stream_metadata(failure, error_kind, context.request_options)
+    |> merge_upstream_websocket_connection(response_context)
   end
 
   @spec finalize_failure(binary(), term(), ResponseContext.t()) :: finalization_result()
@@ -163,7 +174,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def finalize_failure(
         body,
         reason,
-        %ResponseContext{context: context, response: response},
+        %ResponseContext{context: context, response: response} = response_context,
         stream_state \\ nil
       ) do
     code = error_code(reason)
@@ -175,6 +186,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         response
         |> Metadata.response_metadata("stream_interrupted", context.request_options)
         |> Metadata.merge_stream_state_metadata(stream_state)
+        |> merge_upstream_websocket_connection(response_context)
         |> Metadata.maybe_put_masked_error_metadata(
           terminal_failure && terminal_failure.upstream_code,
           code
@@ -196,6 +208,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       )
     end
   end
+
+  defp merge_upstream_websocket_connection(metadata, %ResponseContext{} = response_context) do
+    metadata
+    |> Map.drop(["upstream_websocket_connection", :upstream_websocket_connection])
+    |> Map.merge(
+      Metadata.upstream_websocket_connection_attempt_metadata(
+        upstream_websocket_connection(response_context)
+      )
+    )
+  end
+
+  defp upstream_websocket_connection(%ResponseContext{
+         upstream_websocket_connection: connection
+       })
+       when not is_nil(connection),
+       do: connection
+
+  defp upstream_websocket_connection(%ResponseContext{
+         response: %Req.Response{body: %WebsocketBridgeStream{} = stream}
+       }) do
+    WebsocketBridgeStream.take_upstream_websocket_connection(stream)
+  end
+
+  defp upstream_websocket_connection(%ResponseContext{}), do: nil
 
   @spec error_code(term()) :: String.t()
   def error_code({:chunk, :closed}), do: "client_disconnected"

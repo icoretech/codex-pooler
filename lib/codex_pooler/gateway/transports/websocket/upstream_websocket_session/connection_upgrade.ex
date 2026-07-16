@@ -51,14 +51,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
   defp finish_connection(state, key, conn, ref, response_headers) do
     case new_websocket(conn, ref, response_headers) do
       {:ok, conn, websocket} ->
-        {:ok,
-         %{
-           key: key,
-           conn: conn,
-           ref: ref,
-           websocket: websocket,
-           headers: response_headers
-         }}
+        connection_state = %{
+          key: key,
+          conn: conn,
+          ref: ref,
+          websocket: websocket,
+          headers: response_headers
+        }
+
+        state =
+          state
+          |> Map.merge(connection_state)
+          |> Map.update!(:generation, &(&1 + 1))
+
+        {:ok, state}
 
       {:error, conn, reason} ->
         {:error, reason, Map.put(state, :conn, conn)}
