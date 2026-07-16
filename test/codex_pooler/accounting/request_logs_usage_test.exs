@@ -183,26 +183,6 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
     assert :ok = Rollups.accumulate!(unknown_request, unknown_settlement)
     assert :ok = Rollups.accumulate!(unknown_only_request, unknown_only_settlement)
 
-    summaries = Accounting.list_api_key_usage_summaries([api_key, unknown_only_key])
-
-    assert %{
-             request_count: 2,
-             total_tokens: 30,
-             cached_input_tokens: 4,
-             total_cost_status: "priced"
-           } = summaries[api_key.id]
-
-    assert Decimal.equal?(summaries[api_key.id].total_cost_usd, Decimal.new("0.250000"))
-
-    assert %{
-             request_count: 1,
-             total_tokens: 0,
-             cached_input_tokens: 0,
-             total_cost_status: "unpriced"
-           } = summaries[unknown_only_key.id]
-
-    assert Decimal.equal?(summaries[unknown_only_key.id].total_cost_usd, Decimal.new("0.000000"))
-
     assert {:ok, self_usage} =
              Accounting.build_api_key_self_usage(pool, api_key, as_of: DateTime.add(now, 60))
 

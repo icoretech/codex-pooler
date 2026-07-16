@@ -139,9 +139,6 @@ defmodule CodexPooler.Accounting do
   @spec list_ledger_entries_for_request(Request.t() | Ecto.UUID.t()) :: [term()]
   defdelegate list_ledger_entries_for_request(request), to: LedgerReads
 
-  @spec list_api_key_usage_summaries([term()]) :: map()
-  defdelegate list_api_key_usage_summaries(api_key_ids), to: UsageReadModel
-
   @spec token_totals_by_upstream_identity_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: %{
           optional(Ecto.UUID.t()) => non_neg_integer()
         }

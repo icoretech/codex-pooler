@@ -12,84 +12,9 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   alias CodexPooler.Repo
 
   @entry_settlement "settlement"
-  @amount_recorded "recorded"
   @usage_known "usage_known"
 
   @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
-
-  @spec list_api_key_usage_summaries([term()]) :: map()
-  def list_api_key_usage_summaries(api_key_ids) when is_list(api_key_ids) do
-    api_key_ids =
-      api_key_ids
-      |> Enum.map(&id_for/1)
-      |> Enum.filter(&is_binary/1)
-      |> Enum.uniq()
-
-    if api_key_ids == [] do
-      %{}
-    else
-      Repo.all(
-        from entry in LedgerEntry,
-          where:
-            entry.api_key_id in ^api_key_ids and entry.entry_kind == @entry_settlement and
-              entry.amount_status == @amount_recorded,
-          group_by: entry.api_key_id,
-          select: {
-            entry.api_key_id,
-            sum(entry.request_count),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.input_tokens
-              )
-            ),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.cached_input_tokens
-              )
-            ),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.output_tokens
-              )
-            ),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.reasoning_tokens
-              )
-            ),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0) ELSE 0 END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.total_tokens
-              )
-            ),
-            sum(
-              fragment(
-                "CASE WHEN ? = ? THEN COALESCE(?, 0::numeric) ELSE 0::numeric END",
-                entry.usage_status,
-                ^@usage_known,
-                entry.settled_cost_micros
-              )
-            )
-          }
-      )
-      |> Map.new(&api_key_usage_summary_from_row/1)
-    end
-  end
 
   @spec build_api_key_self_usage(term(), term(), keyword()) ::
           {:ok, map()} | {:error, accounting_error()}
@@ -268,32 +193,6 @@ defmodule CodexPooler.Accounting.UsageReadModel do
     }
   end
 
-  defp api_key_usage_summary_from_row(
-         {api_key_id, request_count, input_tokens, cached_input_tokens, output_tokens,
-          reasoning_tokens, total_tokens, settled_cost_micros}
-       ) do
-    input_tokens = decimal_to_integer(input_tokens)
-    cached_input_tokens = min(decimal_to_integer(cached_input_tokens), input_tokens)
-
-    component_total =
-      input_tokens + decimal_to_integer(output_tokens) + decimal_to_integer(reasoning_tokens)
-
-    settled_cost_micros = settled_cost_micros || Decimal.new(0)
-
-    {api_key_id,
-     %{
-       request_count: decimal_to_integer(request_count),
-       total_tokens: max(decimal_to_integer(total_tokens), component_total),
-       cached_input_tokens: max(cached_input_tokens, 0),
-       total_cost_usd: decimal_micros_to_usd(settled_cost_micros),
-       total_cost_status:
-         if(Decimal.compare(settled_cost_micros, Decimal.new(0)) == :gt,
-           do: "priced",
-           else: "unpriced"
-         )
-     }}
-  end
-
   defp v1_upstream_limits_for_pool(pool_id, as_of, opts) when is_binary(pool_id) do
     UpstreamUsage.v1_upstream_limits_for_pool(pool_id, as_of, opts)
   end
@@ -351,13 +250,6 @@ defmodule CodexPooler.Accounting.UsageReadModel do
   defp id_for(id) when is_binary(id), do: id
   defp id_for(_), do: nil
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-  defp decimal_to_integer(nil), do: 0
-
-  defp decimal_to_integer(%Decimal{} = value),
-    do: value |> Decimal.round(0) |> Decimal.to_integer()
-
-  defp decimal_to_integer(value) when is_integer(value), do: value
 
   defp decimal_micros_to_usd(%Decimal{} = micros),
     do: micros |> Decimal.div(Decimal.new(1_000_000)) |> Decimal.round(6)
