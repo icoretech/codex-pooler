@@ -1205,11 +1205,19 @@ defmodule CodexPooler.CompatibilityMatrix do
         attempt_metadata: ["upstream_websocket_bridge", "upstream_transport"],
         payload_compression_subject: "websocket_envelope",
         upstream_websocket_connection: %{
+          projection: "admin_attempt_detail_only",
           exact_fields: ["lifecycle_id", "generation", "reused", "reconnected"],
           lifecycle_id: "canonical_uuid_per_upstream_websocket_session_lifecycle",
           generation: "positive_successful_connection_ordinal_within_lifecycle",
           reused: "request_started_on_already_established_connection",
           reconnected: "request_retried_on_new_connection_after_pre_response_reuse_failure",
+          omitted_for: [
+            "malformed_metadata",
+            "previous_release_owner",
+            "http_fallback",
+            "request_list",
+            "mcp"
+          ]
         }
       },
       crash_hygiene: %{

@@ -16,6 +16,37 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
   setup :register_and_log_in_user
 
+  test "request list keeps websocket lifecycle evidence out of summary rows", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "list-websocket-connection", name: "List WebSocket"})
+
+    lifecycle_id = "88888888-8888-4888-8888-888888888888"
+
+    %{request: request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-list-websocket-hidden",
+        requested_model: "gpt-list-websocket-hidden",
+        attempt_response_metadata: %{
+          "upstream_websocket_connection" => %{
+            "lifecycle_id" => lifecycle_id,
+            "generation" => 2,
+            "reused" => true,
+            "reconnected" => false
+          }
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    assert has_element?(view, "#request-log-row-#{request.id}")
+    refute render(view) =~ lifecycle_id
+    refute render(view) =~ "Lifecycle ID"
+    refute has_element?(view, "#request-log-detail-attempt-1-lifecycle-id")
+  end
+
   test "renders required selectors and sanitized request log rows with priced cost $0.123456 and unpriced_missing_model status",
        %{
          conn: conn,

@@ -53,7 +53,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       |> maybe_filter_request_log_visible_pools(visible_pool_ids)
       |> where([request, ...], request.id == ^request_id)
       |> request_log_rows(1, 0)
-      |> request_log_items()
+      |> request_log_items(:default)
       |> List.first()
 
     enrich_detail_settlement(item)
@@ -82,7 +82,13 @@ defmodule CodexPooler.Accounting.RequestLogs do
   end
 
   defp list_for_pool_filter(pool_id, opts) do
-    %{limit: limit, offset: offset, filters: filters, visible_pool_ids: visible_pool_ids} =
+    %{
+      limit: limit,
+      offset: offset,
+      filters: filters,
+      visible_pool_ids: visible_pool_ids,
+      surface: surface
+    } =
       request_log_options(opts)
 
     query =
@@ -94,7 +100,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
     total = Repo.aggregate(query, :count, :id)
     rows = request_log_rows(query, limit, offset)
 
-    %{items: request_log_items(rows), total: total, limit: limit, offset: offset}
+    %{items: request_log_items(rows, surface), total: total, limit: limit, offset: offset}
   end
 
   defp request_log_options(opts) do
@@ -102,9 +108,14 @@ defmodule CodexPooler.Accounting.RequestLogs do
       limit: opts |> Keyword.get(:limit, 50) |> clamp_limit(),
       offset: max(Keyword.get(opts, :offset, 0), 0),
       filters: Keyword.get(opts, :filters, []),
-      visible_pool_ids: Keyword.get(opts, :visible_pool_ids)
+      visible_pool_ids: Keyword.get(opts, :visible_pool_ids),
+      surface: request_log_surface(Keyword.get(opts, :surface))
     }
   end
+
+  @spec request_log_surface(term()) :: DebugProjection.surface()
+  defp request_log_surface(:admin), do: :admin
+  defp request_log_surface(_surface), do: :default
 
   defp request_log_query do
     from r in Request,
@@ -132,7 +143,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
     )
   end
 
-  defp request_log_items(rows) do
+  defp request_log_items(rows, surface) do
     attempts_by_request =
       request_log_attempts_by_request(
         Enum.map(rows, fn {request, _, _, _, _, _, _} -> request.id end)
@@ -143,13 +154,16 @@ defmodule CodexPooler.Accounting.RequestLogs do
       |> Enum.map(fn {request, _, _, _, _, _, _} -> request.id end)
       |> SessionReadModel.request_turns_by_request_ids()
 
-    Enum.map(rows, fn row -> request_log_item(row, attempts_by_request, turns_by_request) end)
+    Enum.map(rows, fn row ->
+      request_log_item(row, attempts_by_request, turns_by_request, surface)
+    end)
   end
 
   defp request_log_item(
          {request, pool, key, latest, assignment, identity, settlement},
          attempts,
-         turns_by_request
+         turns_by_request,
+         surface
        ) do
     request_attempts = Map.get(attempts, request.id, [])
     turn = Map.get(turns_by_request, request.id)
@@ -197,7 +211,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       cost: SettlementPresentation.cost(settlement),
       payload_compression: PayloadCompressionProjection.build(metadata),
       errors: ErrorSummaries.build(request, metadata, request_attempts),
-      debug: DebugProjection.build(request, metadata, turn, request_attempts),
+      debug: DebugProjection.build(request, metadata, turn, request_attempts, surface),
       admitted_at: request.admitted_at,
       completed_at: request.completed_at,
       metadata: metadata

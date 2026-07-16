@@ -2,16 +2,29 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   @moduledoc false
 
   alias CodexPooler.Accounting.{Attempt, Request}
-  alias CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure
+
+  alias CodexPooler.Accounting.RequestLogs.DebugProjection.{
+    TransportFailure,
+    UpstreamWebsocketConnection
+  }
+
   alias CodexPooler.Gateway.Persistence.SessionReadModel
 
   @bounded_detail_attempts 10
   @upstream_error_param_max_bytes 160
   @upstream_error_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
 
-  @spec build(Request.t(), map(), SessionReadModel.request_turn_row() | nil, [Attempt.t()]) ::
+  @type surface :: :default | :admin
+
+  @spec build(
+          Request.t(),
+          map(),
+          SessionReadModel.request_turn_row() | nil,
+          [Attempt.t()],
+          surface()
+        ) ::
           map()
-  def build(%Request{} = request, metadata, turn, attempts) do
+  def build(%Request{} = request, metadata, turn, attempts, surface) do
     attempts = Enum.sort_by(attempts, & &1.attempt_number)
     latest_attempt = List.last(attempts)
     continuity = continuity_projection(request, metadata, turn)
@@ -22,7 +35,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
       attempt: attempt_projection(latest_attempt, attempts),
       terminal_state: terminal_state_projection(request, turn, latest_attempt, continuity),
       turn: turn_projection(request, turn, attempts),
-      attempts: detail_attempts(request, turn, attempts)
+      attempts: detail_attempts(request, turn, attempts, surface)
     }
   end
 
@@ -200,15 +213,15 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     end
   end
 
-  defp detail_attempts(request, turn, attempts) do
+  defp detail_attempts(request, turn, attempts, surface) do
     attempts
     |> Enum.sort_by(& &1.attempt_number, :desc)
     |> Enum.take(@bounded_detail_attempts)
     |> Enum.sort_by(& &1.attempt_number)
-    |> Enum.map(&detail_attempt(request.id, turn, &1))
+    |> Enum.map(&detail_attempt(request.id, turn, &1, surface))
   end
 
-  defp detail_attempt(request_id, turn, attempt) do
+  defp detail_attempt(request_id, turn, attempt, surface) do
     %{
       attempt_ref: attempt_ref(request_id, attempt.attempt_number),
       attempt_number: attempt.attempt_number,
@@ -222,7 +235,17 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     }
     |> maybe_put_transport_failure(attempt)
     |> maybe_put_upstream_error_param(attempt)
+    |> maybe_put_upstream_websocket_connection(attempt, surface)
   end
+
+  defp maybe_put_upstream_websocket_connection(projection, %Attempt{} = attempt, :admin) do
+    case UpstreamWebsocketConnection.build(attempt.response_metadata) do
+      nil -> projection
+      connection -> Map.put(projection, :upstream_websocket_connection, connection)
+    end
+  end
+
+  defp maybe_put_upstream_websocket_connection(projection, _attempt, :default), do: projection
 
   defp maybe_put_transport_failure(projection, %Attempt{} = attempt) do
     case TransportFailure.build(attempt) do

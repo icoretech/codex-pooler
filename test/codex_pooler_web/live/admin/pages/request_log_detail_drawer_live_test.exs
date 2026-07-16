@@ -229,6 +229,88 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     refute drawer_html =~ "raw_reason_detail"
   end
 
+  test "renders normalized websocket connection evidence only in the selected attempt drawer",
+       %{conn: conn, scope: scope} do
+    pool = create_pool!(scope, %{slug: "drawer-websocket-connection", name: "Drawer WebSocket"})
+    lifecycle_id = "77777777-7777-4777-8777-77777777777a"
+
+    %{request: valid_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-websocket-valid",
+        requested_model: "gpt-drawer-websocket-valid",
+        attempt_response_metadata: %{
+          "upstream_websocket_connection" => %{
+            "lifecycle_id" => lifecycle_id,
+            "generation" => 3,
+            "reused" => false,
+            "reconnected" => true
+          }
+        }
+      })
+
+    %{request: malformed_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-websocket-malformed",
+        requested_model: "gpt-drawer-websocket-malformed",
+        attempt_response_metadata: %{
+          "upstream_websocket_connection" => %{
+            "lifecycle_id" => String.upcase(lifecycle_id),
+            "generation" => 3,
+            "reused" => false,
+            "reconnected" => true
+          }
+        }
+      })
+
+    %{request: absent_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-websocket-old-release",
+        requested_model: "gpt-drawer-websocket-old-release",
+        attempt_response_metadata: %{"transport" => "legacy"}
+      })
+
+    row_ids = [
+      "#request-log-detail-attempt-1-lifecycle-id",
+      "#request-log-detail-attempt-1-generation",
+      "#request-log-detail-attempt-1-reused",
+      "#request-log-detail-attempt-1-reconnected"
+    ]
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    list_html = render(view)
+    assert has_element?(view, "#request-log-row-#{valid_request.id}")
+    refute list_html =~ lifecycle_id
+    refute list_html =~ "Lifecycle ID"
+    refute Enum.any?(row_ids, &has_element?(view, &1))
+
+    render_click(element(view, "#request-log-#{valid_request.id}-open-details"))
+    assert_patch(view)
+
+    assert has_element?(view, "#request-log-detail-attempt-1-lifecycle-id", lifecycle_id)
+    assert has_element?(view, "#request-log-detail-attempt-1-generation", "3")
+    assert has_element?(view, "#request-log-detail-attempt-1-reused", "no")
+    assert has_element?(view, "#request-log-detail-attempt-1-reconnected", "yes")
+
+    attempt_html = view |> element("#request-log-detail-attempt-1") |> render()
+
+    assert Enum.count(row_ids, &has_element?(view, &1)) == 4
+
+    refute attempt_html =~ "upstream_websocket_connection"
+
+    render_click(element(view, "#request-log-detail-sidebar-close"))
+    assert_patch(view)
+
+    for request <- [malformed_request, absent_request] do
+      render_click(element(view, "#request-log-#{request.id}-open-details"))
+      assert_patch(view)
+
+      refute Enum.any?(row_ids, &has_element?(view, &1))
+      render_click(element(view, "#request-log-detail-sidebar-close"))
+      assert_patch(view)
+    end
+  end
+
   defp create_pool!(scope, attrs) do
     {:ok, pool} = Pools.create_pool(scope, attrs)
     pool

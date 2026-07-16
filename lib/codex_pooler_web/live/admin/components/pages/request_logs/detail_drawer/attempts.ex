@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
 
   @spec attempt_rows(map()) :: [detail_row()]
   def attempt_rows(attempt) do
-    [
+    rows = [
       detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-ref",
         "Attempt ref",
@@ -55,7 +55,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
       ),
       detail("request-log-detail-attempt-#{attempt.attempt_number}-final", "Final", attempt.final)
     ]
-    |> present_rows()
+
+    present_rows(rows ++ websocket_connection_rows(attempt))
   end
 
   @spec transport_failure_rows(map()) :: [detail_row()]
@@ -96,6 +97,30 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
     |> Enum.filter(
       &(is_map(Map.get(&1, :transport_failure)) and map_size(&1.transport_failure) > 0)
     )
+  end
+
+  defp websocket_connection_rows(%{attempt_number: attempt_number} = attempt) do
+    case Map.get(attempt, :upstream_websocket_connection) do
+      %{
+        lifecycle_id: lifecycle_id,
+        generation: generation,
+        reused: reused,
+        reconnected: reconnected
+      }
+      when is_binary(lifecycle_id) and is_integer(generation) and generation > 0 and
+             is_boolean(reused) and is_boolean(reconnected) ->
+        prefix = "request-log-detail-attempt-#{attempt_number}"
+
+        [
+          detail("#{prefix}-lifecycle-id", "Lifecycle ID", lifecycle_id, mono: true),
+          detail("#{prefix}-generation", "Generation", generation, mono: true),
+          detail("#{prefix}-reused", "Reused", reused),
+          detail("#{prefix}-reconnected", "Reconnected", reconnected)
+        ]
+
+      _invalid ->
+        []
+    end
   end
 
   defp detail(id, label, value, opts \\ []) do

@@ -132,6 +132,39 @@ Common causes to inspect are:
 
 The Errors column should stay safe to copy into operator tickets. It should not include raw prompts, responses, uploaded file contents, credentials, or provider payloads.
 
+### Upstream Websocket Connection Details
+
+For an attempt that actually used a current-release upstream websocket, the admin attempt-detail drawer can show an `upstream_websocket_connection` group with exactly four fields:
+
+<table>
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>lifecycle_id</code></td>
+      <td>A generated canonical UUID shared by successful upstream websocket connections created within one in-process session lifecycle. It is not a provider or socket identifier.</td>
+    </tr>
+    <tr>
+      <td><code>generation</code></td>
+      <td>The positive ordinal of a successfully established upstream websocket connection within that lifecycle. Reuse keeps the same generation; a successfully established replacement advances it.</td>
+    </tr>
+    <tr>
+      <td><code>reused</code></td>
+      <td>Whether this request started on a connection that an earlier request had already established.</td>
+    </tr>
+    <tr>
+      <td><code>reconnected</code></td>
+      <td>Whether this request was retried on a newly established connection after its reused connection failed before a response became visible.</td>
+    </tr>
+  </tbody>
+</table>
+
+This group is attempt metadata only. It is omitted when metadata is missing or malformed, when a previous-release owner cannot provide it, and when a bridge falls back to HTTP. It is not added to request-level list rows and is not exposed by request-log MCP tools.
+
 ### Websocket Close Triage
 
 Websocket request rows are created after gateway admission and reservation. If a websocket closes before a request row exists, inspect application logs for sanitized websocket close metadata instead of looking for prompt or frame content.

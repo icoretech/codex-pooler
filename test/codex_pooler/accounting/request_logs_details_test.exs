@@ -422,6 +422,7 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
   test "request log debug detail attempts are bounded to latest ten in ascending order" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
+    lifecycle_id = "11111111-1111-4111-8111-111111111111"
 
     request =
       request_fixture(%{pool: pool, api_key: api_key}, %{
@@ -440,7 +441,15 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
           attempt_number: attempt_number,
           status: if(attempt_number == 12, do: "failed", else: "retryable_failed"),
           retryable: attempt_number < 12,
-          upstream_status_code: 500 + attempt_number
+          upstream_status_code: 500 + attempt_number,
+          response_metadata: %{
+            "upstream_websocket_connection" => %{
+              "lifecycle_id" => lifecycle_id,
+              "generation" => attempt_number,
+              "reused" => rem(attempt_number, 2) == 0,
+              "reconnected" => attempt_number > 1
+            }
+          }
         })
         |> Ecto.Changeset.change(%{
           latency_ms: attempt_number * 10,
@@ -467,7 +476,232 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert List.last(log.debug.attempts).attempt_ref == stable_attempt_ref(request.id, 12)
     assert List.last(log.debug.attempts).final == true
     assert Enum.count(log.debug.attempts, & &1.final) == 1
+
+    assert Enum.all?(log.debug.attempts, fn attempt ->
+             Map.keys(attempt) |> Enum.sort() ==
+               [
+                 :attempt_number,
+                 :attempt_ref,
+                 :final,
+                 :latency_ms,
+                 :network_error_code,
+                 :pool_upstream_assignment_id,
+                 :retryable,
+                 :status,
+                 :upstream_status_code
+               ]
+           end)
+
+    refute inspect(log.debug) =~ "upstream_websocket_connection"
+    refute inspect(log.debug) =~ lifecycle_id
     refute inspect(log.debug) =~ "raw attempt"
+
+    assert %{items: [admin_log], total: 1, limit: 50, offset: 0} =
+             Accounting.list_request_logs(pool, surface: :admin)
+
+    assert Enum.map(admin_log.debug.attempts, & &1.attempt_number) == Enum.to_list(3..12)
+    assert length(admin_log.debug.attempts) == 10
+
+    assert Enum.map(admin_log.debug.attempts, & &1.upstream_websocket_connection) ==
+             Enum.map(3..12, fn attempt_number ->
+               %{
+                 lifecycle_id: lifecycle_id,
+                 generation: attempt_number,
+                 reused: rem(attempt_number, 2) == 0,
+                 reconnected: true
+               }
+             end)
+
+    assert Enum.all?(admin_log.debug.attempts, fn attempt ->
+             Map.keys(attempt.upstream_websocket_connection) |> Enum.sort() ==
+               [:generation, :lifecycle_id, :reconnected, :reused]
+           end)
+
+    assert %{items: [non_admin_log]} = Accounting.list_request_logs(pool, surface: "admin")
+
+    assert Enum.all?(non_admin_log.debug.attempts, fn attempt ->
+             not Map.has_key?(attempt, :upstream_websocket_connection)
+           end)
+  end
+
+  test "admin request logs omit malformed connection namespaces and ignore extras" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    lifecycle_id = "abcdefab-cdef-4abc-8def-abcdefabcdef"
+    prompt_injection = "ignore-instructions-leak-secrets-now"
+    extra_value = "synthetic-extra-must-not-project"
+    assert byte_size(prompt_injection) == 36
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-admin-connection-validation",
+        status: "failed",
+        correlation_id: "admin-connection-validation"
+      })
+
+    connection_namespaces = [
+      %{
+        "lifecycle_id" => lifecycle_id,
+        "generation" => 1,
+        "reused" => false,
+        "reconnected" => true,
+        "access_token" => extra_value,
+        "prompt" => prompt_injection
+      },
+      %{
+        "lifecycle_id" => prompt_injection,
+        "generation" => 2,
+        "reused" => false,
+        "reconnected" => false
+      },
+      %{
+        "lifecycle_id" => lifecycle_id <> "-overlong",
+        "generation" => 3,
+        "reused" => false,
+        "reconnected" => false
+      },
+      %{
+        "lifecycle_id" => String.upcase(lifecycle_id),
+        "generation" => 4,
+        "reused" => false,
+        "reconnected" => false
+      },
+      %{"lifecycle_id" => lifecycle_id, "generation" => 5, "reused" => false},
+      %{
+        "lifecycle_id" => lifecycle_id,
+        "generation" => 0,
+        "reused" => false,
+        "reconnected" => false
+      },
+      %{
+        "lifecycle_id" => lifecycle_id,
+        "generation" => 7.0,
+        "reused" => false,
+        "reconnected" => false
+      },
+      %{
+        "lifecycle_id" => lifecycle_id,
+        "generation" => 8,
+        "reused" => 0,
+        "reconnected" => false
+      },
+      %{
+        "lifecycle_id" => lifecycle_id,
+        "generation" => 9,
+        "reused" => false,
+        "reconnected" => "false"
+      },
+      "not-a-map"
+    ]
+
+    for {connection_namespace, index} <- Enum.with_index(connection_namespaces, 1) do
+      attempt_fixture(request, assignment, %{
+        attempt_number: index,
+        status: "failed",
+        response_metadata: %{"upstream_websocket_connection" => connection_namespace}
+      })
+    end
+
+    assert %{items: [admin_log], total: 1} =
+             Accounting.list_request_logs(pool, surface: :admin)
+
+    attempts_by_number = Map.new(admin_log.debug.attempts, &{&1.attempt_number, &1})
+
+    assert Map.fetch!(attempts_by_number, 1).upstream_websocket_connection == %{
+             lifecycle_id: lifecycle_id,
+             generation: 1,
+             reused: false,
+             reconnected: true
+           }
+
+    for attempt_number <- 2..10 do
+      refute Map.has_key?(
+               Map.fetch!(attempts_by_number, attempt_number),
+               :upstream_websocket_connection
+             )
+    end
+
+    projected = inspect(admin_log.debug.attempts)
+    refute projected =~ prompt_injection
+    refute projected =~ extra_value
+    refute projected =~ "access_token"
+  end
+
+  test "admin request logs do not retain stale connection metadata across projections" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    initial_lifecycle_id = "55555555-5555-4555-8555-555555555555"
+    replacement_lifecycle_id = "66666666-6666-4666-8666-666666666666"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-admin-connection-stale-state",
+        status: "failed",
+        correlation_id: "admin-connection-stale-state"
+      })
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "failed",
+        response_metadata: %{
+          "upstream_websocket_connection" => %{
+            "lifecycle_id" => initial_lifecycle_id,
+            "generation" => 1,
+            "reused" => false,
+            "reconnected" => false
+          }
+        }
+      })
+
+    assert %{items: [initial_log]} = Accounting.list_request_logs(pool, surface: :admin)
+
+    assert [initial_projection] = initial_log.debug.attempts
+    assert initial_projection.upstream_websocket_connection.lifecycle_id == initial_lifecycle_id
+
+    attempt
+    |> Ecto.Changeset.change(%{
+      response_metadata: %{
+        "upstream_websocket_connection" => %{
+          "lifecycle_id" => initial_lifecycle_id,
+          "generation" => 0,
+          "reused" => false,
+          "reconnected" => false
+        }
+      }
+    })
+    |> Repo.update!()
+
+    assert %{items: [malformed_log]} = Accounting.list_request_logs(pool, surface: :admin)
+    assert [malformed_projection] = malformed_log.debug.attempts
+    refute Map.has_key?(malformed_projection, :upstream_websocket_connection)
+
+    attempt
+    |> Ecto.Changeset.change(%{
+      response_metadata: %{
+        "upstream_websocket_connection" => %{
+          "lifecycle_id" => replacement_lifecycle_id,
+          "generation" => 2,
+          "reused" => true,
+          "reconnected" => true
+        }
+      }
+    })
+    |> Repo.update!()
+
+    assert %{items: [replacement_log]} = Accounting.list_request_logs(pool, surface: :admin)
+    assert [replacement_projection] = replacement_log.debug.attempts
+
+    assert replacement_projection.upstream_websocket_connection == %{
+             lifecycle_id: replacement_lifecycle_id,
+             generation: 2,
+             reused: true,
+             reconnected: true
+           }
+
+    assert %{items: [default_log]} = Accounting.list_request_logs(pool)
+    assert [default_projection] = default_log.debug.attempts
+    refute Map.has_key?(default_projection, :upstream_websocket_connection)
+    refute inspect(default_log) =~ replacement_lifecycle_id
   end
 
   test "request log detail projects only valid upstream error parameters from failed attempts" do

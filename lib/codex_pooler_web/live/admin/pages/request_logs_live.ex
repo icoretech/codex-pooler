@@ -375,12 +375,37 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         assign(socket, :selected_request_log, nil)
 
       request_id ->
+        request_log =
+          socket.assigns.current_scope
+          |> Accounting.get_request_log_for_scope(request_id)
+          |> maybe_put_admin_debug_projection(socket.assigns.current_scope, request_id)
+
         assign(
           socket,
           :selected_request_log,
-          Accounting.RequestLogs.get_for_scope(socket.assigns.current_scope, request_id)
+          request_log
         )
     end
+  end
+
+  defp maybe_put_admin_debug_projection(nil, _scope, _request_id), do: nil
+
+  defp maybe_put_admin_debug_projection(request_log, scope, request_id) do
+    case admin_request_log(scope, request_id) do
+      %{debug: debug} -> Map.put(request_log, :debug, debug)
+      _missing -> request_log
+    end
+  end
+
+  defp admin_request_log(scope, request_id) do
+    scope
+    |> Accounting.list_request_logs_for_scope(
+      limit: 200,
+      filters: [request_id: request_id],
+      surface: :admin
+    )
+    |> Map.get(:items, [])
+    |> Enum.find(&(&1.id == request_id))
   end
 
   defp maybe_clear_missing_selected_request_log(socket) do

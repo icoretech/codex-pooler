@@ -164,6 +164,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
   test "lists request-log debug metadata as compact sanitized incident fields", %{auth: auth} do
     pool = pool_fixture(%{slug: "mcp-request-log-debug", name: "MCP Request Log Debug"})
     %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP debug key"})
+    lifecycle_id = "22222222-2222-4222-8222-222222222222"
 
     %{assignment: assignment} =
       upstream_assignment_fixture(pool, %{
@@ -178,7 +179,17 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         codex_session_key: "session-key-example-1",
         request_error: "client_disconnected",
         attempt_error: "owner_drained",
-        response_metadata: safe_transport_failure_metadata()
+        response_metadata:
+          Map.put(
+            safe_transport_failure_metadata(),
+            "upstream_websocket_connection",
+            %{
+              "lifecycle_id" => lifecycle_id,
+              "generation" => 1,
+              "reused" => false,
+              "reconnected" => false
+            }
+          )
       })
 
     terminal_turn =
@@ -259,7 +270,12 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
            "expected request log item to include debug metadata"
 
     terminal_debug = terminal_item["debug"]
+    assert Map.keys(terminal_debug) |> Enum.sort() == ["attempt", "continuity", "failure"]
     refute Map.has_key?(terminal_debug, "attempts")
+    refute inspect(result["structuredContent"]) =~ "upstream_websocket_connection"
+    refute inspect(result["structuredContent"]) =~ lifecycle_id
+    refute text =~ "upstream_websocket_connection"
+    refute text =~ lifecycle_id
     refute inspect(terminal_debug) =~ "Mint.TransportError"
     refute inspect(terminal_debug) =~ "closed"
 
@@ -865,6 +881,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
   } do
     pool = pool_fixture(%{slug: "mcp-request-log-debug-detail", name: "MCP Debug Detail"})
     %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP debug detail key"})
+    lifecycle_id = "33333333-3333-4333-8333-333333333333"
 
     %{assignment: assignment} =
       upstream_assignment_fixture(pool, %{
@@ -879,7 +896,17 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
         codex_session_key: "session-key-example-1",
         request_error: "client_disconnected",
         attempt_error: "owner_drained",
-        response_metadata: safe_transport_failure_metadata()
+        response_metadata:
+          Map.put(
+            safe_transport_failure_metadata(),
+            "upstream_websocket_connection",
+            %{
+              "lifecycle_id" => lifecycle_id,
+              "generation" => 1,
+              "reused" => false,
+              "reconnected" => false
+            }
+          )
       })
 
     turn =
@@ -989,6 +1016,10 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert text =~ "turn=turn_"
     assert text =~ "terminal=terminal"
     assert text =~ "attempts=1"
+    refute inspect(result["structuredContent"]) =~ "upstream_websocket_connection"
+    refute inspect(result["structuredContent"]) =~ lifecycle_id
+    refute text =~ "upstream_websocket_connection"
+    refute text =~ lifecycle_id
     assert_no_debug_raw_session_values(result)
     assert_output_omits_transport_failure_raw_values(result)
     assert :ok = Redaction.assert_mcp_output_safe!(result)
