@@ -3252,6 +3252,57 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert Repo.get!(UpstreamIdentity, identity.id).account_label == "Renamed Codex"
   end
 
+  test "shows an unassigned upstream account and assigns it to a Pool", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "assign-existing-upstream", name: "Assignment Target"})
+
+    identity =
+      active_upstream_identity_fixture(%{
+        account_email: "unassigned@example.com",
+        account_label: "Unassigned Account"
+      })
+
+    {:ok, filtered_view, _html} =
+      live(conn, ~p"/admin/upstreams?pool_id=#{pool.id}")
+
+    refute has_element?(filtered_view, "#upstream-account-#{identity.id}")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Unassigned Account")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id} [data-role='upstream-pool-count-cell']",
+             "No Pools"
+           )
+
+    view
+    |> element("#assign-pool-upstream-account-#{identity.id}")
+    |> render_click()
+
+    assert has_element?(view, "#assign-pool-dialog[open]", "Assignment Target")
+    assert_admin_dialog_docs_link(view, "assign-pool-dialog-footer")
+
+    view
+    |> form("#assign-pool-form", %{"assign_pool" => %{"pool_id" => pool.id}})
+    |> render_submit()
+
+    refute has_element?(view, "#assign-pool-dialog")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id} [data-role='upstream-pool-count-cell']",
+             "1 Pool"
+           )
+
+    assert [assignment] = Upstreams.Assignments.list_active_pool_assignments(pool)
+    assert assignment.upstream_identity_id == identity.id
+  end
+
   test "confirms upstream account deletion from the account actions menu", %{
     conn: conn,
     scope: scope
@@ -6085,6 +6136,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
           "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
 
         "delete-upstream-account-dialog-footer" ->
+          "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
+
+        "assign-pool-dialog-footer" ->
           "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
       end
 

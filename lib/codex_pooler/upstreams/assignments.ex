@@ -23,6 +23,9 @@ defmodule CodexPooler.Upstreams.Assignments do
   defdelegate sync_pool_assignments_for_pool_edit(pool, selected_ids, opts \\ []),
     to: PoolAssignments
 
+  @spec assign_pool_assignment(Pool.t(), identity_ref(), map()) :: assignment_result()
+  defdelegate assign_pool_assignment(pool, identity_or_id, attrs \\ %{}), to: PoolAssignments
+
   @spec put_assignment_cooldown(assignment_ref(), DateTime.t(), map()) :: assignment_result()
   defdelegate put_assignment_cooldown(assignment_or_id, cooldown_until, attrs \\ %{}),
     to: PoolAssignments

@@ -20,6 +20,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   @refresh_failed UpstreamIdentity.refresh_failed_status()
   @reauth_required UpstreamIdentity.reauth_required_status()
   @deleted UpstreamIdentity.deleted_status()
+  @assignment_pending PoolUpstreamAssignment.pending_status()
   @assignment_active PoolUpstreamAssignment.active_status()
   @assignment_paused PoolUpstreamAssignment.paused_status()
   @assignment_refresh_due PoolUpstreamAssignment.refresh_due_status()
@@ -31,6 +32,7 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   @health_disabled PoolUpstreamAssignment.disabled_health_status()
   @reactivatable_statuses [@active, @paused, @refresh_due, @refresh_failed]
   @reactivatable_assignment_statuses [
+    @assignment_pending,
     @assignment_active,
     @assignment_paused,
     @assignment_refresh_due,

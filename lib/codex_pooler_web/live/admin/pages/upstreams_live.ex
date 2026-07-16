@@ -1,8 +1,10 @@
 defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   use CodexPoolerWeb, :admin_live_view
 
+  alias CodexPooler.Admin.UpstreamAssignmentWorkflow
   alias CodexPooler.Events
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
@@ -54,6 +56,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         rename_account_form: nil,
         deleting_account: nil,
         delete_account_form: AccountLifecycleWorkflow.delete_form(nil),
+        assigning_pool_account: nil,
+        assign_pool_form: assign_pool_form(),
         editing_saved_reset_policy: nil,
         saved_reset_policy_form: saved_reset_policy_form(%{}),
         confirming_saved_reset_redemption: nil,
@@ -273,6 +277,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
      update(socket, :account_panel_views, &toggle_account_panel_view(&1, identity_id, :tokens))}
   end
 
+  def handle_event("open_assign_pool", %{"id" => identity_id}, socket) do
+    case find_account(socket.assigns.upstream_accounts, identity_id) do
+      %{identity: %UpstreamIdentity{status: status}} = account when status != "deleted" ->
+        {:noreply,
+         socket
+         |> close_account_workflow_dialogs()
+         |> assign(
+           assigning_pool_account: account,
+           assign_pool_form: assign_pool_form(socket.assigns.pools)
+         )}
+
+      _missing_or_deleted ->
+        {:noreply, put_flash(socket, :error, "Upstream account is not available to assign")}
+    end
+  end
+
+  def handle_event("close_assign_pool", _params, socket) do
+    {:noreply, close_assign_pool_dialog(socket)}
+  end
+
+  def handle_event(
+        "assign_pool_account",
+        %{"assign_pool" => %{"pool_id" => pool_id}},
+        socket
+      ) do
+    pool = selected_pool(socket.assigns.pools, pool_id)
+
+    case {socket.assigns.assigning_pool_account, pool} do
+      {%{identity: %UpstreamIdentity{} = identity} = account, %Pool{} = pool} ->
+        case UpstreamAssignmentWorkflow.assign_to_pool(
+               socket.assigns.current_scope,
+               pool,
+               identity
+             ) do
+          {:ok, _assignment} ->
+            {:noreply,
+             socket
+             |> close_assign_pool_dialog()
+             |> reload_upstreams()
+             |> put_flash(:info, "#{account.label} was assigned to #{pool.name}")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, assignment_error_message(reason))}
+        end
+
+      {nil, _pool} ->
+        {:noreply, put_flash(socket, :error, "Upstream account was not found")}
+
+      {_account, nil} ->
+        {:noreply, put_flash(socket, :error, "Target Pool was not found")}
+    end
+  end
+
+  def handle_event("assign_pool_account", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Select an available Pool")}
+  end
+
   def handle_event("cancel_saved_reset_redemption", _params, socket) do
     {:noreply, assign(socket, :confirming_saved_reset_redemption, nil)}
   end
@@ -390,6 +451,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         rename_account_form={@rename_account_form}
         deleting_account={@deleting_account}
         delete_account_form={@delete_account_form}
+        assigning_pool_account={@assigning_pool_account}
+        assign_pool_form={@assign_pool_form}
         editing_saved_reset_policy={@editing_saved_reset_policy}
         saved_reset_policy_form={@saved_reset_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
@@ -533,8 +596,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     |> close_rename_account_dialog()
     |> AccountLifecycleWorkflow.close_delete()
     |> OAuthWorkflow.close()
+    |> close_assign_pool_dialog()
     |> close_saved_reset_policy_dialog()
   end
+
+  defp close_assign_pool_dialog(socket) do
+    assign(socket,
+      assigning_pool_account: nil,
+      assign_pool_form: assign_pool_form()
+    )
+  end
+
+  defp assign_pool_form(pools \\ []) do
+    default_pool_id =
+      case pools do
+        [%Pool{id: pool_id}] -> pool_id
+        _pools -> ""
+      end
+
+    to_form(%{"pool_id" => default_pool_id}, as: :assign_pool)
+  end
+
+  defp assignment_error_message(%{message: message})
+       when is_binary(message) and message != "",
+       do: message
+
+  defp assignment_error_message(_reason), do: "Upstream account could not be assigned"
 
   defp close_rename_account_dialog(socket) do
     assign(socket,

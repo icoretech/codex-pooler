@@ -389,6 +389,58 @@ defmodule CodexPooler.UpstreamsTest do
       assert Upstreams.list_eligible_pool_assignments(pool) == []
     end
 
+    test "admin assignment creates an active row and restores existing rows" do
+      pool = pool_fixture()
+      identity = active_identity_fixture(%{chatgpt_account_id: "acct_admin_assign"})
+
+      assert Upstreams.list_pool_assignments_for_identity(identity) == []
+
+      assert {:ok, active_assignment} =
+               PoolAssignments.assign_pool_assignment(pool, identity)
+
+      assert active_assignment.status == "active"
+      assert active_assignment.health_status == "active"
+      assert active_assignment.eligibility_status == "eligible"
+
+      assert {:ok, same_assignment} =
+               PoolAssignments.assign_pool_assignment(pool, identity)
+
+      assert same_assignment.id == active_assignment.id
+
+      assert {:ok, %{status: :assignment_deleted}} =
+               PoolAssignments.delete_pool_assignment(pool, active_assignment)
+
+      assert {:ok, restored_assignment} =
+               PoolAssignments.assign_pool_assignment(pool, identity)
+
+      assert restored_assignment.id == active_assignment.id
+      assert restored_assignment.status == "active"
+      assert restored_assignment.health_status == "active"
+      assert restored_assignment.eligibility_status == "eligible"
+      assert is_nil(restored_assignment.disabled_at)
+
+      pending_identity =
+        active_identity_fixture(%{chatgpt_account_id: "acct_admin_assign_pending"})
+
+      assert {:ok, pending_assignment} =
+               PoolAssignments.create_pool_assignment(pool, pending_identity)
+
+      assert {:ok, promoted_assignment} =
+               PoolAssignments.assign_pool_assignment(pool, pending_identity)
+
+      assert promoted_assignment.id == pending_assignment.id
+      assert promoted_assignment.status == "active"
+
+      deleted_identity =
+        active_identity_fixture(%{chatgpt_account_id: "acct_admin_assign_deleted"})
+
+      assert {:ok, deleted_identity} =
+               IdentityLifecycle.update_upstream_identity(deleted_identity, %{status: "deleted"})
+
+      assert {:error, %{code: :upstream_identity_not_assignable}} =
+               PoolAssignments.assign_pool_assignment(pool, deleted_identity)
+    end
+
     test "assignment list APIs return empty results for invalid pool refs" do
       assert Upstreams.list_active_pool_assignments(nil) == []
       assert Upstreams.list_active_pool_assignments(:invalid_pool) == []
@@ -2510,6 +2562,49 @@ defmodule CodexPooler.UpstreamsTest do
                Secrets.decrypt_active_secret(identity, "access_token")
 
       assert decrypted == token
+    end
+
+    test "reactivation promotes a newly attached pending assignment" do
+      source_pool = pool_fixture(%{name: "Reactivation Source"})
+      target_pool = pool_fixture(%{name: "Reactivation Target"})
+      identity = active_identity_fixture(%{chatgpt_account_id: "acct_pending_reactivation"})
+      configure_upstream_secret_key!()
+
+      assert {:ok, source_assignment} =
+               PoolAssignments.create_pool_assignment(source_pool, identity)
+
+      assert {:ok, source_assignment} =
+               PoolAssignments.activate_pool_assignment(source_assignment)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "access_token",
+                 plaintext: generated_secret("pending-reactivation")
+               })
+
+      scope = fixture_owner_scope()
+
+      assert {:ok, %{status: :paused}} =
+               Upstreams.pause_account_for_scope(scope, identity, %{})
+
+      assert {:ok, %{status: :assignment_deleted}} =
+               PoolAssignments.delete_pool_assignment(source_pool, source_assignment)
+
+      assert {:ok, pending_assignment} =
+               PoolAssignments.create_pool_assignment(target_pool, identity)
+
+      assert pending_assignment.status == "pending"
+
+      assert {:ok, %{status: :active}} =
+               Upstreams.reactivate_account_for_scope(scope, identity, %{})
+
+      assert %PoolUpstreamAssignment{
+               status: "active",
+               health_status: "active",
+               eligibility_status: "eligible"
+             } = Repo.get!(PoolUpstreamAssignment, pending_assignment.id)
+
+      assert Repo.get!(PoolUpstreamAssignment, source_assignment.id).status == "deleted"
     end
 
     test "reactivation fails when the account has no active routing secret" do

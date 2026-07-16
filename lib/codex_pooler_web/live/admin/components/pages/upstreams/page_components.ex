@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AssignPoolDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias Phoenix.HTML.Form
@@ -37,6 +38,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :rename_account_form, :any, default: nil
   attr :deleting_account, :map, default: nil
   attr :delete_account_form, :any, required: true
+  attr :assigning_pool_account, :map, default: nil
+  attr :assign_pool_form, :any, required: true
   attr :editing_saved_reset_policy, :map, default: nil
   attr :saved_reset_policy_form, :any, required: true
   attr :confirming_saved_reset_redemption, :map, default: nil
@@ -89,6 +92,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
       <.rename_account_dialog account={@renaming_account} form={@rename_account_form} />
       <.delete_account_dialog account={@deleting_account} form={@delete_account_form} />
+      <AssignPoolDialog.assign_pool_dialog
+        account={@assigning_pool_account}
+        form={@assign_pool_form}
+        pool_options={@dialog_pool_options}
+      />
       <.saved_reset_policy_dialog
         account={@editing_saved_reset_policy}
         form={@saved_reset_policy_form}

@@ -155,9 +155,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     assignments = attach_assignment_model_inventory(assignments, model_inventory)
 
     identities =
-      scope
-      |> Upstreams.list_visible_upstream_identities()
-      |> Enum.filter(&Map.has_key?(assignments, &1.id))
+      if pool_filter_selected?(filters) do
+        visible_assigned_identities(scope, assignments)
+      else
+        case Upstreams.list_upstream_identities_for_pool_management(scope,
+               exclude_status: UpstreamIdentity.deleted_status()
+             ) do
+          {:ok, identities} -> identities
+          {:error, _reason} -> visible_assigned_identities(scope, assignments)
+        end
+      end
 
     token_burns = TokenBurnProjection.summaries(identities)
 
@@ -170,6 +177,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)
     Enum.filter(pools, &MapSet.member?(visible_pool_ids, &1.id))
   end
+
+  defp visible_assigned_identities(scope, assignments) do
+    scope
+    |> Upstreams.list_visible_upstream_identities()
+    |> Enum.filter(&Map.has_key?(assignments, &1.id))
+  end
+
+  defp pool_filter_selected?(%{"pool_id" => pool_id})
+       when is_binary(pool_id) and pool_id != "",
+       do: true
+
+  defp pool_filter_selected?(_filters), do: false
 
   @spec oauth_flow_state(term(), [term()], DateTimeDisplay.preferences(), keyword()) ::
           oauth_flow_state()

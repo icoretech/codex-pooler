@@ -19,7 +19,7 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
   @health_active PoolUpstreamAssignment.active_health_status()
   @health_cooldown PoolUpstreamAssignment.cooldown_health_status()
   @health_disabled PoolUpstreamAssignment.disabled_health_status()
-  @pending UpstreamIdentity.pending_status()
+  @pending PoolUpstreamAssignment.pending_status()
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type lifecycle_result :: {:ok, map()} | {:error, lifecycle_error()}
@@ -58,6 +58,31 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
   end
 
   def create_pool_assignment(_pool, _identity_or_id, _attrs),
+    do: {:error, lifecycle_error(:pool_not_found, "pool was not found")}
+
+  @doc """
+  Assigns an already-linked upstream identity to a Pool as an operational
+  assignment.
+
+  `create_pool_assignment/3` intentionally defaults to `pending` for
+  onboarding. The admin "Assign to Pool" workflow must instead create an
+  active assignment and restore an older pending/deleted row when one already
+  occupies the Pool/identity slot.
+  """
+  @spec assign_pool_assignment(Pool.t(), identity_ref(), map()) :: assignment_result()
+  def assign_pool_assignment(pool, identity_or_id, attrs \\ %{})
+
+  def assign_pool_assignment(%Pool{} = pool, identity_or_id, attrs) when is_map(attrs) do
+    case identity_id(identity_or_id) do
+      identity_id when is_binary(identity_id) ->
+        assign_pool_assignment_transaction(pool, identity_id, attrs)
+
+      nil ->
+        {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+    end
+  end
+
+  def assign_pool_assignment(_pool, _identity_or_id, _attrs),
     do: {:error, lifecycle_error(:pool_not_found, "pool was not found")}
 
   @spec sync_pool_assignments_for_pool_edit(Pool.t(), [Ecto.UUID.t()], keyword()) ::
@@ -569,6 +594,73 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
   defp pool_id(%Pool{id: id}), do: id
   defp pool_id(id) when is_binary(id), do: id
   defp pool_id(_id), do: nil
+
+  defp assignment_for_pool_identity(pool_id, identity_id) do
+    Repo.one(
+      from assignment in PoolUpstreamAssignment,
+        where:
+          assignment.pool_id == ^pool_id and
+            assignment.upstream_identity_id == ^identity_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp assign_pool_assignment_transaction(pool, identity_id, attrs) do
+    Repo.transaction(fn ->
+      identity_id
+      |> lock_upstream_identity()
+      |> assign_locked_identity(pool, attrs)
+      |> case do
+        {:ok, assignment} -> assignment
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp lock_upstream_identity(identity_id) do
+    Repo.one(
+      from identity in UpstreamIdentity,
+        where: identity.id == ^identity_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp assign_locked_identity(nil, _pool, _attrs) do
+    {:error, lifecycle_error(:upstream_identity_not_found, "upstream identity was not found")}
+  end
+
+  defp assign_locked_identity(%UpstreamIdentity{status: @deleted}, _pool, _attrs) do
+    {:error,
+     lifecycle_error(
+       :upstream_identity_not_assignable,
+       "deleted upstream identities cannot be assigned"
+     )}
+  end
+
+  defp assign_locked_identity(%UpstreamIdentity{} = identity, pool, attrs) do
+    assignment_attrs =
+      attrs
+      |> atomize_attrs()
+      |> Map.merge(%{
+        status: @assignment_active,
+        health_status: @health_active,
+        eligibility_status: @eligible,
+        cooldown_until: nil,
+        disabled_at: nil
+      })
+
+    case assignment_for_pool_identity(pool.id, identity.id) do
+      %PoolUpstreamAssignment{status: status} = assignment
+      when status in [@pending, @assignment_deleted] ->
+        update_pool_assignment(assignment, assignment_attrs)
+
+      %PoolUpstreamAssignment{} = assignment ->
+        {:ok, assignment}
+
+      nil ->
+        create_pool_assignment(pool, identity, assignment_attrs)
+    end
+  end
 
   defp atomize_attrs(attrs) when is_map(attrs) do
     Map.new(attrs, fn
