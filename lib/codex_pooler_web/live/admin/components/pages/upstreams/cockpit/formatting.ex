@@ -22,6 +22,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting do
 
   def audit_logs_path(cockpit), do: ~p"/admin/audit-logs?target=#{cockpit.identity.id}"
 
+  def jobs_path(cockpit),
+    do: ~p"/admin/jobs?target_kind=upstream_identity&target_id=#{cockpit.identity.id}"
+
+  @doc """
+  Strips a redundant sentence prefix from a preformatted label ("token refresh
+  succeeded 5d ago" → "succeeded 5d ago") so dt/dd rows do not repeat it.
+  """
+  def strip_label_prefix(label, prefix) when is_binary(label) do
+    String.replace_prefix(label, prefix, "")
+  end
+
+  def strip_label_prefix(label, _prefix), do: label
+
   def assignment_status_class(status), do: AdminBadges.status_chip_class(status)
 
   def status_label(prefix, status), do: "#{prefix} #{status_text(status)}"

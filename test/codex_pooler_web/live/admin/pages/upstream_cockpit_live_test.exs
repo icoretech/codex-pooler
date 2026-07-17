@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   import Phoenix.LiveViewTest
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Admin.UpstreamRoutingReadiness
   alias CodexPooler.Audit
   alias CodexPooler.Events
   alias CodexPooler.FakeOpenAIAuthProvider
@@ -275,7 +276,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(view, "#upstream-cockpit")
     assert has_element?(view, "#upstream-cockpit-header")
-    assert has_element?(view, "#upstream-refresh-data")
+    assert has_element?(view, "#upstream-refresh-data-button")
   end
 
   test "cockpit uses current identity label and quota readiness for shared assignments", %{
@@ -363,10 +364,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     blocked_selector = "#upstream-assignment-#{blocked_assignment.id}"
 
     assert has_element?(view, stale_selector, "Current Shared Codex")
-    assert has_element?(view, stale_selector, "Quota failed")
-    assert has_element?(view, stale_selector, "Quota fresh")
-    assert has_element?(view, blocked_selector, "Priming blocked")
-    assert has_element?(view, blocked_selector, "Quota fresh")
+    assert has_element?(view, "#{stale_selector}-route-quota[title='Quota failed']")
+    assert has_element?(view, "#{blocked_selector}-route-quota[title='Priming blocked']")
+    assert has_element?(view, "#upstream-quota", "Fresh")
 
     refute html =~ "old-shared-label@example.com"
     refute html =~ "another-old-shared-label@example.com"
@@ -874,53 +874,73 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           "#upstream-cockpit",
           "#upstream-cockpit-header",
           "#upstream-status-summary",
-          "#upstream-assignments",
-          "#quota-health-chart",
-          "#request-health-chart",
-          "#pool-contribution-chart",
-          "#upstream-event-summary",
           "#upstream-actions",
-          "#upstream-related-links",
-          "#upstream-refresh-data"
+          "#upstream-assignments",
+          "#upstream-quota",
+          "#request-health-chart",
+          "#upstream-event-summary"
         ] do
       assert has_element?(view, selector)
     end
 
     assert has_element?(view, "#upstream-cockpit-header", "Layout Shell Codex")
-    assert has_element?(view, "#upstream-cockpit-header", "stored account id sha256:")
+    assert has_element?(view, "#upstream-cockpit-safe-account-id", "sha256:")
 
     assert has_element?(
              view,
-             "#upstream-cockpit-header-actions[data-role='upstream-cockpit-header-actions']"
+             "#upstream-cockpit-safe-account-id[title^='stored account id sha256:']"
            )
 
     assert has_element?(
              view,
-             "#upstream-status-summary[data-desktop-columns='four']"
+             "#upstream-cockpit-safe-account-id-copy[phx-hook='ClipboardCopy']"
            )
+
+    for vitals_row <- [
+          "#upstream-vitals-access-token",
+          "#upstream-vitals-token-refresh",
+          "#upstream-vitals-auth-verified",
+          "#upstream-vitals-quota-refresh",
+          "#upstream-vitals-quota-evidence"
+        ] do
+      assert has_element?(view, "#upstream-status-summary #{vitals_row}")
+    end
 
     assert has_element?(
              view,
              "#upstream-actions #cockpit-redeem-saved-reset-upstream-account-#{identity.id}[title]"
            )
 
-    assert has_element?(view, "#upstream-status-summary", "Identity active")
-    assert has_element?(view, "#upstream-assignments", "1 assignment")
-    assert has_element?(view, "#quota-health-chart", "Quota health")
+    assert has_element?(view, "#upstream-cockpit-status", "Active")
+    assert has_element?(view, "#upstream-cockpit-presence[data-status='active']")
+    assert has_element?(view, "#upstream-assignments", "1 lane")
+    assert has_element?(view, "#upstream-quota", "banked resets")
+    assert has_element?(view, "#upstream-quota-limit-primary_5h")
     assert has_element?(view, "#request-health-chart", "Request health")
-    assert has_element?(view, "#pool-contribution-chart", "Pool contribution")
-    assert has_element?(view, "#upstream-event-summary", "Recent events")
-    assert has_element?(view, "#upstream-actions", "Available actions")
-    assert has_element?(view, "#upstream-refresh-data", "Refresh cockpit data")
 
     assert has_element?(
              view,
-             "#upstream-related-links a[href='/admin/request-logs?upstream_identity_id=#{identity.id}']"
+             "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+             "100.0%"
+           )
+
+    assert has_element?(view, "#upstream-event-summary", "Recent activity")
+    assert has_element?(view, "#upstream-actions", "Actions")
+    assert has_element?(view, "#request-health-chart #upstream-refresh-data-button", "Refresh")
+
+    assert has_element?(
+             view,
+             "#upstream-event-summary-request-logs-link[href='/admin/request-logs?upstream_identity_id=#{identity.id}']"
            )
 
     assert has_element?(
              view,
-             "#upstream-related-links a[href='/admin/audit-logs?target=#{identity.id}']"
+             "#upstream-event-summary-audit-logs-link[href='/admin/audit-logs?target=#{identity.id}']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-event-summary-jobs-link[href='/admin/jobs?target_kind=upstream_identity&target_id=#{identity.id}']"
            )
 
     rendered = render(view)
@@ -928,13 +948,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert_ordered_ids(rendered, [
       "upstream-cockpit-header",
       "upstream-status-summary",
-      "upstream-assignments",
-      "quota-health-chart",
-      "request-health-chart",
-      "pool-contribution-chart",
-      "upstream-event-summary",
       "upstream-actions",
-      "upstream-related-links"
+      "upstream-assignments",
+      "upstream-quota",
+      "request-health-chart",
+      "upstream-event-summary"
     ])
 
     refute rendered =~ raw_stored_account_id
@@ -947,7 +965,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "layout-sparse", name: "Layout Sparse"})
 
-    %{identity: identity} =
+    %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
         account_label: "Sparse Layout Codex",
         assignment_label: "Sparse Layout assignment"
@@ -959,64 +977,60 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           "#upstream-cockpit",
           "#upstream-cockpit-header",
           "#upstream-status-summary",
-          "#upstream-assignments",
-          "#quota-health-chart",
-          "#request-health-chart",
-          "#pool-contribution-chart",
-          "#upstream-event-summary",
           "#upstream-actions",
-          "#upstream-related-links",
-          "#upstream-refresh-data"
+          "#upstream-assignments",
+          "#upstream-quota",
+          "#request-health-chart",
+          "#upstream-event-summary"
         ] do
       assert has_element?(view, selector)
     end
 
-    assert has_element?(view, "#upstream-status-summary", "Quota evidence is missing")
+    assert has_element?(view, "#upstream-vitals-quota-evidence", "not reported")
+    assert has_element?(view, "#upstream-assignments", "1 lane")
+    assert has_element?(view, "#upstream-quota", "Quota missing")
+    assert has_element?(view, "#upstream-quota", "Quota evidence is missing for this account")
 
     assert has_element?(
              view,
-             "#upstream-status-summary-quota [data-role='metric-card-value'].break-words:not(.whitespace-nowrap)",
-             "Quota evidence is missing"
+             "#upstream-quota-limits-empty",
+             "No quota windows are reported for this account yet."
            )
 
-    assert has_element?(view, "#upstream-assignments", "1 assignment")
+    refute has_element?(view, "#upstream-quota-limits")
 
     assert has_element?(
              view,
-             "#quota-health-chart",
-             "Quota evidence is missing for this upstream assignment."
+             "#request-health-chart-plot[data-chart-state='empty'][data-chart-total='0']"
            )
+
+    assert has_element?(view, "#request-health-chart-summary", "0 requests")
+    refute has_element?(view, "#request-health-error-breakdown")
 
     assert has_element?(
              view,
-             "#request-health-chart",
-             "No request traffic has reached this upstream in the last 7 days."
+             "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+             "0.0%"
            )
 
-    assert has_element?(
-             view,
-             "#pool-contribution-chart",
-             "No successful request contribution is recorded for assigned Pools in the last 7 days."
-           )
-
+    assert has_element?(view, "#upstream-assignment-#{assignment.id}", "0 successes")
     assert has_element?(view, "#upstream-event-summary", "No recent upstream events")
 
     assert has_element?(
              view,
-             "#upstream-actions",
-             "Bounded operator actions reuse the upstream account workflows"
+             "#upstream-actions #cockpit-redeem-saved-reset-upstream-account-#{identity.id}[disabled]"
+           )
+
+    assert has_element?(view, "#upstream-actions", "unavailable")
+
+    assert has_element?(
+             view,
+             "#upstream-event-summary-request-logs-link[href='/admin/request-logs?upstream_identity_id=#{identity.id}']"
            )
 
     assert has_element?(
              view,
-             "#upstream-actions",
-             "Assignment and Pool changes stay on linked admin pages"
-           )
-
-    assert has_element?(
-             view,
-             "#upstream-related-links",
-             "Use linked admin pages for full request and audit evidence."
+             "#upstream-event-summary-audit-logs-link[href='/admin/audit-logs?target=#{identity.id}']"
            )
   end
 
@@ -1088,19 +1102,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#upstream-status-summary", "Identity active")
-    assert has_element?(view, "#upstream-status-summary", "Plan Team")
-    assert has_element?(view, "#upstream-status-summary", "Auth verified")
-    assert has_element?(view, "#upstream-status-summary", "access token expires")
-    assert has_element?(view, "#upstream-status-summary", "token refresh succeeded")
+    assert has_element?(view, "#upstream-cockpit-status", "Active")
+    assert has_element?(view, "#upstream-cockpit-presence[data-status='active']")
+    assert has_element?(view, "#upstream-cockpit-plan-badge", "Team")
+    assert has_element?(view, "#upstream-vitals-auth-verified")
+    refute has_element?(view, "#upstream-vitals-auth-verified", "not reported")
+    assert has_element?(view, "#upstream-vitals-access-token", "expires")
+    assert has_element?(view, "#upstream-vitals-token-refresh", "succeeded")
 
     assert has_element?(
              view,
-             "#upstream-status-summary",
-             "Quota refresh #{datetime_label(~U[2026-05-27 08:15:00.000000Z], scope.user)}"
+             "#upstream-vitals-quota-refresh",
+             datetime_label(~U[2026-05-27 08:15:00.000000Z], scope.user)
            )
 
-    assert has_element?(view, "#upstream-status-summary", "Quota fresh")
+    assert has_element?(view, "#upstream-quota", "Fresh")
+    assert has_element?(view, "#upstream-routing-verdict", "Routing ready")
 
     primary_selector = "#upstream-assignment-#{primary_assignment.id}"
     disabled_selector = "#upstream-assignment-#{disabled_assignment.id}"
@@ -1108,25 +1125,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, primary_selector, "Primary assignment serving production traffic")
     assert has_element?(view, primary_selector, "Status Primary")
     assert has_element?(view, "#{primary_selector}-pool-link[href='/admin/pools']")
-    assert has_element?(view, primary_selector, "Assignment active")
-    assert has_element?(view, primary_selector, "Health active")
-    assert has_element?(view, primary_selector, "Routing eligible")
-    assert has_element?(view, primary_selector, "Quota known")
-    assert has_element?(view, primary_selector, "Quota fresh")
-    assert has_element?(view, primary_selector, "Active assignment")
+    assert has_element?(view, "#{primary_selector}-route[role='meter'][aria-valuenow='3']")
+    assert has_element?(view, "#{primary_selector}-route-assignment[title='Assignment active']")
+    assert has_element?(view, "#{primary_selector}-route-health[title='Health active']")
+    assert has_element?(view, "#{primary_selector}-route-quota[title='Quota known']")
 
     assert has_element?(view, disabled_selector, "Disabled failover assignment")
     assert has_element?(view, disabled_selector, "Status Secondary")
     assert has_element?(view, "#{disabled_selector}-pool-link[href='/admin/pools']")
-    assert has_element?(view, disabled_selector, "Assignment disabled")
-    assert has_element?(view, disabled_selector, "Health disabled")
-    assert has_element?(view, disabled_selector, "Routing ineligible")
-    assert has_element?(view, disabled_selector, "Priming blocked")
-    assert has_element?(view, disabled_selector, "Disabled or unusable assignment")
+    assert has_element?(view, "#{disabled_selector}-route[role='meter'][aria-valuenow='0']")
+
+    assert has_element?(
+             view,
+             "#{disabled_selector}-route-assignment[title='Assignment disabled']"
+           )
+
+    assert has_element?(view, "#{disabled_selector}-route-health[title='Health disabled']")
+    assert has_element?(view, "#{disabled_selector}-route-quota[title='Priming blocked']")
 
     paused = status_fixture!(scope, "paused", %{identity_status: "paused"})
     {:ok, paused_view, _html} = live(conn, ~p"/admin/upstreams/#{paused.identity.id}")
-    assert has_element?(paused_view, "#upstream-status-summary", "Identity paused")
+    assert has_element?(paused_view, "#upstream-cockpit-status", "Paused")
 
     reauth =
       status_fixture!(scope, "reauth", %{
@@ -1143,18 +1162,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       })
 
     {:ok, reauth_view, _html} = live(conn, ~p"/admin/upstreams/#{reauth.identity.id}")
-    assert has_element?(reauth_view, "#upstream-status-summary", "Reauth required")
-    assert has_element?(reauth_view, "#upstream-status-summary", "codex_oauth_refresh_failed")
-    assert has_element?(reauth_view, "#upstream-status-summary", "credential refresh rejected")
+    assert has_element?(reauth_view, "#upstream-cockpit-status", "Reauth required")
+
+    assert has_element?(
+             reauth_view,
+             "#upstream-vitals-token-refresh",
+             "codex_oauth_refresh_failed"
+           )
+
+    assert has_element?(
+             reauth_view,
+             "#upstream-vitals-token-refresh",
+             "credential refresh rejected"
+           )
 
     disabled = status_fixture!(scope, "disabled", %{identity_status: "disabled"})
     {:ok, disabled_view, _html} = live(conn, ~p"/admin/upstreams/#{disabled.identity.id}")
-    assert has_element?(disabled_view, "#upstream-status-summary", "Identity disabled")
+    assert has_element?(disabled_view, "#upstream-cockpit-status", "Disabled")
 
     missing = status_fixture!(scope, "missing", %{})
     {:ok, missing_view, _html} = live(conn, ~p"/admin/upstreams/#{missing.identity.id}")
-    assert has_element?(missing_view, "#upstream-status-summary", "Quota missing")
-    assert has_element?(missing_view, "#upstream-status-summary", "Never verified")
+    assert has_element?(missing_view, "#upstream-quota", "Quota missing")
+    assert has_element?(missing_view, "#upstream-vitals-auth-verified", "not reported")
 
     exhausted = status_fixture!(scope, "exhausted", %{})
 
@@ -1169,7 +1198,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     {:ok, exhausted_view, _html} = live(conn, ~p"/admin/upstreams/#{exhausted.identity.id}")
-    assert has_element?(exhausted_view, "#upstream-status-summary", "Quota exhausted")
+    assert has_element?(exhausted_view, "#upstream-quota", "Exhausted")
 
     missing_assignment_cockpit =
       UpstreamCockpitReadModel.from_account_snapshot(%{
@@ -1183,6 +1212,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         },
         label: "Detached status Codex",
         subject_ref: nil,
+        workspace_ref: "legacy",
+        workspace_label: nil,
+        routing_readiness: detached_routing_readiness(),
         plan_label: nil,
         plan_reported?: false,
         refresh_status: "not run",
@@ -1283,16 +1315,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert cockpit.saved_resets.next_expires_label == "Next expires #{first_expiration_label}"
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
-    metric_selector = "#upstream-status-summary-saved-resets"
+    meter_selector = "#upstream-quota-saved-reset-meter"
+
+    assert has_element?(view, "#{meter_selector}[data-role='upstream-saved-reset-meter']")
+    assert has_element?(view, "#{meter_selector}-bar[aria-label='2 saved resets']")
 
     assert has_element?(
              view,
-             "#{metric_selector} [data-role='metric-card-value']",
-             "2 saved resets"
+             "#{meter_selector} [data-role='upstream-saved-reset-meter-count']",
+             "x2"
            )
 
-    assert has_element?(view, metric_selector, "Auto redeem off")
-    assert has_element?(view, metric_selector, "Next expires #{first_expiration_label}")
+    assert has_element?(view, "#{meter_selector}-policy", "inactive")
+    assert has_element?(view, "#saved-reset-policy-disclosure", "off")
+    assert has_element?(view, "#{meter_selector}-reset[title='#{first_expiration_label}']")
 
     assert has_element?(view, "#saved-reset-policy-auto-redeem-enabled")
     assert has_element?(view, "#saved-reset-policy-min-blocked-minutes")
@@ -1303,8 +1339,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#cockpit-saved-reset-expiration-summary",
-             "Banked reset expirations"
+             "#cockpit-saved-reset-expiration-summary #cockpit-saved-reset-expiration-table"
            )
 
     assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Expiration Date")
@@ -1345,7 +1380,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert reloaded_identity.saved_reset_auto_redeem_keep_credits == 2
     assert reloaded_identity.saved_reset_auto_redeem_trigger_mode == "threshold"
     assert reloaded_identity.saved_reset_auto_redeem_quota_threshold_percent == 90
-    assert has_element?(view, metric_selector, "Auto redeem on · near 90% · keep 2")
+    assert has_element?(view, "#saved-reset-policy-disclosure", "on · near limit")
+    refute has_element?(view, "#{meter_selector}-policy", "inactive")
+    assert has_element?(view, "#saved-reset-policy-quota-threshold-percent[value='90']")
+    assert has_element?(view, "#saved-reset-policy-keep-credits[value='2']")
 
     action_selector = "#cockpit-redeem-saved-reset-upstream-account-#{identity.id}"
     assert has_element?(view, action_selector, "Redeem saved reset")
@@ -1446,8 +1484,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     view |> element("#cockpit-saved-reset-redemption-confirm") |> render_click()
 
     assert has_element?(view, "#cockpit-saved-reset-redemption-confirmation")
-    assert has_element?(view, "#upstream-actions", "no saved resets are available")
-    assert has_element?(view, "#upstream-actions", "not available")
+
+    assert has_element?(
+             view,
+             "#upstream-actions #cockpit-redeem-saved-reset-upstream-account-#{identity.id}" <>
+               "[disabled][title='no saved resets are available']"
+           )
+
+    assert has_element?(view, "#upstream-actions", "unavailable")
 
     assert Repo.aggregate(
              from(job in Oban.Job,
@@ -1524,8 +1568,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     rendered = render(view)
 
     assert has_element?(view, "#upstream-cockpit-header", long_account_label)
-    assert has_element?(view, "#upstream-status-summary", "stored account id sha256:")
-    assert has_element?(view, "#upstream-status-summary", "Plan Enterprise")
+    assert has_element?(view, "#upstream-cockpit-safe-account-id", "sha256:")
+
+    assert has_element?(
+             view,
+             "#upstream-cockpit-safe-account-id[title^='stored account id sha256:']"
+           )
+
+    assert has_element?(view, "#upstream-cockpit-plan-badge", "Enterprise")
     assert has_element?(view, "#upstream-assignment-#{assignment.id}", long_assignment_label)
     assert has_element?(view, "#upstream-assignment-#{assignment.id}", long_pool_name)
 
@@ -1645,6 +1695,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         },
         label: "Detached Codex",
         subject_ref: nil,
+        workspace_ref: "legacy",
+        workspace_label: nil,
+        routing_readiness: detached_routing_readiness(),
         plan_label: nil,
         plan_reported?: false,
         refresh_status: "not run",
@@ -1686,7 +1739,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     assert has_element?(view, "#upstream-cockpit-header", "Disabled Codex")
-    assert has_element?(view, "#upstream-cockpit-header", "disabled")
+    assert has_element?(view, "#upstream-cockpit-status", "Disabled")
+    assert has_element?(view, "#upstream-cockpit-presence[data-status='disabled']")
   end
 
   @tag :read_model_states
@@ -1997,16 +2051,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-routing-usable='0']")
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "Auth refresh failed")
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "88% remaining")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-active='0']")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-disabled='1']")
+    assert has_element?(view, "#upstream-routing-verdict", "Auth refresh failed")
 
     assert has_element?(
              view,
-             "#pool-contribution-chart-item-#{assignment.id}",
-             "Auth refresh failed"
+             "#upstream-routing-verdict",
+             "Token refresh failed; this account is excluded from model routing until auth is recovered."
+           )
+
+    assert has_element?(view, "#upstream-cockpit-presence[data-status='refresh_failed']")
+    assert has_element?(view, "#upstream-quota-limit-primary_5h", "88%")
+    assert has_element?(view, "#upstream-quota-limit-primary_5h-progress[value='88'][max='100']")
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+             "100.0%"
            )
   end
 
@@ -2644,28 +2704,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#quota-health-chart")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart='quota-health']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-state='fresh']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-total='2']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-routing-usable='2']")
-    assert has_element?(view, "#quota-health-chart-summary.sr-only", "2 assignments")
+    assert has_element?(view, "#upstream-quota")
+    assert has_element?(view, "#upstream-quota", "Fresh")
+    assert has_element?(view, "#upstream-quota-limits")
+    refute has_element?(view, "#upstream-quota-limits-empty")
 
     assert has_element?(
              view,
-             "#quota-health-chart-item-#{primary_assignment.id}[data-chart-value='65']",
-             "Primary chart assignment"
+             "#upstream-quota-limit-primary_5h[data-role='upstream-limit-chart']",
+             "65%"
            )
 
     assert has_element?(
              view,
-             "#quota-health-chart-item-#{primary_assignment.id}-bar[value='65'][max='100']"
-           )
-
-    assert has_element?(
-             view,
-             "#quota-health-chart-item-#{secondary_assignment.id}[data-chart-value='65']",
-             "Secondary chart assignment"
+             "#upstream-quota-limit-primary_5h-progress[value='65'][max='100']"
            )
 
     assert has_element?(view, "#request-health-chart")
@@ -2674,29 +2726,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#request-health-chart-plot[data-chart-unit='requests']")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='4']")
     assert has_element?(view, "#request-health-chart-summary.sr-only", "4 requests")
-    assert has_element?(view, "#request-health-chart", "Failure rate 25.0%")
+    assert has_element?(view, "#request-health-chart-summary.sr-only", "failure rate 25.0%")
+    assert has_element?(view, "#request-health-chart", "25.0%")
     refute has_element?(view, "#request-health-chart-plot svg")
-
-    assert has_element?(view, "#pool-contribution-chart")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart='pool-contribution']")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-state='contributing']")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-total='3']")
-    assert has_element?(view, "#pool-contribution-chart-summary.sr-only", "3 successful requests")
 
     assert has_element?(
              view,
-             "#pool-contribution-chart-item-#{primary_assignment.id}[data-chart-value='66.7']",
+             "#request-health-error-breakdown [data-role='request-error-breakdown-row']",
+             "HTTP 502"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{primary_assignment.id} [data-role='upstream-assignment-share']",
+             "66.7%"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{primary_assignment.id}",
              "2 successes"
            )
 
     assert has_element?(
              view,
-             "#pool-contribution-chart-item-#{primary_assignment.id}-bar[value='66.7'][max='100']"
+             "#upstream-assignment-#{secondary_assignment.id} [data-role='upstream-assignment-share']",
+             "33.3%"
            )
 
     assert has_element?(
              view,
-             "#pool-contribution-chart-item-#{secondary_assignment.id}[data-chart-value='33.3']",
+             "#upstream-assignment-#{secondary_assignment.id}",
              "1 success"
            )
   end
@@ -2734,18 +2794,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
+    refute has_element?(view, "#upstream-quota-limits-empty")
+
     assert has_element?(
              view,
-             "#quota-health-chart-item-#{assignment.id}[data-chart-value='91']",
-             "91% remaining"
+             "#upstream-quota-limit-primary_5h[data-role='upstream-limit-chart']",
+             "91%"
            )
 
     assert has_element?(
              view,
-             "#quota-health-chart-item-#{assignment.id}-bar[value='91'][max='100']"
+             "#upstream-quota-limit-primary_5h-progress[value='91'][max='100']"
            )
 
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}", "9% used")
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{assignment.id}-route-quota" <>
+               "[data-role='upstream-assignment-route-segment']"
+           )
   end
 
   @tag :chart_empty_zero
@@ -2781,58 +2847,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#quota-health-chart")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart='quota-health']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-state='missing_evidence']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-total='2']")
-    assert has_element?(view, "#quota-health-chart-bars[data-chart-routing-usable='0']")
-    assert has_element?(view, "#quota-health-chart", "Quota evidence is missing")
-    assert has_element?(view, "#quota-health-chart-summary.sr-only", "0 routing usable")
+    assert has_element?(view, "#upstream-quota")
+    assert has_element?(view, "#upstream-quota", "Quota missing")
+    assert has_element?(view, "#upstream-quota", "Quota evidence is missing for this account")
+    assert has_element?(view, "#upstream-quota-limits-empty")
+    refute has_element?(view, "#upstream-quota-limits")
 
     for assignment <- [active_assignment, disabled_assignment] do
-      assert has_element?(
-               view,
-               "#quota-health-chart-item-#{assignment.id}[data-chart-value='0']"
-             )
+      assert has_element?(view, "#upstream-assignment-#{assignment.id}-route[role='meter']")
 
       assert has_element?(
                view,
-               "#quota-health-chart-item-#{assignment.id}-bar[value='0'][max='100']"
+               "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+               "0.0%"
              )
     end
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{active_assignment.id}-route[aria-valuenow='2']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{disabled_assignment.id}-route[aria-valuenow='0']"
+           )
 
     assert has_element?(view, "#request-health-chart")
     assert has_element?(view, "#request-health-chart-plot[phx-hook='ApexTimeSeriesChart']")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
-    assert has_element?(view, "#request-health-chart", "0 requests")
-    assert has_element?(view, "#request-health-chart", "No request traffic")
-    assert has_element?(view, "#request-health-chart-summary.sr-only", "0 total requests")
+    assert has_element?(view, "#request-health-chart-plot[data-chart-state='empty']")
+    assert has_element?(view, "#request-health-chart-summary.sr-only", "0 requests")
+    assert has_element?(view, "#request-health-chart", "0 total requests")
     refute has_element?(view, "#request-health-chart-plot svg")
-
-    assert has_element?(view, "#pool-contribution-chart")
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart='pool-contribution']")
-
-    assert has_element?(
-             view,
-             "#pool-contribution-chart-bars[data-chart-state='no_successful_requests']"
-           )
-
-    assert has_element?(view, "#pool-contribution-chart-bars[data-chart-total='0']")
-    assert has_element?(view, "#pool-contribution-chart", "0 successful requests")
-    assert has_element?(view, "#pool-contribution-chart", "No successful request contribution")
-    assert has_element?(view, "#pool-contribution-chart-summary.sr-only", "0 successful requests")
-
-    for assignment <- [active_assignment, disabled_assignment] do
-      assert has_element?(
-               view,
-               "#pool-contribution-chart-item-#{assignment.id}[data-chart-value='0']"
-             )
-
-      assert has_element?(
-               view,
-               "#pool-contribution-chart-item-#{assignment.id}-bar[value='0'][max='100']"
-             )
-    end
+    refute has_element?(view, "#request-health-error-breakdown")
   end
 
   @tag :recent_events
@@ -3141,7 +3189,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-event-summary-row-1 [data-role='recent-event-source']",
-             "audit log"
+             "audit"
            )
 
     assert has_element?(
@@ -3172,7 +3220,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-event-summary-row-2 [data-role='recent-event-source']",
-             "request log"
+             "request"
            )
 
     assert has_element?(
@@ -3195,7 +3243,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-event-summary-row-2 [data-role='recent-event-link'][href='#{request_event.link}']"
+             "#upstream-event-summary-row-2 [data-role='recent-event-link'][href='#{request_event.link}']",
+             "Evidence"
            )
 
     assert has_element?(
@@ -3208,8 +3257,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#upstream-event-summary-audit-logs-link[href='/admin/audit-logs?target=#{identity.id}']"
            )
 
-    assert has_element?(view, "#upstream-event-summary", "manual audit filtering")
-    assert has_element?(view, "#upstream-event-summary", identity.id)
+    assert has_element?(
+             view,
+             "#upstream-event-summary-jobs-link[href='/admin/jobs?target_kind=upstream_identity&target_id=#{identity.id}']"
+           )
 
     rendered = render(view)
 
@@ -3257,8 +3308,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#upstream-event-summary-audit-logs-link[href='/admin/audit-logs?target=#{identity.id}']"
            )
 
-    assert has_element?(view, "#upstream-event-summary", "manual audit filtering")
-    assert has_element?(view, "#upstream-event-summary", identity.id)
+    assert has_element?(
+             view,
+             "#upstream-event-summary-jobs-link[href='/admin/jobs?target_kind=upstream_identity&target_id=#{identity.id}']"
+           )
+
     refute has_element?(view, "#upstream-event-summary a[href='']")
   end
 
@@ -3281,8 +3335,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#upstream-refresh-data")
-    assert has_element?(view, "#upstream-refresh-data-button", "Refresh cockpit data")
+    assert has_element?(view, "#request-health-chart #upstream-refresh-data-button", "Refresh")
     assert has_element?(view, "#upstream-cockpit-header", "Refresh action target")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
 
@@ -3312,7 +3365,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#upstream-event-summary [data-role='recent-event-link'][href='/admin/request-logs?request_id=#{failed_request.request.id}&upstream_identity_id=#{identity.id}']"
            )
 
-    assert has_element?(view, "#upstream-refresh-data", "Cockpit data refreshed")
+    assert has_element?(view, "#upstream-refresh-data-message", "Cockpit data refreshed")
   end
 
   @tag :refresh_broadcast_degraded
@@ -3347,7 +3400,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}[data-chart-value='0']")
+    assert has_element?(view, "#upstream-quota-limits-empty")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -3363,7 +3416,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     _ = :sys.get_state(view.pid)
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}[data-chart-value='0']")
+    assert has_element?(view, "#upstream-quota-limits-empty")
+    refute has_element?(view, "#upstream-quota-limit-primary_5h")
 
     upsert_quota_window!(identity, %{
       window_kind: "primary",
@@ -3376,7 +3430,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     _ = :sys.get_state(view.pid)
-    assert has_element?(view, "#quota-health-chart-item-#{assignment.id}[data-chart-value='64']")
+    assert has_element?(view, "#upstream-quota-limit-primary_5h-progress[value='64'][max='100']")
 
     request_health_request_fixture(pool, assignment, %{
       status: "succeeded",
@@ -3394,8 +3448,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#request-health-chart",
-             "Request health, recent events, and contribution metrics refresh only when this cockpit is reloaded."
+             "#upstream-refresh-data-button[title='Traffic, contribution, and activity data refresh on page load or on demand']"
            )
 
     view |> element("#upstream-refresh-data-button") |> render_click()
@@ -3513,11 +3566,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert Repo.get!(UpstreamIdentity, identity.id).status == "active"
 
     view |> element("#cockpit-pause-upstream-account-#{identity.id}") |> render_click()
-    assert has_element?(view, "#upstream-cockpit-header", "paused")
+    assert has_element?(view, "#upstream-cockpit-status", "Paused")
     assert Repo.get!(UpstreamIdentity, identity.id).status == "paused"
 
     view |> element("#cockpit-reactivate-upstream-account-#{identity.id}") |> render_click()
-    assert has_element?(view, "#upstream-cockpit-header", "active")
+    assert has_element?(view, "#upstream-cockpit-status", "Active")
     assert Repo.get!(UpstreamIdentity, identity.id).status == "active"
 
     view |> element("#cockpit-refresh-upstream-account-#{identity.id}") |> render_click()
@@ -3792,7 +3845,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-cockpit-safe-subject-ref[data-role='upstream-subject-ref']",
-             "Subject #{safe_subject_ref}"
+             safe_subject_ref
            )
 
     refute rendered =~ raw_subject
@@ -3966,6 +4019,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       )
 
     assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
+
+  defp detached_routing_readiness do
+    UpstreamRoutingReadiness.from_inputs("active", [], %{routing_ready_now?: false})
   end
 
   defp empty_identity_observability do

@@ -289,7 +289,10 @@ pools panel renders per-assignment route chevrons:
   `aria-valuemin/max/now` = ready gate count and a spoken label; each
   `.route-chevron` segment (Assignment → Health → Quota) carries tone classes
   `bg-success/80 text-success-content` (or warning/error/neutral) and clips
-  into chevrons via `clip-path` (CSS in `app.css`).
+  into chevrons via `clip-path` (CSS in `app.css`). The gate model lives in
+  the shared
+  [`route_path.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex),
+  reused by the cockpit's routing lanes (§5.16).
 
 **Footer — metric blocks** (`data-role="upstream-account-card-footer"`,
 `border-t border-base-300 bg-base-200/20 px-4 py-2.5`): a three-column `dl`
@@ -614,6 +617,62 @@ verified live as the orange "Pro" / green "Free" pills.
   `input-error` etc. plus an icon+text error line — never color alone.
   `otp_input/1` renders the grouped mono OTP slots styled by `codex-otp-*`
   CSS.
+
+### 5.16 Upstream cockpit (detail-page pattern)
+
+- **Source:**
+  [`cockpit_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit_components.ex)
+  composing
+  [`cockpit/summary.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/summary.ex),
+  [`cockpit/sections.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex),
+  and
+  [`cockpit/charts.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex).
+- **Purpose:** the per-account diagnosis page (`/admin/upstreams/:id`) — the
+  house pattern for entity detail pages: a sticky identity rail beside a
+  content stack.
+- **Layout:** `grid xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]` with 16px
+  gaps; the rail is `xl:sticky xl:top-16` (below the fixed top bar); single
+  column below `xl`. Reconciliation warnings and OAuth activity render
+  full-width above the split.
+- **Credential card** (`#upstream-cockpit-header`): the account as a badge —
+  Gravatar avatar from the account email (`AvatarComponents.gravatar_url`,
+  monogram tile fallback) with a lifecycle-toned presence dot
+  (`#upstream-cockpit-presence`, green active / amber paused-refresh /
+  red reauth-failed), name + humanized status text, plan chip top-right,
+  onboarding meta line, and a **fingerprint band**: labeled mono rows
+  (account hash / subject ref / workspace, `–` when absent) on a tonal
+  footer with `ClipboardCopy` buttons and a 5%-ink key-glyph watermark.
+  Mono is reserved for the fingerprint values.
+- **Vitals** (`#upstream-status-summary`): a dl of freshness facts (access
+  token expiry, token refresh, auth verified, quota refresh, quota evidence
+  age, reconciliation) — sentence prefixes stripped so dt/dd don't repeat,
+  values tone-colored by state, sans `tabular-nums`.
+- **Actions rail** (`#upstream-actions`): every lifecycle/recovery action as
+  a full-width list row (icon + label); unavailable actions stay visible but
+  disabled with the gating reason as `title` and an "unavailable" hint —
+  never hidden, never a reason-chip wall. Destructive actions are
+  error-toned and confirm via dialog.
+- **Routing lanes** (`#upstream-assignments`): a readiness verdict strip
+  (status chip + reason + a calm 24h failure note — a share of failed
+  upstream calls is expected and only escalates past the domain threshold),
+  then one row per Pool assignment: pool link, §5.4 route-chevron gate meter
+  (via `RoutePath`), and the lane's share of 7-day successes.
+- **Quota & banked resets** (`#upstream-quota`): account-level window rows
+  (reusing the index card's `quota_limit_row`, §5.5), the saved-reset meter
+  (§5.6), expiration table, and the auto-redeem policy form behind a
+  `<details>` disclosure with an on/off state chip.
+- **Request health** (`#request-health-chart`): inline facts (24h/7d
+  volumes, failure rate, p50 latency), the ApexTimeSeriesChart plot
+  (§5.13 contract), a 24h error-code breakdown list, and the on-demand
+  refresh control.
+- **Recent activity** (`#upstream-event-summary`): compact metadata-only
+  event rows (timestamp · title/subtitle · source chip · "Evidence →" link)
+  with header links to filtered request logs, audit logs, and the account's
+  jobs.
+- **Rules:** identity facts render exactly once (card, vitals, or lanes —
+  never repeated); machine codes appear only inside evidence contexts
+  (error breakdown, event subtitles); no raw UUIDs in prose — deep links
+  carry them instead.
 
 ## 6. Components — API Key Observatory extension
 

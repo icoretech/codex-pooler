@@ -79,11 +79,18 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics do
           required(:failure_count) => non_neg_integer(),
           required(:total_count) => non_neg_integer()
         }
+  @type request_error_breakdown_entry :: %{
+          required(:status_code) => non_neg_integer() | nil,
+          required(:error_code) => String.t() | nil,
+          required(:count) => pos_integer()
+        }
   @type request_health_kpis :: %{
           required(:total_requests_24h) => non_neg_integer(),
           required(:failed_requests_24h) => non_neg_integer(),
           required(:failure_rate_24h) => float(),
-          required(:total_requests_7d) => non_neg_integer()
+          required(:total_requests_7d) => non_neg_integer(),
+          required(:p50_latency_ms_24h) => non_neg_integer() | nil,
+          required(:error_breakdown_24h) => [request_error_breakdown_entry()]
         }
   @type request_health :: %{
           required(:key) => :request_health,

@@ -11,6 +11,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
 
   @request_failed_statuses ~w(failed rejected interrupted cancelled)
   @request_terminal_statuses ["succeeded" | @request_failed_statuses]
+  # A share of failed upstream calls is expected in normal operation; request
+  # posture only escalates to degraded above this 24h failure-rate percentage.
+  @degraded_failure_rate_percent 5.0
+  @error_breakdown_limit 5
 
   @spec request_health(Scope.t(), UpstreamCockpitMetrics.identity_ref(), DateTime.t()) ::
           UpstreamCockpitMetrics.request_health()
@@ -64,8 +68,21 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
     |> where([request, attempt], attempt.upstream_identity_id == ^identity_id)
     |> where([request], request.status in ^@request_terminal_statuses)
     |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)
-    |> group_by([request], [request.id, request.status, request.admitted_at])
-    |> select([request], %{status: request.status, admitted_at: request.admitted_at})
+    |> group_by([request], [
+      request.id,
+      request.status,
+      request.admitted_at,
+      request.completed_at,
+      request.response_status_code,
+      request.last_error_code
+    ])
+    |> select([request], %{
+      status: request.status,
+      admitted_at: request.admitted_at,
+      completed_at: request.completed_at,
+      response_status_code: request.response_status_code,
+      last_error_code: request.last_error_code
+    })
     |> Repo.all()
   end
 
@@ -79,7 +96,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
       items: items,
       kpis: kpis,
       empty?: kpis.total_requests_7d == 0,
-      degraded?: kpis.failed_requests_24h > 0,
+      degraded?: request_health_state(kpis) in ["degraded", "failed"],
       missing?: false,
       state: request_health_state(kpis)
     }
@@ -114,8 +131,42 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
       total_requests_24h: total_requests_24h,
       failed_requests_24h: failed_requests_24h,
       failure_rate_24h: failure_rate(failed_requests_24h, total_requests_24h),
-      total_requests_7d: total_requests_7d
+      total_requests_7d: total_requests_7d,
+      p50_latency_ms_24h: p50_latency_ms(rows_24h),
+      error_breakdown_24h: error_breakdown(rows_24h)
     }
+  end
+
+  defp p50_latency_ms(rows) do
+    rows
+    |> Enum.filter(&(&1.status == "succeeded"))
+    |> Enum.flat_map(fn
+      %{admitted_at: %DateTime{} = admitted_at, completed_at: %DateTime{} = completed_at} ->
+        [DateTime.diff(completed_at, admitted_at, :millisecond)]
+
+      _row ->
+        []
+    end)
+    |> Enum.filter(&(&1 >= 0))
+    |> median()
+  end
+
+  defp median([]), do: nil
+
+  defp median(values) do
+    sorted = Enum.sort(values)
+    Enum.at(sorted, div(length(sorted) - 1, 2))
+  end
+
+  defp error_breakdown(rows) do
+    rows
+    |> Enum.filter(&failed_request_status?(&1.status))
+    |> Enum.frequencies_by(&{&1.response_status_code, &1.last_error_code})
+    |> Enum.map(fn {{status_code, error_code}, count} ->
+      %{status_code: status_code, error_code: error_code, count: count}
+    end)
+    |> Enum.sort_by(&(-&1.count))
+    |> Enum.take(@error_breakdown_limit)
   end
 
   defp request_health_state(%{total_requests_7d: 0}), do: "empty"
@@ -124,7 +175,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
        when total > 0 and failed == total,
        do: "failed"
 
-  defp request_health_state(%{failed_requests_24h: failed}) when failed > 0, do: "degraded"
+  defp request_health_state(%{failure_rate_24h: rate})
+       when rate > @degraded_failure_rate_percent,
+       do: "degraded"
+
   defp request_health_state(_kpis), do: "healthy"
 
   defp request_health_date(%{admitted_at: %DateTime{} = admitted_at}),

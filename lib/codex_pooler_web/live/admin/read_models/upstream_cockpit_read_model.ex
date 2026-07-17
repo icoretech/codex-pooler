@@ -26,6 +26,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:plan_reported?) => boolean(),
           required(:safe_account_id_label) => String.t(),
           required(:subject_ref) => String.t() | nil,
+          required(:account_email) => String.t() | nil,
+          required(:workspace_ref) => String.t() | nil,
+          required(:workspace_label) => String.t() | nil,
           required(:saved_resets) => SavedResets.snapshot_projection(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection()
         }
@@ -48,6 +51,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:disabled?) => boolean(),
           required(:safe_account_id_label) => String.t(),
           required(:subject_ref) => String.t() | nil,
+          required(:routing_readiness) => map(),
           required(:identity_observability) => UpstreamAccountsReadModel.identity_observability()
         }
   @type assignment :: %{
@@ -138,6 +142,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:sections) => sections(),
           required(:saved_resets) => SavedResets.snapshot_projection(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection(),
+          required(:quota_limits) => [UpstreamAccountsReadModel.quota_limit_row()],
           required(:flags) => flags()
         }
 
@@ -148,13 +153,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     scope
     |> UpstreamAccountsReadModel.list_visible_accounts(
       pools,
-      %{},
+      %{identity_id: identity_id},
       DateTimeDisplay.preferences_for_user(scope.user)
     )
-    |> Enum.find(&(&1.identity.id == identity_id))
     |> case do
-      nil -> :error
-      account -> {:ok, from_account_snapshot(account, scope)}
+      [account | _rest] -> {:ok, from_account_snapshot(account, scope)}
+      [] -> :error
     end
   end
 
@@ -191,6 +195,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       actions: actions,
       saved_resets: saved_resets,
       saved_reset_policy: saved_reset_policy,
+      quota_limits: quota_limits(account),
       oauth_flows: oauth_flows,
       sections: sections,
       flags: flags
@@ -220,10 +225,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       plan_reported?: account.plan_reported?,
       safe_account_id_label: safe_account_id_label(identity.chatgpt_account_id),
       subject_ref: account.subject_ref,
+      account_email: identity.account_email,
+      workspace_ref: account.workspace_ref,
+      workspace_label: account.workspace_label,
       saved_resets: saved_resets(account),
       saved_reset_policy: saved_reset_policy(account)
     }
   end
+
+  defp quota_limits(%{quota_limits: quota_limits}) when is_list(quota_limits),
+    do: quota_limits
+
+  defp quota_limits(_account), do: []
 
   defp saved_resets(%{saved_resets: saved_resets}), do: saved_resets
 
@@ -255,6 +268,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       disabled?: account.identity.status == "disabled",
       safe_account_id_label: safe_identity.safe_account_id_label,
       subject_ref: safe_identity.subject_ref,
+      routing_readiness: account.routing_readiness,
       identity_observability: account.identity_observability
     }
   end

@@ -15,7 +15,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     TokenBurnPopover
   }
 
-  alias CodexPoolerWeb.Admin.UpstreamPageComponents.{ReconciliationStatus, ReinviteLink}
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.{
+    ReconciliationStatus,
+    ReinviteLink,
+    RoutePath
+  }
+
   alias CodexPoolerWeb.DateTimeDisplay
 
   @reactivatable_statuses ~w(paused refresh_due refresh_failed)
@@ -329,16 +334,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   role="meter"
                   aria-valuemin="0"
                   aria-valuemax="3"
-                  aria-valuenow={pool_route_ready_count(assignment)}
-                  aria-label={pool_route_aria_label(assignment)}
+                  aria-valuenow={RoutePath.ready_count(assignment)}
+                  aria-label={RoutePath.aria_label(assignment)}
                   class="route-chevron-flow"
                 >
                   <span
-                    :for={segment <- pool_route_segments(assignment)}
+                    :for={segment <- RoutePath.segments(assignment)}
                     id={"upstream-account-#{@account.identity.id}-pool-assignment-#{assignment.id}-route-#{segment.key}"}
                     data-role="upstream-account-pool-route-segment"
                     title={segment.detail_label}
-                    class={pool_route_segment_class(segment)}
+                    class={RoutePath.segment_class(segment)}
                   >
                     {segment.label}
                   </span>
@@ -905,98 +910,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp assignment_eligibility_class(_status) do
     "shrink-0 text-[11px] font-medium leading-4 text-base-content/60"
   end
-
-  defp pool_route_segments(assignment) do
-    [
-      %{
-        key: "assignment",
-        label: "Assignment",
-        detail_label: assignment_state_label(Map.get(assignment, :status)),
-        ready?: Map.get(assignment, :status) == "active",
-        tone: assignment_state_tone(Map.get(assignment, :status))
-      },
-      %{
-        key: "health",
-        label: "Health",
-        detail_label: assignment_health_label(Map.get(assignment, :health_status)),
-        ready?: Map.get(assignment, :health_status) == "active",
-        tone: assignment_health_tone(Map.get(assignment, :health_status))
-      },
-      %{
-        key: "quota",
-        label: "Quota",
-        detail_label: Map.get(assignment, :quota_priming_label) || "Quota unknown",
-        ready?: quota_priming_ready?(Map.get(assignment, :quota_priming_status)),
-        tone: quota_priming_tone(Map.get(assignment, :quota_priming_status))
-      }
-    ]
-  end
-
-  defp pool_route_ready_count(assignment) do
-    assignment
-    |> pool_route_segments()
-    |> Enum.count(& &1.ready?)
-  end
-
-  defp pool_route_aria_label(assignment) do
-    segment_labels =
-      assignment
-      |> pool_route_segments()
-      |> Enum.map_join(", ", & &1.detail_label)
-
-    "#{Map.get(assignment, :pool_label, "Pool")} route path: #{segment_labels}"
-  end
-
-  defp pool_route_segment_class(%{tone: :success}),
-    do: [pool_route_segment_base_class(), "bg-success/80 text-success-content"]
-
-  defp pool_route_segment_class(%{tone: :warning}),
-    do: [pool_route_segment_base_class(), "bg-warning/80 text-warning-content"]
-
-  defp pool_route_segment_class(%{tone: :error}),
-    do: [pool_route_segment_base_class(), "bg-error/80 text-error-content"]
-
-  defp pool_route_segment_class(_segment) do
-    [pool_route_segment_base_class(), "bg-base-300/70 text-base-content/55"]
-  end
-
-  defp pool_route_segment_base_class, do: "route-chevron"
-
-  defp assignment_state_label("active"), do: "Assignment active"
-  defp assignment_state_label("paused"), do: "Assignment paused"
-  defp assignment_state_label("disabled"), do: "Assignment disabled"
-  defp assignment_state_label("deleted"), do: "Assignment deleted"
-  defp assignment_state_label(status), do: "Assignment #{human_status_label(status)}"
-
-  defp assignment_health_label("active"), do: "Health active"
-  defp assignment_health_label("degraded"), do: "Health degraded"
-  defp assignment_health_label("errored"), do: "Health errored"
-  defp assignment_health_label(status), do: "Health #{human_status_label(status)}"
-
-  defp assignment_state_tone("active"), do: :success
-  defp assignment_state_tone("paused"), do: :warning
-  defp assignment_state_tone("deleted"), do: :error
-  defp assignment_state_tone("disabled"), do: :error
-  defp assignment_state_tone(_status), do: :warning
-
-  defp assignment_health_tone("active"), do: :success
-  defp assignment_health_tone("degraded"), do: :warning
-  defp assignment_health_tone("errored"), do: :error
-  defp assignment_health_tone(_status), do: :warning
-
-  defp quota_priming_ready?(status), do: status in ["known", "weekly_only_probe"]
-
-  defp quota_priming_tone(status) when status in ["known", "weekly_only_probe"], do: :success
-  defp quota_priming_tone(status) when status in ["failed", "blocked", "expired"], do: :error
-  defp quota_priming_tone(_status), do: :warning
-
-  defp human_status_label(value) when is_binary(value) and value != "" do
-    value
-    |> String.replace("_", " ")
-    |> String.downcase()
-  end
-
-  defp human_status_label(_value), do: "unknown"
 
   defp recent_token_count_label(%{token_burn: %{recent_tokens: tokens}})
        when is_integer(tokens) and tokens >= 0 do

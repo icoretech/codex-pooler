@@ -148,6 +148,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         ]
   def list_visible_accounts(scope, pools, filters, datetime_preferences)
       when is_list(pools) and is_map(filters) and is_map(datetime_preferences) do
+    # :identity_id narrows the projection to one account BEFORE the expensive
+    # per-identity snapshot work; detail pages must not pay fleet cost.
+    {identity_id, filters} = Map.pop(filters, :identity_id)
+
     pools = intersect_visible_pools(scope, pools)
     pool_lookup = Map.new(pools, &{&1.id, &1})
     assignments = active_assignment_snapshots(pools, pool_lookup)
@@ -158,6 +162,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       scope
       |> Upstreams.list_visible_upstream_identities()
       |> Enum.filter(&Map.has_key?(assignments, &1.id))
+      |> narrow_to_identity(identity_id)
 
     token_burns = TokenBurnProjection.summaries(identities)
 
@@ -165,6 +170,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     |> Enum.map(&account_snapshot(&1, assignments, token_burns, datetime_preferences))
     |> Filter.apply(filters)
   end
+
+  defp narrow_to_identity(identities, nil), do: identities
+
+  defp narrow_to_identity(identities, identity_id) when is_binary(identity_id),
+    do: Enum.filter(identities, &(&1.id == identity_id))
 
   defp intersect_visible_pools(scope, pools) do
     visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)
