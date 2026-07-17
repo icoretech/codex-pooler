@@ -297,6 +297,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           data-chart-height="220"
           data-chart-colors={@model.colors}
           data-chart-labels="true"
+          data-chart-zoom="false"
+          data-chart-wheel-scroll="page"
         >
         </div>
         <p id="request-health-chart-title" class="sr-only">Request health</p>

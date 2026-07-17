@@ -1223,8 +1223,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-saved-reset-meter-reset",
-             "in "
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-reset .hero-clock"
            )
 
     refute has_element?(
@@ -1472,7 +1471,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#saved-reset-expiration-date-1", second_expiration_label)
     assert has_element?(view, "#saved-reset-expiration-first-seen-0", first_seen_label)
     assert has_element?(view, "#saved-reset-expiration-first-seen-1", second_seen_label)
-    assert has_element?(view, "#saved-reset-expiration-time-left-0", "in ")
+    assert has_element?(view, "#saved-reset-expiration-time-left-0 .hero-clock")
 
     send(view.pid, :reload_upstreams_from_events)
     _ = :sys.get_state(view.pid)
@@ -2454,7 +2453,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limit-weekly-reset",
-             "in 5d 23h"
+             "5d 23h"
            )
 
     assert has_element?(

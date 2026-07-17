@@ -40,12 +40,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           title={@limit.reset_title}
         >
           <.icon name="hero-clock" class="size-3" />
-          <span>{@limit.reset_label}</span>
+          <span>{strip_in_prefix(@limit.reset_label)}</span>
         </span>
       </div>
     </div>
     """
   end
+
+  # The clock icon already says "time until"; the label's "in " prefix is
+  # redundant next to it.
+  defp strip_in_prefix("in " <> rest), do: rest
+  defp strip_in_prefix(label), do: label
 
   defp quota_limit_details?(%{count_label: count_label, reset_label: reset_label}) do
     present_string?(count_label) or present_string?(reset_label)

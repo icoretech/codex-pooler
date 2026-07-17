@@ -192,7 +192,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
     seconds_until_expiration = DateTime.diff(expires_at, DateTime.utc_now(), :second)
 
     if seconds_until_expiration > 0 do
-      "in #{ResetFormatting.format_reset_duration(seconds_until_expiration)}"
+      ResetFormatting.format_reset_duration(seconds_until_expiration)
     else
       "expired"
     end

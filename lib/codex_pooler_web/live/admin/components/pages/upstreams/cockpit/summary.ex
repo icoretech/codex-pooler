@@ -7,21 +7,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
 
-  def cockpit_navigation(assigns) do
-    ~H"""
-    <div class="flex flex-wrap items-center justify-between gap-3">
-      <.link
-        id="upstream-cockpit-back-link"
-        navigate={~p"/admin/upstreams"}
-        class="btn btn-ghost btn-sm gap-2"
-      >
-        <.icon name="hero-arrow-left" class="size-4" />
-        <span>Upstreams</span>
-      </.link>
-    </div>
-    """
-  end
-
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
 

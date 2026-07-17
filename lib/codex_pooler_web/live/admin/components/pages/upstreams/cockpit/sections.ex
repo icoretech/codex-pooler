@@ -39,19 +39,36 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
 
       <div
         id="upstream-routing-verdict"
-        class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-base-300/60 px-4 py-3"
+        data-tone={verdict_tone(@cockpit)}
+        class={[
+          "flex items-start gap-3 border-b border-base-300/60 px-4 py-3",
+          verdict_wash_class(verdict_tone(@cockpit))
+        ]}
       >
-        <span class={AdminBadges.status_chip_class(routing_readiness(@cockpit).state)}>
-          {routing_readiness(@cockpit).label}
-        </span>
-        <span class="text-sm text-base-content/65">{routing_readiness(@cockpit).reason}</span>
         <span
-          :if={request_note(@cockpit.charts.request_health)}
-          id="upstream-routing-request-note"
-          class="text-xs text-base-content/50"
+          class={[
+            "grid size-8 shrink-0 place-items-center rounded-lg",
+            verdict_icon_class(verdict_tone(@cockpit))
+          ]}
+          aria-hidden="true"
         >
-          {request_note(@cockpit.charts.request_health)}
+          <.icon name={verdict_icon(verdict_tone(@cockpit))} class="size-4.5" />
         </span>
+        <div class="grid min-w-0 gap-0.5">
+          <p class="text-sm font-semibold leading-5 text-base-content">
+            {routing_readiness(@cockpit).label}
+          </p>
+          <p class="text-xs leading-5 text-base-content/60">
+            {routing_readiness(@cockpit).reason}
+          </p>
+          <p
+            :if={request_note(@cockpit.charts.request_health)}
+            id="upstream-routing-request-note"
+            class="text-xs leading-5 text-base-content/45"
+          >
+            {request_note(@cockpit.charts.request_health)}
+          </p>
+        </div>
       </div>
 
       <div :if={@cockpit.assignments.empty?} class="p-4">
@@ -317,7 +334,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   end
 
   @doc """
-  Recent failures: merged request-failure and audit feed; request evidence
+  Recent activity: merged request-failure and audit feed; request evidence
   opens the request-log detail drawer in place.
   """
   attr :cockpit, :map, required: true
@@ -332,9 +349,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
-          <h2 class="text-base font-semibold leading-5 text-base-content">Recent failures</h2>
+          <h2 class="text-base font-semibold leading-5 text-base-content">Recent activity</h2>
           <p class="text-xs leading-5 text-base-content/60">
-            Failed requests and account changes · metadata only
+            Failed requests and account changes
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -413,7 +430,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             aria-label="Open request evidence"
             class="btn btn-ghost btn-xs btn-square justify-self-end text-base-content/45 hover:text-primary"
           >
-            <.icon name="hero-document-magnifying-glass" class="size-3.5" />
+            <.icon name="hero-magnifying-glass" class="size-3.5" />
           </button>
           <.link
             :if={!event_row.event.request_id}
@@ -447,9 +464,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
     %{
       state: "unavailable",
       label: "Routing unavailable",
+      tone: :warning,
       reason: "Routing readiness is unavailable for this upstream account."
     }
   end
+
+  defp verdict_tone(cockpit) do
+    case routing_readiness(cockpit) do
+      %{tone: tone} when tone in [:success, :warning, :error] -> tone
+      _readiness -> :warning
+    end
+  end
+
+  defp verdict_wash_class(:success), do: "bg-success/5"
+  defp verdict_wash_class(:error), do: "bg-error/5"
+  defp verdict_wash_class(_tone), do: "bg-warning/5"
+
+  defp verdict_icon_class(:success), do: "bg-success/15 text-success"
+  defp verdict_icon_class(:error), do: "bg-error/15 text-error"
+  defp verdict_icon_class(_tone), do: "bg-warning/15 text-warning"
+
+  defp verdict_icon(:success), do: "hero-check-circle"
+  defp verdict_icon(:error), do: "hero-x-circle"
+  defp verdict_icon(_tone), do: "hero-exclamation-triangle"
 
   defp request_note(%{kpis: %{total_requests_24h: 0}}), do: nil
 

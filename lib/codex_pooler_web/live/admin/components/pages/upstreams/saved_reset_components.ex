@@ -129,7 +129,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             </div>
             <div class="grid gap-1 text-right">
               <p class="text-xs font-semibold text-base-content/55">Time left</p>
-              <p class="truncate text-xs text-base-content/70">{row.time_left_label}</p>
+              <p class="inline-flex items-center justify-end gap-1 truncate text-xs text-base-content/70">
+                <.icon name="hero-clock" class="size-3 shrink-0" />
+                <span>{row.time_left_label}</span>
+              </p>
             </div>
           </div>
         </article>
@@ -184,7 +187,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                 data-role="saved-reset-expiration-time-left"
                 class="whitespace-nowrap px-3 py-2 text-right text-xs text-base-content/70"
               >
-                {row.time_left_label}
+                <span class="inline-flex items-center gap-1">
+                  <.icon name="hero-clock" class="size-3 shrink-0" />
+                  <span>{row.time_left_label}</span>
+                </span>
               </td>
             </tr>
           </tbody>
@@ -297,7 +303,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     seconds_until_expiration = DateTime.diff(expires_at, now, :second)
 
     if seconds_until_expiration > 0 do
-      "in #{ResetFormatting.format_reset_duration(seconds_until_expiration)}"
+      ResetFormatting.format_reset_duration(seconds_until_expiration)
     else
       "expired"
     end

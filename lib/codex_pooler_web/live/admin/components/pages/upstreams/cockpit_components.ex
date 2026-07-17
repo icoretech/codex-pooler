@@ -42,8 +42,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
 
       <div class="drawer-content min-w-0">
         <section id="upstream-cockpit" class="grid gap-4">
-          <Summary.cockpit_navigation />
-
           <AuthJsonDialog.auth_json_import_dialog
             auth_json_form={@auth_json_form}
             importing_auth_json={@importing_auth_json}
@@ -73,7 +71,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
           <Summary.oauth_flow_state cockpit={@cockpit} datetime_preferences={@datetime_preferences} />
 
           <div class="grid items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
-            <div class="grid gap-4 xl:sticky xl:top-16">
+            <div class="grid gap-4 xl:sticky xl:top-4">
               <Summary.credential_card cockpit={@cockpit} />
               <Summary.vitals_card cockpit={@cockpit} />
               <Sections.actions_rail

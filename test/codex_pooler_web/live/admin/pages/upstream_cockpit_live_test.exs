@@ -921,7 +921,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "100.0%"
            )
 
-    assert has_element?(view, "#upstream-event-summary", "Recent failures")
+    assert has_element?(view, "#upstream-event-summary", "Recent activity")
     assert has_element?(view, "#upstream-actions", "Actions")
     assert has_element?(view, "#request-health-chart #upstream-refresh-data-button", "Refresh")
 
@@ -1357,7 +1357,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "not recorded"
            )
 
-    assert has_element?(view, "#cockpit-saved-reset-expiration-time-left-0", "in ")
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-expiration-time-left-0 .hero-clock"
+           )
 
     view
     |> element("#saved-reset-policy-form")
