@@ -69,16 +69,16 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
       assert has_element?(view, "#admin-notifications-list.max-h-96.overflow-y-auto")
 
       assert_notification_row(view, critical,
-        severity: "Critical",
-        state: "Open",
+        severity: "critical",
+        state: "open",
         title: "No usable assignments",
         pool: "Shell Visible",
         last_seen: "2026-05-31 14:30 UTC"
       )
 
       assert_notification_row(view, acknowledged,
-        severity: "Warning",
-        state: "Acknowledged",
+        severity: "warning",
+        state: "acknowledged",
         title: "No usable assignments",
         pool: "Shell Visible",
         last_seen: "2026-05-31 14:20 UTC"
@@ -91,42 +91,38 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
 
       assert has_element?(
                view,
-               "#admin-notification-row-#{critical.id} [data-role='admin-notification-unread-indicator']",
-               "Unread"
+               "#admin-notification-row-#{critical.id} [data-role='admin-notification-unread-indicator'][aria-label='Unread']"
              )
 
       refute html =~ raw_snapshot
     end
   end
 
-  test "notification rows use a compact readable card structure", %{conn: conn, scope: scope} do
+  test "notification rows use the stripe row structure", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("layout"), name: "Layout Visible"})
-    incident = shell_incident_fixture(pool, %{dedupe_key: unique_dedupe("layout")})
+
+    incident =
+      shell_incident_fixture(pool, %{severity: "warning", dedupe_key: unique_dedupe("layout")})
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
     row_selector = "#admin-notification-row-#{incident.id}"
 
-    assert has_element?(view, "#{row_selector} [data-role='admin-notification-heading']")
+    assert has_element?(view, "#{row_selector}[data-severity='warning']")
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-stripe']")
     assert has_element?(view, "#{row_selector} [data-role='admin-notification-meta']")
-    assert has_element?(view, "#{row_selector}.rounded-box.border.bg-base-100.p-3")
+    assert has_element?(view, "#{row_selector} [data-role='admin-notification-actions']")
+
+    # Severity is stripe + aria-label only; no chip text inside the row.
+    refute has_element?(view, "#{row_selector} [data-role='admin-notification-severity']")
+    refute has_element?(view, "#{row_selector}", "Impacted Pools")
 
     assert has_element?(
              view,
-             "#{row_selector} [data-role='admin-notification-severity'].inline-flex.items-center.rounded-full"
+             "#admin-notification-open-#{incident.id}[aria-label='View incident']"
            )
 
-    assert has_element?(
-             view,
-             "#{row_selector} [data-role='admin-notification-state'].inline-flex.items-center.rounded-full"
-           )
-
-    assert has_element?(view, "#{row_selector} [data-role='admin-notification-actions'].flex")
-
-    assert has_element?(
-             view,
-             "#{row_selector} [data-role='admin-notification-primary-action'].justify-center"
-           )
+    refute has_element?(view, "#admin-notification-open-#{incident.id}", "View incident")
 
     assert has_element?(
              view,
@@ -168,7 +164,10 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/settings")
 
-    assert has_element?(view, "#admin-notification-open-#{incident.id}", "View incident")
+    assert has_element?(
+             view,
+             "#admin-notification-open-#{incident.id}[aria-label='View incident']"
+           )
 
     view
     |> element("#admin-notification-open-#{incident.id}")
@@ -197,8 +196,15 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     {:ok, first_view, _html} = live(conn, ~p"/admin/settings")
     {:ok, second_view, _html} = live(conn, ~p"/admin/upstreams")
 
-    assert has_element?(first_view, "#admin-notification-mark-read-#{incident.id}", "Mark read")
-    assert has_element?(second_view, "#admin-notification-row-#{incident.id}", "Unread")
+    assert has_element?(
+             first_view,
+             "#admin-notification-mark-read-#{incident.id}[aria-label='Mark read']"
+           )
+
+    assert has_element?(
+             second_view,
+             "#admin-notification-row-#{incident.id} [data-role='admin-notification-unread-indicator']"
+           )
 
     first_view
     |> element("#admin-notification-mark-read-#{incident.id}")
@@ -288,12 +294,25 @@ defmodule CodexPoolerWeb.Admin.AdminShellNotificationsTest do
     row_selector = "#admin-notification-row-#{incident.id}"
 
     assert has_element?(view, row_selector, Keyword.fetch!(opts, :title))
-    assert has_element?(view, "#{row_selector}-severity", Keyword.fetch!(opts, :severity))
-    assert has_element?(view, "#{row_selector}-state", Keyword.fetch!(opts, :state))
-    assert has_element?(view, "#{row_selector}-severity[data-role='admin-notification-severity']")
-    assert has_element?(view, "#{row_selector}-state[data-role='admin-notification-state']")
-    assert has_element?(view, row_selector, Keyword.fetch!(opts, :pool))
-    assert has_element?(view, row_selector, Keyword.fetch!(opts, :last_seen))
+
+    assert has_element?(
+             view,
+             "#{row_selector}[data-severity='#{Keyword.fetch!(opts, :severity)}']"
+           )
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='admin-notification-meta']",
+             Keyword.fetch!(opts, :state)
+           )
+
+    assert has_element?(
+             view,
+             "#{row_selector} [data-role='admin-notification-meta']",
+             Keyword.fetch!(opts, :pool)
+           )
+
+    assert has_element?(view, "#{row_selector} [title='#{Keyword.fetch!(opts, :last_seen)}']")
   end
 
   defp assert_single_notification_shell(html) do
