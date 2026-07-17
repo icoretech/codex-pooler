@@ -156,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">Upstream account</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Update the operator label shown in this cockpit and on the upstream account list.
+            Update the operator label shown on this page and on the upstream account list.
           </p>
         </div>
         <.form

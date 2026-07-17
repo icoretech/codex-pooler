@@ -577,8 +577,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert has_element?(view, "#upstream-cockpit-page-header h1", "Upstream cockpit")
-    assert has_element?(view, "#upstream-cockpit-page-header", "recovery actions")
+    assert has_element?(view, "#upstream-cockpit-page-header h1", "Upstream health")
+    assert has_element?(view, "#upstream-cockpit-page-header", "actions to recover it")
     refute has_element?(view, "#upstream-cockpit-page-header button")
   end
 
@@ -3552,7 +3552,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#upstream-event-summary button[data-role='recent-event-link'][phx-value-request-id='#{failed_request.request.id}']"
            )
 
-    assert has_element?(view, "#upstream-refresh-data-message", "Cockpit data refreshed")
+    assert has_element?(view, "#upstream-refresh-data-message", "Account data refreshed")
   end
 
   @tag :refresh_broadcast_degraded

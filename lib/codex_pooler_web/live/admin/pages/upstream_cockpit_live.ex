@@ -25,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       socket
       |> assign(
         cockpit: nil,
-        page_title: "Upstream cockpit",
+        page_title: "Upstream health",
         refresh_data_message: nil,
         auth_json_form: UpstreamAuthJsonImport.empty_form(),
         auth_json_upload_limit_label: UpstreamAuthJsonImport.upload_limit_label(),
@@ -93,7 +93,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   def handle_event("refresh_data", _params, socket) do
     {:noreply,
-     socket |> load_cockpit() |> assign(:refresh_data_message, "Cockpit data refreshed")}
+     socket |> load_cockpit() |> assign(:refresh_data_message, "Account data refreshed")}
   end
 
   @impl true

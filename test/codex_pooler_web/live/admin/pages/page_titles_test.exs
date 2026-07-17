@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Admin.PageTitlesTest do
 
     {:ok, _view, html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    assert extracted_page_title(html) == "Upstream cockpit - Codex Pooler"
+    assert extracted_page_title(html) == "Upstream health - Codex Pooler"
   end
 
   defp extracted_page_title(html) do
