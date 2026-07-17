@@ -66,11 +66,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             <span>{row.time_left_label}</span>
           </p>
         </div>
+        <%!-- The date line's 20px box leaves ~1px more air under the glyphs
+        than the meter title's 16px box; tuck the bar so the ink-to-bar
+        rhythm matches the banked-resets meter above. --%>
         <div
           :if={row.life_percent}
           id={"#{@id}-life-#{row.index}"}
           data-role="saved-reset-expiration-life"
-          class="h-1.5 overflow-hidden rounded-full bg-base-300/70"
+          class="-mt-px h-1.5 overflow-hidden rounded-full bg-base-300/70"
         >
           <span
             class="saved-reset-life-fill block h-full rounded-full bg-(--color-reset-bank)/80"
