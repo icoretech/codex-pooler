@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.4.33](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.32...codex-pooler-v0.4.33) (2026-07-17)
+
+
+### Features
+
+* **admin:** collapse cockpit expiration rows under the meter row ([a683c01](https://github.com/icoretech/codex-pooler/commit/a683c01c667ea45f494256147644bba6c4fdc6b4))
+* **admin:** fold oauth relink activity into the cockpit rail ([717babe](https://github.com/icoretech/codex-pooler/commit/717babe77a2e21a1c1e7bdef72a137269dd51c8a))
+* **admin:** give the cockpit the standard page header ([328213b](https://github.com/icoretech/codex-pooler/commit/328213bec63372208bc17537548507b21b7d0e78))
+* **admin:** link pool compat flags to their documentation ([469b2c0](https://github.com/icoretech/codex-pooler/commit/469b2c0690bc78c3d51645fc7495db5f74ab5e00))
+* **admin:** mark the websocket bridge pool flag experimental ([4daf45b](https://github.com/icoretech/codex-pooler/commit/4daf45ba5348e257170e14d810966e676cd3bebd))
+* **admin:** name the redemption phase on the meter policy line ([2fe86ba](https://github.com/icoretech/codex-pooler/commit/2fe86ba77dc858b826b65ec45047881b8b37474a))
+* **admin:** quota-style saved reset expiration rows ([b6723e5](https://github.com/icoretech/codex-pooler/commit/b6723e5ef28b5d8b9a24fa46c022b73c45704c24))
+* **admin:** rebuild saved reset dialog as summary-first ([ad09b01](https://github.com/icoretech/codex-pooler/commit/ad09b01e0f43cab98060ffa098ce12b105990427))
+* **admin:** ride the redemption lifecycle on the first meter segment ([6adcd00](https://github.com/icoretech/codex-pooler/commit/6adcd001ddec902d69fcf2f8a25c941ac10ebc49))
+* **admin:** tell the connection story in the live-updates popover ([5d2921d](https://github.com/icoretech/codex-pooler/commit/5d2921d381808d4c24212817944025500f3b09b3))
+* **admin:** trigger-mode radio cards for the saved reset policy ([687bd93](https://github.com/icoretech/codex-pooler/commit/687bd93d9c4a2ab4a61a5f946204ca62bf30b5d7))
+
+
+### Bug Fixes
+
+* **admin:** anchor 11px clock icons to the baseline, not the line box ([87cb84d](https://github.com/icoretech/codex-pooler/commit/87cb84d0b419f9668299f27cd1c5ee972ac6c9d1))
+* **admin:** hide lane labels that repeat the account name ([f5a1d95](https://github.com/icoretech/codex-pooler/commit/f5a1d95517a6dcf300c3bd551a66f3711ecc7a8d))
+* **admin:** hide owner-only Operators nav item from instance admins ([a1682fe](https://github.com/icoretech/codex-pooler/commit/a1682fe6815fb3c318ea7f2eb68dff0b2038ff9f))
+* **admin:** keep lane reconciliation visible under long account labels ([7515ca0](https://github.com/icoretech/codex-pooler/commit/7515ca0e5fcfc854d0004a8ef7835359fc8788a0))
+* **admin:** repaint the connection icon as soon as navigation lands ([35f15f9](https://github.com/icoretech/codex-pooler/commit/35f15f92c5b8506f05906acfbbe0c047182a7ad1))
+* **admin:** show one disconnect banner, not both ([bf45be1](https://github.com/icoretech/codex-pooler/commit/bf45be1fc95d70b665dba67e9a7daf1911d5bbd0))
+* **admin:** stop event reloads from wiping open dialog selections ([66d04a8](https://github.com/icoretech/codex-pooler/commit/66d04a883e7aea366712beedbf932a6e1607dbc5))
+* **alerts:** deliver the v2 saved-reset evidence timestamps ([1c4aa70](https://github.com/icoretech/codex-pooler/commit/1c4aa70a6984954a2186127e1ce441841a12c326))
+* **deps:** update dependency astro to v7.1.0 ([#185](https://github.com/icoretech/codex-pooler/issues/185)) ([a7c829f](https://github.com/icoretech/codex-pooler/commit/a7c829f2120bb42c335d65f7fcefb957400c2275))
+* **mcp:** return explicit capability denial from operator metadata tools ([dc09c35](https://github.com/icoretech/codex-pooler/commit/dc09c35e8a70caaf1deba58809067ccaabeddfeb))
+* **openai:** normalize Responses tool-output image detail ([434cbc3](https://github.com/icoretech/codex-pooler/commit/434cbc34483bfbbdd92b510d542ec7677d9f2d74))
+* **openai:** preserve tool-output cache breakpoints ([fee62b0](https://github.com/icoretech/codex-pooler/commit/fee62b095c3461e87af12012f265aeba541b31b0))
+
 ## [0.4.32](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.31...codex-pooler-v0.4.32) (2026-07-17)
 
 
