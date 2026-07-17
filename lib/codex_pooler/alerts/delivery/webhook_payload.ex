@@ -4,12 +4,20 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayload do
   alias CodexPooler.Accounting
   alias CodexPooler.Alerts.Schemas.{AlertChannel, AlertDeliveryAttempt, AlertIncident}
 
+  # reset_expires_at / reset_first_seen_at are the evidence v1 names; the
+  # current evaluator emits the *_reset_* v2 keys, but stored incidents can
+  # still carry v1 evidence on redelivery, so both generations stay listed.
   @safe_summary_keys ~w(
     assignment_count
     available_count
+    earliest_reset_first_seen_at
     enabled_assignment_count
     impacted_pool_count
+    latest_reset_expires_at
+    latest_reset_first_seen_at
     model
+    new_reset_count
+    next_reset_expires_at
     path_style
     quota_state
     reason_code

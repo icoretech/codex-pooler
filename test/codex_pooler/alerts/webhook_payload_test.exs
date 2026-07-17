@@ -100,11 +100,14 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
 
     assert summary == %{
              "available_count" => 2,
+             "new_reset_count" => 2,
              "impacted_pool_count" => 2,
              "path_style" => "codex",
              "reason_code" => "saved_reset_banked_first_seen",
-             "reset_expires_at" => "2026-07-03T09:00:00Z",
-             "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "earliest_reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "latest_reset_first_seen_at" => "2026-07-02T09:30:00Z",
+             "next_reset_expires_at" => "2026-07-03T09:00:00Z",
+             "latest_reset_expires_at" => "2026-07-04T10:00:00Z",
              "source" => "persisted_saved_resets"
            }
 
@@ -200,9 +203,12 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
   defp saved_reset_evidence do
     %{
       "reason_code" => "saved_reset_banked_first_seen",
-      "reset_expires_at" => "2026-07-03T09:00:00Z",
-      "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "earliest_reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "latest_reset_first_seen_at" => "2026-07-02T09:30:00Z",
+      "next_reset_expires_at" => "2026-07-03T09:00:00Z",
+      "latest_reset_expires_at" => "2026-07-04T10:00:00Z",
       "available_count" => 2,
+      "new_reset_count" => 2,
       "source" => "persisted_saved_resets",
       "path_style" => "codex",
       "impacted_pool_count" => 2,

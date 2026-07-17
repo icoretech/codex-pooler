@@ -144,8 +144,11 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     refute_forbidden_values(email.text_body)
     assert email.text_body =~ "Reason code: saved_reset_banked_first_seen"
     assert email.text_body =~ "- available_count: 2"
-    assert email.text_body =~ "- reset_expires_at: 2026-07-03T09:00:00Z"
-    assert email.text_body =~ "- reset_first_seen_at: 2026-07-02T08:00:00Z"
+    assert email.text_body =~ "- new_reset_count: 2"
+    assert email.text_body =~ "- earliest_reset_first_seen_at: 2026-07-02T08:00:00Z"
+    assert email.text_body =~ "- latest_reset_first_seen_at: 2026-07-02T09:30:00Z"
+    assert email.text_body =~ "- next_reset_expires_at: 2026-07-03T09:00:00Z"
+    assert email.text_body =~ "- latest_reset_expires_at: 2026-07-04T10:00:00Z"
     assert email.text_body =~ "- source: persisted_saved_resets"
     refute email.text_body =~ "provider-credit-hidden"
     refute email.text_body =~ "pool_upstream_assignment_id"
@@ -161,11 +164,14 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
 
     assert attempt.response_metadata["safe_evidence_summary"] == %{
              "available_count" => 2,
+             "new_reset_count" => 2,
              "impacted_pool_count" => 1,
              "path_style" => "codex",
              "reason_code" => "saved_reset_banked_first_seen",
-             "reset_expires_at" => "2026-07-03T09:00:00Z",
-             "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "earliest_reset_first_seen_at" => "2026-07-02T08:00:00Z",
+             "latest_reset_first_seen_at" => "2026-07-02T09:30:00Z",
+             "next_reset_expires_at" => "2026-07-03T09:00:00Z",
+             "latest_reset_expires_at" => "2026-07-04T10:00:00Z",
              "source" => "persisted_saved_resets"
            }
 
@@ -198,9 +204,12 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
   defp saved_reset_evidence do
     %{
       "reason_code" => "saved_reset_banked_first_seen",
-      "reset_expires_at" => "2026-07-03T09:00:00Z",
-      "reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "earliest_reset_first_seen_at" => "2026-07-02T08:00:00Z",
+      "latest_reset_first_seen_at" => "2026-07-02T09:30:00Z",
+      "next_reset_expires_at" => "2026-07-03T09:00:00Z",
+      "latest_reset_expires_at" => "2026-07-04T10:00:00Z",
       "available_count" => 2,
+      "new_reset_count" => 2,
       "source" => "persisted_saved_resets",
       "path_style" => "codex",
       "impacted_pool_count" => 1,

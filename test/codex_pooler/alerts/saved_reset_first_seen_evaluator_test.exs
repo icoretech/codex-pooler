@@ -4,6 +4,7 @@ defmodule CodexPooler.Alerts.Evaluation.SavedResetFirstSeenEvaluatorTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Alerts
+  alias CodexPooler.Alerts.Delivery.WebhookPayload
   alias CodexPooler.Alerts.Schemas.AlertRule
 
   @tag :saved_reset_banked_first_seen
@@ -153,6 +154,52 @@ defmodule CodexPooler.Alerts.Evaluation.SavedResetFirstSeenEvaluatorTest do
 
     assert match.safe_evidence_snapshot["next_reset_expires_at"] ==
              DateTime.to_iso8601(~U[2026-01-10 00:00:00Z])
+  end
+
+  @tag :saved_reset_banked_first_seen
+  test "delivery allowlist keeps every evidence field the evaluator emits" do
+    timestamp = ~U[2026-01-02 03:04:05Z]
+    baseline = ~U[2026-01-02 01:00:00Z]
+    pool = pool_fixture()
+
+    upstream_assignment_fixture(pool, %{
+      identity_metadata:
+        saved_reset_metadata([
+          saved_reset_expiration(~U[2026-01-09 00:00:00Z], ~U[2026-01-02 02:04:05Z])
+        ])
+    })
+
+    rule = saved_reset_banked_first_seen_rule(pool, created_at: baseline)
+
+    [%{match_attrs: match}] =
+      rule
+      |> Alerts.evaluate_rule(at: timestamp)
+      |> Enum.filter(&match?(%{action: :match}, &1))
+
+    summary = WebhookPayload.safe_evidence_summary(match.safe_evidence_snapshot)
+
+    delivered_keys = ~w(
+      available_count
+      earliest_reset_first_seen_at
+      latest_reset_expires_at
+      latest_reset_first_seen_at
+      new_reset_count
+      next_reset_expires_at
+      path_style
+      reason_code
+      source
+    )
+
+    for key <- delivered_keys do
+      assert Map.has_key?(summary, key),
+             "delivery allowlist drift: evaluator evidence key #{key} was dropped from the webhook summary"
+    end
+
+    internal_keys = ~w(pool_id upstream_identity_id pool_upstream_assignment_id)
+
+    assert Enum.sort(Map.keys(match.safe_evidence_snapshot)) ==
+             Enum.sort(delivered_keys ++ internal_keys),
+           "evaluator evidence keys changed: classify each new key as delivered (add to the webhook and email allowlists) or internal, then update this contract"
   end
 
   defp saved_reset_banked_first_seen_rule(pool, attrs) do
