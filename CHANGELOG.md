@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.32](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.31...codex-pooler-v0.4.32) (2026-07-17)
+
+
+### Features
+
+* **admin:** redesign upstream cockpit as identity console ([349f24f](https://github.com/icoretech/codex-pooler/commit/349f24f17f1fdecd33acbef5710a30c88f354f8c))
+* **admin:** show websocket connection generations ([0fc8621](https://github.com/icoretech/codex-pooler/commit/0fc862119b19c6f4975a03125b720e041f05eadc))
+* **admin:** visualize cumulative traffic distribution ([d2a6c7c](https://github.com/icoretech/codex-pooler/commit/d2a6c7c0057f2c75ba6015344bd67e0d733596a3))
+* **gateway:** record websocket connection generations ([181a05d](https://github.com/icoretech/codex-pooler/commit/181a05de0c0a44b9f17ca961ef1f2063af5ea119))
+* **settings:** configure websocket owner idle retention ([55acbe9](https://github.com/icoretech/codex-pooler/commit/55acbe943e6eac74ef08b69fe2eb85ef51b30c81))
+
+
+### Bug Fixes
+
+* **admin:** show ten stats leaderboard entries ([fc7b407](https://github.com/icoretech/codex-pooler/commit/fc7b4075c2312291c272b3f9cd7888f435e49f32))
+* **admin:** size pool cards independently in the grid ([6d9034e](https://github.com/icoretech/codex-pooler/commit/6d9034ed5ff2d234bc76957dffe7ef9d66b92c0a))
+
+
+### Performance Improvements
+
+* **admin:** open request-log details without scanning the requests table ([bf59431](https://github.com/icoretech/codex-pooler/commit/bf594313cfb304ed8ad863e78e9e0a6921f7420b))
+
 ## [0.4.31](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.30...codex-pooler-v0.4.31) (2026-07-15)
 
 
