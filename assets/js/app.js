@@ -1121,6 +1121,11 @@ const initConnectionIndicator = () => {
 		handleConnectionIndicatorAction();
 	});
 
+	// Live navigation replaces the topbar with the server's grey "syncing"
+	// template; repaint as soon as the new page lands instead of waiting for
+	// the next interval tick.
+	window.addEventListener("phx:page-loading-stop", updateConnectionIndicator);
+
 	updateConnectionIndicator();
 	window.setInterval(updateConnectionIndicator, 1000);
 	window.setInterval(pingConnectionIndicator, 10000);
