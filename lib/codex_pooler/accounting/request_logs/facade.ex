@@ -43,8 +43,8 @@ defmodule CodexPooler.Accounting.RequestLogs do
     list_for_pool_filter(nil, Keyword.put(opts, :visible_pool_ids, visible_pool_ids))
   end
 
-  @spec get_for_scope(CodexPooler.Accounts.Scope.t(), Ecto.UUID.t()) :: map() | nil
-  def get_for_scope(%CodexPooler.Accounts.Scope{} = scope, request_id)
+  @spec get_for_scope(CodexPooler.Accounts.Scope.t(), Ecto.UUID.t(), keyword()) :: map() | nil
+  def get_for_scope(%CodexPooler.Accounts.Scope{} = scope, request_id, opts \\ [])
       when is_binary(request_id) do
     visible_pool_ids = scope |> Pools.list_log_filter_pools() |> Enum.map(& &1.id)
 
@@ -53,7 +53,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       |> maybe_filter_request_log_visible_pools(visible_pool_ids)
       |> where([request, ...], request.id == ^request_id)
       |> request_log_rows(1, 0)
-      |> request_log_items(:default)
+      |> request_log_items(request_log_surface(Keyword.get(opts, :surface)))
       |> List.first()
 
     enrich_detail_settlement(item)
@@ -463,15 +463,27 @@ defmodule CodexPooler.Accounting.RequestLogs do
   defp maybe_filter_request_log_request_id(query, nil), do: query
 
   defp maybe_filter_request_log_request_id(query, request_id) do
-    pattern = "%#{request_id}%"
+    trimmed = String.trim(request_id)
 
-    from([request, ...] in query,
-      where:
-        fragment("?::text ILIKE ?", request.id, ^pattern) or
-          ilike(request.correlation_id, ^pattern) or
-          fragment("?->>? ILIKE ?", request.request_metadata, "request_id", ^pattern) or
-          fragment("?->>? ILIKE ?", request.request_metadata, "client_request_id", ^pattern)
-    )
+    case Ecto.UUID.cast(trimmed) do
+      {:ok, uuid} ->
+        # A full UUID is an exact reference: two index lookups instead of a
+        # sequential scan with per-row casts and JSONB extraction.
+        from([request, ...] in query,
+          where: request.id == ^uuid or request.correlation_id == ^trimmed
+        )
+
+      :error ->
+        pattern = "%#{trimmed}%"
+
+        from([request, ...] in query,
+          where:
+            fragment("?::text ILIKE ?", request.id, ^pattern) or
+              ilike(request.correlation_id, ^pattern) or
+              fragment("?->>? ILIKE ?", request.request_metadata, "request_id", ^pattern) or
+              fragment("?->>? ILIKE ?", request.request_metadata, "client_request_id", ^pattern)
+        )
+    end
   end
 
   defp maybe_filter_request_log_date_from(query, nil), do: query

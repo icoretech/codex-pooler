@@ -197,8 +197,11 @@ defmodule CodexPooler.Accounting do
   @spec list_request_logs_for_scope(CodexPooler.Accounts.Scope.t(), keyword()) :: map()
   defdelegate list_request_logs_for_scope(scope, opts \\ []), to: RequestLogs, as: :list_for_scope
 
-  @spec get_request_log_for_scope(CodexPooler.Accounts.Scope.t(), Ecto.UUID.t()) :: map() | nil
-  defdelegate get_request_log_for_scope(scope, request_id), to: RequestLogs, as: :get_for_scope
+  @spec get_request_log_for_scope(CodexPooler.Accounts.Scope.t(), Ecto.UUID.t(), keyword()) ::
+          map() | nil
+  defdelegate get_request_log_for_scope(scope, request_id, opts \\ []),
+    to: RequestLogs,
+    as: :get_for_scope
 
   @spec list_request_log_models(term(), keyword()) :: [String.t()]
   defdelegate list_request_log_models(pool_or_id, opts \\ []), to: RequestLogs, as: :list_models

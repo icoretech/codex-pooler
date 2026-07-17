@@ -53,7 +53,24 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, load_request_logs(socket, params)}
+    # Opening or closing the detail drawer only changes the selection param;
+    # the list, filter options, and counts are unaffected and must not be
+    # rebuilt (each rebuild costs several queries over large tables).
+    if socket.assigns[:request_logs_loaded?] &&
+         same_list_params?(params, socket.assigns[:current_params]) do
+      {:noreply,
+       socket
+       |> assign(:current_params, params)
+       |> assign_selected_request_log(params)
+       |> maybe_clear_missing_selected_request_log()}
+    else
+      {:noreply, load_request_logs(socket, params)}
+    end
+  end
+
+  defp same_list_params?(params, current_params) do
+    Map.drop(params || %{}, [@selected_request_id_param]) ==
+      Map.drop(current_params || %{}, [@selected_request_id_param])
   end
 
   @impl true
@@ -375,37 +392,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         assign(socket, :selected_request_log, nil)
 
       request_id ->
-        request_log =
-          socket.assigns.current_scope
-          |> Accounting.get_request_log_for_scope(request_id)
-          |> maybe_put_admin_debug_projection(socket.assigns.current_scope, request_id)
-
         assign(
           socket,
           :selected_request_log,
-          request_log
+          Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id,
+            surface: :admin
+          )
         )
     end
-  end
-
-  defp maybe_put_admin_debug_projection(nil, _scope, _request_id), do: nil
-
-  defp maybe_put_admin_debug_projection(request_log, scope, request_id) do
-    case admin_request_log(scope, request_id) do
-      %{debug: debug} -> Map.put(request_log, :debug, debug)
-      _missing -> request_log
-    end
-  end
-
-  defp admin_request_log(scope, request_id) do
-    scope
-    |> Accounting.list_request_logs_for_scope(
-      limit: 200,
-      filters: [request_id: request_id],
-      surface: :admin
-    )
-    |> Map.get(:items, [])
-    |> Enum.find(&(&1.id == request_id))
   end
 
   defp maybe_clear_missing_selected_request_log(socket) do

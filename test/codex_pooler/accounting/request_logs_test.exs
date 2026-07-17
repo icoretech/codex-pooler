@@ -1360,7 +1360,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
            ) == 1
   end
 
-  test "exact scoped request log lookup is not affected by fuzzy correlation matches" do
+  test "request id filter is exact for full UUIDs and fuzzy for fragments" do
     reset_bootstrap_state_fixture!()
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     owner_scope = Scope.for_user(owner, [])
@@ -1404,10 +1404,23 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
       |> Ecto.Changeset.change(admitted_at: newer_time)
       |> Repo.update!()
 
-    assert %{items: [fuzzy_match]} =
+    # A full UUID is an exact reference: it finds the request itself (indexed),
+    # never a newer correlation id that merely contains the UUID.
+    assert %{items: [exact_filter_match]} =
              Accounting.list_request_logs_for_scope(scope,
                limit: 1,
                filters: [request_id: target_request.id]
+             )
+
+    assert exact_filter_match.id == target_request.id
+
+    # Fragments keep the fuzzy contract and match on containment, newest first.
+    fragment = String.slice(target_request.id, 0, 8)
+
+    assert %{items: [fuzzy_match]} =
+             Accounting.list_request_logs_for_scope(scope,
+               limit: 1,
+               filters: [request_id: fragment]
              )
 
     assert fuzzy_match.id == distractor_request.id

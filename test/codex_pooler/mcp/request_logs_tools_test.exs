@@ -829,7 +829,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     end
   end
 
-  test "gets request-log by exact id when a newer correlation id contains that id", %{auth: auth} do
+  test "request id inputs are exact for full UUIDs and fuzzy for fragments", %{auth: auth} do
     pool = pool_fixture(%{slug: "mcp-request-log-exact-id", name: "MCP Exact Request Log"})
     %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP exact key"})
     older_time = ~U[2026-05-26 00:00:00.000000Z]
@@ -853,10 +853,24 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       |> Ecto.Changeset.change(admitted_at: newer_time)
       |> Repo.update!()
 
-    assert {:ok, fuzzy_list_result} =
+    # A full UUID is an exact reference: the list filter finds the request
+    # itself, not a newer correlation id that merely contains the UUID.
+    assert {:ok, exact_list_result} =
              ToolDispatch.call(
                "codex_pooler_list_request_logs",
                %{"request_id" => target_request.id, "limit" => 1},
+               %{auth: auth}
+             )
+
+    assert exact_list_result["isError"] == false
+    assert [exact_item] = exact_list_result["structuredContent"]["items"]
+    assert exact_item["id"] == target_request.id
+
+    # Fragments keep the fuzzy containment contract, newest first.
+    assert {:ok, fuzzy_list_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"request_id" => String.slice(target_request.id, 0, 8), "limit" => 1},
                %{auth: auth}
              )
 

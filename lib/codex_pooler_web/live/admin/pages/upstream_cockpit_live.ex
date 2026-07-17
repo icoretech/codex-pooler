@@ -284,31 +284,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     """
   end
 
-  # Same scope-checked loader (plus the admin debug projection) the request
-  # logs page uses for its detail drawer.
+  # Same scope-checked loader the request logs page uses for its drawer; the
+  # admin surface includes the debug projection.
   defp load_request_log(socket, request_id) do
-    scope = socket.assigns.current_scope
-
-    scope
-    |> Accounting.get_request_log_for_scope(request_id)
-    |> maybe_put_admin_debug_projection(scope, request_id)
-  end
-
-  defp maybe_put_admin_debug_projection(nil, _scope, _request_id), do: nil
-
-  defp maybe_put_admin_debug_projection(request_log, scope, request_id) do
-    scope
-    |> Accounting.list_request_logs_for_scope(
-      limit: 200,
-      filters: [request_id: request_id],
+    Accounting.get_request_log_for_scope(socket.assigns.current_scope, request_id,
       surface: :admin
     )
-    |> Map.get(:items, [])
-    |> Enum.find(&(&1.id == request_id))
-    |> case do
-      %{debug: debug} -> Map.put(request_log, :debug, debug)
-      _missing -> request_log
-    end
   end
 
   defp default_relink_pool(socket) do
