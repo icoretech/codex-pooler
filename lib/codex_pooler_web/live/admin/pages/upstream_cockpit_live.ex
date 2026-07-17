@@ -362,9 +362,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     |> maybe_subscribe_pool_events(cockpit)
     |> assign(
       cockpit: cockpit,
-      dialog_pool_options: dialog_pool_options(socket.assigns.current_scope),
+      dialog_pool_options: preserve_dialog_pool_options(socket),
       saved_reset_policy_form: preserve_policy_edits(socket, cockpit)
     )
+  end
+
+  # Event-driven reloads must not rebuild the pool options feeding the
+  # auth-json and OAuth relink dialog selects while one of those dialogs is
+  # open: a changed option list re-renders the select and reverts the
+  # operator's un-submitted choice. The next reload after close refreshes.
+  defp preserve_dialog_pool_options(socket) do
+    if socket.assigns[:importing_auth_json] or socket.assigns[:oauth_relinking] do
+      socket.assigns.dialog_pool_options
+    else
+      dialog_pool_options(socket.assigns.current_scope)
+    end
   end
 
   defp refresh_oauth_flow_state(%{assigns: %{cockpit: nil}} = socket), do: socket

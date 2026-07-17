@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Pools
   alias CodexPooler.Pools.OperatorPoolAssignment
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Admin.AvatarComponents
@@ -160,6 +161,42 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
 
     assert has_element?(view, "#operator-row-#{disabled_operator.id}", "disabled")
     refute has_element?(view, "#operator-row-#{active_operator.id}", "Alpha Filter")
+  end
+
+  test "defers pool option reloads while an operator dialog is open", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/operators")
+
+    open_create_dialog(view)
+    assert has_element?(view, "#operator_pool_ids_group")
+
+    {:ok, late_pool} =
+      Pools.create_pool(scope, %{slug: "late-operator-pool", name: "Late Operator Pool"})
+
+    assert {:ok, _result} =
+             Accounts.create_operator(
+               scope,
+               %{
+                 "email" => "concurrent.operator@example.com",
+                 "display_name" => "Concurrent Operator",
+                 "password" => "ConcurrentPass123!",
+                 "send_email" => "false"
+               },
+               %{}
+             )
+
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#operator-create-dialog[open]")
+    refute has_element?(view, "#operator_pool_id_#{late_pool.id}_option")
+
+    view |> element("#operator-create-cancel") |> render_click()
+    refute has_element?(view, "#operator-create-dialog[open]")
+
+    open_create_dialog(view)
+    assert has_element?(view, "#operator_pool_id_#{late_pool.id}_option")
   end
 
   test "live-updates when operators change elsewhere", %{conn: conn, scope: scope} do

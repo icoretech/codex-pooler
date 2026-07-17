@@ -293,7 +293,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   @impl true
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
     case pool_event_kind(topics, pool_id) do
-      :lifecycle -> {:noreply, load_pools(socket)}
+      :lifecycle -> {:noreply, reload_pools_or_defer(socket)}
       :usage -> {:noreply, schedule_pool_traffic_refresh(socket)}
       :ignore -> {:noreply, socket}
     end
@@ -520,6 +520,20 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   defp clear_deleting(socket),
     do: assign(socket, deleting_pool: nil, delete_form: PoolForm.delete_form())
+
+  # Lifecycle events must not rebuild the option assigns while a pool dialog
+  # is open: the create/edit checkbox selections live only in the client DOM
+  # (submit-only forms), so a re-render reverts un-submitted ticks. Mark the
+  # page stale instead and let the dialog-close flush reload it.
+  defp reload_pools_or_defer(socket) do
+    if pool_dialog_open?(socket) do
+      socket
+      |> assign(:pool_traffic_dirty?, true)
+      |> cancel_pool_traffic_refresh_timer()
+    else
+      load_pools(socket)
+    end
+  end
 
   defp schedule_pool_traffic_refresh(socket) do
     socket = assign(socket, :pool_traffic_dirty?, true)

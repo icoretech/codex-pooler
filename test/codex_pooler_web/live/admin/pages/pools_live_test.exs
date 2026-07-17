@@ -955,6 +955,73 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-create-dialog")
   end
 
+  test "defers lifecycle event reloads while the create wizard is open", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    open_create_dialog(view)
+    assert has_element?(view, "#pool-create-upstream-identity-options")
+
+    late_identity = active_identity_fixture(account_label: "Mid-edit lifecycle account")
+
+    send(view.pid, {Events, %{pool_id: Ecto.UUID.generate(), topics: ["upstreams"]}})
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#pool-create-dialog[open]")
+
+    refute has_element?(
+             view,
+             "#pool-create-upstream-identity-options-card-#{late_identity.id}"
+           )
+
+    view |> element("#pool-create-cancel") |> render_click()
+    refute has_element?(view, "#pool-create-dialog")
+
+    open_create_dialog(view)
+
+    assert has_element?(
+             view,
+             "#pool-create-upstream-identity-options-card-#{late_identity.id}"
+           )
+  end
+
+  test "defers lifecycle event reloads while the edit dialog is open", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "lifecycle-edit-pool", name: "Lifecycle Edit Pool"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-upstream-assignment-options")
+
+    _late_identity = active_identity_fixture(account_label: "Mid-edit assignment account")
+
+    send(view.pid, {Events, %{pool_id: pool.id, topics: ["pools"]}})
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+
+    refute has_element?(
+             view,
+             "#pool-edit-upstream-assignment-options",
+             "Mid-edit assignment account"
+           )
+
+    view |> element("#pool-edit-cancel") |> render_click()
+    refute has_element?(view, "#pool-edit-dialog")
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    assert has_element?(
+             view,
+             "#pool-edit-upstream-assignment-options",
+             "Mid-edit assignment account"
+           )
+  end
+
   test "creates pools with routing strategy, compatibility, compression, websocket bridge, and upstream identities",
        %{conn: conn} do
     first_identity =
@@ -1637,7 +1704,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert stale_timer_queries == []
   end
 
-  test "defers traffic in every Pool dialog, flushes once on close, and preserves edit drafts", %{
+  test "defers traffic and lifecycle reloads in every Pool dialog, flushing once on close", %{
     conn: conn,
     scope: scope
   } do
@@ -1682,7 +1749,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         _ = :sys.get_state(view.pid)
       end)
 
-    assert lifecycle_queries != []
+    assert lifecycle_queries == []
     assert has_element?(view, "#pool-edit-dialog-tab-routing[aria-selected='true']")
 
     {_result, edit_flush_queries} =

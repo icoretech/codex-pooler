@@ -23,6 +23,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
        create_form: OperatorForm.create_form(),
        editing_operator: nil,
        edit_form: nil,
+       pool_options: [],
+       pool_options_stale?: false,
        resetting_operator: nil,
        reset_operation: nil,
        reset_form: OperatorForm.reset_form(),
@@ -392,15 +394,44 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   end
 
   defp clear_editing(socket) do
-    assign(socket, editing_operator: nil, edit_form: nil)
+    socket
+    |> assign(editing_operator: nil, edit_form: nil)
+    |> flush_stale_pool_options()
   end
 
   defp close_create_dialog(socket) do
-    assign(socket,
+    socket
+    |> assign(
       creating_operator: false,
       create_form: OperatorForm.create_form(),
       temporary_password_receipt: nil
     )
+    |> flush_stale_pool_options()
+  end
+
+  # Operator events must not rebuild :pool_options while a create/edit dialog
+  # is open: the pool checkbox group is submit-only, so a re-render reverts
+  # un-submitted ticks. Mark the options stale and refetch on dialog close.
+  defp assign_pool_options(socket) do
+    if socket.assigns.creating_operator or socket.assigns.editing_operator do
+      assign(socket, :pool_options_stale?, true)
+    else
+      assign(socket,
+        pool_options: management_pool_options(socket.assigns.current_scope),
+        pool_options_stale?: false
+      )
+    end
+  end
+
+  defp flush_stale_pool_options(socket) do
+    if socket.assigns.pool_options_stale? do
+      assign(socket,
+        pool_options: management_pool_options(socket.assigns.current_scope),
+        pool_options_stale?: false
+      )
+    else
+      socket
+    end
   end
 
   defp clear_resetting(socket) do
@@ -432,7 +463,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         socket =
           socket
           |> assign(:operator_management_denied?, false)
-          |> assign(:pool_options, management_pool_options(socket.assigns.current_scope))
+          |> assign_pool_options()
           |> assign(:operator_count, length(operators))
           |> assign(:active_operator_count, OperatorForm.active_operator_count(operators))
           |> stream(:operators, filtered_operators, reset: true, dom_id: &"operator-row-#{&1.id}")
