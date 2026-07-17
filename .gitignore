@@ -25,6 +25,7 @@ erl_crash.dump
 
 # Local automation artifacts.
 AGENTS.md
+CLAUDE.md
 PRODUCT.md
 RUNBOOK.md
 /docs/
