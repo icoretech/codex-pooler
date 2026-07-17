@@ -296,9 +296,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           label="Enforced reasoning effort"
           options={@reasoning_effort_options}
         />
+        <p class="text-sm leading-6 text-base-content/60">
+          Reasoning "None" is an enforced upstream value; it is different from leaving the field unset.
+          Minimal is sent upstream as low, and Ultra is sent upstream as max for backend Codex
+          compatibility; use Max or Ultra only when the target model/upstream supports them.
+        </p>
       </div>
 
-      <div class="grid gap-1">
+      <div class="grid gap-1 border-t border-base-300/60 pt-5">
         <h3 class="text-lg font-semibold text-base-content">Enforced request fields</h3>
         <p class="text-sm leading-6 text-base-content/65">
           Optionally pin the model and service tier sent upstream, regardless of request values.
@@ -320,6 +325,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
         />
       </div>
 
+      <p class="text-sm leading-6 text-base-content/60">
+        Service tier is only enforced when selected. Auto lets the upstream choose, default requests
+        standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the
+        highest available tier.
+      </p>
+
       <div
         :if={@selector_state.enforced_unavailable_warning}
         id="api-key-enforced-model-warning"
@@ -331,15 +342,6 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           <p class="text-sm">{@selector_state.enforced_unavailable_warning.message}</p>
         </div>
       </div>
-
-      <p class="text-sm leading-6 text-base-content/60">
-        Reasoning "None" is an enforced upstream value; it is different from leaving the field unset.
-        Minimal is sent upstream as low, and Ultra is sent upstream as max for backend Codex
-        compatibility; use Max or Ultra only when the target model/upstream supports them.
-        Service tier is only enforced when selected. Auto lets the upstream choose, default requests
-        standard capacity, flex opts into lower-priority flexible capacity, and priority asks for the
-        highest available tier.
-      </p>
     </section>
     """
   end
