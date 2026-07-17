@@ -433,19 +433,169 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     refute inspect(cockpit.oauth_flows) =~ "admin_cockpit_test"
     refute inspect(cockpit.oauth_flows) =~ "code_verifier"
 
+    assert %{id: pending_id} = UpstreamCockpitReadModel.pending_relink_flow(cockpit.oauth_flows)
+    assert pending_id == flow.id
+
     {:ok, view, html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
-    assert has_element?(view, "#upstream-cockpit-oauth-flow-state")
-
-    assert has_element?(
-             view,
-             "#upstream-cockpit-oauth-flow-#{flow.id}",
-             "Browser authorization pending"
-           )
-
-    assert has_element?(view, "#upstream-cockpit-oauth-flow-#{flow.id}", "relink")
+    assert has_element?(view, ~s(#upstream-cockpit-relink[data-flow-kind="browser"]))
+    assert has_element?(view, "#upstream-cockpit-relink", "Authorization link issued")
+    assert has_element?(view, "#upstream-cockpit-relink", "Waiting for authorization")
+    assert has_element?(view, "#upstream-cockpit-relink-kind", "browser flow")
+    assert has_element?(view, "#upstream-cockpit-relink-expiry", "expires in")
+    assert has_element?(view, "#upstream-cockpit-relink-cancel", "Cancel flow")
+    refute has_element?(view, "#upstream-cockpit-relink-code")
     refute html =~ authorization_url
     refute html =~ "admin_cockpit_test"
     refute html =~ "code_verifier"
+  end
+
+  test "renders the relink timeline for a pending device flow", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "cockpit-relink-device", name: "Cockpit Relink Device"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Device Account"})
+
+    insert_oauth_flow!(pool, identity, scope.user, %{
+      flow_kind: "device",
+      device_user_code: "KDWZ-LRVP",
+      verification_uri: "https://provider.example/verify",
+      last_polled_at: DateTime.add(DateTime.utc_now(), -90, :second)
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(view, ~s(#upstream-cockpit-relink[data-flow-kind="device"]))
+    assert has_element?(view, "#upstream-cockpit-relink", "Device code issued")
+    assert has_element?(view, "#upstream-cockpit-relink", "Waiting for confirmation")
+    assert has_element?(view, "#upstream-cockpit-relink", "checked")
+    assert has_element?(view, "#upstream-cockpit-relink-code", "KDWZ-LRVP")
+    assert has_element?(view, ~s(#upstream-cockpit-relink-copy-code[data-copy-text="KDWZ-LRVP"]))
+
+    assert has_element?(
+             view,
+             ~s(#upstream-cockpit-relink-verification-link[href="https://provider.example/verify"]),
+             "Open verification page"
+           )
+  end
+
+  test "does not render a relink card without an actively pending flow", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "cockpit-relink-stale", name: "Cockpit Relink Stale"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Stale Account"})
+
+    insert_oauth_flow!(pool, identity, scope.user, %{
+      status: "completed",
+      completed_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+    })
+
+    # Still labelled pending, but the deadline has passed: the sweeper has not
+    # relabelled it yet, and it must not keep the card alive.
+    insert_oauth_flow!(pool, identity, scope.user, %{
+      status: "pending",
+      expires_at: DateTime.add(DateTime.utc_now(), -1800, :second)
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    refute has_element?(view, "#upstream-cockpit-relink")
+    refute has_element?(view, "#upstream-cockpit-oauth-flow-state")
+    assert has_element?(view, "#upstream-event-summary", "OAuth relink expired")
+  end
+
+  test "surfaces terminal relink flows in recent activity within 24h only", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "cockpit-relink-terminal", name: "Cockpit Relink Terminal"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Terminal Account"})
+
+    insert_oauth_flow!(pool, identity, scope.user, %{
+      status: "failed",
+      completed_at: DateTime.add(DateTime.utc_now(), -7200, :second),
+      error_message: "access denied at provider"
+    })
+
+    insert_oauth_flow!(pool, identity, scope.user, %{
+      status: "cancelled",
+      cancelled_at: DateTime.add(DateTime.utc_now(), -3 * 86_400, :second)
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(view, "#upstream-event-summary", "OAuth relink failed")
+    assert has_element?(view, "#upstream-event-summary", "access denied at provider")
+
+    assert has_element?(
+             view,
+             ~s(#upstream-event-summary [data-role="recent-event-source"]),
+             "oauth"
+           )
+
+    refute has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
+  end
+
+  test "cancels a pending relink flow from the card footer", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "cockpit-relink-cancel", name: "Cockpit Relink Cancel"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Cockpit Relink Cancel Account"})
+
+    flow =
+      insert_oauth_flow!(pool, identity, scope.user, %{
+        flow_kind: "device",
+        device_user_code: "CNCL-FLOW"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    assert has_element?(view, "#upstream-cockpit-relink")
+
+    view
+    |> element("#upstream-cockpit-relink-cancel")
+    |> render_click()
+
+    assert Repo.get!(OAuthFlow, flow.id).status == "cancelled"
+    refute has_element?(view, "#upstream-cockpit-relink")
+    assert has_element?(view, "#upstream-event-summary", "OAuth relink cancelled")
+  end
+
+  test "vitals values carry title tooltips for clipped text", %{conn: conn, scope: scope} do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "cockpit-vitals-titles", name: "Cockpit Vitals Titles"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Cockpit Vitals Titles Account"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(view, "#upstream-vitals-access-token dd[title]")
+    assert has_element?(view, "#upstream-vitals-token-refresh dd[title]")
+  end
+
+  defp insert_oauth_flow!(pool, identity, user, attrs) do
+    defaults = %{
+      pool_id: pool.id,
+      upstream_identity_id: identity.id,
+      requested_by_user_id: user.id,
+      flow_kind: "device",
+      purpose: "relink",
+      status: "pending",
+      expires_at: DateTime.add(DateTime.utc_now(), 900, :second),
+      metadata: %{}
+    }
+
+    %OAuthFlow{}
+    |> OAuthFlow.changeset(Map.merge(defaults, attrs))
+    |> Repo.insert!()
   end
 
   test "relinks cockpit account through browser OAuth dialog without rendering token secrets", %{

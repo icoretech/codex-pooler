@@ -433,7 +433,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             <.icon name="hero-magnifying-glass" class="size-3.5" />
           </button>
           <.link
-            :if={!event_row.event.request_id}
+            :if={!event_row.event.request_id && event_row.event.link}
             data-role="recent-event-link"
             href={event_row.event.link}
             title="Open in audit logs"
@@ -442,6 +442,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           >
             <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
           </.link>
+          <span
+            :if={!event_row.event.request_id && !event_row.event.link}
+            class="size-6 justify-self-end"
+            aria-hidden="true"
+          ></span>
         </article>
       </div>
 
@@ -553,10 +558,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
 
   defp event_source_label("request_log"), do: "request"
   defp event_source_label("audit_log"), do: "audit"
+  defp event_source_label("oauth_flow"), do: "oauth"
   defp event_source_label(source), do: source |> Formatting.status_text() |> String.downcase()
 
   defp event_source_tone("request_log"), do: :info
   defp event_source_tone("audit_log"), do: :primary
+  defp event_source_tone("oauth_flow"), do: :warning
   defp event_source_tone(_source), do: :neutral
 
   defp confirming_saved_reset_redemption?(nil, _cockpit), do: false

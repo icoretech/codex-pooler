@@ -68,12 +68,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
             reauth_required?={@cockpit.flags.reauth_required?}
           />
 
-          <Summary.oauth_flow_state cockpit={@cockpit} datetime_preferences={@datetime_preferences} />
-
           <div class="grid items-start gap-4 xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
             <div class="grid gap-4 xl:sticky xl:top-4">
               <Summary.credential_card cockpit={@cockpit} />
               <Summary.vitals_card cockpit={@cockpit} />
+              <Summary.relink_card cockpit={@cockpit} datetime_preferences={@datetime_preferences} />
               <Sections.actions_rail
                 cockpit={@cockpit}
                 confirming_saved_reset_redemption={@confirming_saved_reset_redemption}

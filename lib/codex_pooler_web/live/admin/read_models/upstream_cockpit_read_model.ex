@@ -16,6 +16,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @request_failed_statuses ~w(failed rejected interrupted cancelled)
   @recent_event_limit 8
   @recent_event_prefetch_limit 32
+  @oauth_terminal_statuses ~w(failed expired cancelled)
+  @oauth_recent_event_window_seconds 24 * 60 * 60
 
   @type safe_identity :: %{
           required(:id) => Ecto.UUID.t(),
@@ -89,7 +91,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:source) => String.t(),
           required(:title) => String.t(),
           required(:subtitle) => String.t(),
-          required(:link) => String.t(),
+          required(:link) => String.t() | nil,
           required(:request_id) => Ecto.UUID.t() | nil,
           required(:failure?) => boolean()
         }
@@ -181,9 +183,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     pool_contribution = pool_contribution(account.identity, assignments, scope)
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
-    recent_events = recent_events(account.identity, scope)
-    actions = actions(account)
     oauth_flows = oauth_flows(account, scope)
+    recent_events = recent_events(account.identity, scope, oauth_flows)
+    actions = actions(account)
     saved_resets = saved_resets(account)
     saved_reset_policy = saved_reset_policy(account)
     sections = sections(flags, assignments, charts, recent_events, actions)
@@ -355,11 +357,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
   defp datetime_sort_value(_datetime), do: 0
 
-  defp recent_events(%UpstreamIdentity{} = identity, scope) do
+  defp recent_events(%UpstreamIdentity{} = identity, scope, oauth_flows) do
     items =
       identity.id
       |> request_recent_event_items(scope)
       |> Enum.concat(audit_recent_event_items(scope, identity.id))
+      |> Enum.concat(oauth_recent_event_items(oauth_flows))
       |> Enum.sort_by(&datetime_sort_value(&1.timestamp), :desc)
       |> Enum.take(@recent_event_limit)
 
@@ -476,6 +479,98 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     query = URI.encode_query([{"target", identity_id}])
     "/admin/audit-logs?#{query}"
   end
+
+  @doc """
+  The account's most recent OAuth flow that is still actionable: pending and
+  not yet past its deadline. A pending flow whose expiry has passed is dead
+  even if the expiry sweeper has not relabelled it yet, so it never keeps the
+  relink card alive.
+  """
+  @spec pending_relink_flow(oauth_flow_state()) :: map() | nil
+  def pending_relink_flow(%{items: items}) when is_list(items) do
+    Enum.find(items, &actively_pending_flow?/1)
+  end
+
+  def pending_relink_flow(_oauth_flows), do: nil
+
+  defp actively_pending_flow?(%{status: "pending", expires_at: %DateTime{} = expires_at}),
+    do: DateTime.after?(expires_at, DateTime.utc_now())
+
+  defp actively_pending_flow?(_flow), do: false
+
+  # Failed, expired, and cancelled relink flows emit no audit event (only
+  # successful completions do), so these feed rows are their only surface.
+  # The recency window keeps a stale flow from resurfacing days later.
+  defp oauth_recent_event_items(%{items: items}) when is_list(items) do
+    items
+    |> Enum.map(&normalize_oauth_flow_status/1)
+    |> Enum.filter(&(&1.status in @oauth_terminal_statuses))
+    |> Enum.map(&oauth_recent_event_item/1)
+    |> Enum.filter(&recent_oauth_event?/1)
+  end
+
+  defp oauth_recent_event_items(_oauth_flows), do: []
+
+  # A pending flow past its deadline is expired in fact; present it as such
+  # without waiting for the expiry sweeper to relabel the row.
+  defp normalize_oauth_flow_status(
+         %{status: "pending", expires_at: %DateTime{} = expires_at} = flow
+       ) do
+    if DateTime.after?(expires_at, DateTime.utc_now()) do
+      flow
+    else
+      %{flow | status: "expired"}
+    end
+  end
+
+  defp normalize_oauth_flow_status(flow), do: flow
+
+  defp oauth_recent_event_item(flow) do
+    %{
+      timestamp: oauth_terminal_timestamp(flow),
+      source: "oauth_flow",
+      title: oauth_recent_event_title(flow.status),
+      subtitle: oauth_recent_event_subtitle(flow),
+      link: nil,
+      request_id: nil,
+      failure?: flow.status in ["failed", "expired"]
+    }
+  end
+
+  defp recent_oauth_event?(%{timestamp: %DateTime{} = timestamp}) do
+    DateTime.diff(DateTime.utc_now(), timestamp, :second) <= @oauth_recent_event_window_seconds
+  end
+
+  defp recent_oauth_event?(_item), do: false
+
+  defp oauth_terminal_timestamp(%{status: "cancelled"} = flow),
+    do: flow.cancelled_at || flow.inserted_at
+
+  defp oauth_terminal_timestamp(%{status: "failed"} = flow),
+    do: flow.completed_at || flow.inserted_at
+
+  defp oauth_terminal_timestamp(%{status: "expired"} = flow),
+    do: flow.expires_at || flow.inserted_at
+
+  defp oauth_terminal_timestamp(flow), do: flow.inserted_at
+
+  defp oauth_recent_event_title("failed"), do: "OAuth relink failed"
+  defp oauth_recent_event_title("expired"), do: "OAuth relink expired"
+  defp oauth_recent_event_title(_status), do: "OAuth relink cancelled"
+
+  defp oauth_recent_event_subtitle(flow) do
+    ["#{flow.flow_kind} flow", oauth_error_label(flow.error)]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp oauth_error_label(%{message: message}) when is_binary(message) and message != "",
+    do: message
+
+  defp oauth_error_label(%{code: code}) when is_binary(code) and code != "",
+    do: human_status(code)
+
+  defp oauth_error_label(_error), do: nil
 
   defp humanize_event_title(value) do
     value

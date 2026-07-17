@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   alias CodexPooler.Accounting
   alias CodexPooler.Events
   alias CodexPooler.Pools
+  alias CodexPooler.Upstreams.OAuth, as: UpstreamOAuth
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -188,6 +189,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     {:noreply, OAuthRelinkWorkflow.cancel(socket, &refresh_oauth_flow_state/1)}
   end
 
+  # Cancels a pending flow discovered from the DB (the relink card), unlike
+  # the dialog's cancel which only knows the flow this session started.
+  def handle_event("cancel_pending_oauth_flow", %{"id" => flow_id}, socket) do
+    if pending_cockpit_flow?(socket, flow_id) do
+      case UpstreamOAuth.cancel_oauth_flow(socket.assigns.current_scope, flow_id) do
+        {:ok, _flow} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "OAuth relink flow cancelled")
+           |> load_cockpit()}
+
+        {:error, %{message: message}} when is_binary(message) ->
+          {:noreply, put_flash(socket, :error, "Could not cancel OAuth flow: #{message}")}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Could not cancel OAuth flow")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "OAuth flow was not found")}
+    end
+  end
+
   def handle_event("validate_auth_json_import", %{"auth_json" => auth_json_params}, socket) do
     {:noreply, AuthJsonImportWorkflow.validate(socket, auth_json_params)}
   end
@@ -345,6 +368,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       {socket, _stale_pool_ids} = PoolEventSubscriptions.reconcile(socket, target_pool_ids)
       socket
     end)
+  end
+
+  defp pending_cockpit_flow?(socket, flow_id) do
+    case socket.assigns.cockpit do
+      %{oauth_flows: %{items: items}} when is_list(items) ->
+        Enum.any?(items, &(&1.id == flow_id and &1.status == "pending"))
+
+      _cockpit ->
+        false
+    end
   end
 
   defp upstream_event_in_scope?(socket, payload) do

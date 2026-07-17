@@ -5,92 +5,219 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
 
   alias CodexPoolerWeb.Admin.AvatarComponents
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
+  alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
 
+  @doc """
+  Relink in progress: a status timeline for the account's pending OAuth flow,
+  rendered in the rail directly above Actions and only while a flow is
+  actively pending. The lone action is cancelling the flow — a browser flow
+  cannot be resumed because its authorization link never leaves the session
+  that started it.
+  """
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
 
-  def oauth_flow_state(assigns) do
-    assigns = assign(assigns, :oauth_flows, assigns.cockpit.oauth_flows)
+  def relink_card(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :flow,
+        UpstreamCockpitReadModel.pending_relink_flow(assigns.cockpit.oauth_flows)
+      )
 
     ~H"""
     <section
-      :if={!@oauth_flows.empty?}
-      id="upstream-cockpit-oauth-flow-state"
+      :if={@flow}
+      id="upstream-cockpit-relink"
+      data-flow-kind={@flow.flow_kind}
+      aria-label="OAuth relink in progress"
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
-      <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
-        <h2 class="text-base font-semibold leading-5 text-base-content">OAuth activity</h2>
-        <span class={AdminBadges.count_chip_class()}>
-          {@oauth_flows.pending_count} pending of {@oauth_flows.count}
+      <header class={[
+        "flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3",
+        relink_wash_class(@flow.flow_kind)
+      ]}>
+        <h2 class="flex items-center gap-2.5 text-base font-semibold leading-5 text-base-content">
+          <span class="relative flex size-2" aria-hidden="true">
+            <span class={[
+              "absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping",
+              relink_dot_class(@flow.flow_kind)
+            ]}></span>
+            <span class={[
+              "relative inline-flex size-2 rounded-full",
+              relink_dot_class(@flow.flow_kind)
+            ]}></span>
+          </span>
+          <span>Relink in progress</span>
+        </h2>
+        <span
+          id="upstream-cockpit-relink-kind"
+          class={[
+            AdminBadges.metadata_chip_class(relink_chip_tone(@flow.flow_kind)),
+            "!px-2 !py-0.5 !text-[10px] uppercase"
+          ]}
+        >
+          {@flow.flow_kind} flow
         </span>
       </header>
 
-      <div class="grid gap-2 p-4 md:grid-cols-2">
-        <article
-          :for={flow <- @oauth_flows.items}
-          id={"upstream-cockpit-oauth-flow-#{flow.id}"}
-          data-flow-kind={flow.flow_kind}
-          data-flow-status={flow.status}
-          class="grid gap-2 rounded-lg border border-base-300 bg-base-100 p-4"
+      <ol class="grid px-4 py-3" role="list">
+        <.relink_step
+          done
+          connector
+          title={relink_issued_title(@flow.flow_kind)}
+          time={ResetFormatting.relative_time_label(@flow.inserted_at)}
+          time_title={Formatting.format_oauth_flow_time(@flow.inserted_at, @datetime_preferences)}
+          hint={relink_issued_hint(@flow.flow_kind)}
         >
-          <div class="flex flex-wrap items-start justify-between gap-2">
-            <div class="min-w-0">
-              <p class="font-medium text-base-content">{flow.status_label}</p>
-              <p class="text-xs text-base-content/60">
-                {flow.flow_kind} · {flow.purpose}
-              </p>
-            </div>
-            <span class={AdminBadges.status_chip_class(flow.status)}>{flow.status}</span>
+          <div :if={@flow.device} class="flex flex-wrap items-center gap-3 pt-1">
+            <span class="inline-flex items-center gap-1 rounded-lg border border-base-300 bg-base-200/60 py-1 pl-3 pr-1">
+              <code
+                id="upstream-cockpit-relink-code"
+                class="font-mono text-[13px] font-semibold tracking-[0.12em] text-base-content"
+              >
+                {@flow.device.user_code}
+              </code>
+              <button
+                id="upstream-cockpit-relink-copy-code"
+                type="button"
+                class="btn btn-ghost btn-xs btn-square text-base-content/45 hover:text-base-content"
+                phx-hook="ClipboardCopy"
+                phx-update="ignore"
+                data-copy-text={@flow.device.user_code}
+                aria-label="Copy device code"
+              >
+                <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
+              </button>
+            </span>
+            <a
+              :if={@flow.device.verification_uri}
+              id="upstream-cockpit-relink-verification-link"
+              href={@flow.device.verification_uri}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1 text-xs font-semibold text-info hover:underline"
+            >
+              <span>Open verification page</span>
+              <.icon name="hero-arrow-top-right-on-square" class="size-3" />
+            </a>
           </div>
+        </.relink_step>
+        <.relink_step
+          pulse_class={relink_dot_class(@flow.flow_kind)}
+          title={relink_waiting_title(@flow.flow_kind)}
+          time={relink_checked_label(@flow)}
+          time_title={Formatting.format_oauth_flow_time(@flow.last_polled_at, @datetime_preferences)}
+          hint={relink_waiting_hint(@flow.flow_kind)}
+        />
+      </ol>
 
-          <dl class="grid gap-1 text-xs text-base-content/70">
-            <div>
-              <dt class="sr-only">Expires</dt>
-              <dd>
-                expires {Formatting.format_oauth_flow_time(flow.expires_at, @datetime_preferences)}
-              </dd>
-            </div>
-            <div :if={flow.poll_after_at}>
-              <dt class="sr-only">Next poll</dt>
-              <dd>
-                next poll {Formatting.format_oauth_flow_time(
-                  flow.poll_after_at,
-                  @datetime_preferences
-                )}
-              </dd>
-            </div>
-            <div :if={flow.device}>
-              <dt class="sr-only">Device code</dt>
-              <dd>device code {flow.device.user_code}</dd>
-            </div>
-            <div :if={flow.device && flow.device.verification_uri}>
-              <dt class="sr-only">Verification URL</dt>
-              <dd>
-                <a
-                  href={flow.device.verification_uri}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="link link-primary break-all"
-                >
-                  {flow.device.verification_uri}
-                </a>
-              </dd>
-            </div>
-            <div :if={flow.error}>
-              <dt class="sr-only">Error</dt>
-              <dd>{flow.error.message || flow.error.code}</dd>
-            </div>
-            <div :if={flow.result_identity}>
-              <dt class="sr-only">Completed identity</dt>
-              <dd>{flow.result_identity.label}</dd>
-            </div>
-          </dl>
-        </article>
-      </div>
+      <footer class="flex items-center justify-between gap-3 border-t border-base-300/70 bg-base-200/25 px-4 py-1.5">
+        <span
+          id="upstream-cockpit-relink-expiry"
+          title={Formatting.format_oauth_flow_time(@flow.expires_at, @datetime_preferences)}
+          class="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-base-content/55"
+        >
+          <.icon name="hero-clock" class="size-3 shrink-0" />
+          <span>expires {ResetFormatting.relative_time_label(@flow.expires_at)}</span>
+        </span>
+        <button
+          id="upstream-cockpit-relink-cancel"
+          type="button"
+          phx-click="cancel_pending_oauth_flow"
+          phx-value-id={@flow.id}
+          class="btn btn-ghost btn-xs text-base-content/55 hover:text-error"
+        >
+          Cancel flow
+        </button>
+      </footer>
     </section>
     """
   end
+
+  attr :title, :string, required: true
+  attr :done, :boolean, default: false
+  attr :connector, :boolean, default: false
+  attr :pulse_class, :string, default: nil
+  attr :time, :string, default: nil
+  attr :time_title, :string, default: nil
+  attr :hint, :string, default: nil
+  slot :inner_block
+
+  defp relink_step(assigns) do
+    ~H"""
+    <li class="relative grid gap-1 pb-3.5 pl-6 last:pb-0">
+      <span
+        :if={@connector}
+        class="absolute bottom-0 left-[3.5px] top-4 w-px bg-base-300/80"
+        aria-hidden="true"
+      ></span>
+      <span class="absolute left-0 top-1 flex size-2" aria-hidden="true">
+        <span
+          :if={@pulse_class}
+          class={[
+            "absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping",
+            @pulse_class
+          ]}
+        ></span>
+        <span class={[
+          "relative inline-flex size-2 rounded-full",
+          relink_step_dot(@done, @pulse_class)
+        ]}></span>
+      </span>
+      <div class="flex items-baseline justify-between gap-3">
+        <h3 class="text-[13px] font-semibold leading-4 text-base-content">{@title}</h3>
+        <span
+          :if={@time}
+          title={@time_title}
+          class="shrink-0 text-[11px] tabular-nums text-base-content/45"
+        >
+          {@time}
+        </span>
+      </div>
+      <p :if={@hint} class="text-xs leading-5 text-base-content/60">{@hint}</p>
+      {render_slot(@inner_block)}
+    </li>
+    """
+  end
+
+  defp relink_step_dot(true, _pulse_class), do: "bg-success"
+  defp relink_step_dot(false, pulse_class) when is_binary(pulse_class), do: pulse_class
+  defp relink_step_dot(false, _pulse_class), do: "bg-base-300"
+
+  defp relink_wash_class("browser"), do: "bg-primary/5"
+  defp relink_wash_class(_kind), do: "bg-info/5"
+
+  defp relink_dot_class("browser"), do: "bg-primary"
+  defp relink_dot_class(_kind), do: "bg-info"
+
+  defp relink_chip_tone("browser"), do: :primary
+  defp relink_chip_tone(_kind), do: :info
+
+  defp relink_issued_title("device"), do: "Device code issued"
+  defp relink_issued_title(_kind), do: "Authorization link issued"
+
+  defp relink_issued_hint("device"),
+    do: "Enter this code on the provider's verification page to finish linking this account."
+
+  defp relink_issued_hint(_kind),
+    do: "The link only lives in the browser tab where it was opened — it can't be reissued here."
+
+  defp relink_waiting_title("device"), do: "Waiting for confirmation"
+  defp relink_waiting_title(_kind), do: "Waiting for authorization"
+
+  defp relink_waiting_hint("device"),
+    do: "The pooler polls the provider until the code is confirmed."
+
+  defp relink_waiting_hint(_kind),
+    do: "Completion arrives via callback once the sign-in finishes."
+
+  defp relink_checked_label(%{last_polled_at: %DateTime{} = polled_at}),
+    do: "checked #{ResetFormatting.relative_time_label(polled_at)}"
+
+  defp relink_checked_label(_flow), do: nil
 
   @doc """
   Credential card: the account rendered as a badge — avatar with a lifecycle
@@ -250,7 +377,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           class="flex items-baseline justify-between gap-3 border-t border-base-300/50 px-4 py-2 text-xs first:border-t-0"
         >
           <dt class="shrink-0 text-base-content/55">{row.label}</dt>
-          <dd class={["min-w-0 truncate text-right font-semibold tabular-nums", row.class]}>
+          <dd
+            title={row.value}
+            class={["min-w-0 truncate text-right font-semibold tabular-nums", row.class]}
+          >
             {row.value}
           </dd>
         </div>
