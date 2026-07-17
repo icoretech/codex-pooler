@@ -11,6 +11,14 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.PoolForm
 
+  @empty_token_usage %{
+    cached_input_tokens: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0
+  }
+
   @type data_load_warning :: map()
   @type option :: {String.t(), Ecto.UUID.t() | String.t()}
   @type metrics :: %{
@@ -42,7 +50,6 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:total_tokens) => non_neg_integer(),
           required(:latency_ms) => non_neg_integer(),
           required(:token_usage) => token_usage(),
-          required(:token_usage_weekly) => token_usage(),
           required(:token_histogram) => [map()],
           required(:request_histogram) => [map()],
           required(:settled_cost_micros) => non_neg_integer(),
@@ -51,9 +58,15 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:routing_strategy) => String.t(),
           required(:compat_flags) => compat_flags()
         }
+  @type usage_by_pool_id :: %{optional(Ecto.UUID.t()) => Stats.pool_usage_metrics()}
+  @type traffic_result :: %{
+          required(:traffic_window) => String.t(),
+          required(:usage_by_pool_id) => usage_by_pool_id()
+        }
   @type page_state :: %{
           required(:pools) => [pool_row()],
           required(:pool_metrics) => metrics(),
+          required(:traffic_pool_ids) => [Ecto.UUID.t()],
           required(:can_manage_pools?) => boolean(),
           required(:upstream_identity_options) => [option()],
           required(:api_key_options) => [option()],
@@ -63,10 +76,10 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   @spec empty_metrics() :: metrics()
   def empty_metrics, do: pool_metrics([])
 
-  @spec load(term(), map()) :: page_state()
-  def load(scope, filters) do
+  @spec load_structural(term(), map()) :: page_state()
+  def load_structural(scope, filters) do
     traffic_window = PoolForm.normalize_traffic_window(Map.get(filters, "traffic_window", "24h"))
-    pool_rows = pool_rows(scope, traffic_window)
+    pool_rows = structural_pool_rows(scope, traffic_window)
     visible_pool_rows = filter_pool_rows(pool_rows, filters)
     can_manage_pools? = Pools.can_manage_pools?(scope)
 
@@ -78,11 +91,55 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     %{
       pools: visible_pool_rows,
       pool_metrics: pool_metrics(pool_rows, traffic_window),
+      traffic_pool_ids: Enum.map(pool_rows, & &1.pool.id),
       can_manage_pools?: can_manage_pools?,
       upstream_identity_options: upstream_identity_options,
       api_key_options: api_key_options,
       data_load_warnings: upstream_warnings ++ api_key_warnings
     }
+  end
+
+  # The expensive multi-aggregate read. Callers must run this off the LiveView
+  # process (start_async) so pending clicks never queue behind it.
+  @spec traffic_metrics([Ecto.UUID.t()], String.t()) :: traffic_result()
+  def traffic_metrics(pool_ids, traffic_window) do
+    traffic_window = PoolForm.normalize_traffic_window(traffic_window)
+
+    %{
+      traffic_window: traffic_window,
+      usage_by_pool_id:
+        Stats.pool_usage_metrics_by_pool_ids(pool_ids, traffic_window: traffic_window)
+    }
+  end
+
+  # Merges by pool id and touches only traffic fields, so pools that vanished
+  # mid-flight are ignored and dialog/form assigns are never rebuilt.
+  @spec merge_traffic([pool_row()], metrics(), usage_by_pool_id(), [Ecto.UUID.t()]) ::
+          {[pool_row()], metrics()}
+  def merge_traffic(pool_rows, pool_metrics, usage_by_pool_id, traffic_pool_ids) do
+    merged_rows =
+      Enum.map(pool_rows, fn pool_row ->
+        case Map.fetch(usage_by_pool_id, pool_row.pool.id) do
+          {:ok, usage} -> put_row_usage(pool_row, usage)
+          :error -> pool_row
+        end
+      end)
+
+    usages =
+      traffic_pool_ids
+      |> Enum.map(&Map.get(usage_by_pool_id, &1))
+      |> Enum.reject(&is_nil/1)
+
+    total_tokens = usages |> Enum.map(& &1.total_tokens) |> Enum.sum()
+    latency_ms = usages |> Enum.map(& &1.latency_ms) |> Enum.sum()
+
+    merged_metrics = %{
+      pool_metrics
+      | request_count: usages |> Enum.map(& &1.request_count) |> Enum.sum(),
+        tokens_per_second: pool_tokens_per_second(total_tokens, latency_ms)
+    }
+
+    {merged_rows, merged_metrics}
   end
 
   @spec format_metric_integer(integer() | nil) :: String.t()
@@ -107,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     Format.money_precise_from_micros(micros)
   end
 
-  defp pool_rows(scope, traffic_window) do
+  defp structural_pool_rows(scope, traffic_window) do
     pools =
       case Pools.list_pools_for_management(scope) do
         {:ok, pools} -> pools
@@ -118,26 +175,23 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     api_key_counts = Access.count_api_keys_by_pool_ids(pool_ids)
     upstream_counts = UpstreamAssignments.count_pool_assignments_by_pool_ids(pool_ids)
     routing_settings = PoolRouting.routing_settings_by_pool_ids(pool_ids)
-    usage_metrics = Stats.pool_usage_metrics_by_pool_ids(pool_ids, traffic_window: traffic_window)
     traffic_window_label = PoolForm.traffic_window_short_label(traffic_window)
 
     Enum.map(pools, fn pool ->
-      usage = Map.fetch!(usage_metrics, pool.id)
       settings = Map.get(routing_settings, pool.id)
 
       %{
         pool: pool,
         api_key_count: Map.get(api_key_counts, pool.id, 0),
         upstream_count: Map.get(upstream_counts, pool.id, 0),
-        request_count: usage.request_count,
-        tokens_per_second: usage.tokens_per_second,
-        total_tokens: usage.total_tokens,
-        latency_ms: usage.latency_ms,
-        token_usage: usage.token_usage,
-        token_usage_weekly: usage.token_usage_weekly,
-        token_histogram: usage.token_histogram,
-        request_histogram: usage.request_histogram,
-        settled_cost_micros: usage.settled_cost_micros,
+        request_count: 0,
+        tokens_per_second: nil,
+        total_tokens: 0,
+        latency_ms: 0,
+        token_usage: @empty_token_usage,
+        token_histogram: [],
+        request_histogram: [],
+        settled_cost_micros: 0,
         traffic_window: traffic_window,
         traffic_window_label: traffic_window_label,
         routing_strategy: settings.routing_strategy,
@@ -148,6 +202,20 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         }
       }
     end)
+  end
+
+  defp put_row_usage(pool_row, usage) do
+    %{
+      pool_row
+      | request_count: usage.request_count,
+        tokens_per_second: usage.tokens_per_second,
+        total_tokens: usage.total_tokens,
+        latency_ms: usage.latency_ms,
+        token_usage: usage.token_usage,
+        token_histogram: usage.token_histogram,
+        request_histogram: usage.request_histogram,
+        settled_cost_micros: usage.settled_cost_micros
+    }
   end
 
   defp filter_pool_rows(pool_rows, filters) do

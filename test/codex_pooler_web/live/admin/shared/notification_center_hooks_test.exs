@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
   } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: unique_slug("incident"), name: "Incident"})
     {:ok, first_view, _html} = live(conn, ~p"/admin/pools")
+    _ = render_async(first_view, 2_000)
     {:ok, second_view, _html} = live(conn, ~p"/admin/jobs")
 
     assert %{badge_count: 0, badge_label: "0", rows: [], has_rows?: false, empty?: true} =
@@ -45,6 +46,7 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
     second_id = second.id
 
     {:ok, first_view, _html} = live(conn, ~p"/admin/pools")
+    _ = render_async(first_view, 2_000)
     {:ok, second_view, _html} = live(conn, ~p"/admin/jobs")
 
     assert %{badge_count: 2, rows: rows} = notification_center(first_view)
@@ -83,7 +85,9 @@ defmodule CodexPoolerWeb.Admin.NotificationCenterHooksTest do
 
     assigned_conn = assigned_admin_conn(owner_scope, assigned_pool)
     {:ok, owner_view, _html} = live(owner_conn, ~p"/admin/pools")
+    _ = render_async(owner_view, 2_000)
     {:ok, assigned_view, _html} = live(assigned_conn, ~p"/admin/pools")
+    _ = render_async(assigned_view, 2_000)
 
     assert %{badge_count: 0, rows: []} = notification_center(owner_view)
     assert %{badge_count: 0, rows: []} = notification_center(assigned_view)

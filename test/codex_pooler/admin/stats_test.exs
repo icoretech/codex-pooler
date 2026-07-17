@@ -1009,7 +1009,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[pool.id].tokens_per_second == 50.0
     assert metrics[pool.id].token_usage.total_tokens == 100
     assert metrics[pool.id].token_usage.cached_input_tokens == 20
-    assert metrics[pool.id].token_usage_weekly.total_tokens == 125
+    refute Map.has_key?(metrics[pool.id], :token_usage_weekly)
     assert metrics[pool.id].settled_cost_micros == 700_000
     assert length(metrics[pool.id].token_histogram) == 24
     assert Enum.any?(metrics[pool.id].token_histogram, &(&1.total_tokens == 100))
@@ -1021,7 +1021,6 @@ defmodule CodexPooler.Admin.StatsTest do
     assert metrics[other_pool.id].request_count == 1
     assert metrics[other_pool.id].tokens_per_second == 500.0
     assert metrics[other_pool.id].token_usage.total_tokens == 50
-    assert metrics[other_pool.id].token_usage_weekly.total_tokens == 50
     assert metrics[other_pool.id].settled_cost_micros == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].token_histogram, & &1.total_tokens)) == 50
     assert Enum.sum(Enum.map(metrics[other_pool.id].request_histogram, & &1.requests)) == 1
@@ -1080,7 +1079,6 @@ defmodule CodexPooler.Admin.StatsTest do
              total_tokens: 100
            }
 
-    assert metrics[pool.id].token_usage_weekly.total_tokens == 100
     assert metrics[pool.id].settled_cost_micros == 700_000
     assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 100
     assert Enum.sum(Enum.map(metrics[pool.id].request_histogram, & &1.requests)) == 2

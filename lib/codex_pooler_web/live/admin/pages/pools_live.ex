@@ -39,9 +39,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        subscribed_pool_events?: false,
        pool_traffic_dirty?: false,
        pool_traffic_refresh_timer: nil,
-       pool_traffic_refresh_token: nil
+       pool_traffic_refresh_token: nil,
+       traffic_pool_ids: [],
+       pool_traffic_usage: nil,
+       pool_traffic_loading?: true,
+       pool_traffic_running?: false,
+       pool_traffic_rerun?: false
      )
-     |> load_pools()}
+     |> load_structural()
+     |> start_pool_traffic_load()}
   end
 
   @impl true
@@ -81,7 +87,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        |> put_flash(:info, "Pool created")
        |> clear_pool_traffic_refresh()
        |> close_create_dialog()
-       |> load_pools()}
+       |> load_structural()
+       |> start_pool_traffic_load()}
     else
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
@@ -142,7 +149,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        |> put_flash(:info, "Pool updated")
        |> clear_pool_traffic_refresh()
        |> clear_editing()
-       |> load_pools()}
+       |> load_structural()
+       |> start_pool_traffic_load()}
     else
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
@@ -196,13 +204,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:noreply,
        socket
        |> put_flash(:info, "#{flag_label} #{state_label} on #{pool_row.pool.name}")
-       |> load_pools()}
+       |> load_structural()}
     else
       {:error, reason} ->
         {:noreply,
          socket
          |> put_flash(:error, error_message(reason))
-         |> load_pools()}
+         |> load_structural()}
     end
   end
 
@@ -239,7 +247,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        |> put_flash(:info, "Pool deleted")
        |> clear_pool_traffic_refresh()
        |> clear_deleting()
-       |> load_pools()}
+       |> load_structural()
+       |> start_pool_traffic_load()}
     else
       {:error, reason} ->
         {:noreply,
@@ -251,43 +260,25 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_event("filter_pools", %{"pool_filters" => filter_params}, socket) do
-    filters = PoolForm.filter(filter_params)
-
-    {:noreply,
-     socket
-     |> assign(:pool_filters, filters)
-     |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> load_pools()}
+    {:noreply, apply_pool_filters(socket, PoolForm.filter(filter_params))}
   end
 
   def handle_event("clear_pool_query_filter", _params, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "query", ""))
 
-    {:noreply,
-     socket
-     |> assign(:pool_filters, filters)
-     |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> load_pools()}
+    {:noreply, apply_pool_filters(socket, filters)}
   end
 
   def handle_event("select_pool_status_filter", %{"status" => status}, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "status", status))
 
-    {:noreply,
-     socket
-     |> assign(:pool_filters, filters)
-     |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> load_pools()}
+    {:noreply, apply_pool_filters(socket, filters)}
   end
 
   def handle_event("select_pool_traffic_window_filter", %{"window" => window}, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "traffic_window", window))
 
-    {:noreply,
-     socket
-     |> assign(:pool_filters, filters)
-     |> assign(:pool_filter_form, PoolForm.filter_form(filters))
-     |> load_pools()}
+    {:noreply, apply_pool_filters(socket, filters)}
   end
 
   @impl true
@@ -304,13 +295,48 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       {:noreply,
        socket
        |> clear_pool_traffic_refresh()
-       |> load_pools()}
+       |> start_pool_traffic_load()}
     else
       {:noreply, socket}
     end
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_async(:pool_traffic, {:ok, traffic}, socket) do
+    socket = assign(socket, :pool_traffic_running?, false)
+
+    if traffic.traffic_window == current_traffic_window(socket) do
+      socket =
+        socket
+        |> assign(pool_traffic_usage: traffic.usage_by_pool_id, pool_traffic_loading?: false)
+        |> apply_pool_traffic()
+
+      if socket.assigns.pool_traffic_rerun? do
+        {:noreply, start_pool_traffic_load(socket)}
+      else
+        {:noreply, socket}
+      end
+    else
+      # The traffic window changed while this result was in flight; the stale
+      # aggregate must not merge, so discard it and load the current window.
+      {:noreply, start_pool_traffic_load(socket)}
+    end
+  end
+
+  def handle_async(:pool_traffic, {:exit, _reason}, socket) do
+    socket = assign(socket, :pool_traffic_running?, false)
+
+    if socket.assigns.pool_traffic_rerun? do
+      {:noreply, start_pool_traffic_load(socket)}
+    else
+      # Without merged usage the structural zeros are placeholders, not data:
+      # keep the loading affordance instead of presenting them as settled.
+      {:noreply,
+       assign(socket, :pool_traffic_loading?, is_nil(socket.assigns.pool_traffic_usage))}
+    end
+  end
 
   defp pool_event_kind(topics, pool_id) when is_list(topics) and is_binary(pool_id) do
     case Events.validate_topics(topics) do
@@ -395,14 +421,24 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
             id="pool-metric-requests"
             icon="hero-arrow-path"
             label={"Requests #{@pool_metrics.traffic_window_label}"}
-            value={PoolsReadModel.format_metric_integer(@pool_metrics.request_count)}
+            value={
+              pool_traffic_metric_value(
+                @pool_traffic_loading?,
+                PoolsReadModel.format_metric_integer(@pool_metrics.request_count)
+              )
+            }
             compact_mobile
           />
           <AdminComponents.metric_card
             id="pool-metric-tokens-per-sec"
             icon="hero-bolt"
             label={"TPS #{@pool_metrics.traffic_window_label}"}
-            value={PoolsReadModel.format_metric_rate(@pool_metrics.tokens_per_second)}
+            value={
+              pool_traffic_metric_value(
+                @pool_traffic_loading?,
+                PoolsReadModel.format_metric_rate(@pool_metrics.tokens_per_second)
+              )
+            }
             tone={:primary}
             compact_mobile
           />
@@ -442,9 +478,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     """
   end
 
-  defp load_pools(socket) do
+  defp load_structural(socket) do
     page_state =
-      PoolsReadModel.load(
+      PoolsReadModel.load_structural(
         socket.assigns.current_scope,
         socket.assigns.pool_filters
       )
@@ -452,7 +488,70 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     socket
     |> assign(page_state)
     |> maybe_subscribe_pool_events(page_state.pools)
+    |> apply_pool_traffic()
   end
+
+  defp apply_pool_filters(socket, filters) do
+    previous_window = current_traffic_window(socket)
+
+    socket =
+      socket
+      |> assign(:pool_filters, filters)
+      |> assign(:pool_filter_form, PoolForm.filter_form(filters))
+
+    if current_traffic_window(socket) == previous_window do
+      load_structural(socket)
+    else
+      socket
+      |> assign(pool_traffic_usage: nil, pool_traffic_loading?: true)
+      |> load_structural()
+      |> start_pool_traffic_load()
+    end
+  end
+
+  # The traffic aggregate is the expensive read; running it on this process
+  # would queue clicks and dialog opens behind it. One task at a time: extra
+  # requests while one is in flight coalesce into a single re-run.
+  defp start_pool_traffic_load(socket) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      socket.assigns.pool_traffic_running? ->
+        assign(socket, :pool_traffic_rerun?, true)
+
+      true ->
+        pool_ids = socket.assigns.traffic_pool_ids
+        traffic_window = current_traffic_window(socket)
+
+        socket
+        |> assign(pool_traffic_running?: true, pool_traffic_rerun?: false)
+        |> start_async(:pool_traffic, fn ->
+          PoolsReadModel.traffic_metrics(pool_ids, traffic_window)
+        end)
+    end
+  end
+
+  defp apply_pool_traffic(socket) do
+    case socket.assigns.pool_traffic_usage do
+      nil ->
+        socket
+
+      usage_by_pool_id ->
+        {pools, pool_metrics} =
+          PoolsReadModel.merge_traffic(
+            socket.assigns.pools,
+            socket.assigns.pool_metrics,
+            usage_by_pool_id,
+            socket.assigns.traffic_pool_ids
+          )
+
+        assign(socket, pools: pools, pool_metrics: pool_metrics)
+    end
+  end
+
+  defp current_traffic_window(socket),
+    do: Map.get(socket.assigns.pool_filters, "traffic_window", "24h")
 
   defp maybe_subscribe_pool_events(socket, pool_rows) do
     pool_rows
@@ -531,7 +630,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       |> assign(:pool_traffic_dirty?, true)
       |> cancel_pool_traffic_refresh_timer()
     else
-      load_pools(socket)
+      socket
+      |> load_structural()
+      |> start_pool_traffic_load()
     end
   end
 
@@ -575,7 +676,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     if socket.assigns.pool_traffic_dirty? and not pool_dialog_open?(socket) do
       socket
       |> clear_pool_traffic_refresh()
-      |> load_pools()
+      |> load_structural()
+      |> start_pool_traffic_load()
     else
       socket
     end
@@ -598,6 +700,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
     assign(socket, pool_traffic_refresh_timer: nil, pool_traffic_refresh_token: nil)
   end
+
+  defp pool_traffic_metric_value(true = _loading?, _value), do: "…"
+  defp pool_traffic_metric_value(false = _loading?, value), do: value
 
   defp pool_dialog_open?(socket) do
     socket.assigns.creating_pool or not is_nil(socket.assigns.editing_pool) or

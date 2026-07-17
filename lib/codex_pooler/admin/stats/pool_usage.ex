@@ -21,7 +21,6 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
   @type pool_usage_opt ::
           {:as_of, DateTime.t()}
           | {:started_at, DateTime.t()}
-          | {:weekly_started_at, DateTime.t()}
           | {:histogram_started_at, DateTime.t()}
           | {:traffic_window, String.t() | atom()}
           | {:histogram_window, String.t() | atom()}
@@ -31,7 +30,6 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
           required(:total_tokens) => non_neg_integer(),
           required(:latency_ms) => non_neg_integer(),
           required(:token_usage) => map(),
-          required(:token_usage_weekly) => map(),
           required(:token_histogram) => [map()],
           required(:request_histogram) => [map()],
           required(:settled_cost_micros) => non_neg_integer()
@@ -52,15 +50,10 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
         pool_default_started_at(ended_at, window)
       )
 
-    weekly_started_at = Keyword.get(opts, :weekly_started_at, DateTime.add(ended_at, -7, :day))
-
     request_counts = GatewayReadModel.request_counts_by_pool_ids(pool_ids, started_at, ended_at)
     token_totals = AccountingReporting.token_totals_by_pool_ids(pool_ids, started_at, ended_at)
     latency_totals = GatewayReadModel.latency_totals_by_pool_ids(pool_ids, started_at, ended_at)
     token_usage = AccountingReporting.token_usage_by_pool_ids(pool_ids, started_at, ended_at)
-
-    token_usage_weekly =
-      AccountingReporting.token_usage_by_pool_ids(pool_ids, weekly_started_at, ended_at)
 
     histogram_started_at =
       Keyword.get(
@@ -105,7 +98,6 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
          total_tokens: total_tokens,
          latency_ms: latency_ms,
          token_usage: Map.get(token_usage, pool_id, Aggregates.empty_token_usage()),
-         token_usage_weekly: Map.get(token_usage_weekly, pool_id, Aggregates.empty_token_usage()),
          token_histogram: Map.fetch!(token_histograms, pool_id),
          request_histogram: Map.fetch!(request_histograms, pool_id),
          settled_cost_micros: Map.fetch!(cost_micros, pool_id)

@@ -71,6 +71,9 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
 
       for {path, selector} <- @admin_routes do
         assert {:ok, view, _html} = live(conn, path)
+        # Settle any mount-started async work so no task still holds a
+        # sandbox connection when the view is torn down.
+        _ = render_async(view, 2_000)
         assert has_element?(view, selector)
         assert has_element?(view, "#admin-shell-root")
         assert has_element?(view, "#admin-shell-scroll-region")

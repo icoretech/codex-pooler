@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     Repo.delete_all(Pool)
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-empty-state", "No Pools Found")
 
@@ -55,6 +56,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       capture_log(fn ->
         admin_conn = log_in_user(build_conn(), admin, token)
         {:ok, view, html} = live(admin_conn, ~p"/admin/pools")
+        _ = await_pool_traffic(view)
 
         refute html =~ "Pool create hidden account"
         refute has_element?(view, "#pools-page-create-action")
@@ -95,6 +97,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     admin_conn = log_in_user(build_conn(), admin, token)
     {:ok, view, html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{assigned_pool.id}")
     refute html =~ hidden_pool.name
@@ -125,6 +128,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     admin_conn = log_in_user(build_conn(), admin, token)
     {:ok, view, html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-empty-state", "No assigned Pools")
 
@@ -146,6 +150,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "compat-panel", name: "Compat Panel Pool"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
 
@@ -184,12 +189,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     view |> element("#pool-row-#{pool.id}-compat-ws-bridge") |> render_click()
     refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
+    _ = await_pool_traffic(view)
   end
 
   test "ignores compat toggles outside the whitelist", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "compat-guard", name: "Compat Guard Pool"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     html =
       render_click(view, "toggle_pool_compat_flag", %{
@@ -225,6 +232,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     admin_conn = log_in_user(build_conn(), admin, token)
     {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#pool-row-#{pool.id}-compat-v1") |> render_click()
 
@@ -275,6 +283,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     state = :sys.get_state(view.pid)
     pool_id = pool.id
@@ -472,6 +481,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              ])
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{pool.id}-activity")
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram")
@@ -514,6 +524,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-metric-requests", "1")
     refute has_element?(view, "#pool-metric-requests", "Last 5h requests")
@@ -610,6 +621,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     insert_timed_usage!(pool, api_key, assignment, old_at, 25, 500_000, 500)
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-metric-requests", "1")
     assert has_element?(view, "#pool-metric-requests", "Requests 24h")
@@ -632,6 +644,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     view
     |> element("#pool-traffic-window-filter [data-window='7d']")
     |> render_click()
+
+    _ = await_pool_traffic(view)
 
     assert has_element?(
              view,
@@ -658,6 +672,111 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram", "2 requests")
   end
 
+  test "paints structural rows instantly and fills traffic metrics asynchronously", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "async-traffic", name: "Async Traffic Pool"})
+    %{api_key: api_key} = api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request = request_fixture(%{pool: pool, api_key: api_key})
+
+    attempt =
+      request
+      |> attempt_fixture(assignment)
+      |> Ecto.Changeset.change(%{latency_ms: 2_000})
+      |> Repo.update!()
+
+    ledger_entry_fixture(request, %{
+      attempt_id: attempt.id,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      total_tokens: 100,
+      input_tokens: 60,
+      output_tokens: 40,
+      estimated_cost_micros: 1_000_000,
+      settled_cost_micros: 500_000
+    })
+
+    {:ok, view, html} = live(conn, ~p"/admin/pools")
+
+    assert html =~ "Async Traffic Pool"
+
+    [_, requests_card] = String.split(html, ~s(id="pool-metric-requests"), parts: 2)
+
+    [requests_card | _] =
+      String.split(requests_card, ~s(id="pool-metric-tokens-per-sec"), parts: 2)
+
+    assert requests_card =~ "…"
+
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-metric-requests", "1")
+    assert has_element?(view, "#pool-metric-tokens-per-sec", "50")
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
+    refute has_element?(view, "#pool-metric-requests", "…")
+  end
+
+  test "async traffic merges leave an open dialog and its form intact", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    open_create_dialog(view)
+    assert has_element?(view, "#pool-create-dialog[open]")
+
+    late_identity = active_identity_fixture(account_label: "Mid-merge account")
+
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-create-dialog[open]")
+    assert has_element?(view, "#pool-create-form")
+
+    refute has_element?(
+             view,
+             "#pool-create-upstream-identity-options-card-#{late_identity.id}"
+           )
+
+    refute :sys.get_state(view.pid).socket.assigns.pool_traffic_loading?
+
+    view |> element("#pool-create-cancel") |> render_click()
+    refute has_element?(view, "#pool-create-dialog")
+    _ = await_pool_traffic(view)
+  end
+
+  test "rapid traffic window changes settle on the latest window", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "window-race", name: "Window Race Pool"})
+    %{api_key: api_key} = api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    recent_at =
+      DateTime.utc_now() |> DateTime.add(-30, :minute) |> DateTime.truncate(:microsecond)
+
+    insert_timed_usage!(pool, api_key, assignment, recent_at, 100, 1_000_000, 2_000)
+
+    insert_timed_usage!(
+      pool,
+      api_key,
+      assignment,
+      DateTime.add(recent_at, -5, :day),
+      25,
+      500_000,
+      500
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    view |> element("#pool-traffic-window-filter [data-window='7d']") |> render_click()
+    view |> element("#pool-traffic-window-filter [data-window='24h']") |> render_click()
+
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-metric-requests", "Requests 24h")
+    assert has_element?(view, "#pool-metric-requests", "1")
+    assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
+    refute has_element?(view, "#pool-metric-requests", "…")
+  end
+
   test "renders the pools shell and protected controls for authenticated admins", %{
     conn: conn,
     scope: scope
@@ -666,6 +785,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     expected_pool_total = Repo.aggregate(Pool, :count, :id) |> Integer.to_string()
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#admin-pools-live")
     assert has_element?(view, "#pool-metrics")
@@ -888,6 +1008,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert {:ok, _pool} = Pools.change_pool_status(scope, disabled_pool, "disabled")
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{active_pool.id}", "Filter Active")
     assert has_element?(view, "#pool-row-#{disabled_pool.id}", "Filter Disabled")
@@ -936,6 +1057,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   test "creates pools from names with generated slugs", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
 
@@ -953,10 +1075,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{created_pool.id}", "Generated Slug Pool")
     refute has_element?(view, "#pool-row-#{created_pool.id}", "generated-slug-pool")
     refute has_element?(view, "#pool-create-dialog")
+    _ = await_pool_traffic(view)
   end
 
   test "defers lifecycle event reloads while the create wizard is open", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
     assert has_element?(view, "#pool-create-upstream-identity-options")
@@ -982,6 +1106,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-create-upstream-identity-options-card-#{late_identity.id}"
            )
+
+    _ = await_pool_traffic(view)
   end
 
   test "defers lifecycle event reloads while the edit dialog is open", %{
@@ -992,6 +1118,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       Pools.create_pool(scope, %{slug: "lifecycle-edit-pool", name: "Lifecycle Edit Pool"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
     assert has_element?(view, "#pool-edit-dialog[open]")
@@ -1020,6 +1147,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-edit-upstream-assignment-options",
              "Mid-edit assignment account"
            )
+
+    _ = await_pool_traffic(view)
   end
 
   test "creates pools with routing strategy, compatibility, compression, websocket bridge, and upstream identities",
@@ -1030,6 +1159,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     second_identity = active_identity_fixture(account_label: "Second create account")
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
 
@@ -1080,6 +1210,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert Enum.all?(assignments, &(&1.status == "active"))
     refute has_element?(view, "#pool-create-dialog")
+    _ = await_pool_traffic(view)
   end
 
   test "rejects duplicate generated slugs and keeps the create dialog open", %{
@@ -1092,6 +1223,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     initial_pool_count = Repo.aggregate(Pool, :count, :id)
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
 
@@ -1113,6 +1245,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     identity = active_identity_fixture(account_label: "Preserved create account")
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
 
@@ -1152,6 +1285,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       Pools.create_pool(scope, %{slug: "editable-pool", name: "Editable Pool"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
@@ -1188,6 +1322,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}", "Renamed Pool")
     assert has_element?(view, "#pool-row-#{pool.id}-status", "disabled")
     refute has_element?(view, "#pool-row-#{pool.id}", "editable-pool")
+    _ = await_pool_traffic(view)
   end
 
   test "edits routing strategy and selected upstream identity rows", %{conn: conn, scope: scope} do
@@ -1219,6 +1354,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
@@ -1411,6 +1547,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert Repo.get!(APIKey, linked_api_key.id).pool_id == pool.id
     assert Repo.get!(APIKey, moved_api_key.id).pool_id == pool.id
     refute has_element?(view, "#pool-edit-dialog")
+    _ = await_pool_traffic(view)
   end
 
   test "edit upstream step exposes identities assigned to other pools", %{
@@ -1436,6 +1573,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{target_pool.id}") |> render_click()
     view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()
@@ -1477,6 +1615,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{target_pool.id}-upstream-account-count", "0")
     assert has_element?(view, "#pool-row-#{source_pool.id}-upstream-account-count", "1")
@@ -1504,6 +1643,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert [%{status: "active", upstream_identity_id: ^source_identity_id}] = source_assignments
     assert has_element?(view, "#pool-row-#{target_pool.id}-upstream-account-count", "1")
     assert has_element?(view, "#pool-row-#{source_pool.id}-upstream-account-count", "1")
+    _ = await_pool_traffic(view)
   end
 
   test "edit can remove a shared identity from one pool while upstream read model keeps the other assignment",
@@ -1529,6 +1669,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              )
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{target_pool.id}") |> render_click()
 
@@ -1545,7 +1686,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       }
     })
 
-    _ = :sys.get_state(view.pid)
+    _ = await_pool_traffic(view)
 
     assignments_by_pool =
       identity
@@ -1570,6 +1711,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "refresh-routing", name: "Refresh Routing"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Bridge ring")
     refute has_element?(view, "#pool-inspector")
@@ -1583,12 +1725,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-row-#{pool.id}-routing-strategy", "Deterministic rotation")
     refute has_element?(view, "#pool-inspector")
+    _ = await_pool_traffic(view)
   end
 
   test "refreshes pool counts and usage metrics when events arrive", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "refresh-counts", name: "Refresh Counts"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{pool.id}-api-key-count", "0")
     assert has_element?(view, "#pool-row-#{pool.id}-upstream-account-count", "0")
@@ -1636,6 +1780,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     state = :sys.get_state(view.pid)
     send(view.pid, {:refresh_pool_traffic, state.socket.assigns.pool_traffic_refresh_token})
     _ = :sys.get_state(view.pid)
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
@@ -1656,6 +1801,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       Pools.create_pool(scope, %{slug: "coalesced-traffic", name: "Coalesced Traffic"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     state = :sys.get_state(view.pid)
 
@@ -1689,11 +1835,17 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         _ = :sys.get_state(view.pid)
       end)
 
-    assert timer_queries != []
+    # the traffic aggregate runs in an async task, never on the LiveView process
+    assert timer_queries == []
 
     state = :sys.get_state(view.pid)
     refute state.socket.assigns.pool_traffic_dirty?
     assert is_nil(state.socket.assigns.pool_traffic_refresh_timer)
+
+    _ = await_pool_traffic(view)
+    state = :sys.get_state(view.pid)
+    refute state.socket.assigns.pool_traffic_running?
+    assert is_map(state.socket.assigns.pool_traffic_usage)
 
     {_result, stale_timer_queries} =
       capture_repo_queries(view.pid, fn ->
@@ -1702,6 +1854,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       end)
 
     assert stale_timer_queries == []
+    refute :sys.get_state(view.pid).socket.assigns.pool_traffic_running?
   end
 
   test "defers traffic and lifecycle reloads in every Pool dialog, flushing once on close", %{
@@ -1715,6 +1868,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert {:ok, _archived_pool} = Pools.change_pool_status(scope, archived_pool, "archived")
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     open_create_dialog(view)
 
@@ -1786,6 +1940,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
            )
 
     assert_no_pending_pool_traffic_refresh(view)
+    _ = await_pool_traffic(view)
   end
 
   test "preserves supporting routing settings when editing from pools dialog", %{
@@ -1807,6 +1962,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
@@ -1842,6 +1998,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.upstream_websocket_bridge_enabled == false
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
     refute has_element?(view, "#pool-edit-dialog")
+    _ = await_pool_traffic(view)
   end
 
   test "edit failure rolls back pool and routing changes", %{conn: conn, scope: scope} do
@@ -1863,6 +2020,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
@@ -1909,6 +2067,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
@@ -1968,6 +2127,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       operator_pool_assignment_fixture(admin, pool, created_by_user_id: scope.user.id)
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
 
     assert has_element?(view, "#delete-pool-#{pool.id}[disabled]")
 
@@ -2027,6 +2187,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute Repo.get(OperatorPoolAssignment, operator_assignment.id)
     refute has_element?(view, "#pool-row-#{pool.id}")
     refute has_element?(view, "#pool-delete-dialog")
+    _ = await_pool_traffic(view)
   end
 
   test "rejects missing-scope pool mutations", %{scope: scope} do
@@ -2046,6 +2207,19 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   defp open_create_dialog(view) do
     view |> element("#pools-page-create-action") |> render_click()
+  end
+
+  # Waits for the async traffic task, including coalesced re-runs, so tests
+  # never leave a task holding a sandbox connection when the view is killed.
+  defp await_pool_traffic(view) do
+    html = render_async(view, 2_000)
+    state = :sys.get_state(view.pid)
+
+    if state.socket.assigns.pool_traffic_running? or state.socket.assigns.pool_traffic_rerun? do
+      await_pool_traffic(view)
+    else
+      html
+    end
   end
 
   defp assert_deferred_traffic_refresh(view, pool_id) do
