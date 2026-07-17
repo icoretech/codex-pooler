@@ -85,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   end
 
   def count_chip_class do
-    "inline-flex items-center justify-center rounded-box bg-base-200 px-2.5 py-1 text-xs font-semibold tabular-nums text-base-content"
+    [chip_class(:neutral), "tabular-nums"]
   end
 
   def metadata_chip_class(tone \\ :neutral), do: chip_class(tone)

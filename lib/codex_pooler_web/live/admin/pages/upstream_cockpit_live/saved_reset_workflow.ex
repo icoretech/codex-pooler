@@ -48,6 +48,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
       identity_id != socket.assigns.cockpit.identity.id ->
         put_flash(socket, :error, "Upstream account was not found")
 
+      confirming_redemption_for?(socket, identity_id) ->
+        close_redemption_confirmation(socket)
+
       action_available?(socket, :redeem_saved_reset, identity_id) ->
         assign(socket, :confirming_saved_reset_redemption, %{
           identity_id: identity_id,
@@ -58,6 +61,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive.SavedResetWorkflow do
       true ->
         put_unavailable_action_error(socket, :redeem_saved_reset)
     end
+  end
+
+  defp confirming_redemption_for?(socket, identity_id) do
+    match?(
+      %{identity_id: ^identity_id},
+      socket.assigns.confirming_saved_reset_redemption
+    )
   end
 
   @spec close_redemption_confirmation(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()

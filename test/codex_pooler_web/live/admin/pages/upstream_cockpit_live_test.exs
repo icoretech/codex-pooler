@@ -1554,6 +1554,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#cockpit-saved-reset-redemption-confirm", "Confirm redemption")
     assert has_element?(view, "#cockpit-saved-reset-redemption-cancel", "Keep resets in bank")
 
+    # Clicking the rail action again toggles the confirmation closed.
+    view |> element(action_selector) |> render_click()
+    refute has_element?(view, "#cockpit-saved-reset-redemption-confirmation")
+
+    view |> element(action_selector) |> render_click()
+    assert has_element?(view, "#cockpit-saved-reset-redemption-confirmation")
+
     assert Repo.aggregate(
              from(job in Oban.Job,
                where: job.worker == ^worker_name(SavedResetRedemptionWorker)
