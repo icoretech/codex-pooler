@@ -61,43 +61,55 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         No quota windows are reported for this account yet.
       </p>
 
-      <div class="grid gap-3 border-t border-base-300/60 px-4 py-3">
-        <SavedResetMeter.saved_reset_meter
-          id="upstream-quota-saved-reset-meter"
-          saved_resets={@cockpit.saved_resets}
-          saved_reset_policy={@cockpit.saved_reset_policy}
-        />
-        <div
-          :if={@cockpit.saved_resets.reset_lifecycle}
-          id="cockpit-saved-reset-lifecycle"
-          class="grid gap-1 rounded-box border border-base-300 bg-base-200/30 p-3"
-        >
-          <h3 class="text-sm font-semibold text-base-content">Reset confirmation</h3>
-          <p id="cockpit-saved-reset-lifecycle-label" class="text-xs leading-5 text-base-content/60">
-            {@cockpit.saved_resets.reset_lifecycle.label}
-          </p>
-          <p
-            :if={@cockpit.saved_resets.reset_lifecycle.deadline_at}
-            class="text-xs leading-5 text-base-content/50"
-          >
-            Confirmation window until {@cockpit.saved_resets.reset_lifecycle.deadline_at}
-          </p>
-        </div>
-        <div
-          :if={@cockpit.saved_resets.available?}
-          id="cockpit-saved-reset-expiration-summary"
-          class="grid gap-2"
-        >
-          <SavedResetComponents.saved_reset_expiration_table
-            id="cockpit-saved-reset-expiration"
+      <details
+        id="saved-reset-bank-disclosure"
+        class="border-t border-base-300/60"
+        data-preserve-open
+      >
+        <summary class="block cursor-pointer list-none px-4 py-3 transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
+          <SavedResetMeter.saved_reset_meter
+            id="upstream-quota-saved-reset-meter"
             saved_resets={@cockpit.saved_resets}
-            datetime_preferences={@datetime_preferences}
-            empty_label="No expiration dates reported for the available saved resets yet."
+            saved_reset_policy={@cockpit.saved_reset_policy}
           />
+        </summary>
+        <div class="grid gap-3 px-4 pb-3">
+          <div
+            :if={@cockpit.saved_resets.reset_lifecycle}
+            id="cockpit-saved-reset-lifecycle"
+            class="grid gap-1 rounded-box border border-base-300 bg-base-200/30 p-3"
+          >
+            <h3 class="text-sm font-semibold text-base-content">Reset confirmation</h3>
+            <p id="cockpit-saved-reset-lifecycle-label" class="text-xs leading-5 text-base-content/60">
+              {@cockpit.saved_resets.reset_lifecycle.label}
+            </p>
+            <p
+              :if={@cockpit.saved_resets.reset_lifecycle.deadline_at}
+              class="text-xs leading-5 text-base-content/50"
+            >
+              Confirmation window until {@cockpit.saved_resets.reset_lifecycle.deadline_at}
+            </p>
+          </div>
+          <div
+            :if={@cockpit.saved_resets.available?}
+            id="cockpit-saved-reset-expiration-summary"
+            class="grid gap-2"
+          >
+            <SavedResetComponents.saved_reset_expiration_table
+              id="cockpit-saved-reset-expiration"
+              saved_resets={@cockpit.saved_resets}
+              datetime_preferences={@datetime_preferences}
+              empty_label="No expiration dates reported for the available saved resets yet."
+            />
+          </div>
         </div>
-      </div>
+      </details>
 
-      <details id="saved-reset-policy-disclosure" class="border-t border-base-300/60">
+      <details
+        id="saved-reset-policy-disclosure"
+        class="border-t border-base-300/60"
+        data-preserve-open
+      >
         <summary class="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
           <span>Auto redeem policy</span>
           <span class={[

@@ -1521,6 +1521,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     assert has_element?(view, "#{meter_selector}-policy", "inactive")
+    assert has_element?(view, "#saved-reset-bank-disclosure summary #{meter_selector}")
+    refute has_element?(view, "#saved-reset-bank-disclosure[open]")
     assert has_element?(view, "#saved-reset-policy-disclosure", "off")
     assert has_element?(view, "#{meter_selector}-reset[title='#{first_expiration_label}']")
 
