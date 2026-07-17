@@ -703,7 +703,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     if Pools.owner?(current_scope) do
       @admin_nav_items
     else
-      Enum.reject(@admin_nav_items, &(&1.key in [:jobs, :system]))
+      Enum.reject(@admin_nav_items, &(&1.key in [:jobs, :system, :operators]))
     end
   end
 
