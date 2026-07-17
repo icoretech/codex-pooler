@@ -891,10 +891,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#upstream-cockpit-safe-account-id[title^='stored account id sha256:']"
            )
 
-    assert has_element?(
-             view,
-             "#upstream-cockpit-safe-account-id-copy[phx-hook='ClipboardCopy']"
-           )
+    refute has_element?(view, "#upstream-cockpit-safe-account-id [phx-hook='ClipboardCopy']")
 
     for vitals_row <- [
           "#upstream-vitals-access-token",
@@ -924,7 +921,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "100.0%"
            )
 
-    assert has_element?(view, "#upstream-event-summary", "Recent activity")
+    assert has_element?(view, "#upstream-event-summary", "Recent failures")
     assert has_element?(view, "#upstream-actions", "Actions")
     assert has_element?(view, "#request-health-chart #upstream-refresh-data-button", "Refresh")
 
@@ -2975,26 +2972,30 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert Enum.all?(events, fn event ->
              MapSet.new(Map.keys(event)) ==
-               MapSet.new([:timestamp, :source, :title, :subtitle, :link])
+               MapSet.new([:timestamp, :source, :title, :subtitle, :link, :request_id, :failure?])
            end)
 
     assert hd(events) == %{
              timestamp: newest_audit.occurred_at,
              source: "audit_log",
              title: "Upstream account paused",
-             subtitle: "Success · upstream identity #{String.slice(identity.id, 0, 8)}",
-             link: "/admin/audit-logs?target=#{identity.id}"
+             subtitle: "Success",
+             link: "/admin/audit-logs?target=#{identity.id}",
+             request_id: nil,
+             failure?: false
            }
 
     assert Enum.any?(events, fn event ->
-             event.source == "request_log" and event.title == "Request failed" and
+             event.source == "request_log" and event.failure? and
+               event.subtitle =~ "Failed" and
                event.timestamp == failed_request.request.admitted_at and
+               event.request_id == failed_request.request.id and
                event.link ==
                  "/admin/request-logs?request_id=#{failed_request.request.id}&upstream_identity_id=#{identity.id}"
            end)
 
     assert Enum.any?(events, fn event ->
-             event.source == "request_log" and event.title == "Request retried" and
+             event.source == "request_log" and not event.failure? and
                event.timestamp == retried_request.request.admitted_at and
                event.subtitle =~ "2 attempts"
            end)
@@ -3243,9 +3244,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-event-summary-row-2 [data-role='recent-event-link'][href='#{request_event.link}']",
-             "Evidence"
+             "#upstream-event-summary-row-2 button[data-role='recent-event-link'][phx-click='open_request_log'][phx-value-request-id='#{request_event.request_id}']"
            )
+
+    view
+    |> element("#upstream-event-summary-row-2 button[data-role='recent-event-link']")
+    |> render_click()
+
+    assert has_element?(view, "#request-log-detail-drawer:checked")
+    assert has_element?(view, "#request-log-detail-sidebar")
+
+    view
+    |> element("#request-log-detail-sidebar-close")
+    |> render_click()
+
+    refute has_element?(view, "#request-log-detail-drawer:checked")
 
     assert has_element?(
              view,
@@ -3362,7 +3375,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-event-summary [data-role='recent-event-link'][href='/admin/request-logs?request_id=#{failed_request.request.id}&upstream_identity_id=#{identity.id}']"
+             "#upstream-event-summary button[data-role='recent-event-link'][phx-value-request-id='#{failed_request.request.id}']"
            )
 
     assert has_element?(view, "#upstream-refresh-data-message", "Cockpit data refreshed")

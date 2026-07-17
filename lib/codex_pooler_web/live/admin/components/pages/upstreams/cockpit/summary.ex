@@ -160,9 +160,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           id="upstream-cockpit-safe-subject-ref"
           data-role="upstream-subject-ref"
           icon="hero-user"
-          label="subject"
+          label="user"
           value={@cockpit.header.subject_ref}
-          title="Sanitized subject reference"
+          title="Sanitized reference to the ChatGPT user behind this credential; it separates credentials that share the same account"
         />
         <.fingerprint_row
           id="upstream-cockpit-workspace"
@@ -235,17 +235,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
       ]}>
         {@value || "–"}
       </dd>
-      <button
-        :if={@value}
-        id={"#{@id}-copy"}
-        type="button"
-        phx-hook="ClipboardCopy"
-        data-copy-text={@value}
-        aria-label={"Copy #{@label} reference"}
-        class="ml-auto grid size-6 shrink-0 place-items-center rounded text-base-content/35 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-      >
-        <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
-      </button>
     </div>
     """
   end

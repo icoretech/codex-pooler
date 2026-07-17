@@ -317,7 +317,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   end
 
   @doc """
-  Recent activity: merged request-failure and audit feed with evidence links.
+  Recent failures: merged request-failure and audit feed; request evidence
+  opens the request-log detail drawer in place.
   """
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
@@ -331,9 +332,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
         <div class="grid min-w-0 gap-0.5">
-          <h2 class="text-base font-semibold leading-5 text-base-content">Recent activity</h2>
+          <h2 class="text-base font-semibold leading-5 text-base-content">Recent failures</h2>
           <p class="text-xs leading-5 text-base-content/60">
-            Failures and lifecycle changes for this account · metadata only
+            Failed requests and account changes · metadata only
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -382,7 +383,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           <div class="grid min-w-0 gap-0.5 sm:flex sm:items-baseline sm:gap-2">
             <h3
               data-role="recent-event-title"
-              class="min-w-0 truncate text-sm font-semibold text-base-content"
+              class="min-w-0 truncate text-sm font-medium text-base-content"
             >
               {event_row.event.title}
             </h3>
@@ -402,12 +403,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
           >
             {event_source_label(event_row.event.source)}
           </span>
+          <button
+            :if={event_row.event.request_id}
+            data-role="recent-event-link"
+            type="button"
+            phx-click="open_request_log"
+            phx-value-request-id={event_row.event.request_id}
+            title="Open request evidence"
+            aria-label="Open request evidence"
+            class="btn btn-ghost btn-xs btn-square justify-self-end text-base-content/45 hover:text-primary"
+          >
+            <.icon name="hero-document-magnifying-glass" class="size-3.5" />
+          </button>
           <.link
+            :if={!event_row.event.request_id}
             data-role="recent-event-link"
             href={event_row.event.link}
-            class="justify-self-end text-xs font-semibold text-base-content/55 transition-colors hover:text-primary"
+            title="Open in audit logs"
+            aria-label="Open in audit logs"
+            class="btn btn-ghost btn-xs btn-square justify-self-end text-base-content/45 hover:text-primary"
           >
-            Evidence →
+            <.icon name="hero-arrow-top-right-on-square" class="size-3.5" />
           </.link>
         </article>
       </div>

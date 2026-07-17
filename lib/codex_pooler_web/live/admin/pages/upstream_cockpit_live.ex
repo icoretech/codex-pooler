@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   use CodexPoolerWeb, :admin_live_view
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
@@ -42,6 +43,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         delete_account_form: AccountLifecycleWorkflow.delete_form(nil),
         saved_reset_policy_form: SavedResetWorkflow.policy_form(%{}),
         confirming_saved_reset_redemption: nil,
+        selected_request_log: nil,
         subscribed_pool_ids: MapSet.new()
       )
       |> allow_upload(:auth_json,
@@ -80,6 +82,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   @impl true
+  def handle_event("open_request_log", %{"request-id" => request_id}, socket) do
+    {:noreply, assign(socket, :selected_request_log, load_request_log(socket, request_id))}
+  end
+
+  def handle_event("close_request_log", _params, socket) do
+    {:noreply, assign(socket, :selected_request_log, nil)}
+  end
+
   def handle_event("refresh_data", _params, socket) do
     {:noreply,
      socket |> load_cockpit() |> assign(:refresh_data_message, "Cockpit data refreshed")}
@@ -265,12 +275,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         delete_account_form={@delete_account_form}
         saved_reset_policy_form={@saved_reset_policy_form}
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
+        selected_request_log={@selected_request_log}
         refresh_data_message={@refresh_data_message}
         uploads={@uploads}
         datetime_preferences={@datetime_preferences}
       />
     </AdminComponents.admin_shell>
     """
+  end
+
+  # Same scope-checked loader (plus the admin debug projection) the request
+  # logs page uses for its detail drawer.
+  defp load_request_log(socket, request_id) do
+    scope = socket.assigns.current_scope
+
+    scope
+    |> Accounting.get_request_log_for_scope(request_id)
+    |> maybe_put_admin_debug_projection(scope, request_id)
+  end
+
+  defp maybe_put_admin_debug_projection(nil, _scope, _request_id), do: nil
+
+  defp maybe_put_admin_debug_projection(request_log, scope, request_id) do
+    scope
+    |> Accounting.list_request_logs_for_scope(
+      limit: 200,
+      filters: [request_id: request_id],
+      surface: :admin
+    )
+    |> Map.get(:items, [])
+    |> Enum.find(&(&1.id == request_id))
+    |> case do
+      %{debug: debug} -> Map.put(request_log, :debug, debug)
+      _missing -> request_log
+    end
   end
 
   defp default_relink_pool(socket) do

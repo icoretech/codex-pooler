@@ -89,7 +89,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:source) => String.t(),
           required(:title) => String.t(),
           required(:subtitle) => String.t(),
-          required(:link) => String.t()
+          required(:link) => String.t(),
+          required(:request_id) => Ecto.UUID.t() | nil,
+          required(:failure?) => boolean()
         }
   @type recent_events :: %{
           required(:items) => [recent_event_item()],
@@ -365,7 +367,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       items: items,
       count: length(items),
       empty?: items == [],
-      degraded?: Enum.any?(items, &(&1.source == "request_log" and &1.title == "Request failed")),
+      degraded?: Enum.any?(items, & &1.failure?),
       missing?: false
     }
   end
@@ -392,29 +394,44 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       source: "request_log",
       title: request_recent_event_title(row),
       subtitle: request_recent_event_subtitle(row),
-      link: request_recent_event_link(row.id, identity_id)
+      link: request_recent_event_link(row.id, identity_id),
+      request_id: row.id,
+      failure?: row.status in @request_failed_statuses
     }
   end
 
-  defp request_recent_event_title(%{status: status, attempt_count: attempt_count})
-       when status in @request_failed_statuses and attempt_count > 1,
-       do: "Request failed after retry"
+  # Failures lead with the distinctive fact (the error), not a repeated
+  # "Request failed" heading; the outcome moves to the subtitle.
+  defp request_recent_event_title(row) do
+    [status_code_label(row.response_status_code), row.last_error_code]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" · ")
+    |> case do
+      "" -> fallback_request_event_title(row)
+      title -> title
+    end
+  end
 
-  defp request_recent_event_title(%{status: status}) when status in @request_failed_statuses,
+  defp fallback_request_event_title(%{status: status}) when status in @request_failed_statuses,
     do: "Request failed"
 
-  defp request_recent_event_title(_row), do: "Request retried"
+  defp fallback_request_event_title(_row), do: "Request retried"
 
   defp request_recent_event_subtitle(row) do
     [
       human_status(row.status),
-      pluralize_count(row.attempt_count, "attempt", "attempts"),
-      status_code_label(row.response_status_code),
-      error_code_label(row.last_error_code)
+      retry_label(row),
+      pluralize_count(row.attempt_count, "attempt", "attempts")
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
+
+  defp retry_label(%{status: status, attempt_count: attempt_count})
+       when status in @request_failed_statuses and attempt_count > 1,
+       do: "after retry"
+
+  defp retry_label(_row), do: nil
 
   defp request_recent_event_link(request_id, identity_id) do
     query = URI.encode_query([{"request_id", request_id}, {"upstream_identity_id", identity_id}])
@@ -448,9 +465,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       timestamp: row.occurred_at,
       source: "audit_log",
       title: Audit.action_label(row.action) || humanize_event_title(row.action),
-      subtitle:
-        "#{human_status(row.outcome)} · upstream identity #{String.slice(identity_id, 0, 8)}",
-      link: audit_recent_event_link(identity_id)
+      subtitle: human_status(row.outcome),
+      link: audit_recent_event_link(identity_id),
+      request_id: nil,
+      failure?: false
     }
   end
 
@@ -475,9 +493,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   defp status_code_label(nil), do: nil
   defp status_code_label(status_code), do: "HTTP #{status_code}"
-
-  defp error_code_label(nil), do: nil
-  defp error_code_label(error_code), do: "error #{error_code}"
 
   defp pluralize_count(1, singular, _plural), do: "1 #{singular}"
   defp pluralize_count(count, _singular, plural), do: "#{count || 0} #{plural}"
