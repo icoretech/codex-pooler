@@ -1458,6 +1458,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         DateTimeDisplay.preferences_for_user(scope.user)
       )
 
+    first_seen_date =
+      DateTimeDisplay.format_datetime_parts(
+        first_seen_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      ).date
+
     %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
         account_label: "Saved Reset Cockpit Codex",
@@ -1527,26 +1533,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#cockpit-saved-reset-expiration-summary #cockpit-saved-reset-expiration-table"
+             "#cockpit-saved-reset-expiration-summary #cockpit-saved-reset-expiration[data-role='saved-reset-expiration-list']"
            )
 
-    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Expiration Date")
-    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "First Seen")
-    assert has_element?(view, "#cockpit-saved-reset-expiration-table", "Time Left")
     assert has_element?(view, "#cockpit-saved-reset-expiration-date-0", first_expiration_label)
     assert has_element?(view, "#cockpit-saved-reset-expiration-date-1", second_expiration_label)
 
     assert has_element?(
              view,
-             "#cockpit-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen']",
-             first_seen_label
+             "#cockpit-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen'][title='#{first_seen_label}']",
+             "banked #{first_seen_date}"
            )
 
     assert has_element?(
              view,
              "#cockpit-saved-reset-expiration-first-seen-1[data-role='saved-reset-expiration-first-seen']",
-             "not recorded"
+             "banked not recorded"
            )
+
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-expiration-life-0[data-role='saved-reset-expiration-life'] .saved-reset-life-fill"
+           )
+
+    refute has_element?(view, "#cockpit-saved-reset-expiration-life-1")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-held-0", "held 2d")
+    refute has_element?(view, "#cockpit-saved-reset-expiration-held-1")
 
     assert has_element?(
              view,

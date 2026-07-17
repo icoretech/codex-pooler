@@ -64,6 +64,56 @@ defmodule CodexPoolerWeb.DateTimeDisplay do
     end
   end
 
+  @doc """
+  Formats a datetime as separate date and time strings so callers can style
+  the two parts differently while honoring the operator's format preference.
+  """
+  @spec format_datetime_parts(datetime_value(), preferences()) ::
+          %{date: String.t(), time: String.t()} | nil
+  def format_datetime_parts(nil, _preferences), do: nil
+
+  def format_datetime_parts(%NaiveDateTime{} = datetime, preferences) do
+    datetime
+    |> DateTime.from_naive!(@default_timezone, Calendar.UTCOnlyTimeZoneDatabase)
+    |> format_datetime_parts(preferences)
+  end
+
+  def format_datetime_parts(%DateTime{} = datetime, preferences) when is_map(preferences) do
+    format = normalize_format(Map.get(preferences, :datetime_format))
+    datetime = shift_for_display(datetime, Map.get(preferences, :timezone))
+
+    case format do
+      "short" ->
+        %{
+          date: Calendar.strftime(datetime, "%Y-%m-%d"),
+          time: Calendar.strftime(datetime, "%H:%M")
+        }
+
+      "long" ->
+        %{
+          date: Calendar.strftime(datetime, "%b %-d, %Y"),
+          time: "#{Calendar.strftime(datetime, "%H:%M:%S")} #{timezone_label(datetime)}"
+        }
+
+      "iso8601" ->
+        iso =
+          datetime
+          |> DateTime.truncate(:second)
+          |> DateTime.to_iso8601()
+
+        case String.split(iso, "T", parts: 2) do
+          [date, time] -> %{date: date, time: time}
+          _no_time -> %{date: iso, time: ""}
+        end
+
+      _default ->
+        %{
+          date: Calendar.strftime(datetime, "%Y-%m-%d"),
+          time: "#{Calendar.strftime(datetime, "%H:%M:%S")} #{timezone_label(datetime)}"
+        }
+    end
+  end
+
   @spec format_options() :: [{String.t(), String.t()}]
   def format_options do
     [
