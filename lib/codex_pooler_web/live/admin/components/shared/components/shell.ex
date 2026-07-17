@@ -137,58 +137,59 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 x_profile_url={@x_profile_url}
               />
               <.alert_notification_dropdown center={@alert_notification_center} />
-              <div
+              <details
                 id="topbar-connection-indicator"
                 class="dropdown dropdown-end"
                 data-state="connecting"
                 data-transport="pending"
+                data-preserve-open
+                phx-click-away={JS.remove_attribute("open", to: "#topbar-connection-indicator")}
               >
-                <button
+                <summary
                   id="admin-websocket-state-button"
-                  type="button"
-                  tabindex="0"
-                  class="btn btn-ghost btn-sm btn-square text-base-content/60"
+                  class="btn btn-ghost btn-sm btn-square relative list-none text-base-content/60 [&::-webkit-details-marker]:hidden"
+                  role="button"
                   aria-label="Live updates: syncing"
                   data-ws-button
+                  phx-update="ignore"
                 >
                   <span data-ws-icon>
                     <.icon name="hero-wifi" class="size-5 text-base-content/45" />
                   </span>
                   <span class="sr-only" data-ws-label>Live updates: syncing</span>
-                </button>
-                <div
+                </summary>
+                <section
                   id="admin-websocket-state-popover"
-                  tabindex="0"
-                  class="dropdown-content z-50 mt-3 w-72 rounded-box border border-base-300 bg-base-100 p-4 shadow-2xl"
+                  class="dropdown-content z-50 mt-3 w-72 overflow-hidden rounded-box border border-base-300 bg-base-100 text-left shadow-2xl"
                   data-state="connecting"
                   data-transport="pending"
-                  phx-hook="WebSocketState"
                   phx-update="ignore"
+                  aria-label="Live updates connection"
                 >
-                  <div class="grid gap-3">
-                    <div>
-                      <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
-                        live updates
-                      </p>
-                    </div>
-                    <dl class="grid gap-2 text-xs">
-                      <div class="flex items-center justify-between gap-3">
-                        <dt class="text-base-content/50">Status</dt>
-                        <dd
-                          class="max-w-40 text-right font-mono font-semibold text-base-content/70"
-                          data-ws-state
-                        >
-                          Syncing
-                        </dd>
-                      </div>
-                      <div class="flex items-center justify-between gap-3">
-                        <dt class="text-base-content/50">Transport</dt>
-                        <dd class="font-mono text-base-content/80" data-ws-transport>Pending</dd>
-                      </div>
-                    </dl>
+                  <div class="grid gap-2 px-4 pb-3 pt-3.5">
+                    <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
+                      Live Updates
+                    </p>
+                    <ol data-ws-timeline role="list" class="grid list-none">
+                      <li class="ws-step" data-tone="pending">
+                        <span class="ws-step-dot" aria-hidden="true"></span>
+                        <span class="ws-step-text">Connecting to live updates</span>
+                        <span class="ws-step-time">now</span>
+                      </li>
+                    </ol>
+                    <p data-ws-hint class="text-xs leading-5 text-base-content/60" hidden></p>
                   </div>
-                </div>
-              </div>
+                  <footer class="flex min-h-9 items-center justify-between gap-3 border-t border-base-300 bg-base-200/60 py-1.5 pl-4 pr-2 text-[11px] text-base-content/55">
+                    <span data-ws-meta>connecting…</span>
+                    <button
+                      type="button"
+                      data-ws-action
+                      class="btn btn-ghost btn-xs text-base-content/55 hover:text-primary"
+                      hidden
+                    ></button>
+                  </footer>
+                </section>
+              </details>
             </div>
           </div>
         </header>
@@ -310,6 +311,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     <details
       id="admin-github-dropdown"
       class="dropdown dropdown-end"
+      data-preserve-open
       phx-click-away={JS.remove_attribute("open", to: "#admin-github-dropdown")}
     >
       <summary
@@ -423,6 +425,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
     <details
       id="admin-notifications-dropdown"
       class="dropdown dropdown-end"
+      data-preserve-open
       phx-click-away={JS.remove_attribute("open", to: "#admin-notifications-dropdown")}
     >
       <summary

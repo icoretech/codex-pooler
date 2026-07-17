@@ -905,3 +905,76 @@ body {
 :root {
   scrollbar-gutter: stable;
 }
+
+/* Live-updates popover: connection timeline rendered by the WebSocketState
+   hook (the popover subtree is phx-update="ignore"). */
+.ws-step {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.25rem 1.125rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.ws-step::before {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--color-base-300) 90%, transparent);
+}
+
+.ws-step:first-child::before {
+  top: 12px;
+}
+
+.ws-step:last-child::before {
+  bottom: calc(100% - 12px);
+}
+
+.ws-step-dot {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-base-300) 100%, transparent);
+  outline: 3px solid var(--color-base-100);
+}
+
+.ws-step[data-tone="done"] .ws-step-dot {
+  background: color-mix(in oklab, var(--color-base-content) 35%, transparent);
+}
+
+.ws-step[data-tone="ok"] .ws-step-dot {
+  background: var(--color-success);
+}
+
+.ws-step[data-tone="now"] .ws-step-dot {
+  background: var(--color-warning);
+}
+
+.ws-step[data-tone="bad"] .ws-step-dot {
+  background: var(--color-error);
+}
+
+.ws-step-text {
+  min-width: 0;
+  color: var(--color-base-content);
+}
+
+.ws-step[data-emphasis] .ws-step-text {
+  font-weight: 600;
+}
+
+.ws-step-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+}

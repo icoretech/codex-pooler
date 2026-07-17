@@ -11,6 +11,16 @@ import { renderSVG } from "uqr";
 import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
+import {
+	connectionActionLabel,
+	connectionFooterMeta,
+	connectionHint,
+	connectionTimelineSteps,
+	initialConnectionHistory,
+	recordRoundTrip,
+	recordSocketError,
+	trackConnectionTransition,
+} from "./ws_state_timeline.mjs";
 
 const csrfToken = document
 	.querySelector("meta[name='csrf-token']")
@@ -915,69 +925,200 @@ const CONNECTION_ICON_CLASSES = Object.values(CONNECTION_VISUAL_STATES).map(
 	(state) => state.icon,
 );
 
-const WebSocketState = {
-	mounted() {
-		this.updateState();
-		this.interval = window.setInterval(() => this.updateState(), 1000);
-	},
-	destroyed() {
-		window.clearInterval(this.interval);
-	},
-	updateState() {
-		const liveSocket = window.liveSocket;
-		const socket = liveSocket?.socket;
-		const connection = classifyLiveSocketConnection(liveSocket, socket);
-		const visualState = CONNECTION_VISUAL_STATES[connection.visualState];
-		const endpoint = socket?.endPoint || "/live";
-		const heartbeat = socket?.heartbeatIntervalMs
-			? `${socket.heartbeatIntervalMs}ms`
-			: "default";
+const connectionIndicator = {
+	history: initialConnectionHistory(),
+	lastRoot: null,
+	lastStepsSignature: null,
+};
 
-		this.applyVisualState(visualState, connection.transportKey);
-		this.setText("[data-ws-state]", visualState.stateText);
-		this.setTone("[data-ws-state]", visualState.toneClass);
-		this.setText("[data-ws-transport]", connection.transportLabel);
-		this.setText("[data-ws-endpoint]", endpoint);
-		this.setText("[data-ws-heartbeat]", heartbeat);
-	},
-	applyVisualState(visualState, transportKey) {
-		const indicator = document.getElementById("topbar-connection-indicator");
-		const button = indicator?.querySelector("[data-ws-button]");
-		const icon = indicator?.querySelector("[data-ws-icon] span");
-		const label = indicator?.querySelector("[data-ws-label]");
+const setAttributeIfChanged = (el, name, value) => {
+	if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+};
 
-		indicator?.setAttribute("data-state", visualState.dataState);
-		indicator?.setAttribute("data-transport", transportKey);
-		this.el.setAttribute("data-state", visualState.dataState);
-		this.el.setAttribute("data-transport", transportKey);
+const setTextIfChanged = (el, value) => {
+	if (el.textContent !== value) el.textContent = value;
+};
 
-		if (button) {
-			button.classList.remove(...CONNECTION_TONE_CLASSES);
-			button.classList.add(visualState.buttonToneClass);
-			button.setAttribute("aria-label", visualState.label);
-		}
+const renderConnectionTimeline = (popover, steps) => {
+	const list = popover.querySelector("[data-ws-timeline]");
+	if (!list) return;
 
-		if (icon) {
-			icon.classList.remove(
-				...CONNECTION_ICON_CLASSES,
-				...CONNECTION_TONE_CLASSES,
+	const signature = JSON.stringify(steps);
+	if (signature === connectionIndicator.lastStepsSignature) return;
+	connectionIndicator.lastStepsSignature = signature;
+
+	list.replaceChildren(
+		...steps.map((step) => {
+			const item = document.createElement("li");
+			item.className = "ws-step";
+			item.dataset.tone = step.tone;
+			if (step.emphasis) item.dataset.emphasis = "";
+
+			const dot = document.createElement("span");
+			dot.className = "ws-step-dot";
+			dot.setAttribute("aria-hidden", "true");
+
+			const text = document.createElement("span");
+			text.className = "ws-step-text";
+			text.textContent = step.text;
+
+			const time = document.createElement("span");
+			time.className = "ws-step-time";
+			time.textContent = step.time;
+
+			item.append(dot, text, time);
+			return item;
+		}),
+	);
+};
+
+const applyConnectionVisualState = (root, popover, visualState, transportKey) => {
+	const button = root.querySelector("[data-ws-button]");
+	const icon = root.querySelector("[data-ws-icon] span");
+	const label = root.querySelector("[data-ws-label]");
+
+	setAttributeIfChanged(root, "data-state", visualState.dataState);
+	setAttributeIfChanged(root, "data-transport", transportKey);
+	setAttributeIfChanged(popover, "data-state", visualState.dataState);
+	setAttributeIfChanged(popover, "data-transport", transportKey);
+
+	if (button && !button.classList.contains(visualState.buttonToneClass)) {
+		button.classList.remove(...CONNECTION_TONE_CLASSES);
+		button.classList.add(visualState.buttonToneClass);
+	}
+	if (button) setAttributeIfChanged(button, "aria-label", visualState.label);
+
+	// Guard on glyph AND tone: connecting and connected share the wifi glyph,
+	// so the glyph alone would skip the green repaint after the first join.
+	if (
+		icon &&
+		!(
+			icon.classList.contains(visualState.icon) &&
+			icon.classList.contains(visualState.toneClass)
+		)
+	) {
+		icon.classList.remove(
+			...CONNECTION_ICON_CLASSES,
+			...CONNECTION_TONE_CLASSES,
+		);
+		icon.classList.add(visualState.icon, visualState.toneClass);
+	}
+
+	if (label) setTextIfChanged(label, visualState.label);
+};
+
+const updateConnectionIndicator = () => {
+	const root = document.getElementById("topbar-connection-indicator");
+	const popover = document.getElementById("admin-websocket-state-popover");
+	if (!root || !popover) return;
+
+	// Live navigation swaps the shell DOM for a fresh server render; force a
+	// full timeline repaint on the new nodes.
+	if (root !== connectionIndicator.lastRoot) {
+		connectionIndicator.lastRoot = root;
+		connectionIndicator.lastStepsSignature = null;
+	}
+
+	const liveSocket = window.liveSocket;
+	const socket = liveSocket?.socket;
+	const connection = classifyLiveSocketConnection(liveSocket, socket);
+	const visualState = CONNECTION_VISUAL_STATES[connection.visualState];
+
+	connectionIndicator.history = trackConnectionTransition(
+		connectionIndicator.history,
+		connection.visualState,
+	);
+
+	applyConnectionVisualState(
+		root,
+		popover,
+		visualState,
+		connection.transportKey,
+	);
+	renderConnectionTimeline(
+		popover,
+		connectionTimelineSteps(connection.visualState, connectionIndicator.history),
+	);
+
+	const hint = connectionHint(connection.visualState);
+	const hintEl = popover.querySelector("[data-ws-hint]");
+	if (hintEl) {
+		setTextIfChanged(hintEl, hint || "");
+		if (hintEl.hidden === Boolean(hint)) hintEl.hidden = !hint;
+	}
+
+	const metaEl = popover.querySelector("[data-ws-meta]");
+	if (metaEl) {
+		setTextIfChanged(
+			metaEl,
+			connectionFooterMeta(connection.visualState, {
+				endPoint: socket?.endPoint,
+				heartbeatIntervalMs: socket?.heartbeatIntervalMs,
+				online: navigator.onLine,
+			}),
+		);
+	}
+
+	const actionLabel = connectionActionLabel(connection.visualState);
+	const actionEl = popover.querySelector("[data-ws-action]");
+	if (actionEl) {
+		setTextIfChanged(actionEl, actionLabel || "");
+		if (actionEl.hidden === Boolean(actionLabel)) actionEl.hidden = !actionLabel;
+	}
+};
+
+const pingConnectionIndicator = () => {
+	const socket = window.liveSocket?.socket;
+	if (socket?.isConnected?.() && typeof socket.ping === "function") {
+		socket.ping((rtt) => {
+			connectionIndicator.history = recordRoundTrip(
+				connectionIndicator.history,
+				rtt,
 			);
-			icon.classList.add(visualState.icon, visualState.toneClass);
+		});
+	}
+};
+
+const handleConnectionIndicatorAction = () => {
+	const liveSocket = window.liveSocket;
+	if (!liveSocket) return;
+
+	if (connectionIndicator.history.prevVisual === "longPollFallback") {
+		// connect() alone would reopen long polling: once Phoenix has fallen
+		// back, the socket transport stays LongPoll for the page session, so
+		// the websocket must be restored as primary before reconnecting.
+		forgetMemorizedLongPollFallback();
+		liveSocket.replaceTransport(window.WebSocket);
+		return;
+	}
+
+	// Cycle the raw socket rather than LiveSocket.disconnect, which would
+	// permanently drop LiveView's server-close reload handler.
+	liveSocket.socket.disconnect(() => liveSocket.socket.connect());
+};
+
+const initConnectionIndicator = () => {
+	window.liveSocket?.socket?.onError?.(() => {
+		connectionIndicator.history = recordSocketError(
+			connectionIndicator.history,
+		);
+	});
+
+	document.addEventListener("click", (event) => {
+		if (!(event.target instanceof Element)) return;
+		if (
+			!event.target.closest("#admin-websocket-state-popover [data-ws-action]")
+		) {
+			return;
 		}
 
-		if (label) label.textContent = visualState.label;
-	},
-	setText(selector, text) {
-		const target = this.el.querySelector(selector);
-		if (target) target.textContent = text;
-	},
-	setTone(selector, toneClass) {
-		const target = this.el.querySelector(selector);
-		if (!target) return;
+		handleConnectionIndicatorAction();
+	});
 
-		target.classList.remove(...CONNECTION_TONE_CLASSES);
-		target.classList.add(toneClass);
-	},
+	updateConnectionIndicator();
+	window.setInterval(updateConnectionIndicator, 1000);
+	window.setInterval(pingConnectionIndicator, 10000);
+	pingConnectionIndicator();
 };
 
 const forgetMemorizedLongPollFallback = () => {
@@ -1055,7 +1196,6 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		QuotaPressureChart,
 		TotpSetupTools,
 		WorkerFailureMarker,
-		WebSocketState,
 	},
 });
 
@@ -1066,6 +1206,8 @@ window.addEventListener("phx:page-loading-stop", (_info) => topbar.hide());
 liveSocket.connect();
 
 window.liveSocket = liveSocket;
+
+initConnectionIndicator();
 
 if (process.env.NODE_ENV === "development") {
 	window.addEventListener(

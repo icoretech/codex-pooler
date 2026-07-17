@@ -96,11 +96,20 @@ defmodule CodexPoolerWeb.Admin.AuthLiveTest do
 
         assert has_element?(
                  view,
-                 "#admin-websocket-state-popover[data-state='connecting'][data-transport='pending'][phx-hook='WebSocketState']"
+                 "#admin-websocket-state-popover[data-state='connecting'][data-transport='pending'][phx-update='ignore']"
                )
 
-        assert has_element?(view, "#admin-websocket-state-popover [data-ws-state]", "Syncing")
-        assert has_element?(view, "#admin-websocket-state-popover [data-ws-transport]", "Pending")
+        assert has_element?(view, "#topbar-connection-indicator[data-preserve-open]")
+
+        assert has_element?(
+                 view,
+                 "#admin-websocket-state-popover [data-ws-timeline] .ws-step[data-tone='pending']",
+                 "Connecting to live updates"
+               )
+
+        assert has_element?(view, "#admin-websocket-state-popover [data-ws-meta]", "connecting")
+        assert has_element?(view, "#admin-websocket-state-popover [data-ws-action][hidden]")
+        assert has_element?(view, "#admin-websocket-state-popover [data-ws-hint][hidden]")
 
         for forbidden_copy <- [
               "web" <> "socket degraded",
