@@ -112,7 +112,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
           class="inline-flex shrink-0 items-center gap-1"
           title={@saved_resets.next_expires_title}
         >
-          <.icon name="hero-clock" class="size-3 shrink-0" />
+          <.icon name="hero-clock" class="size-3 shrink-0 -translate-y-px" />
           <span class="truncate">{@meter_reset_label}</span>
         </span>
       </div>

@@ -77,7 +77,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             style={"width: #{row.life_percent}%; --shine-delay: #{row.shine_delay}s"}
           ></span>
         </div>
-        <div class="flex items-baseline justify-between gap-3 text-xs leading-4 text-base-content/60">
+        <div class="flex items-baseline justify-between gap-3 text-[11px] leading-4 text-base-content/60">
           <span
             id={"#{@id}-first-seen-#{row.index}"}
             data-role="saved-reset-expiration-first-seen"

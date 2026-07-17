@@ -39,7 +39,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           class="inline-flex items-center gap-1"
           title={@limit.reset_title}
         >
-          <.icon name="hero-clock" class="size-3" />
+          <%!-- Roboto Condensed's 11px line box sits ink-high; without the 1px
+          lift the box-centered icon reads low against the glyphs. --%>
+          <.icon name="hero-clock" class="size-3 -translate-y-px" />
           <span>{strip_in_prefix(@limit.reset_label)}</span>
         </span>
       </div>
