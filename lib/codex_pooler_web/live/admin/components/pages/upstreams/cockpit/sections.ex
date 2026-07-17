@@ -41,10 +41,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
         id="upstream-routing-verdict"
         data-tone={verdict_tone(@cockpit)}
         class={[
-          "flex items-start gap-3 border-b border-base-300/60 px-4 py-3",
+          "relative flex items-start gap-3 overflow-hidden border-b border-base-300/60 px-4 py-3",
           verdict_wash_class(verdict_tone(@cockpit))
         ]}
       >
+        <.icon
+          name={verdict_icon(verdict_tone(@cockpit))}
+          class={[
+            "pointer-events-none absolute right-3 top-1/2 size-16 -translate-y-1/2",
+            verdict_watermark_class(verdict_tone(@cockpit))
+          ]}
+        />
         <span
           class={[
             "grid size-8 shrink-0 place-items-center rounded-lg",
@@ -516,6 +523,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   defp verdict_icon(:success), do: "hero-check-circle"
   defp verdict_icon(:error), do: "hero-x-circle"
   defp verdict_icon(_tone), do: "hero-exclamation-triangle"
+
+  defp verdict_watermark_class(:success), do: "text-success/10"
+  defp verdict_watermark_class(:error), do: "text-error/10"
+  defp verdict_watermark_class(_tone), do: "text-warning/10"
 
   defp request_note(%{kpis: %{total_requests_24h: 0}}), do: nil
 
