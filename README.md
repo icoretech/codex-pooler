@@ -116,6 +116,10 @@ assigned Pools.
 - 🖥️ **Operator dashboard:** manage Pool-scoped accounts, API keys, invites, saved
   resets, usage, request logs, audit logs, MCP access, and the owner-only jobs,
   operators, and system settings surfaces
+- 🔭 **Per-key Observatory:** switch on read-only Observatory access for any Pool
+  API key and its holder gets a live, self-service dashboard of just that key's
+  usage, models, latency, cache, and spend — a monitor-friendly view to keep on a
+  second screen, with no operator controls or other keys in reach
 - 🛡️ **Privacy-minded observability:** store request, routing, and audit metadata
   without storing prompts, file bodies, audio, images, bearer tokens, cookies,
   raw Codex account tokens, or raw API keys
