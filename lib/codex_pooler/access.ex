@@ -3,7 +3,7 @@ defmodule CodexPooler.Access do
   External API key, policy binding, invite, and gateway authorization APIs.
   """
 
-  alias CodexPooler.Access.{APIKey, APIKeys, Invite, InviteEmail, Invites}
+  alias CodexPooler.Access.{APIKey, APIKeys, DashboardSessions, Invite, InviteEmail, Invites}
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Pools.Pool
 
@@ -21,6 +21,8 @@ defmodule CodexPooler.Access do
   @type pool_invite_email_result :: InviteEmail.pool_invite_result()
   @type invite_page :: Invites.invite_page()
   @type invite_page_result :: Invites.invite_page_result()
+  @type dashboard_principal :: DashboardSessions.Principal.t()
+  @type dashboard_session_handoff :: DashboardSessions.handoff()
 
   @spec resolve_reasoning_effort(
           APIKey.t(),
@@ -158,6 +160,28 @@ defmodule CodexPooler.Access do
 
   @spec authenticate_v1_api_key(term()) :: {:ok, auth_context()} | {:error, access_error()}
   defdelegate authenticate_v1_api_key(raw_key), to: APIKeys
+
+  @spec issue_dashboard_session(term()) :: DashboardSessions.issue_result()
+  defdelegate issue_dashboard_session(raw_api_key), to: DashboardSessions, as: :issue
+
+  @spec authenticate_dashboard_session(term()) ::
+          {:ok, dashboard_principal()} | {:error, :invalid_dashboard_session}
+  defdelegate authenticate_dashboard_session(token), to: DashboardSessions, as: :authenticate
+
+  @spec dashboard_session_handoff(term()) :: dashboard_session_handoff() | nil
+  defdelegate dashboard_session_handoff(token), to: DashboardSessions, as: :handoff
+
+  @spec authenticate_dashboard_session_handoff(term()) ::
+          {:ok, dashboard_principal()} | {:error, :invalid_dashboard_session}
+  defdelegate authenticate_dashboard_session_handoff(handoff),
+    to: DashboardSessions,
+    as: :authenticate_handoff
+
+  @spec delete_dashboard_session(term()) :: :ok
+  defdelegate delete_dashboard_session(token), to: DashboardSessions, as: :delete
+
+  @spec delete_all_dashboard_sessions(APIKey.t() | Ecto.UUID.t()) :: :ok
+  defdelegate delete_all_dashboard_sessions(api_key_or_id), to: DashboardSessions, as: :delete_all
 
   @spec policy_denial_precedence() :: [atom()]
   defdelegate policy_denial_precedence, to: APIKeys

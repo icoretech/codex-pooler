@@ -7,6 +7,7 @@ defmodule CodexPooler.Events do
   for LiveViews that need deterministic selector updates, such as job status.
   """
 
+  alias CodexPooler.Events.DashboardSessions, as: DashboardSessionEvents
   alias CodexPooler.Events.Event
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -27,7 +28,16 @@ defmodule CodexPooler.Events do
   @model_sync "model_sync"
   @pools "pools"
   @upstreams "upstreams"
-  @topics [@request_logs, @usage, @job_status, @model_sync, @pools, @upstreams]
+  @dashboard_sessions "dashboard_sessions"
+  @topics [
+    @request_logs,
+    @usage,
+    @job_status,
+    @model_sync,
+    @pools,
+    @upstreams,
+    @dashboard_sessions
+  ]
 
   @type topic :: String.t()
   @type topics :: [topic()] | topic()
@@ -87,6 +97,21 @@ defmodule CodexPooler.Events do
     PubSub.subscribe(@pubsub, @all_topic)
   end
 
+  @spec subscribe_dashboard_sessions(Ecto.UUID.t()) :: :ok | {:error, term()}
+  defdelegate subscribe_dashboard_sessions(api_key_id),
+    to: DashboardSessionEvents,
+    as: :subscribe
+
+  @spec unsubscribe_dashboard_sessions(Ecto.UUID.t()) :: :ok | {:error, term()}
+  defdelegate unsubscribe_dashboard_sessions(api_key_id),
+    to: DashboardSessionEvents,
+    as: :unsubscribe
+
+  @spec dashboard_sessions_pubsub_topic(Ecto.UUID.t()) :: String.t()
+  defdelegate dashboard_sessions_pubsub_topic(api_key_id),
+    to: DashboardSessionEvents,
+    as: :pubsub_topic
+
   @spec broadcast_request_logs(pool_ref(), reason(), payload()) :: broadcast_result()
   def broadcast_request_logs(pool_or_id, reason, payload \\ %{}) do
     broadcast_pool_event(pool_or_id, [@request_logs], reason, payload)
@@ -122,9 +147,25 @@ defmodule CodexPooler.Events do
     broadcast_pool_event(pool_or_id, [@upstreams], reason, payload, :after_commit)
   end
 
+  @spec broadcast_dashboard_sessions(
+          pool_ref(),
+          Ecto.UUID.t(),
+          reason(),
+          payload()
+        ) :: broadcast_result()
+  defdelegate broadcast_dashboard_sessions(pool_or_id, api_key_id, reason, payload \\ %{}),
+    to: DashboardSessionEvents,
+    as: :broadcast
+
   @spec broadcast_pool_event(pool_ref(), topics(), reason(), payload()) :: broadcast_result()
   def broadcast_pool_event(pool_or_id, topics, reason, payload \\ %{}) do
     broadcast_pool_event(pool_or_id, topics, reason, payload, :immediate)
+  end
+
+  @spec broadcast_pool_event_after_commit(pool_ref(), topics(), reason(), payload()) ::
+          broadcast_result()
+  def broadcast_pool_event_after_commit(pool_or_id, topics, reason, payload \\ %{}) do
+    broadcast_pool_event(pool_or_id, topics, reason, payload, :after_commit)
   end
 
   defp broadcast_pool_event(pool_or_id, topics, reason, payload, delivery) do
@@ -207,7 +248,8 @@ defmodule CodexPooler.Events do
     message = {@message_tag, event}
 
     with :ok <- PubSub.broadcast_from(@pubsub, self(), pubsub_topic(event.pool_id), message),
-         :ok <- broadcast_scoped_topics(event, message) do
+         :ok <- broadcast_scoped_topics(event, message),
+         :ok <- DashboardSessionEvents.broadcast_local(event, message) do
       PubSub.broadcast_from(@pubsub, self(), @all_topic, message)
     end
   end

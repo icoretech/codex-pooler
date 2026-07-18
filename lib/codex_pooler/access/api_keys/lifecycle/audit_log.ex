@@ -75,6 +75,7 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
       previous_pool_id: previous_api_key.pool_id,
       pool_changed: pool_changed?,
       previous_status: previous_api_key.status,
+      previous_dashboard_access: previous_api_key.dashboard_access,
       previous_reasoning_policy_mode: reasoning_policy_mode(previous_api_key),
       previous_reasoning_policy_configuration: reasoning_policy_configuration(previous_api_key)
     }
@@ -95,6 +96,7 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
       display_name: api_key.display_name,
       key_prefix: api_key.key_prefix,
       status: api_key.status,
+      dashboard_access: api_key.dashboard_access,
       expires_at: api_key.expires_at && DateTime.to_iso8601(api_key.expires_at),
       allowed_model_mode: audit_model_mode(api_key.allowed_model_identifiers),
       allowed_model_count: audit_allowed_model_count(api_key.allowed_model_identifiers),
@@ -110,6 +112,7 @@ defmodule CodexPooler.Access.APIKeys.AuditLog do
       "display_name",
       "pool_id",
       "status",
+      "dashboard_access",
       "expires_at",
       "allowed_model_identifiers",
       "metadata",

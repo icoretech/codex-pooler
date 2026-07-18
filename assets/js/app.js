@@ -12,6 +12,10 @@ import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
 import {
+	ObservatoryRefresh,
+	observatoryRefreshConnectParams,
+} from "./observatory_refresh.mjs";
+import {
 	connectionActionLabel,
 	connectionFooterParts,
 	connectionHint,
@@ -1181,7 +1185,10 @@ document.addEventListener("keydown", dismissTopAdminDialogFromEscape, true);
 
 const liveSocket = new LiveSocket("/live", Socket, {
 	longPollFallbackMs: 8000,
-	params: { _csrf_token: csrfToken },
+	params: () => ({
+		_csrf_token: csrfToken,
+		...observatoryRefreshConnectParams(),
+	}),
 	dom: {
 		// Client-toggled disclosure state lives only in the DOM; without this,
 		// any LiveView patch of the surrounding card would fold the element
@@ -1204,6 +1211,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		ClipboardCopy,
 		FlashAutoDismiss,
 		OtpInput,
+		ObservatoryRefresh,
 		QuotaPressureChart,
 		TotpSetupTools,
 		WorkerFailureMarker,

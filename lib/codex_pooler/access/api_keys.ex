@@ -2,6 +2,7 @@ defmodule CodexPooler.Access.APIKeys do
   @moduledoc false
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.DashboardSessions.Lifecycle, as: DashboardSessionLifecycle
 
   alias CodexPooler.Access.APIKeys.{
     Assignment,
@@ -106,6 +107,7 @@ defmodule CodexPooler.Access.APIKeys do
           key_prefix: key_prefix,
           key_hash: key_hash,
           status: Map.get(attrs, :status) || Map.get(attrs, "status") || @status_active,
+          dashboard_access: Policy.input(attrs, [:dashboard_access, "dashboard_access"]) || false,
           expires_at: expires_at,
           metadata: Policy.input(attrs, [:metadata, "metadata"]) || %{},
           created_by_user_id: scope.user.id,
@@ -163,8 +165,10 @@ defmodule CodexPooler.Access.APIKeys do
           {:ok, APIKey.t()} | {:error, Ecto.Changeset.t() | access_error()}
   def update_api_key(%Scope{} = scope, %APIKey{} = api_key, attrs) when is_map(attrs) do
     with {:ok, target_pool_id} <- authorize_api_key_update(scope, api_key, attrs) do
+      update_attrs = api_key_update_attrs(attrs, target_pool_id)
+
       api_key
-      |> update_api_key_record(api_key_update_attrs(attrs, target_pool_id))
+      |> update_api_key_record(update_attrs)
       |> Notifications.notify_api_key_change("api_key_updated", api_key.pool_id)
       |> AuditLog.audit_api_key_change(scope, "api_key.update", fn updated ->
         AuditLog.api_key_update_audit_details(updated, api_key, attrs)
@@ -212,9 +216,17 @@ defmodule CodexPooler.Access.APIKeys do
   end
 
   defp update_api_key_record(api_key, update_attrs) do
-    api_key
-    |> APIKey.changeset(update_attrs)
-    |> Repo.update()
+    mutation = fn ->
+      api_key
+      |> APIKey.changeset(update_attrs)
+      |> Repo.update()
+    end
+
+    if dashboard_session_invalidation_required?(api_key, update_attrs) do
+      DashboardSessionLifecycle.run(api_key, "api_key_updated", mutation)
+    else
+      mutation.()
+    end
   end
 
   @spec pause_api_key(Scope.t(), APIKey.t() | Ecto.UUID.t()) ::
@@ -257,9 +269,14 @@ defmodule CodexPooler.Access.APIKeys do
          :ok <- ensure_api_key_rotatable(api_key) do
       {key_prefix, raw_key, key_hash} = Material.generate()
 
+      mutation = fn ->
+        api_key
+        |> APIKey.changeset(%{key_prefix: key_prefix, key_hash: key_hash})
+        |> Repo.update()
+      end
+
       api_key
-      |> APIKey.changeset(%{key_prefix: key_prefix, key_hash: key_hash})
-      |> Repo.update()
+      |> DashboardSessionLifecycle.run("api_key_rotated", mutation)
       |> case do
         {:ok, rotated_key} -> {:ok, %{api_key: rotated_key, raw_key: raw_key}}
         {:error, _changeset} = error -> error
@@ -289,12 +306,17 @@ defmodule CodexPooler.Access.APIKeys do
              PoolAuthorization.capability(:pool_api_key_manage),
              pool_id: api_key.pool_id
            ) do
+      mutation = fn ->
+        api_key
+        |> APIKey.changeset(%{status: @status_revoked, revoked_at: now()})
+        |> Repo.update()
+      end
+
       if api_key.status == @status_revoked do
         {:ok, api_key}
       else
         api_key
-        |> APIKey.changeset(%{status: @status_revoked, revoked_at: now()})
-        |> Repo.update()
+        |> DashboardSessionLifecycle.run("api_key_revoked", mutation)
         |> Notifications.notify_api_key_change("api_key_revoked")
         |> AuditLog.audit_api_key_status_change(
           scope,
@@ -324,7 +346,10 @@ defmodule CodexPooler.Access.APIKeys do
              PoolAuthorization.capability(:pool_api_key_manage),
              pool_id: api_key.pool_id
            ) do
-      Repo.delete(api_key)
+      mutation = fn -> Repo.delete(api_key) end
+
+      api_key
+      |> DashboardSessionLifecycle.run("api_key_deleted", mutation)
       |> Notifications.notify_api_key_change("api_key_deleted")
       |> AuditLog.audit_api_key_change(scope, "api_key.delete")
     end
@@ -397,9 +422,10 @@ defmodule CodexPooler.Access.APIKeys do
            )}
 
         true ->
-          api_key
-          |> APIKey.changeset(%{status: to_status})
-          |> Repo.update()
+          mutation = api_key_status_mutation(api_key, to_status)
+          result = run_status_mutation(api_key, to_status, mutation)
+
+          result
           |> Notifications.notify_api_key_change("api_key_status_updated")
           |> AuditLog.audit_api_key_status_change(
             scope,
@@ -411,26 +437,59 @@ defmodule CodexPooler.Access.APIKeys do
     end
   end
 
+  defp api_key_status_mutation(%APIKey{} = api_key, to_status) do
+    fn ->
+      api_key
+      |> APIKey.changeset(%{status: to_status})
+      |> Repo.update()
+    end
+  end
+
+  defp run_status_mutation(%APIKey{} = _api_key, @status_active, mutation), do: mutation.()
+
+  defp run_status_mutation(%APIKey{} = api_key, _to_status, mutation),
+    do: DashboardSessionLifecycle.run(api_key, "api_key_status_updated", mutation)
+
   defp ensure_api_key_rotatable(%APIKey{status: @status_revoked}),
     do: {:error, Errors.access_error(:api_key_revoked, "revoked api keys cannot be rotated")}
 
   defp ensure_api_key_rotatable(%APIKey{}), do: :ok
 
   defp api_key_update_attrs(attrs, target_pool_id) do
-    attrs
-    |> Map.take([
+    [
       :display_name,
       :status,
+      :dashboard_access,
       :expires_at,
       :allowed_model_identifiers,
-      :metadata,
-      "display_name",
-      "status",
-      "expires_at",
-      "allowed_model_identifiers",
-      "metadata"
-    ])
+      :metadata
+    ]
+    |> Enum.reduce(%{}, &put_update_attr(&2, attrs, &1))
     |> Map.put(:pool_id, target_pool_id)
+  end
+
+  defp dashboard_session_invalidation_required?(api_key, update_attrs) do
+    pool_changed? = Map.get(update_attrs, :pool_id, api_key.pool_id) != api_key.pool_id
+
+    dashboard_access_disabled? =
+      Map.has_key?(update_attrs, :dashboard_access) and
+        Map.get(update_attrs, :dashboard_access) == false and api_key.dashboard_access
+
+    status_disabled? =
+      Map.has_key?(update_attrs, :status) and
+        Map.get(update_attrs, :status) != @status_active and api_key.status == @status_active
+
+    pool_changed? or dashboard_access_disabled? or status_disabled?
+  end
+
+  defp put_update_attr(acc, attrs, field) do
+    string_field = Atom.to_string(field)
+
+    cond do
+      Map.has_key?(attrs, field) -> Map.put(acc, field, Map.get(attrs, field))
+      Map.has_key?(attrs, string_field) -> Map.put(acc, field, Map.get(attrs, string_field))
+      true -> acc
+    end
   end
 
   defp normalize_pool(%Pool{} = pool), do: pool

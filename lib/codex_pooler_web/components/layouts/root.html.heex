@@ -27,8 +27,17 @@
             document.documentElement.setAttribute("data-theme", theme);
           }
         };
+        const storedTheme = localStorage.getItem("phx:theme");
+        const isObservatoryPath = window.location.pathname === "/observatory" ||
+          window.location.pathname.startsWith("/observatory/");
         if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
+          if (storedTheme) {
+            setTheme(storedTheme);
+          } else if (isObservatoryPath) {
+            document.documentElement.setAttribute("data-theme", "dark");
+          } else {
+            setTheme("system");
+          }
         }
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         

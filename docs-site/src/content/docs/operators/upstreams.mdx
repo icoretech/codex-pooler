@@ -206,9 +206,10 @@ The browser manual callback workflow is:
 6. submit the callback form and wait for the success or safe error state
 7. use `Close` after the dialog reports that the account was linked or relinked
 
-The returned browser URL is consumed only by the already-authenticated admin page,
-and there is no hosted OAuth callback route, no public callback endpoint, and no
-`/api/admin/*` or dashboard JSON API for this workflow.
+The returned browser URL is consumed only by the already-authenticated admin page.
+There is no hosted OAuth callback route or public callback endpoint for this
+workflow, and there is no `/api/admin/*` or dashboard JSON API for it. The
+callback is handled inside the signed-in admin page.
 
 Use the device-code fallback when browser authorization is not practical. The
 dialog shows the user code and verification URL while the flow is pending, and

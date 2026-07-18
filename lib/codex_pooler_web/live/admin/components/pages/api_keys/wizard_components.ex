@@ -76,6 +76,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           label="Expires at"
           disabled={@disabled}
         />
+        <div
+          id="api-key-dashboard-access-control"
+          class="grid gap-1 border-t border-base-300 pt-4 md:col-span-2"
+        >
+          <.input
+            field={@form[:dashboard_access]}
+            type="checkbox"
+            label="Dashboard access"
+            class="checkbox checkbox-primary checkbox-sm"
+            disabled={@disabled}
+          />
+          <p
+            id="api-key-dashboard-access-help"
+            class="text-sm leading-5 text-base-content/60"
+          >
+            Allow this key to open the read-only Observatory. Runtime API policy stays independent.
+          </p>
+        </div>
       </div>
       <.input
         field={@form[:operator_notes]}

@@ -14,7 +14,8 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   @type review_section :: {String.t(), [review_row()]}
   @type selector_state :: map()
   @type selector_attrs :: %{String.t() => term()}
-  @type form_error :: {:expires_at, {String.t(), keyword()}}
+  @type form_error ::
+          {:expires_at | :dashboard_access, {String.t(), keyword()}}
 
   @limit_fields ~w(
     max_requests_per_minute
@@ -41,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "display_name" => api_key.display_name,
       "pool_id" => api_key.pool_id,
       "status" => api_key.status,
+      "dashboard_access" => api_key.dashboard_access,
       "expires_at" => datetime_local_value(api_key.expires_at),
       "model_mode" => model_mode(api_key.allowed_model_identifiers),
       "allowed_model_identifiers" => api_key.allowed_model_identifiers || [],
@@ -71,6 +73,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     end
   end
 
+  @spec input_errors(params()) :: [form_error()]
+  def input_errors(params) do
+    expiry_errors(params) ++ dashboard_access_errors(params)
+  end
+
   @spec normalize_params(params(), [Pool.t()]) :: params()
   def normalize_params(params, pools) do
     params
@@ -98,6 +105,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       display_name: params |> Map.get("display_name", "") |> to_string() |> String.trim(),
       pool_id: pool_id,
       status: blank_to_nil(params["status"]) || "active",
+      dashboard_access: dashboard_access_value(params["dashboard_access"]),
       expires_at: expires_at_value(params["expires_at"]),
       model_mode: params["model_mode"],
       allowed_model_identifiers: policy_model_identifiers(params),
@@ -119,6 +127,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     []
     |> maybe_add_error(blank_to_nil(params["display_name"]) == nil, "Display name is required")
     |> maybe_add_error(blank_to_nil(params["pool_id"]) == nil, "Pool is required")
+    |> maybe_add_error(
+      invalid_dashboard_access?(params["dashboard_access"]),
+      "Dashboard access must be enabled or disabled"
+    )
     |> maybe_add_error(
       invalid_expiry?(params["expires_at"]),
       "Expiry must be a valid date and time"
@@ -284,6 +296,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       "display_name" => "",
       "pool_id" => "",
       "status" => "active",
+      "dashboard_access" => false,
       "expires_at" => "",
       "model_mode" => "all_models",
       "allowed_model_identifiers" => [],
@@ -423,6 +436,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       {"Name", blank_to_nil(form[:display_name].value) || "Missing"},
       {"Pool", selected_pool_name(selected_pool)},
       {"Status", form[:status].value || "active"},
+      {"Dashboard access", dashboard_access_label(form[:dashboard_access].value)},
       {"Expires", blank_to_nil(form[:expires_at].value) || "Never"}
     ]
   end
@@ -549,6 +563,37 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   end
 
   defp operator_notes(_api_key), do: "No notes"
+
+  defp dashboard_access_errors(params) do
+    if invalid_dashboard_access?(params["dashboard_access"]) do
+      [dashboard_access: {"must be enabled or disabled", []}]
+    else
+      []
+    end
+  end
+
+  defp dashboard_access_value(value) do
+    case parse_dashboard_access(value) do
+      {:ok, dashboard_access} -> dashboard_access
+      :error -> nil
+    end
+  end
+
+  defp invalid_dashboard_access?(value), do: parse_dashboard_access(value) == :error
+
+  defp dashboard_access_label(value) do
+    case parse_dashboard_access(value) do
+      {:ok, true} -> "Enabled"
+      {:ok, false} -> "Disabled"
+      :error -> "Invalid"
+    end
+  end
+
+  defp parse_dashboard_access(true), do: {:ok, true}
+  defp parse_dashboard_access(false), do: {:ok, false}
+  defp parse_dashboard_access("true"), do: {:ok, true}
+  defp parse_dashboard_access("false"), do: {:ok, false}
+  defp parse_dashboard_access(_value), do: :error
 
   defp blank_to_nil(nil), do: nil
 

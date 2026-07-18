@@ -363,7 +363,21 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 </span>
               </div>
             </div>
-            <div class="relative z-10 flex items-center gap-2 justify-self-end">
+            <div
+              data-role="api-key-actions"
+              class="relative z-10 flex items-center gap-2 justify-self-end"
+            >
+              <span
+                id={"api-key-row-#{api_key.id}-dashboard-access"}
+                class={[
+                  AdminBadges.status_chip_class(
+                    if(api_key.dashboard_access, do: "active", else: "disabled")
+                  ),
+                  "shrink-0"
+                ]}
+              >
+                Dashboard {if(api_key.dashboard_access, do: "enabled", else: "disabled")}
+              </span>
               <span
                 id={"api-key-row-#{api_key.id}-status"}
                 class={[AdminBadges.lifecycle_chip_class(api_key.status), "shrink-0"]}
@@ -406,7 +420,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
 
   defp api_key_actions_menu(assigns) do
     ~H"""
-    <div class="dropdown dropdown-end relative inline-block focus-within:z-50">
+    <div
+      data-role="api-key-actions-menu"
+      class="dropdown dropdown-end relative inline-block focus-within:z-50"
+    >
       <button
         id={"api-key-actions-menu-#{@api_key.id}"}
         type="button"
@@ -418,6 +435,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       </button>
       <ul
         tabindex="0"
+        data-role="api-key-action-menu"
         class="menu dropdown-content z-50 mt-2 w-56 rounded-box border border-base-300 bg-base-100 p-2 shadow-xl"
       >
         <li>

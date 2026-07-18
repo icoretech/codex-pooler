@@ -20,6 +20,22 @@ defmodule CodexPoolerWeb.Router do
     plug CodexPoolerWeb.Plugs.AdminBrowserAdmission
   end
 
+  pipeline :observatory_browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {CodexPoolerWeb.Layouts, :root}
+    plug :protect_from_forgery
+
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" => "default-src 'self'; base-uri 'self'; frame-ancestors 'self'"
+    }
+  end
+
+  pipeline :observatory_authenticated_browser do
+    plug CodexPoolerWeb.Plugs.ObservatoryAuth
+  end
+
   pipeline :api do
     plug :accepts, ["json", "event-stream"]
   end
@@ -55,6 +71,24 @@ defmodule CodexPoolerWeb.Router do
 
     get "/bootstrap/status", UserSessionController, :bootstrap_status
     get "/session", UserSessionController, :session
+  end
+
+  scope "/observatory", CodexPoolerWeb do
+    pipe_through :observatory_browser
+
+    get "/login", Observatory.LoginController, :new
+    post "/login", Observatory.LoginController, :create
+    delete "/logout", Observatory.LoginController, :delete
+  end
+
+  scope "/observatory", CodexPoolerWeb do
+    pipe_through [:observatory_browser, :observatory_authenticated_browser]
+
+    live_session :observatory,
+      session: {CodexPoolerWeb.ObservatoryAuth, :live_session, []},
+      on_mount: [{CodexPoolerWeb.ObservatoryAuth, :require_authenticated}] do
+      live "/", ObservatoryLive, :index
+    end
   end
 
   scope "/", CodexPoolerWeb do

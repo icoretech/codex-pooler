@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.DevRoutes do
           pipe_through :browser
 
           live_dashboard "/dashboard", metrics: CodexPoolerWeb.Telemetry
+          live "/component-showcase/:theme", CodexPoolerWeb.Dev.ComponentShowcaseLive, :index
           forward "/mailbox", Plug.Swoosh.MailboxPreview
         end
       end

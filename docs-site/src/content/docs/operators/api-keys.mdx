@@ -1,6 +1,6 @@
 ---
 title: API keys
-description: Understand the admin API keys page, Pool-scoped client credentials, policy wizard, lifecycle registry, rotation, and destructive actions.
+description: Understand the admin API keys page, Pool-scoped client credentials, policy wizard, dashboard access, lifecycle registry, rotation, and destructive actions.
 ---
 
 The API keys page is the operator surface for runtime client credentials. A Pool API key lets a client send requests through one Pool. It does not represent an upstream account, and it is not an operator login credential.
@@ -14,9 +14,9 @@ Use this page when you need to answer:
 5. when a key was last used or expires
 6. when a key needs rotation, pause, revoke, or deletion
 
-The page is a lifecycle registry, not an analytics page. It shows display names, safe key prefixes, Pool grouping and filtering, status, last-used and expiry state, model-policy summaries and warnings, operator notes, and action menus. It does not show raw Pool API keys after the one-time secret dialog is closed.
+The page is a lifecycle and policy registry, not an analytics page. It shows display names, safe key prefixes, Pool grouping and filtering, status, dashboard-access state, last-used and expiry state, model-policy summaries and warnings, operator notes, and action menus. It does not show usage totals or charts, and it does not show raw Pool API keys after the one-time secret dialog is closed.
 
-Use the admin Stats page for aggregate request, token, and cost analytics. Use [Request logs](/operators/request-logs/) for request-level investigation, including API key context, outcomes, and available settled usage metadata.
+Use the [API Key Observatory](/clients/api-key-observatory/) for read-only analytics scoped to one API key. Use the admin Stats page for Pool-level aggregate request, token, and cost analytics, and [Request logs](/operators/request-logs/) for request-level investigation, including API key context, outcomes, and available settled usage metadata.
 
 ![API keys page overview](/operators/api-keys/api-keys-overview.png)
 
@@ -80,12 +80,13 @@ Click `Create API key` to open the policy wizard.
 
 ![Create API key basics step](/operators/api-keys/api-keys-create-basics-dialog.png)
 
-The wizard has four sections:
+The wizard has five sections:
 
 1. Basics
 2. Models
-3. Limits
-4. Review
+3. Enforcement
+4. Limits
+5. Review
 
 The dialog footer keeps Docs on the left and actions on the right. `Cancel` closes without creating a credential. `Create API key` submits the policy and then shows the raw key once.
 
@@ -117,6 +118,38 @@ Status choices are:
 </table>
 
 Expiry is optional. Use it for temporary automation or time-bounded access. Leave it blank for long-lived client credentials that are rotated operationally.
+
+## Dashboard access
+
+`Dashboard access` is a separate, disabled-by-default capability on the API key. Enable it in the Basics step when the key holder should be able to open the read-only [API Key Observatory](/clients/api-key-observatory/). The same policy wizard manages this setting; there is no separate dashboard settings page.
+
+This capability does not replace runtime API-key permission. Runtime requests still use the key's active status, Pool, model policy, limits, expiry, and the Pool's routing eligibility. It also does not grant an instance-owner or instance-admin browser session, access to `/admin/*`, or visibility into other keys.
+
+Owners can manage the setting for their visible Pools. Instance admins need the existing `pool_api_key.manage` capability for the assigned Pool. The wizard shows the normalized value as `Dashboard access: Enabled` or `Dashboard access: Disabled`, and each key card shows a matching badge. The API-key page remains a lifecycle/policy registry: it does not grow usage totals or charts when dashboard access is enabled.
+
+## Open the API Key Observatory
+
+The Observatory has its own browser boundary. It is not part of the instance-admin login flow:
+
+1. Open `GET /observatory/login`.
+2. Enter the Pool API key in the password-style `Access key` field and submit the CSRF-protected form to `POST /observatory/login`. The credential is accepted only in that form; never add it to a URL or query string.
+3. A valid active, non-expired key with Dashboard access enabled receives a separate HttpOnly, SameSite `Lax` browser session and redirects to `GET /observatory`.
+4. The Observatory page can be ended with `DELETE /observatory/logout` from its `Log out` control. Logout removes the dashboard session and clears the browser cookie.
+
+The dashboard session lasts at most 14 days, does not renew its expiry while idle or active, and is limited to 10 concurrent sessions per key. The database stores only a hash of the browser session token. The raw Pool API key is not persisted as dashboard session data, rendered in the dashboard, or included in logs. Login attempts that fail because a key is missing, malformed, paused, revoked, expired, not enabled for Dashboard access, or attached to an inactive Pool use the same generic failure message.
+
+## Observatory contents and privacy
+
+The authenticated dashboard is read-only and scoped to the one API key used to sign in. It offers `1h`, `5h`, `24h`, and `7d` windows with:
+
+- success, cache, cost, throughput, and latency summaries
+- a model distribution based on settled token totals
+- Traffic buckets with fresh and cached token values, plus interval and cumulative views
+- at most 12 recent outcomes showing time, model, sanitized endpoint class, status, latency, tokens, and cost
+
+Cost values are reporting estimates or settled accounting values, not provider invoices. Partial accounting, missing pricing, no activity, paused refresh, disconnection, and temporary read errors are shown as explicit states rather than invented totals.
+
+Dashboard data is metadata-only. It excludes prompts, completions, file or media contents, request and response bodies, headers, cookies, bearer credentials, raw idempotency keys, IP addresses, user agents, upstream identities, Pool controls, other API keys, and raw error text.
 
 ## Models
 
@@ -193,13 +226,15 @@ The Review step shows the normalized effective policy before saving, including t
 
 Resolve review errors before saving. The submit button stays disabled when required policy data is missing. The review summary is useful because it shows what the key will actually enforce after normalization, not only what the operator entered on the previous steps.
 
-Review does not show request, token, or cost totals. Open Stats for aggregates, or filter Request logs when you need to investigate recorded traffic.
+Review does not show request, token, or cost totals. Open the Observatory for one-key analytics, Stats for Pool-level aggregates, or filter Request logs when you need to investigate recorded traffic.
 
 ## One-Time Secret Dialog
 
 After a key is created or rotated, Codex Pooler shows the raw bearer token exactly once. Copy it before closing the dialog.
 
 Future views only show the safe prefix. If the raw value is lost, rotate the key and update the client with the new value. Do not store raw keys in operator notes, screenshots, tickets, chat, request logs, audit comments, or public docs.
+
+The Observatory login accepts the raw key only for the form exchange. It creates a separate browser session and does not make the raw value available again. Treat the key as a one-time secret at creation or rotation and keep it in the client or password manager that owns the runtime integration.
 
 ## Action Menu
 
@@ -261,4 +296,29 @@ When client traffic is rejected or not behaving as expected, check API keys in t
 9. use Request logs filtered by Pool or key metadata to inspect recent failures
 10. use Audit logs to confirm recent create, rotate, pause, revoke, or edit actions
 
-If the raw key was copied incorrectly or lost, do not create another unrelated key unless the client identity should change. Rotate the existing key so its identity, audit history, and Request log attribution stay attached to the same operator label. Rotation does not make the API-key registry an analytics record. Use Stats for aggregates.
+If the raw key was copied incorrectly or lost, do not create another unrelated key unless the client identity should change. Rotate the existing key so its identity, audit history, and Request log attribution stay attached to the same operator label. Rotation keeps the key record but invalidates every existing Observatory session, so the new raw key must be used for both runtime requests and the next dashboard login. Use the Observatory for per-key analytics and Stats for Pool-level aggregates.
+
+## Dashboard session and lifecycle effects
+
+Dashboard sessions are tied to the canonical API key and its current Pool. The following changes invalidate existing dashboard sessions and require a new login when access is eligible again:
+
+| Change | Result |
+| --- | --- |
+| Pause | Runtime admission stops and existing Observatory sessions are removed. Resuming the key does not restore a deleted browser session. |
+| Revoke | Runtime and Observatory access stop; the revoked key cannot be resumed or rotated. |
+| Rotate | The key record and history remain, a new raw key is shown once, and all Observatory sessions are removed. |
+| Delete | The key and its dashboard sessions are removed. |
+| Expiry | New login and subsequent session checks fail after the expiry time. |
+| Pool disabled or archived | Dashboard sessions for keys in that Pool are removed and the Pool must be active before login can succeed again. |
+| Key moved to another Pool | Existing sessions are removed; sign in again after the destination Pool and key are eligible. |
+| Dashboard access disabled | Existing sessions are removed without changing the key's runtime policy. |
+
+An open dashboard normally receives the invalidation promptly across application nodes. It also rechecks the database on reconnect, refresh, and the bounded revalidation interval, so a missed relay fails closed rather than leaving stale access active.
+
+## Observatory troubleshooting
+
+- **The login form says `The API key is invalid or unavailable.`** Ask the key manager to confirm the key is active, unexpired, attached to an active Pool, and has Dashboard access enabled. The message is intentionally generic and does not reveal which eligibility check failed.
+- **The page returns to login after a lifecycle change.** This is expected after pause, revoke, rotate, delete, expiry, Pool disable/archive, Pool reassignment, or Dashboard access disable. Sign in again only after the key is eligible.
+- **The page says `No usage in this window`.** The key has no recorded activity in the selected window. Try another window or confirm that the client is using this key.
+- **The page says usage is estimated or unavailable.** Accounting or pricing is still settling, missing, or temporarily unavailable. The dashboard does not invent a settled value.
+- **The page says updates are paused or disconnected.** Resume refresh or wait for the browser connection to recover. Hidden tabs and paused views stop periodic refreshes; the last known values remain visible until a new refresh is applied.

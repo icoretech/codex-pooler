@@ -79,6 +79,25 @@ Unsupported public `/v1` routes that may be named as unsupported:
 - `DELETE /v1/responses/:response_id`
 - `/v1/realtime` and OpenAI Realtime SDK websocket or session routes
 
+### API Key Observatory
+
+The Observatory is a separate read-only browser surface for a single eligible
+Pool API key. It is not part of the instance-admin session and it is not a
+runtime compatibility API.
+
+Allowed public claims:
+
+- `GET /observatory/login` renders the access-key form
+- `POST /observatory/login` exchanges an eligible Pool API key for a dashboard browser session
+- `DELETE /observatory/logout` ends the dashboard browser session
+- authenticated `GET /observatory` serves the key-local Observatory LiveView
+- Dashboard access is a separate per-key capability and does not grant `/admin/*` access
+- Observatory values are bounded, sanitized usage metadata for the authenticated key only
+
+Do not document raw credentials in URLs, query strings, cookies, screenshots, or
+client-side storage. Do not describe the Observatory as exposing Pool-wide
+analytics, other keys, prompts, payloads, or administration controls.
+
 ### `/mcp`
 
 Use `operator MCP endpoint` for `/mcp`. It is a root metadata-only, read-only operator endpoint. It is not under `/backend-api` or `/v1`.
@@ -170,6 +189,7 @@ Use these tracked sources as the source of truth for public route claims. Do not
 | Unsupported `/v1` routes | `lib/codex_pooler_web/controllers/v1/unsupported_routes.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Explicit unsupported `/v1` routes return deterministic OpenAI-shaped unsupported endpoint errors before gateway dispatch |
 | Realtime exclusion | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs` | `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are not supported |
 | MCP endpoint | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | `/mcp` is a root metadata-only, read-only operator endpoint using operator MCP bearer tokens, not Pool API keys or browser sessions |
+| API Key Observatory | `lib/codex_pooler_web/router.ex`, `lib/codex_pooler_web/controllers/observatory/login_controller.ex`, `lib/codex_pooler_web/plugs/observatory_auth.ex`, `lib/codex_pooler_web/observatory_auth.ex`, `lib/codex_pooler/access/dashboard_sessions.ex`, `lib/codex_pooler/accounting/usage/observatory.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/browser/observatory_login_controller_test.exs`, `test/codex_pooler/access/api_key_dashboard_sessions_test.exs`, `test/codex_pooler/accounting/observatory_contract_test.exs`, `test/codex_pooler_web/live/observatory_live_test.exs` | `/observatory` is a separate key-local read-only browser surface using an eligible Pool API key, a dedicated opaque dashboard token, and a minimal signed LiveView handoff; it does not grant runtime or `/admin/*` authority and exposes only bounded sanitized usage metadata |
 | Upstream identity linking | `lib/codex_pooler/upstreams/lifecycle/identity_lifecycle.ex`, `lib/codex_pooler/upstreams/token_linking.ex`, `lib/codex_pooler/upstreams/auth/codex_auth.ex`, `lib/codex_pooler/upstreams/auth/codex_auth_json.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex`, `test/codex_pooler/upstreams/oauth_browser_linking_test.exs`, `test/codex_pooler/upstreams/oauth_device_linking_test.exs`, `test/codex_pooler/upstreams/oauth_relink_test.exs`, `test/codex_pooler/upstreams_test.exs`, `test/codex_pooler_web/live/admin/pages/upstreams_live_test.exs`, `test/codex_pooler_web/live/admin/pages/upstream_cockpit_live_test.exs` | OAuth links, relinks, and auth.json imports can use an OpenAI user subject, when returned, to separate same-account and same-workspace upstream credentials. Public docs may mention only sanitized subject references or fingerprints, never raw subjects |
 | Privacy and redaction | `README.md`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | Public docs must keep prompts, bodies, bearer tokens, cookies, `auth.json`, upstream secrets, and private identifiers out of examples and evidence |
 

@@ -10,6 +10,7 @@ defmodule CodexPooler.Access.APIKey do
 
   @type reasoning_effort :: String.t()
   @type t :: %__MODULE__{
+          dashboard_access: boolean(),
           enforced_reasoning_effort: reasoning_effort() | nil,
           maximum_reasoning_effort: reasoning_effort() | nil
         }
@@ -21,6 +22,7 @@ defmodule CodexPooler.Access.APIKey do
     field :key_prefix, :string
     field :key_hash, :binary
     field :status, :string
+    field :dashboard_access, :boolean, default: false
     field :expires_at, :utc_datetime_usec
     field :last_used_at, :utc_datetime_usec
     field :allowed_model_identifiers, {:array, :string}
@@ -43,6 +45,7 @@ defmodule CodexPooler.Access.APIKey do
       :key_prefix,
       :key_hash,
       :status,
+      :dashboard_access,
       :expires_at,
       :last_used_at,
       :allowed_model_identifiers,
@@ -59,7 +62,14 @@ defmodule CodexPooler.Access.APIKey do
     |> update_change(:allowed_model_identifiers, &normalize_model_identifiers/1)
     |> update_change(:enforced_model_identifier, &normalize_model_identifier/1)
     |> update_change(:metadata, &normalize_metadata/1)
-    |> validate_required([:pool_id, :display_name, :key_prefix, :key_hash, :status])
+    |> validate_required([
+      :pool_id,
+      :display_name,
+      :key_prefix,
+      :key_hash,
+      :status,
+      :dashboard_access
+    ])
     |> validate_inclusion(:status, ["active", "paused", "revoked"])
     |> validate_string_list(:allowed_model_identifiers)
     |> validate_model_identifier(:enforced_model_identifier)

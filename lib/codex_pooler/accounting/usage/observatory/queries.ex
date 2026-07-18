@@ -1,0 +1,177 @@
+defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
+  @moduledoc false
+
+  import Ecto.Query
+
+  alias CodexPooler.Accounting.Usage.Observatory.QueryScope
+  alias CodexPooler.Repo
+
+  def summary(identity, window) do
+    half_bucket_count = div(window.bucket_count, 2)
+
+    identity
+    |> QueryScope.scoped_facts(window)
+    |> then(fn facts ->
+      Repo.one(
+        from(fact in subquery(facts),
+          select: %{
+            request_count: count(fact.request_id),
+            succeeded: sum(fact.succeeded),
+            failed: sum(fact.failed),
+            in_progress: sum(fact.in_progress),
+            settlement_count: sum(fact.has_settlement),
+            unknown_usage_count: sum(fact.unknown_usage),
+            input_tokens: sum(fact.input_tokens),
+            cached_input_tokens: sum(fact.cached_input_tokens),
+            output_tokens: sum(fact.output_tokens),
+            reasoning_tokens: sum(fact.reasoning_tokens),
+            total_tokens: sum(fact.total_tokens),
+            settled_cost_micros: sum(fact.settled_cost_micros),
+            settled_cost_count: sum(fact.settled_cost_available),
+            estimated_cost_micros: sum(fact.estimated_cost_micros),
+            estimated_cost_count: sum(fact.estimated_cost_available),
+            unavailable_cost_count: sum(fact.cost_unavailable),
+            latency_mean: type(fragment("ROUND(AVG(?))::bigint", fact.latency_ms), :integer),
+            latency_p50:
+              type(
+                fragment(
+                  "ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY ?))::numeric)::bigint",
+                  fact.latency_ms
+                ),
+                :integer
+              ),
+            latency_p95:
+              type(
+                fragment(
+                  "ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY ?))::numeric)::bigint",
+                  fact.latency_ms
+                ),
+                :integer
+              ),
+            latency_max: max(fact.latency_ms),
+            throughput_p50:
+              type(
+                fragment(
+                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?)",
+                  fact.throughput_tokens_per_second
+                ),
+                :float
+              ),
+            throughput_previous_p50:
+              type(
+                fragment(
+                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?) FILTER (WHERE ? < ?)",
+                  fact.throughput_tokens_per_second,
+                  fact.bucket_index,
+                  ^half_bucket_count
+                ),
+                :float
+              ),
+            throughput_current_p50:
+              type(
+                fragment(
+                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?) FILTER (WHERE ? >= ?)",
+                  fact.throughput_tokens_per_second,
+                  fact.bucket_index,
+                  ^half_bucket_count
+                ),
+                :float
+              ),
+            throughput_p95:
+              type(
+                fragment(
+                  "percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)",
+                  fact.throughput_tokens_per_second
+                ),
+                :float
+              )
+          }
+        ),
+        telemetry_options: [reporting_projection: :observatory_summary]
+      )
+    end)
+  end
+
+  def buckets(identity, window) do
+    identity
+    |> QueryScope.scoped_facts(window)
+    |> then(fn facts ->
+      Repo.all(
+        from(fact in subquery(facts),
+          group_by: fact.bucket_index,
+          order_by: fact.bucket_index,
+          select: %{
+            bucket_index: fact.bucket_index,
+            request_count: count(fact.request_id),
+            succeeded: sum(fact.succeeded),
+            failed: sum(fact.failed),
+            in_progress: sum(fact.in_progress),
+            input_tokens: sum(fact.input_tokens),
+            cached_input_tokens: sum(fact.cached_input_tokens),
+            output_tokens: sum(fact.output_tokens),
+            reasoning_tokens: sum(fact.reasoning_tokens),
+            total_tokens: sum(fact.total_tokens),
+            settled_cost_micros: sum(fact.settled_cost_micros),
+            settled_cost_count: sum(fact.settled_cost_available),
+            estimated_cost_micros: sum(fact.estimated_cost_micros),
+            estimated_cost_count: sum(fact.estimated_cost_available),
+            unavailable_cost_count: sum(fact.cost_unavailable)
+          }
+        ),
+        telemetry_options: [reporting_projection: :observatory_buckets]
+      )
+    end)
+  end
+
+  def models(identity, window) do
+    identity
+    |> QueryScope.scoped_facts(window)
+    |> then(fn facts ->
+      Repo.all(
+        from(fact in subquery(facts),
+          group_by: fact.model_label,
+          order_by: [
+            desc: sum(fact.total_tokens),
+            desc: count(fact.request_id),
+            asc: fact.model_label
+          ],
+          limit: 12,
+          select: %{
+            label: fact.model_label,
+            request_count: count(fact.request_id),
+            total_tokens: sum(fact.total_tokens)
+          }
+        ),
+        telemetry_options: [reporting_projection: :observatory_models]
+      )
+    end)
+  end
+
+  def outcomes(identity, window) do
+    identity
+    |> QueryScope.scoped_facts(window)
+    |> then(fn facts ->
+      Repo.all(
+        from(fact in subquery(facts),
+          order_by: [desc: fact.timestamp, desc: fact.request_id],
+          limit: 12,
+          select: %{
+            timestamp: fact.timestamp,
+            model: fact.model_label,
+            endpoint_class: fact.endpoint_class,
+            status: fact.status,
+            code: fact.safe_code,
+            response_status_code: fact.response_status_code,
+            latency_ms: fact.latency_ms,
+            total_tokens: fact.total_tokens,
+            settled_cost_micros: fact.settled_cost_micros,
+            settled_cost_available: fact.settled_cost_available,
+            estimated_cost_micros: fact.estimated_cost_micros,
+            estimated_cost_available: fact.estimated_cost_available
+          }
+        ),
+        telemetry_options: [reporting_projection: :observatory_outcomes]
+      )
+    end)
+  end
+end

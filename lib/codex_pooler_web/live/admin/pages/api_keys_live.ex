@@ -540,7 +540,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   defp assign_api_key_wizard_state(socket, params) do
     params = ApiKeyPolicyForm.normalize_params(params, socket.assigns.pools)
-    form = ApiKeyPolicyForm.form(params, errors: ApiKeyPolicyForm.expiry_errors(params))
+    form = ApiKeyPolicyForm.form(params, errors: ApiKeyPolicyForm.input_errors(params))
     pool = ApiKeysReadModel.selected_pool(socket.assigns.pools, params["pool_id"])
     model_selector_state = ApiKeysReadModel.model_selector_state(pool, params)
     review_errors = ApiKeyPolicyForm.review_errors(params)

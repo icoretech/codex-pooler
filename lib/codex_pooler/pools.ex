@@ -5,6 +5,7 @@ defmodule CodexPooler.Pools do
 
   import Ecto.Query
 
+  alias CodexPooler.Access.DashboardSessions
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Accounts.User
   alias CodexPooler.Audit
@@ -591,14 +592,34 @@ defmodule CodexPooler.Pools do
              |> Pool.changeset(attrs)
              |> Repo.update(),
            {:ok, _revoked_count} <-
-             revoke_active_operator_pool_assignments(pool, Map.get(attrs, :status), now) do
-        pool
+             revoke_active_operator_pool_assignments(pool, Map.get(attrs, :status), now),
+           invalidated_api_keys <-
+             delete_dashboard_sessions_for_inactive_pool(pool, Map.get(attrs, :status)) do
+        {pool, invalidated_api_keys}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> normalize_transaction_error()
+    |> normalize_pool_lifecycle_transaction()
   end
+
+  defp delete_dashboard_sessions_for_inactive_pool(%Pool{}, nil), do: []
+  defp delete_dashboard_sessions_for_inactive_pool(%Pool{}, @status_active), do: []
+
+  defp delete_dashboard_sessions_for_inactive_pool(%Pool{} = pool, _inactive_status) do
+    DashboardSessions.delete_all_for_pool(pool.id)
+  end
+
+  defp normalize_pool_lifecycle_transaction({:ok, {%Pool{} = pool, invalidated_api_keys}}) do
+    Enum.each(invalidated_api_keys, fn api_key ->
+      DashboardSessions.broadcast_invalidation(api_key, "pool_status_updated")
+    end)
+
+    {:ok, pool}
+  end
+
+  defp normalize_pool_lifecycle_transaction({:error, reason}),
+    do: normalize_transaction_error({:error, reason})
 
   @spec revoke_active_operator_pool_assignments(Pool.t(), String.t() | nil, DateTime.t()) ::
           {:ok, non_neg_integer()}

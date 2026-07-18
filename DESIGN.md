@@ -160,6 +160,63 @@ Grid conventions:
 - Responsive breakpoints in active use: `sm` (640), `md` (768), `lg` (1024),
   `xl` (1280), plus one bespoke `min-[1900px]` on the stats KPI strip.
 
+### Observatory token extension
+
+The Observatory keeps its exact approved geometry while using the existing
+Tailwind/daisyUI vocabulary wherever a named value already exists. Standard
+spacing and control geometry in the Observatory CSS are applied through named
+Tailwind v4 utilities (`min-h-12`, the `gap-*`/`p-*`/`m*` scale, `size-*`,
+`min-w-160`, `border`/`border-b`/`border-s-2`, and `leading-5`). The 576px
+chart minimum is the existing Tailwind `--container-xl` token; compact body
+type is `--text-xs`; weights and tight leading use `--font-weight-*` and
+`--leading-tight`. Cards and field controls remain on `--radius-box` and
+`--radius-field`; colors remain on the §2 semantic theme slots.
+
+Only values with no exact framework token receive an Observatory-local token.
+This is the complete inventory; it is not a new global scale:
+
+| Token | Resolved value | Role |
+| --- | --- | --- |
+| `--observatory-radius-pill` | `999px` | Exact existing pill geometry for the key chip, segmented controls, live dot, and minibar |
+| `--observatory-shell-max-width` | `87.5rem` (1400px) | Exact existing maximum width of the centered Observatory content column |
+| `--observatory-model-label-column-width` | `8.5rem` | Exact model-name column width in ranked model rows |
+| `--observatory-model-value-column-width` | `4.5rem` | Exact right-aligned token-value column width in ranked model rows |
+| `--observatory-type-wordmark-size` | `0.95rem` | Observatory wordmark size |
+| `--observatory-type-wordmark-tracking` | `-0.04em` | Observatory wordmark tracking |
+| `--observatory-type-wordmark-suffix-size` | `0.625rem` | "Codex Pooler" wordmark suffix size |
+| `--observatory-type-wordmark-suffix-tracking` | `0.14em` | Wordmark suffix tracking |
+| `--observatory-type-control-size` | `0.6875rem` | Window and chart-mode segmented button type |
+| `--observatory-type-control-leading` | `1.3` | Segmented button line height |
+| `--observatory-type-fine-size` | `0.71875rem` | Freshness and fact-detail type |
+| `--observatory-type-fine-compact-size` | `0.65625rem` | Freshness type on phones at or below 420px |
+| `--observatory-type-fact-label-size` | `0.625rem` | Telemetry fact labels and Observatory micro metadata chips |
+| `--observatory-type-fact-label-tracking` | `0.08em` | Telemetry fact-label tracking |
+| `--observatory-type-fact-value-size` | `1.3125rem` | Standard telemetry fact value |
+| `--observatory-type-fact-value-leading` | `1.15` | Telemetry fact-value line height |
+| `--observatory-type-fact-value-lead-size` | `1.6875rem` | Lead success-rate value |
+| `--observatory-focus-ring-width` | `2px` | Segmented, pause/resume, and logout focus ring |
+| `--observatory-focus-ring-offset` | `2px` | Focus-ring separation from the control edge |
+| `--observatory-motion-control-duration` | `150ms` via `--default-transition-duration` | Border/background/text state transition |
+| `--observatory-motion-control-easing` | `ease` | Control state-transition curve |
+| `--observatory-motion-live-duration` | `2.4s` | Live freshness-dot pulse period |
+| `--observatory-motion-live-easing` | `ease-in-out` | Live freshness-dot pulse curve |
+| `--observatory-motion-live-dim-opacity` | `0.35` | Midpoint opacity that makes the live pulse readable |
+
+Responsive conditions are named Tailwind custom variants rather than custom
+properties (custom properties cannot be evaluated in media-query conditions):
+
+| Variant | Concrete condition | Role |
+| --- | --- | --- |
+| `observatory-split` | `width >= 1100px` | 4/8 telemetry split and sticky facts rail |
+| `observatory-toolbar-stacked` | `width <= 45rem` (720px) | Two-row toolbar and compact gutters |
+| `observatory-freshness-compact` | `width <= 26.25rem` (420px) | Smaller freshness label |
+| `observatory-wordmark-compact` | `width <= 23.4375rem` (375px) | Hide only the wordmark suffix |
+
+The variants are declared once with `@custom-variant`; component CSS consumes
+them through `@variant`, and HEEx uses `observatory-split:*`. Tailwind 4 emits
+the concrete media queries during the asset build. The ordinary `sm` variant
+continues to control safe-prefix visibility at 640px.
+
 ## 5. Components — current admin system
 
 Each entry: source, purpose, anatomy/API, tones and states, responsive/scroll
@@ -501,11 +558,18 @@ verified live as the orange "Pro" / green "Free" pills.
 
 ### 5.12 Segmented pill control
 
-- **Source:** `chart_mode_control/1` in
-  [`presentation_charts.ex`](lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex)
-  and `leaderboard_sort_button_class/1` in
+- **Source:** the private `chart_mode_control/1` is rendered only through the
+  public `traffic_charts/1` composition in
+  [`presentation_charts.ex`](lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex);
+  the same visual pattern is also used by `leaderboard_sort_button_class/1` in
   [`stats/presentation.ex`](lib/codex_pooler_web/live/admin/components/pages/stats/presentation.ex)
-  (same pattern, Interval/Cumulative and Tokens/Cost, verified live).
+  (Interval/Cumulative and Tokens/Cost).
+- **Showcase contract:**
+  [`ComponentShowcaseStats.contract/0`](dev_support/codex_pooler_web/dev/component_showcase_stats.ex)
+  maps stable entry `5.12-segmented-control` to the real public
+  `StatsPresentation.Charts.traffic_charts/1` export and scopes its selectors
+  beneath `#showcase-stats-traffic-charts`. The showcase never exposes or
+  calls the private leaf directly.
 - **Anatomy:** `rounded-full border border-base-300 bg-base-200/60 p-0.5`
   group (`role="group"` + `aria-label`) of `text-[11px]` pill buttons; the
   active option reads as a raised thumb (`border-base-300 bg-base-100
@@ -527,6 +591,12 @@ verified live as the orange "Pro" / green "Free" pills.
   hook `ApexTimeSeriesChart` in `assets/js` (series math in
   `assets/js/chart_series.mjs`); tooltip/container CSS
   (`admin-apex-bar-chart`, `admin-chart-mobile-wide`) in `app.css`.
+- **Showcase contract:** the same structured
+  [`ComponentShowcaseStats.contract/0`](dev_support/codex_pooler_web/dev/component_showcase_stats.ex)
+  maps stable entry `5.13-time-series-chart` to that public export, its
+  deterministic inputs, and the scoped `#stats-traffic-chart` surface. Tests
+  consume the structured export/root/selector identities, not this human
+  documentation prose.
 - **Anatomy:** an `admin_surface`-style card whose header holds the title, a
   live `tabular-nums` total line, and a mode pill (§5.12); the plot `div`
   carries `phx-hook="ApexTimeSeriesChart" phx-update="ignore"` and a
@@ -681,15 +751,19 @@ surface**. It reuses the token system, chips, metric cards, chart contract,
 and states above, but not the admin chrome. The layout below was chosen from
 five browser-verified candidates on 2026-07-17 ("Ledger" composition with the
 "Console" facts rail) and this section is its authoritative description.
-Implementation must land here as components stabilize, replacing "planned"
-markers with source links.
 
-### 6.1 Shell and toolbar (planned; mockup-approved)
+### 6.1 Shell and toolbar
+
+**Sources:** [`Layouts.app`](lib/codex_pooler_web/components/layouts.ex),
+[`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
+[`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar.ex),
+and [Observatory rules in `app.css`](assets/css/app.css).
 
 - Own minimal layout (own `live_session`, no `Shell.admin_shell`, no sidebar,
   no operator identity, no Pool selector). Root is a single scroll region on
-  `bg-base-200`; content column is `max-w-[1400px] mx-auto` with `p-4 sm:p-5`
-  and `gap-4` section stacking.
+  `bg-base-200`; the `observatory-shell-content` column is centered with
+  `mx-auto` and capped by `--observatory-shell-max-width` at the existing
+  87.5rem (1400px), with `p-4 sm:p-5` and `gap-4` section stacking.
 - Dark-first: default presentation is the dark theme; light must remain fully
   supported through the same `data-theme` mechanism. No neon/glass/gradient
   decoration — Observatory distinctiveness comes from layout density and the
@@ -709,18 +783,26 @@ markers with source links.
   5. Pause/resume icon button and a "Log out" ghost button.
 - Toolbar responsiveness: the toolbar is two flex groups — identity
   (wordmark + key chip) and controls (window pill, freshness, pause, logout).
-  On desktop they share one 48px row; when they no longer fit (~720px and
-  below) the groups wrap into two stacked rows: identity on top, controls
-  full-width below with the pill left and freshness/pause/logout right. The
-  key prefix hides below `sm`; the wordmark suffix hides on very narrow
-  phones. The toolbar stays sticky in both shapes.
+  Above 720px they share one 48px row; the named
+  `observatory-toolbar-stacked` variant applies at 720px and below and wraps
+  them into two stacked rows: identity on top, controls full-width below with
+  the pill left and freshness/pause/logout right. The key prefix hides below
+  `sm`; `observatory-freshness-compact` applies through 420px and
+  `observatory-wordmark-compact` hides the suffix through 375px. The toolbar
+  stays sticky in both shapes.
 - Vocabulary rule: no "Pool", "upstream", or operator terminology anywhere in
   Observatory copy; statuses use the holder's perspective (usage, models,
   outcomes).
 
-### 6.2 Telemetry grid (planned; mockup-approved)
+### 6.2 Telemetry grid
 
-- Desktop (>1100px): a two-column split, `grid-template-columns:
+**Sources:** [`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
+[`Telemetry.telemetry`](lib/codex_pooler_web/live/observatory/components/telemetry.ex),
+[`Activity.activity`](lib/codex_pooler_web/live/observatory/components/activity.ex),
+and [Observatory rules in `app.css`](assets/css/app.css).
+
+- At 1100px and above (`observatory-split`): a two-column split,
+  `grid-template-columns:
   minmax(0,4fr) minmax(0,8fr)` with 16px gap. The **left rail is sticky**
   below the toolbar (`position: sticky; top: 64px`) and stacks two cards; the
   right column stacks the chart card over the outcome table. Below 1100px
@@ -762,7 +844,12 @@ markers with source links.
   Rows may adopt the admin status-stripe pattern (§5.4: a `data-status`
   attribute painted by CSS, reinforcing the status chip).
 
-### 6.3 Window control and refresh states (planned)
+### 6.3 Window control and refresh states
+
+**Sources:** [`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
+[`States.state`](lib/codex_pooler_web/live/observatory/components/states.ex),
+[`Observatory.Presentation`](lib/codex_pooler_web/live/observatory/presentation.ex),
+and [`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar.ex).
 
 - Windows are the allowlisted `1h / 5h / 24h / 7d` as a segmented pill;
   selection is server-validated (client ids are never authority).
@@ -772,6 +859,10 @@ markers with source links.
   hidden-tab), `disconnected` (reuses the flash reconnect pattern), and
   `error`. Refresh cadence is 30s only while visible; pause/resume is explicit
   and reflected in the toolbar.
+- The named state rendering, window allowlist, and initial loading behavior are
+  implemented in the linked sources. The 30-second visibility-aware cadence and
+  stale-result behavior are a separate runtime contract and are not claimed as
+  implemented by these source links.
 
 ## 7. Motion
 
@@ -790,6 +881,11 @@ animated):
 - Flash show/hide: 200–300ms fade/scale via `CoreComponents.show/hide`;
   reconnect spinner is `motion-safe:animate-spin`.
 - Theme toggle thumb: `transition-[left]`.
+- Observatory segmented/pause/logout controls: the semantic control motion
+  role is 150ms `ease` for border/background/text state changes; the live-dot
+  role is a 2.4s `ease-in-out` opacity pulse whose midpoint is 0.35. These map
+  to the `--observatory-motion-*` tokens in §4; pause makes the dot static and
+  `prefers-reduced-motion: reduce` removes the pulse and control transitions.
 
 Rule: no looping decorative animation; the burn shine is the ceiling for
 ambient motion and it is evidence-driven (recent token burn).

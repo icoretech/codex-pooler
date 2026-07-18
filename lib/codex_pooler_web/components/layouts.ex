@@ -44,14 +44,11 @@ defmodule CodexPoolerWeb.Layouts do
           <.public_footer id="invite-footer" />
         </main>
       <% @chrome == :observatory -> %>
-        <main id="observatory-shell" class="min-h-svh bg-base-200/40 text-base-content">
-          <div class="mx-auto w-full max-w-6xl">
-            <header class="flex items-center justify-between border-b border-base-300 px-4 py-4 sm:px-6 lg:px-8">
-              <Layouts.public_logo id="observatory-logo" />
-              <span class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-base-content/60">
-                Observatory
-              </span>
-            </header>
+        <main
+          id="observatory-shell"
+          class="min-h-svh overflow-x-clip bg-base-200/40 text-base-content"
+        >
+          <div class="observatory-shell-content mx-auto w-full min-w-0">
             {render_slot(@inner_block)}
           </div>
         </main>

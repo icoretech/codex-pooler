@@ -1,0 +1,145 @@
+defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
+  @moduledoc false
+
+  import CodexPooler.PoolerFixtures
+
+  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.DashboardSessions.Principal, as: DashboardPrincipal
+  alias CodexPooler.Accounting.{LedgerEntry, Request}
+  alias CodexPooler.Repo
+
+  @scope_indexes [
+    "requests_api_key_pool_admitted_idx",
+    "ledger_entries_api_key_pool_settlement_occurred_idx",
+    "ledger_entries_api_key_recorded_occurred_idx"
+  ]
+
+  def set_statement_timeout, do: Repo.query!("SET LOCAL statement_timeout = '30s'")
+
+  def refresh_statistics do
+    # Repeated sandbox rollbacks leave dead pages in these local test indexes.
+    Enum.each(@scope_indexes, &Repo.query!("REINDEX INDEX " <> &1))
+    Repo.query!("ANALYZE requests")
+    Repo.query!("ANALYZE ledger_entries")
+  end
+
+  def insert_representative_rows! do
+    pool = pool_fixture()
+    wrong_pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    api_key = api_key |> APIKey.changeset(%{dashboard_access: true}) |> Repo.update!()
+    %{api_key: other_api_key} = active_api_key_fixture(pool)
+    model = model_fixture(pool, %{exposed_model_id: "gpt-observatory-plan"})
+    wrong_model = model_fixture(wrong_pool, %{exposed_model_id: "gpt-observatory-other"})
+    upper_bound = ~U[2026-07-17 12:00:00Z]
+
+    {request_template, ledger_template} =
+      retained_template_pair!(pool, api_key, model, DateTime.add(upper_bound, -13))
+
+    fixture_ref = System.unique_integer([:positive])
+
+    build_pair = fn index, pool_id, api_key_id, model_id, timestamp ->
+      request_id = Ecto.UUID.generate()
+      timestamp = %{timestamp | microsecond: {0, 6}}
+
+      request_row =
+        Map.merge(request_template, %{
+          id: request_id,
+          pool_id: pool_id,
+          api_key_id: api_key_id,
+          model_id: model_id,
+          admitted_at: timestamp,
+          completed_at: timestamp,
+          idempotency_key: nil,
+          correlation_id: "observatory-plan-#{fixture_ref}-#{index}"
+        })
+
+      ledger_row =
+        Map.merge(ledger_template, %{
+          id: Ecto.UUID.generate(),
+          request_id: request_id,
+          pool_id: pool_id,
+          api_key_id: api_key_id,
+          occurred_at: timestamp,
+          created_at: timestamp
+        })
+
+      {request_row, ledger_row}
+    end
+
+    rows =
+      for index <- 2..240 do
+        timestamp = DateTime.add(upper_bound, -(rem(index * 13, 3_500) + 1), :second)
+        build_pair.(index, pool.id, api_key.id, model.id, timestamp)
+      end ++
+        for index <- 1..2_000 do
+          timestamp = DateTime.add(upper_bound, -(7_200 + index), :second)
+          build_pair.(10_000 + index, pool.id, api_key.id, model.id, timestamp)
+        end ++
+        for index <- 1..5_000 do
+          timestamp = DateTime.add(upper_bound, -(rem(index * 17, 3_500) + 1), :second)
+          build_pair.(20_000 + index, pool.id, other_api_key.id, model.id, timestamp)
+        end ++
+        [
+          build_pair.(
+            30_001,
+            wrong_pool.id,
+            api_key.id,
+            wrong_model.id,
+            DateTime.add(upper_bound, -100)
+          )
+        ]
+
+    rows
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.chunk_every(500)
+    |> Enum.each(&Repo.insert_all(Request, &1))
+
+    rows
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.chunk_every(500)
+    |> Enum.each(&Repo.insert_all(LedgerEntry, &1))
+
+    %{
+      principal:
+        DashboardPrincipal.new(%{
+          api_key_id: api_key.id,
+          pool_id: pool.id,
+          display_name: api_key.display_name,
+          key_prefix: api_key.key_prefix
+        }),
+      upper_bound: upper_bound,
+      row_count: length(rows) + 1
+    }
+  end
+
+  defp retained_template_pair!(pool, api_key, model, timestamp) do
+    timestamp = %{timestamp | microsecond: {0, 6}}
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{model_id: model.id, status: "succeeded"})
+      |> Ecto.Changeset.change(%{admitted_at: timestamp, completed_at: timestamp})
+      |> Repo.update!()
+
+    ledger =
+      ledger_entry_fixture(request, %{
+        input_tokens: 6,
+        cached_input_tokens: 2,
+        output_tokens: 3,
+        reasoning_tokens: 1,
+        total_tokens: 10,
+        settled_cost_micros: 2,
+        occurred_at: timestamp,
+        created_at: timestamp,
+        details: %{"pricing_status" => "priced"}
+      })
+
+    {request_fields, []} = Request.__schema__(:insertable_fields)
+    {ledger_fields, []} = LedgerEntry.__schema__(:insertable_fields)
+
+    {
+      request |> Map.from_struct() |> Map.take(request_fields),
+      ledger |> Map.from_struct() |> Map.take(ledger_fields)
+    }
+  end
+end

@@ -101,6 +101,14 @@
 /* Use the data attribute for dark mode  */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
+/* Observatory breakpoints stay named at the Tailwind boundary so component
+   CSS and HEEx never carry one-off media-query values. Tailwind resolves
+   these variants to the concrete conditions declared here. */
+@custom-variant observatory-split (@media (width >= 1100px));
+@custom-variant observatory-toolbar-stacked (@media (width <= 45rem));
+@custom-variant observatory-freshness-compact (@media (width <= 26.25rem));
+@custom-variant observatory-wordmark-compact (@media (width <= 23.4375rem));
+
 /* This file is for your main application CSS */
 
 @font-face {
@@ -166,6 +174,34 @@
   --codex-rank-gold-ink: oklch(62% 0.13 85);
   --codex-rank-bronze: oklch(62% 0.11 55);
   --codex-rank-bronze-ink: oklch(55% 0.11 55);
+
+  /* Observatory-only values that do not map exactly to an existing Tailwind
+     or daisyUI token. Common spacing and control geometry continue to use
+     named Tailwind utilities in the component rules. */
+  --observatory-radius-pill: 999px;
+  --observatory-shell-max-width: 87.5rem;
+  --observatory-model-label-column-width: 8.5rem;
+  --observatory-model-value-column-width: 4.5rem;
+  --observatory-type-wordmark-size: 0.95rem;
+  --observatory-type-wordmark-tracking: -0.04em;
+  --observatory-type-wordmark-suffix-size: 0.625rem;
+  --observatory-type-wordmark-suffix-tracking: 0.14em;
+  --observatory-type-control-size: 0.6875rem;
+  --observatory-type-control-leading: 1.3;
+  --observatory-type-fine-size: 0.71875rem;
+  --observatory-type-fine-compact-size: 0.65625rem;
+  --observatory-type-fact-label-size: 0.625rem;
+  --observatory-type-fact-label-tracking: 0.08em;
+  --observatory-type-fact-value-size: 1.3125rem;
+  --observatory-type-fact-value-leading: 1.15;
+  --observatory-type-fact-value-lead-size: 1.6875rem;
+  --observatory-focus-ring-width: 2px;
+  --observatory-focus-ring-offset: 2px;
+  --observatory-motion-control-duration: var(--default-transition-duration);
+  --observatory-motion-control-easing: ease;
+  --observatory-motion-live-duration: 2.4s;
+  --observatory-motion-live-easing: ease-in-out;
+  --observatory-motion-live-dim-opacity: 0.35;
 }
 
 body {
@@ -1023,6 +1059,371 @@ body {
   background-color: var(--color-primary);
   color: #fff;
 }
+
+/* Observatory component rules: begin */
+/* The monitor-first shell stays compact at desktop widths and
+   becomes an intentional two-row control surface below the content-width
+   breakpoint. The chart/table scroll regions own their overflow; the page
+   itself never becomes a second horizontal viewport. */
+.observatory-shell-content {
+  max-width: var(--observatory-shell-max-width);
+}
+
+.observatory-toolbar {
+  @apply -mx-4 min-h-12 gap-x-4 gap-y-2 border-b px-4 py-1.5;
+
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  border-bottom-color: color-mix(in oklab, var(--color-base-300) 70%, transparent);
+  background: var(--color-base-100);
+}
+
+.observatory-toolbar-identity,
+.observatory-toolbar-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.observatory-toolbar-identity {
+  @apply gap-3.5;
+
+  flex: 1 1 auto;
+}
+
+.observatory-toolbar-controls {
+  @apply gap-3;
+
+  flex-shrink: 0;
+  justify-content: flex-end;
+  margin-inline-start: auto;
+}
+
+.observatory-wordmark {
+  @apply gap-2;
+
+  display: inline-flex;
+  min-width: max-content;
+  align-items: baseline;
+  color: var(--color-primary);
+  font-size: var(--observatory-type-wordmark-size);
+  font-weight: var(--font-weight-black);
+  letter-spacing: var(--observatory-type-wordmark-tracking);
+  line-height: var(--leading-tight);
+  text-transform: uppercase;
+}
+
+.observatory-wordmark small {
+  color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  font-size: var(--observatory-type-wordmark-suffix-size);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--observatory-type-wordmark-suffix-tracking);
+}
+
+.observatory-key-chip {
+  @apply gap-2 border py-1 pr-3 pl-1.5 leading-none;
+
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  border-color: var(--color-base-300);
+  border-radius: var(--observatory-radius-pill);
+  background: var(--color-base-200);
+  font-size: var(--text-xs);
+}
+
+.observatory-key-icon {
+  @apply size-4.5;
+
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--observatory-radius-pill);
+  background: color-mix(in oklab, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+}
+
+.observatory-window-control,
+.observatory-segmented-control {
+  @apply gap-0.5 border p-0.5;
+
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  border-color: var(--color-base-300);
+  border-radius: var(--observatory-radius-pill);
+  background: color-mix(in oklab, var(--color-base-200) 60%, transparent);
+}
+
+.observatory-window-button,
+.observatory-segmented-button {
+  @apply border px-2.5 py-0.75;
+
+  cursor: pointer;
+  border-color: transparent;
+  border-radius: var(--observatory-radius-pill);
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  font-size: var(--observatory-type-control-size);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--observatory-type-control-leading);
+  transition:
+    border-color var(--observatory-motion-control-duration)
+      var(--observatory-motion-control-easing),
+    background-color var(--observatory-motion-control-duration)
+      var(--observatory-motion-control-easing),
+    color var(--observatory-motion-control-duration) var(--observatory-motion-control-easing);
+}
+
+.observatory-window-button:hover,
+.observatory-segmented-button:hover {
+  color: var(--color-base-content);
+}
+
+.observatory-window-button[aria-pressed="true"],
+.observatory-segmented-button[aria-pressed="true"] {
+  border-color: var(--color-base-300);
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  font-weight: var(--font-weight-semibold);
+}
+
+.observatory-window-button:focus-visible,
+.observatory-segmented-button:focus-visible,
+.observatory-icon-button:focus-visible,
+.observatory-logout-button:focus-visible {
+  outline: var(--observatory-focus-ring-width) solid var(--color-primary);
+  outline-offset: var(--observatory-focus-ring-offset);
+}
+
+.observatory-freshness {
+  @apply gap-1.75;
+
+  display: inline-flex;
+  min-width: max-content;
+  align-items: center;
+  color: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  font-size: var(--observatory-type-fine-size);
+  white-space: nowrap;
+}
+
+.observatory-live-dot {
+  @apply size-1.75;
+
+  flex: 0 0 auto;
+  border-radius: var(--observatory-radius-pill);
+  background: var(--color-success);
+}
+
+.observatory-freshness.is-paused {
+  color: color-mix(in oklab, var(--color-warning) 80%, var(--color-base-content));
+}
+
+.observatory-freshness.is-paused .observatory-live-dot {
+  background: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .observatory-freshness:not(.is-paused) .observatory-live-dot {
+    animation: observatory-live-pulse var(--observatory-motion-live-duration)
+      var(--observatory-motion-live-easing) infinite;
+  }
+
+  @keyframes observatory-live-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: var(--observatory-motion-live-dim-opacity);
+    }
+  }
+}
+
+.observatory-icon-button,
+.observatory-logout-button {
+  color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
+  transition:
+    background-color var(--observatory-motion-control-duration)
+      var(--observatory-motion-control-easing),
+    color var(--observatory-motion-control-duration) var(--observatory-motion-control-easing);
+}
+
+.observatory-icon-button {
+  @apply size-7;
+
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-field);
+}
+
+.observatory-logout-button {
+  white-space: nowrap;
+}
+
+.observatory-icon-button:hover,
+.observatory-logout-button:hover {
+  background: color-mix(in oklab, var(--color-base-content) 8%, transparent);
+  color: var(--color-base-content);
+}
+
+.observatory-card {
+  @apply border;
+
+  min-width: 0;
+  border-color: var(--color-base-300);
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+}
+
+.observatory-metadata-chip {
+  font-size: var(--observatory-type-fact-label-size) !important;
+}
+
+.observatory-model-row {
+  grid-template-columns:
+    minmax(0, var(--observatory-model-label-column-width)) minmax(0, 1fr)
+    var(--observatory-model-value-column-width);
+}
+
+.observatory-fact {
+  @apply gap-0.5 px-4 py-3;
+
+  display: grid;
+  min-width: 0;
+}
+
+.observatory-fact-lead {
+  @apply py-3.5;
+}
+
+.observatory-fact-label {
+  color: color-mix(in oklab, var(--color-base-content) 42%, transparent);
+  font-size: var(--observatory-type-fact-label-size);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--observatory-type-fact-label-tracking);
+  line-height: var(--leading-tight);
+  text-transform: uppercase;
+}
+
+.observatory-fact-value {
+  font-size: var(--observatory-type-fact-value-size);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--observatory-type-fact-value-leading);
+}
+
+.observatory-fact-lead .observatory-fact-value {
+  font-size: var(--observatory-type-fact-value-lead-size);
+}
+
+.observatory-fact-detail {
+  @apply leading-5;
+
+  color: color-mix(in oklab, var(--color-base-content) 52%, transparent);
+  font-size: var(--observatory-type-fine-size);
+}
+
+.observatory-minibar {
+  @apply mt-1 h-1;
+
+  overflow: hidden;
+  border-radius: var(--observatory-radius-pill);
+  background: color-mix(in oklab, var(--color-base-300) 60%, transparent);
+}
+
+.observatory-chart-scroll,
+#observatory-outcomes-scroll {
+  max-width: 100%;
+}
+
+.observatory-chart {
+  min-width: var(--container-xl);
+}
+
+#observatory-outcomes-table {
+  border-collapse: collapse;
+}
+
+#observatory-outcomes-table thead {
+  background: color-mix(in oklab, var(--color-base-200) 35%, transparent);
+}
+
+#observatory-outcomes-table tbody tr:nth-child(odd) {
+  background: color-mix(in oklab, var(--color-base-200) 40%, transparent);
+}
+
+#observatory-outcomes-table tbody tr > td:first-child {
+  @apply border-s-2;
+
+  border-inline-start-color: var(--color-base-300);
+}
+
+#observatory-outcomes-table tbody tr[data-status="ok"] > td:first-child {
+  border-inline-start-color: var(--color-success);
+}
+
+#observatory-outcomes-table tbody tr[data-status="warn"] > td:first-child {
+  border-inline-start-color: var(--color-warning);
+}
+
+#observatory-outcomes-table tbody tr[data-status="err"] > td:first-child {
+  border-inline-start-color: var(--color-error);
+}
+
+#observatory-page,
+#observatory-widgets,
+#observatory-left-rail,
+#observatory-right-rail,
+#observatory-activity {
+  min-width: 0;
+}
+
+@variant observatory-toolbar-stacked {
+  .observatory-toolbar {
+    @apply -mx-3 flex-wrap gap-y-2 px-3 py-2;
+  }
+
+  .observatory-toolbar-identity {
+    @apply basis-full gap-2.5;
+  }
+
+  .observatory-toolbar-controls {
+    @apply ms-0 w-full justify-between gap-2;
+  }
+
+  .observatory-freshness {
+    @apply ms-auto;
+  }
+}
+
+@variant observatory-freshness-compact {
+  .observatory-freshness {
+    font-size: var(--observatory-type-fine-compact-size);
+  }
+}
+
+@variant observatory-wordmark-compact {
+  .observatory-wordmark small {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .observatory-window-button,
+  .observatory-segmented-button,
+  .observatory-icon-button,
+  .observatory-logout-button {
+    transition: none;
+  }
+}
+/* Observatory component rules: end */
 
 /* Auto redeem tunables dim while the policy toggle is off. Keyed on the
    shared form id so the cockpit accordion (submit-only, no server

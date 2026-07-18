@@ -1,0 +1,45 @@
+---
+title: API Key Observatory
+description: Use the read-only Observatory to review sanitized, key-local usage without accessing the admin workspace.
+---
+
+The API Key Observatory is a read-only view of activity for one Pool API key. It is useful when a key holder needs to check recent usage, latency, models, or outcomes without receiving access to the instance administration workspace.
+
+Dashboard access must be enabled for the key by the person who manages that key. It is separate from both runtime permission and the instance-admin browser session:
+
+- The Pool API key continues to authenticate runtime requests through the configured `/backend-api` or narrow `/v1` routes.
+- Dashboard access only permits this key to open the Observatory.
+- Observatory access does not grant `/admin/*` access, expose other keys, or change the key's runtime policy.
+
+## Sign in
+
+1. Open `GET /observatory/login`.
+2. Enter the access key in the password-style form and choose `Continue`.
+3. A valid eligible key creates a separate browser session and redirects to `GET /observatory`.
+4. Choose `Log out` in the Observatory when you are finished.
+
+The access key is accepted in the form submission only. Do not place it in a URL or query string, and do not copy it into notes, screenshots, tickets, or browser storage. The Observatory does not show the raw key again.
+
+## What the Observatory shows
+
+Choose one of the fixed windows: `1h`, `5h`, `24h`, or `7d`. The page can show:
+
+- success rate, cache rate, cost, throughput, and latency summaries
+- model distribution and settled token totals
+- Traffic buckets with fresh and cached token values
+- interval or cumulative chart views
+- at most 12 recent outcomes with time, model, sanitized endpoint class, status, latency, tokens, and cost
+
+The page refreshes while visible. You can pause and resume refresh, and a hidden or disconnected browser stops periodic refreshes until it becomes visible or connected again. The dashboard displays explicit loading, empty, partial-accounting, stale, disconnected, and temporary-error states instead of filling gaps with invented values.
+
+## Key-local and sanitized by design
+
+Every value is anchored to the authenticated API key. The Observatory does not combine data from another key, another Pool, or a separate administration view. It does not show prompts, completions, request or response bodies, file or media contents, headers, cookies, bearer credentials, raw idempotency keys, IP addresses, user agents, upstream identities, or raw error text.
+
+Costs are usage-reporting values, not provider invoices. A value may be settled, estimated while accounting completes, or unavailable when pricing or accounting data is missing.
+
+## When access ends
+
+The dashboard session is separate from the runtime credential and lasts at most 14 days without idle renewal. A key or Pool lifecycle change can end the session and return the browser to the login page. This includes pausing, revoking, rotating, deleting, or expiring the key; disabling Dashboard access; disabling or archiving the Pool; or moving the key to another Pool. After access is restored, sign in again with the currently valid raw key.
+
+If the login form reports `The API key is invalid or unavailable.`, ask the key manager to confirm that the key is active, unexpired, attached to an active Pool, and enabled for Dashboard access. The message is intentionally generic and does not identify which eligibility check failed.

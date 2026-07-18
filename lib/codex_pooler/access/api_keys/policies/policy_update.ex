@@ -2,6 +2,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
   @moduledoc false
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.DashboardSessions.Lifecycle, as: DashboardSessionLifecycle
 
   alias CodexPooler.Access.APIKeys.{
     AuditLog,
@@ -51,9 +52,20 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
         |> api_key_update_attrs(target_pool_id)
         |> Map.merge(policy_attrs)
 
-      api_key
-      |> PolicyPersistence.update_api_key_policy(update_attrs, policy_inputs, now())
-      |> PolicyPersistence.normalize_transaction_result()
+      mutation = fn ->
+        api_key
+        |> PolicyPersistence.update_api_key_policy(update_attrs, policy_inputs, now())
+        |> PolicyPersistence.normalize_transaction_result()
+      end
+
+      result =
+        if dashboard_session_invalidation_required?(api_key, update_attrs) do
+          DashboardSessionLifecycle.run(api_key, "api_key_updated", mutation)
+        else
+          mutation.()
+        end
+
+      result
       |> Notifications.notify_api_key_change("api_key_updated", api_key.pool_id)
       |> AuditLog.audit_api_key_change(scope, "api_key.update", fn updated ->
         updated
@@ -94,20 +106,40 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
   end
 
   defp api_key_update_attrs(attrs, target_pool_id) do
-    attrs
-    |> Map.take([
+    [
       :display_name,
       :status,
+      :dashboard_access,
       :expires_at,
       :allowed_model_identifiers,
-      :metadata,
-      "display_name",
-      "status",
-      "expires_at",
-      "allowed_model_identifiers",
-      "metadata"
-    ])
+      :metadata
+    ]
+    |> Enum.reduce(%{}, &put_update_attr(&2, attrs, &1))
     |> Map.put(:pool_id, target_pool_id)
+  end
+
+  defp dashboard_session_invalidation_required?(api_key, update_attrs) do
+    pool_changed? = Map.get(update_attrs, :pool_id, api_key.pool_id) != api_key.pool_id
+
+    dashboard_access_disabled? =
+      Map.has_key?(update_attrs, :dashboard_access) and
+        Map.get(update_attrs, :dashboard_access) == false and api_key.dashboard_access
+
+    status_disabled? =
+      Map.has_key?(update_attrs, :status) and
+        Map.get(update_attrs, :status) != "active" and api_key.status == "active"
+
+    pool_changed? or dashboard_access_disabled? or status_disabled?
+  end
+
+  defp put_update_attr(acc, attrs, field) do
+    string_field = Atom.to_string(field)
+
+    cond do
+      Map.has_key?(attrs, field) -> Map.put(acc, field, Map.get(attrs, field))
+      Map.has_key?(attrs, string_field) -> Map.put(acc, field, Map.get(attrs, string_field))
+      true -> acc
+    end
   end
 
   defp normalize_pool(%Pool{} = pool), do: pool
