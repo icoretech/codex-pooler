@@ -5,7 +5,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanReceipt do
   alias CodexPooler.Accounting.ObservatoryQueryPlanSupport, as: Support
 
   @request_fields ["api_key_id", "pool_id", "admitted_at"]
-  @ledger_fields ["api_key_id", "pool_id", "occurred_at"]
+  @fact_fields ["request_id"]
 
   def build(plans, projection, query_count, fixture_row_count, checks, probes) do
     %{
@@ -51,7 +51,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanReceipt do
       },
       "execution_time_ms" => plan.execution_time_ms,
       "fact_access" => %{
-        "ledger_entries" => relation_summary(plan.root, "ledger_entries", @ledger_fields),
+        "request_log_facts" => relation_summary(plan.root, "request_log_facts", @fact_fields),
         "requests" => relation_summary(plan.root, "requests", @request_fields)
       },
       "indexes" =>

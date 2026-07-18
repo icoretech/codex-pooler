@@ -116,6 +116,7 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
       latest_reasoning_tokens: known_usage_value(entry, :reasoning_tokens),
       latest_total_tokens: known_usage_value(entry, :total_tokens),
       latest_settled_cost_micros: settled_cost_micros(entry),
+      latest_estimated_cost_micros: estimated_cost_micros(entry),
       latest_cached_input_cost_micros: cached_input_cost_micros(entry),
       latest_cached_input_token_micros: cached_input_token_micros(entry),
       latest_settlement_occurred_at: entry.occurred_at,
@@ -204,6 +205,13 @@ defmodule CodexPooler.Accounting.RequestLogFacts do
 
   defp settled_cost_micros_for_known_usage(%{settled_cost_micros: value}),
     do: integer_micros(value)
+
+  # Estimated cost is denormalized ungated: the observatory read uses it exactly
+  # for rows that are not usage-known-and-priced, so gating here would blank the
+  # estimate the read still needs. The read column mirrors the settlement's
+  # `estimated_cost_micros` the same way the old ledger-backed query did.
+  defp estimated_cost_micros(entry),
+    do: entry |> Map.get(:estimated_cost_micros) |> integer_micros()
 
   defp cached_input_cost_micros(entry) do
     if usage_known?(entry), do: cached_input_cost_micros_for_known_usage(entry), else: nil

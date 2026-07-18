@@ -3,11 +3,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Request, RequestLogFact}
   alias CodexPooler.Catalog.Model
 
-  @settlement "settlement"
-  @recorded "recorded"
   @usage_known "usage_known"
   @safe_model_pattern "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$"
 
@@ -25,14 +23,14 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
     end
   end
 
-  defmacrop settled_cost(status, details, value) do
+  defmacrop settled_cost(status, pricing_status, value) do
     quote do
       type(
         fragment(
-          "CASE WHEN ? = ? AND COALESCE(?->>'pricing_status', '') = 'priced' THEN ROUND(COALESCE(?, 0), 0)::bigint ELSE 0 END",
+          "CASE WHEN ? = ? AND COALESCE(?, '') = 'priced' THEN ROUND(COALESCE(?, 0), 0)::bigint ELSE 0 END",
           unquote(status),
           unquote(@usage_known),
-          unquote(details),
+          unquote(pricing_status),
           unquote(value)
         ),
         :integer
@@ -40,25 +38,25 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
     end
   end
 
-  defmacrop settled_cost_available(status, details) do
+  defmacrop settled_cost_available(status, pricing_status) do
     quote do
       fragment(
-        "CASE WHEN ? = ? AND COALESCE(?->>'pricing_status', '') = 'priced' THEN 1 ELSE 0 END",
+        "CASE WHEN ? = ? AND COALESCE(?, '') = 'priced' THEN 1 ELSE 0 END",
         unquote(status),
         unquote(@usage_known),
-        unquote(details)
+        unquote(pricing_status)
       )
     end
   end
 
-  defmacrop estimated_cost(status, details, value) do
+  defmacrop estimated_cost(status, pricing_status, value) do
     quote do
       type(
         fragment(
-          "CASE WHEN NOT (? = ? AND COALESCE(?->>'pricing_status', '') = 'priced') AND COALESCE(?, 0) > 0 THEN ROUND(?, 0)::bigint ELSE 0 END",
+          "CASE WHEN NOT (? = ? AND COALESCE(?, '') = 'priced') AND COALESCE(?, 0) > 0 THEN ROUND(?, 0)::bigint ELSE 0 END",
           unquote(status),
           unquote(@usage_known),
-          unquote(details),
+          unquote(pricing_status),
           unquote(value),
           unquote(value)
         ),
@@ -67,29 +65,83 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
     end
   end
 
-  defmacrop estimated_cost_available(status, details, value) do
+  defmacrop estimated_cost_available(status, pricing_status, value) do
     quote do
       fragment(
-        "CASE WHEN NOT (? = ? AND COALESCE(?->>'pricing_status', '') = 'priced') AND COALESCE(?, 0) > 0 THEN 1 ELSE 0 END",
+        "CASE WHEN NOT (? = ? AND COALESCE(?, '') = 'priced') AND COALESCE(?, 0) > 0 THEN 1 ELSE 0 END",
         unquote(status),
         unquote(@usage_known),
-        unquote(details),
+        unquote(pricing_status),
         unquote(value)
       )
     end
   end
 
-  defmacrop cost_unavailable(status, details, value) do
+  defmacrop cost_unavailable(status, pricing_status, value) do
     quote do
       fragment(
-        "CASE WHEN (? = ? AND COALESCE(?->>'pricing_status', '') = 'priced') OR (NOT (? = ? AND COALESCE(?->>'pricing_status', '') = 'priced') AND COALESCE(?, 0) > 0) THEN 0 ELSE 1 END",
+        "CASE WHEN (? = ? AND COALESCE(?, '') = 'priced') OR (NOT (? = ? AND COALESCE(?, '') = 'priced') AND COALESCE(?, 0) > 0) THEN 0 ELSE 1 END",
         unquote(status),
         unquote(@usage_known),
-        unquote(details),
+        unquote(pricing_status),
         unquote(status),
         unquote(@usage_known),
-        unquote(details),
+        unquote(pricing_status),
         unquote(value)
+      )
+    end
+  end
+
+  defmacrop bucket_index(admitted_at, started_at, bucket_seconds) do
+    quote do
+      type(
+        fragment(
+          "FLOOR(EXTRACT(EPOCH FROM (? - ?)) / ?)::integer",
+          unquote(admitted_at),
+          unquote(started_at),
+          unquote(bucket_seconds)
+        ),
+        :integer
+      )
+    end
+  end
+
+  defmacrop model_label(exposed_model_id) do
+    quote do
+      fragment(
+        "CASE WHEN ? ~ ? THEN ? ELSE 'Unknown model' END",
+        unquote(exposed_model_id),
+        unquote(@safe_model_pattern),
+        unquote(exposed_model_id)
+      )
+    end
+  end
+
+  defmacrop endpoint_class(endpoint) do
+    quote do
+      fragment(
+        "CASE WHEN ? LIKE '%responses%' THEN 'responses' WHEN ? LIKE '%files%' THEN 'files' WHEN ? LIKE '%audio%' OR ? LIKE '%transcribe%' THEN 'audio' WHEN ? LIKE '%models%' THEN 'models' WHEN ? LIKE '%usage%' OR ? LIKE '%wham%' THEN 'usage' ELSE 'other' END",
+        unquote(endpoint),
+        unquote(endpoint),
+        unquote(endpoint),
+        unquote(endpoint),
+        unquote(endpoint),
+        unquote(endpoint),
+        unquote(endpoint)
+      )
+    end
+  end
+
+  defmacrop safe_code(last_error_code) do
+    quote do
+      fragment(
+        "CASE WHEN ? IS NULL THEN NULL WHEN ? ~* '(rate|quota)' THEN 'rate_limited' WHEN ? ~* '(auth|unauthor|forbidden)' THEN 'authentication' WHEN ? ~* 'timeout' THEN 'timeout' WHEN ? ~* '(network|connect|upstream)' THEN 'service_unavailable' WHEN ? ~* '(schema|invalid)' THEN 'invalid_request' ELSE 'request_failed' END",
+        unquote(last_error_code),
+        unquote(last_error_code),
+        unquote(last_error_code),
+        unquote(last_error_code),
+        unquote(last_error_code),
+        unquote(last_error_code)
       )
     end
   end
@@ -103,21 +155,22 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
     end
   end
 
+  @doc """
+  Aggregation-facing rows for the scoped key/pool/window.
+
+  Tokens and cost read from the request's denormalized fact
+  (`request_log_facts`) typed columns, so the aggregate queries never join
+  `ledger_entries` or dig through settlement JSONB. The fact is a 1:1 projection
+  keyed by `request_id`, so the join is one primary-key lookup per scoped
+  request. Token/settled reads stay gated on `latest_settlement_usage_status`
+  (backfilled facts store raw usage columns, live facts store them pre-gated, so
+  the SQL gate keeps both identical to the old ledger read); estimated cost is
+  stored ungated and gated here to non-priced rows.
+  """
   def scoped_facts(identity, window) do
-    # Join the settlement per request through the unique
-    # (request_id) WHERE settlement/recorded index. The request is already
-    # scoped to this key/pool/window by `request_scope`, so pool_id, api_key_id,
-    # and an occurred_at window on the settlement are redundant — and adding them
-    # makes the planner fetch every settlement in the window and nested-loop
-    # request_id across it (O(requests × settlements)), which times the read out
-    # for high-volume keys. Matching only on request_id keeps it one indexed
-    # lookup per request and also stops dropping the cost of requests that settle
-    # just after the window closes.
     from request in Request,
-      left_join: settlement in LedgerEntry,
-      on:
-        settlement.request_id == request.id and
-          settlement.entry_kind == ^@settlement and settlement.amount_status == ^@recorded,
+      left_join: fact in RequestLogFact,
+      on: fact.request_id == request.id,
       left_join: model in Model,
       on: model.id == request.model_id and model.pool_id == request.pool_id,
       where:
@@ -130,47 +183,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
         ),
       select: %{
         request_id: request.id,
-        timestamp: request.admitted_at,
         bucket_index:
-          type(
-            fragment(
-              "FLOOR(EXTRACT(EPOCH FROM (? - ?)) / ?)::integer",
-              request.admitted_at,
-              ^window.started_at,
-              ^window.bucket_seconds
-            ),
-            :integer
-          ),
-        model_label:
-          fragment(
-            "CASE WHEN ? ~ ? THEN ? ELSE 'Unknown model' END",
-            model.exposed_model_id,
-            ^@safe_model_pattern,
-            model.exposed_model_id
-          ),
-        endpoint_class:
-          fragment(
-            "CASE WHEN ? LIKE '%responses%' THEN 'responses' WHEN ? LIKE '%files%' THEN 'files' WHEN ? LIKE '%audio%' OR ? LIKE '%transcribe%' THEN 'audio' WHEN ? LIKE '%models%' THEN 'models' WHEN ? LIKE '%usage%' OR ? LIKE '%wham%' THEN 'usage' ELSE 'other' END",
-            request.endpoint,
-            request.endpoint,
-            request.endpoint,
-            request.endpoint,
-            request.endpoint,
-            request.endpoint,
-            request.endpoint
-          ),
-        status: request.status,
-        safe_code:
-          fragment(
-            "CASE WHEN ? IS NULL THEN NULL WHEN ? ~* '(rate|quota)' THEN 'rate_limited' WHEN ? ~* '(auth|unauthor|forbidden)' THEN 'authentication' WHEN ? ~* 'timeout' THEN 'timeout' WHEN ? ~* '(network|connect|upstream)' THEN 'service_unavailable' WHEN ? ~* '(schema|invalid)' THEN 'invalid_request' ELSE 'request_failed' END",
-            request.last_error_code,
-            request.last_error_code,
-            request.last_error_code,
-            request.last_error_code,
-            request.last_error_code,
-            request.last_error_code
-          ),
-        response_status_code: request.response_status_code,
+          bucket_index(request.admitted_at, ^window.started_at, ^window.bucket_seconds),
+        model_label: model_label(model.exposed_model_id),
         succeeded: fragment("CASE WHEN ? = 'succeeded' THEN 1 ELSE 0 END", request.status),
         failed:
           fragment(
@@ -182,44 +197,110 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
             "CASE WHEN ? IN ('accepted', 'in_progress') THEN 1 ELSE 0 END",
             request.status
           ),
-        has_settlement: fragment("CASE WHEN ? IS NULL THEN 0 ELSE 1 END", settlement.id),
+        has_settlement:
+          fragment("CASE WHEN ? IS NULL THEN 0 ELSE 1 END", fact.latest_settlement_entry_id),
         unknown_usage:
           fragment(
             "CASE WHEN ? IS NOT NULL AND ? <> ? THEN 1 ELSE 0 END",
-            settlement.id,
-            settlement.usage_status,
+            fact.latest_settlement_entry_id,
+            fact.latest_settlement_usage_status,
             ^@usage_known
           ),
-        input_tokens: known_usage(settlement.usage_status, settlement.input_tokens),
-        cached_input_tokens: known_usage(settlement.usage_status, settlement.cached_input_tokens),
-        output_tokens: known_usage(settlement.usage_status, settlement.output_tokens),
-        reasoning_tokens: known_usage(settlement.usage_status, settlement.reasoning_tokens),
-        total_tokens: known_usage(settlement.usage_status, settlement.total_tokens),
+        input_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_input_tokens),
+        cached_input_tokens:
+          known_usage(fact.latest_settlement_usage_status, fact.latest_cached_input_tokens),
+        output_tokens:
+          known_usage(fact.latest_settlement_usage_status, fact.latest_output_tokens),
+        reasoning_tokens:
+          known_usage(fact.latest_settlement_usage_status, fact.latest_reasoning_tokens),
+        total_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_total_tokens),
         settled_cost_micros:
           settled_cost(
-            settlement.usage_status,
-            settlement.details,
-            settlement.settled_cost_micros
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_settled_cost_micros
           ),
         settled_cost_available:
-          settled_cost_available(settlement.usage_status, settlement.details),
+          settled_cost_available(
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status
+          ),
         estimated_cost_micros:
           estimated_cost(
-            settlement.usage_status,
-            settlement.details,
-            settlement.estimated_cost_micros
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_estimated_cost_micros
           ),
         estimated_cost_available:
           estimated_cost_available(
-            settlement.usage_status,
-            settlement.details,
-            settlement.estimated_cost_micros
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_estimated_cost_micros
           ),
         cost_unavailable:
           cost_unavailable(
-            settlement.usage_status,
-            settlement.details,
-            settlement.estimated_cost_micros
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_estimated_cost_micros
+          )
+      }
+  end
+
+  @doc """
+  The twelve most recent scoped outcomes.
+
+  This is a dedicated query rather than a slice of `scoped_facts/2` so the
+  endpoint/error-code regex classification runs over only the twelve rows the
+  limit keeps, not the whole window. `requests_api_key_pool_admitted_idx` yields
+  the scoped rows already in `admitted_at DESC` order, so the limit stops early
+  and the fact/model joins are twelve primary-key lookups.
+  """
+  def recent_outcomes(identity, window) do
+    from request in Request,
+      left_join: fact in RequestLogFact,
+      on: fact.request_id == request.id,
+      left_join: model in Model,
+      on: model.id == request.model_id and model.pool_id == request.pool_id,
+      where:
+        request_scope(
+          request,
+          ^identity.pool_id,
+          ^identity.api_key_id,
+          ^window.started_at,
+          ^window.ended_at
+        ),
+      order_by: [desc: request.admitted_at, desc: request.id],
+      limit: 12,
+      select: %{
+        timestamp: request.admitted_at,
+        model: model_label(model.exposed_model_id),
+        endpoint_class: endpoint_class(request.endpoint),
+        status: request.status,
+        code: safe_code(request.last_error_code),
+        response_status_code: request.response_status_code,
+        total_tokens: known_usage(fact.latest_settlement_usage_status, fact.latest_total_tokens),
+        settled_cost_micros:
+          settled_cost(
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_settled_cost_micros
+          ),
+        settled_cost_available:
+          settled_cost_available(
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status
+          ),
+        estimated_cost_micros:
+          estimated_cost(
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_estimated_cost_micros
+          ),
+        estimated_cost_available:
+          estimated_cost_available(
+            fact.latest_settlement_usage_status,
+            fact.latest_settlement_pricing_status,
+            fact.latest_estimated_cost_micros
           )
       }
   end

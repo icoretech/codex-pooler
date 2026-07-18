@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanSupport do
 
   alias CodexPooler.Repo
 
-  @fact_relations ["requests", "ledger_entries"]
+  @fact_relations ["requests", "request_log_facts"]
   @projections [
     :observatory_summary,
     :observatory_buckets,

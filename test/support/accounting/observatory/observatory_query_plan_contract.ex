@@ -4,17 +4,14 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
   alias CodexPooler.Accounting.ObservatoryQueryPlanSupport, as: Support
 
   @request_index "requests_api_key_pool_admitted_idx"
-  # The settlement joins per request through the unique (request_id) index; the
-  # request is already scoped, so binding the ledger by request_id keeps it a
-  # bounded per-request lookup instead of a full key/window scan that the planner
-  # would then nested-loop by request_id.
-  @ledger_indexes [
-    "ledger_entries_settlement_request_uq",
-    "ledger_entries_request_occurred_idx"
-  ]
+  # Tokens and cost read from the 1:1 request_log_facts projection. The request is
+  # already scoped, so binding the fact by its request_id primary key keeps it a
+  # bounded per-request lookup instead of a full scan the planner would then
+  # nested-loop by request_id.
+  @fact_indexes ["request_log_facts_pkey"]
   @request_predicates ["api_key_id", "pool_id", "admitted_at"]
-  @ledger_predicates ["request_id"]
-  @ledger_index_predicates ["request_id"]
+  @fact_predicates ["request_id"]
+  @fact_index_predicates ["request_id"]
   @maximum_scoped_rows 240
   @maximum_relation_work 241
   @minimum_fixture_rows 7_241
@@ -38,13 +35,13 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
     outcome_plan = Enum.find(plans, &(&1.projection == :observatory_outcomes))
 
     %{
-      "aggregate_ledger_per_request_indexed_join" =>
+      "aggregate_fact_per_request_indexed_join" =>
         Enum.all?(aggregate_plans, fn plan ->
-          Support.uses_any_index?(plan.root, @ledger_indexes) and
+          Support.uses_any_index?(plan.root, @fact_indexes) and
             Support.index_condition_contains?(
               plan.root,
-              "ledger_entries",
-              @ledger_index_predicates
+              "request_log_facts",
+              @fact_index_predicates
             )
         end),
       "aggregate_request_composite_index_condition" =>
@@ -56,12 +53,12 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
       "bounded_sorts" => sorts_bounded?(plans),
       "bucket_count" => length(projection.buckets) == 12,
       "fact_table_indexed_access" => Support.no_fact_sequential_scans?(plans),
+      "fact_scope_predicates_present" =>
+        predicates_present_for_all?(plans, "request_log_facts", @fact_predicates),
       "fixture_volume" => fixture_row_count >= @minimum_fixture_rows,
-      "ledger_scope_predicates_present" =>
-        predicates_present_for_all?(plans, "ledger_entries", @ledger_predicates),
       "outcome_count" => length(projection.outcomes) <= 12,
-      "outcome_ledger_bounded_indexed_access" =>
-        outcome_plan && Support.indexed_access?(outcome_plan.root, "ledger_entries"),
+      "outcome_fact_bounded_indexed_access" =>
+        outcome_plan && Support.indexed_access?(outcome_plan.root, "request_log_facts"),
       "outcome_request_bounded_indexed_access" =>
         outcome_plan && Support.indexed_access?(outcome_plan.root, "requests"),
       "projection_set" => Enum.map(plans, & &1.projection) == Support.projections(),

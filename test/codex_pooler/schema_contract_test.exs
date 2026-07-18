@@ -426,6 +426,7 @@ defmodule CodexPooler.SchemaContractTest do
     assert column_type("hourly_model_usage_rollups", "total_tokens") == "bigint"
     assert column_type("request_log_facts", "latest_input_tokens") == "bigint"
     assert column_type("request_log_facts", "latest_settled_cost_micros") == "bigint"
+    assert column_type("request_log_facts", "latest_estimated_cost_micros") == "bigint"
     assert column_type("request_log_facts", "latest_cached_input_cost_micros") == "bigint"
 
     assert column_type("request_log_facts", "latest_settlement_occurred_at") ==
@@ -721,6 +722,7 @@ defmodule CodexPooler.SchemaContractTest do
              "latest_reasoning_tokens",
              "latest_total_tokens",
              "latest_settled_cost_micros",
+             "latest_estimated_cost_micros",
              "latest_cached_input_cost_micros",
              "latest_cached_input_token_micros",
              "latest_settlement_occurred_at",
@@ -748,6 +750,7 @@ defmodule CodexPooler.SchemaContractTest do
              "latest_reasoning_tokens" => {"bigint", "YES"},
              "latest_total_tokens" => {"bigint", "YES"},
              "latest_settled_cost_micros" => {"bigint", "YES"},
+             "latest_estimated_cost_micros" => {"bigint", "YES"},
              "latest_cached_input_cost_micros" => {"bigint", "YES"},
              "latest_cached_input_token_micros" => {"bigint", "YES"},
              "latest_settlement_occurred_at" => {"timestamp without time zone", "YES"},
@@ -767,6 +770,7 @@ defmodule CodexPooler.SchemaContractTest do
                "latest_cached_input_cost_micros",
                "latest_cached_input_token_micros",
                "latest_cached_input_tokens",
+               "latest_estimated_cost_micros",
                "latest_input_tokens",
                "latest_latency_ms",
                "latest_network_error_code",

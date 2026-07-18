@@ -5,31 +5,37 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.DashboardSessions.Principal, as: DashboardPrincipal
-  alias CodexPooler.Accounting.{LedgerEntry, Request}
+  alias CodexPooler.Accounting.{LedgerEntry, Request, RequestLogFact}
   alias CodexPooler.Repo
 
   @scope_indexes [
     "requests_api_key_pool_admitted_idx",
-    "ledger_entries_settlement_request_uq"
+    "request_log_facts_pkey"
   ]
 
   def set_statement_timeout do
     Repo.query!("SET LOCAL statement_timeout = '30s'")
 
     # The representative fixture is orders of magnitude smaller than production,
-    # so the planner would hash-join a seq-scanned ledger for the aggregates.
+    # so the planner would hash-join a seq-scanned fact table for the aggregates.
     # Force nested-loop index access to assert the production-shape plan: the
-    # scope index paths exist and stay bounded per request.
+    # scope index paths exist and the per-request fact lookup stays bounded.
     Repo.query!("SET LOCAL enable_seqscan = off")
     Repo.query!("SET LOCAL enable_hashjoin = off")
     Repo.query!("SET LOCAL enable_mergejoin = off")
+
+    # Keep the scoped-request bitmap exact. With a lossy (page-level) bitmap the
+    # heap recheck rereads whole pages of the 7k-row fixture and removes the
+    # non-matching rows, which is non-deterministic and inflates the bounded
+    # relation-work assertion; ample work_mem keeps the bitmap tuple-exact.
+    Repo.query!("SET LOCAL work_mem = '256MB'")
   end
 
   def refresh_statistics do
     # Repeated sandbox rollbacks leave dead pages in these local test indexes.
     Enum.each(@scope_indexes, &Repo.query!("REINDEX INDEX " <> &1))
     Repo.query!("ANALYZE requests")
-    Repo.query!("ANALYZE ledger_entries")
+    Repo.query!("ANALYZE request_log_facts")
   end
 
   def insert_representative_rows! do
@@ -42,13 +48,14 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     wrong_model = model_fixture(wrong_pool, %{exposed_model_id: "gpt-observatory-other"})
     upper_bound = ~U[2026-07-17 12:00:00Z]
 
-    {request_template, ledger_template} =
+    {request_template, ledger_template, fact_template} =
       retained_template_pair!(pool, api_key, model, DateTime.add(upper_bound, -13))
 
     fixture_ref = System.unique_integer([:positive])
 
     build_pair = fn index, pool_id, api_key_id, model_id, timestamp ->
       request_id = Ecto.UUID.generate()
+      entry_id = Ecto.UUID.generate()
       timestamp = %{timestamp | microsecond: {0, 6}}
 
       request_row =
@@ -65,7 +72,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
 
       ledger_row =
         Map.merge(ledger_template, %{
-          id: Ecto.UUID.generate(),
+          id: entry_id,
           request_id: request_id,
           pool_id: pool_id,
           api_key_id: api_key_id,
@@ -73,7 +80,19 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
           created_at: timestamp
         })
 
-      {request_row, ledger_row}
+      # The observatory reads the denormalized fact, so every scoped request needs
+      # its 1:1 projection row for the per-request fact lookup to be exercised.
+      fact_row =
+        Map.merge(fact_template, %{
+          request_id: request_id,
+          latest_settlement_entry_id: entry_id,
+          latest_settlement_occurred_at: timestamp,
+          latest_settlement_created_at: timestamp,
+          inserted_at: timestamp,
+          updated_at: timestamp
+        })
+
+      {request_row, ledger_row, fact_row}
     end
 
     rows =
@@ -108,6 +127,11 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     |> Enum.map(&elem(&1, 1))
     |> Enum.chunk_every(500)
     |> Enum.each(&Repo.insert_all(LedgerEntry, &1))
+
+    rows
+    |> Enum.map(&elem(&1, 2))
+    |> Enum.chunk_every(500)
+    |> Enum.each(&Repo.insert_all(RequestLogFact, &1))
 
     %{
       principal:
@@ -146,9 +170,22 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     {request_fields, []} = Request.__schema__(:insertable_fields)
     {ledger_fields, []} = LedgerEntry.__schema__(:insertable_fields)
 
+    fact_template = %{
+      latest_settlement_usage_status: "usage_known",
+      latest_settlement_pricing_status: "priced",
+      latest_input_tokens: 6,
+      latest_cached_input_tokens: 2,
+      latest_output_tokens: 3,
+      latest_reasoning_tokens: 1,
+      latest_total_tokens: 10,
+      latest_settled_cost_micros: 2,
+      latest_estimated_cost_micros: nil
+    }
+
     {
       request |> Map.from_struct() |> Map.take(request_fields),
-      ledger |> Map.from_struct() |> Map.take(ledger_fields)
+      ledger |> Map.from_struct() |> Map.take(ledger_fields),
+      fact_template
     }
   end
 end

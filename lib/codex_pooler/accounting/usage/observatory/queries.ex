@@ -113,29 +113,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
   end
 
   def outcomes(identity, window) do
-    identity
-    |> QueryScope.scoped_facts(window)
-    |> then(fn facts ->
-      Repo.all(
-        from(fact in subquery(facts),
-          order_by: [desc: fact.timestamp, desc: fact.request_id],
-          limit: 12,
-          select: %{
-            timestamp: fact.timestamp,
-            model: fact.model_label,
-            endpoint_class: fact.endpoint_class,
-            status: fact.status,
-            code: fact.safe_code,
-            response_status_code: fact.response_status_code,
-            total_tokens: fact.total_tokens,
-            settled_cost_micros: fact.settled_cost_micros,
-            settled_cost_available: fact.settled_cost_available,
-            estimated_cost_micros: fact.estimated_cost_micros,
-            estimated_cost_available: fact.estimated_cost_available
-          }
-        ),
-        telemetry_options: [reporting_projection: :observatory_outcomes]
-      )
-    end)
+    Repo.all(
+      QueryScope.recent_outcomes(identity, window),
+      telemetry_options: [reporting_projection: :observatory_outcomes]
+    )
   end
 end
