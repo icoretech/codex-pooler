@@ -47,9 +47,10 @@ defmodule CodexPooler.Accounting.Usage.Observatory do
       summary = Queries.summary(identity, window)
       buckets = Queries.buckets(identity, window)
       models = Queries.models(identity, window)
+      model_buckets = Queries.model_buckets(identity, window)
       outcomes = Queries.outcomes(identity, window)
 
-      {:ok, Presentation.build(window, summary, buckets, models, outcomes)}
+      {:ok, Presentation.build(window, summary, buckets, models, outcomes, model_buckets)}
     else
       {:error, :unauthorized} ->
         {:error,

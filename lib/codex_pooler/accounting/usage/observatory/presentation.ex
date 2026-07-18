@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
 
   @max_float 1.797_693_134_862_315_7e308
 
-  def build(window, summary, sparse_buckets, models, outcomes) do
+  def build(window, summary, sparse_buckets, models, outcomes, model_buckets \\ []) do
     summary = normalize_row(summary)
     normalized_buckets = buckets(window, sparse_buckets)
 
@@ -13,11 +13,24 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
       performance: performance(summary),
       accounting: accounting(summary),
       buckets: normalized_buckets,
+      model_buckets: model_bucket_rows(model_buckets),
       trends: trends(normalized_buckets, summary),
       models: model_distribution(models, summary.total_tokens),
       outcomes: Enum.map(outcomes, &outcome/1)
     }
   end
+
+  defp model_bucket_rows(rows) when is_list(rows) do
+    Enum.map(rows, fn row ->
+      %{
+        bucket_index: integer(Map.get(row, :bucket_index)),
+        label: Map.get(row, :model_label),
+        total_tokens: integer(Map.get(row, :total_tokens))
+      }
+    end)
+  end
+
+  defp model_bucket_rows(_rows), do: []
 
   defp totals(row) do
     %{
@@ -112,6 +125,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
       row = Map.get(rows, index, normalize_row(%{}))
 
       %{
+        bucket_index: index,
         started_at: started_at,
         ended_at: DateTime.add(started_at, window.bucket_seconds, :second),
         requests: request_counts(row),

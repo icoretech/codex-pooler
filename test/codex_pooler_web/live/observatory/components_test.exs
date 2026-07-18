@@ -117,7 +117,7 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
 
     assert LazyHTML.query(
              fragment,
-             "#{plot}[data-chart-unit='tokens'][data-chart-height='232'][data-chart-bar-radius='0']"
+             "#{plot}[data-chart-unit='tokens'][data-chart-height='264'][data-chart-bar-radius='0']"
            ) != []
 
     assert LazyHTML.query(
@@ -134,13 +134,7 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
     assert LazyHTML.query(fragment, "#observatory-traffic-fallback-total") != []
     assert LazyHTML.query(fragment, "#observatory-outcomes") != []
 
-    assert LazyHTML.query(fragment, "#observatory-outcomes-sanitized[class*='badge']")
-           |> Enum.empty?()
-
-    assert LazyHTML.query(
-             fragment,
-             "#observatory-outcomes-sanitized[class*='text-base-content/70']"
-           ) != []
+    assert LazyHTML.query(fragment, "#observatory-outcomes-sanitized") |> Enum.empty?()
 
     assert LazyHTML.query(fragment, "#observatory-outcomes-scroll.overflow-x-auto") != []
     assert LazyHTML.query(fragment, "#observatory-outcomes-table.table-sm") != []
@@ -164,8 +158,8 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
     end
 
     assert html =~ "metadata only"
-    assert html =~ "130 tokens / 10 requests"
-    assert html =~ "Total: 80 tokens / 10 requests"
+    assert html =~ "130 tokens · $2.40"
+    assert html =~ "Total: 80 tokens · $1.20"
     assert html =~ "Succeeded"
     assert html =~ "In progress"
     assert html =~ "Failed"
@@ -203,45 +197,25 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
 
   defp traffic do
     %{
-      total_label: "130 tokens / 10 requests",
+      total_label: "130 tokens · $2.40",
       chart: %{
         categories: "[\"07-17 11:00\",\"07-17 12:00\"]",
         series:
           Jason.encode!([
-            %{"name" => "Fresh input", "type" => "column", "data" => [45, 15]},
-            %{"name" => "Cached input", "type" => "column", "data" => [15, 5]}
+            %{"name" => "alpha-model", "type" => "column", "data" => [45, 15]},
+            %{"name" => "Cost", "type" => "line", "data" => [1.0, 0.5]}
           ]),
-        units: "[\"tokens\",\"tokens\"]",
-        value_kinds: "[\"tokens\",\"tokens\"]",
+        units: "[\"tokens\",\"USD\"]",
+        value_kinds: "[\"tokens\",\"usd\"]",
         yaxis: "[]",
-        colors: "[\"var(--color-primary)\",\"var(--color-info)\"]"
+        colors: "[\"var(--color-primary)\",\"var(--color-success)\"]"
       },
       fallback: %{
         rows: [
-          %{
-            label: "07-17 11:00",
-            fresh: 45,
-            fresh_label: "45",
-            cached: 15,
-            cached_label: "15",
-            total: 60,
-            total_label: "60",
-            requests: 6,
-            requests_label: "6"
-          },
-          %{
-            label: "07-17 12:00",
-            fresh: 15,
-            fresh_label: "15",
-            cached: 5,
-            cached_label: "5",
-            total: 20,
-            total_label: "20",
-            requests: 4,
-            requests_label: "4"
-          }
+          %{label: "07-17 11:00", total: 60, total_label: "60", cost_label: "$0.90"},
+          %{label: "07-17 12:00", total: 20, total_label: "20", cost_label: "$0.30"}
         ],
-        total_label: "80 tokens / 10 requests"
+        total_label: "80 tokens · $1.20"
       }
     }
   end

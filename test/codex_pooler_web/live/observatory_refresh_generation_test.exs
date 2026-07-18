@@ -50,12 +50,12 @@ defmodule CodexPoolerWeb.ObservatoryRefreshGenerationTest do
     newer = start_refresh(view)
 
     complete_read(newer, {:ok, report(222)})
-    assert has_element?(view, "#observatory-traffic-fallback-total", "222 tokens · 1 request")
+    assert has_element?(view, "#observatory-traffic-fallback-total", "222 tokens · $0.00")
     assert has_element?(view, "#observatory-page[data-freshness-generation='2']")
 
     complete_read(older, {:ok, report(111)})
-    assert has_element?(view, "#observatory-traffic-fallback-total", "222 tokens · 1 request")
-    refute has_element?(view, "#observatory-traffic-fallback-total", "111 tokens · 1 request")
+    assert has_element?(view, "#observatory-traffic-fallback-total", "222 tokens · $0.00")
+    refute has_element?(view, "#observatory-traffic-fallback-total", "111 tokens · $0.00")
   end
 
   test "a stale error cannot replace a newer success", %{conn: conn} do
@@ -67,7 +67,7 @@ defmodule CodexPoolerWeb.ObservatoryRefreshGenerationTest do
     complete_read(newer, {:ok, report(333)})
     complete_read(older, {:error, :older_failure})
 
-    assert has_element?(view, "#observatory-traffic-fallback-total", "333 tokens · 1 request")
+    assert has_element?(view, "#observatory-traffic-fallback-total", "333 tokens · $0.00")
     refute has_element?(view, "#observatory-state-error")
   end
 

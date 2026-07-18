@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseObservatory do
       <AdminComponents.admin_surface id="showcase-observatory-states" title="Named states">
         <div class="grid gap-3 p-4 md:grid-cols-2">
           <States.state
-            :for={state <- [:loading, :empty, :partial_accounting, :stale, :disconnected, :error]}
+            :for={state <- [:loading, :empty, :stale, :error]}
             state={state}
           />
         </div>
@@ -71,7 +71,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseObservatory do
           <div id="showcase-note-disconnected" class="grid gap-1">
             <dt class="font-semibold">Disconnected</dt>
             <dd class="text-base-content/65">
-              The real reconnect state renders without simulating transport loss.
+              Connection loss surfaces in the freshness pill, not a separate banner.
             </dd>
           </div>
           <div id="showcase-note-domain" class="grid gap-1">

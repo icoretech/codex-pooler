@@ -121,17 +121,14 @@ defmodule CodexPoolerWeb.ObservatoryLive do
           paused={@paused}
         />
 
-        <div id="observatory-disconnected" class="hidden phx-disconnected:block">
-          <States.state state={:disconnected} />
-        </div>
-
-        <div id="observatory-notices" class="grid gap-3 py-4">
+        <div
+          :if={@loading or @observatory_state in [:error, :empty, :stale]}
+          id="observatory-notices"
+          class="grid gap-3 py-4"
+        >
           <div :if={@loading}><States.state state={:loading} /></div>
           <div :if={@observatory_state == :error}><States.state state={:error} /></div>
           <div :if={@observatory_state == :empty}><States.state state={:empty} /></div>
-          <div :if={@observatory_state == :partial}>
-            <States.state state={:partial_accounting} />
-          </div>
           <div :if={@observatory_state == :stale}><States.state state={:stale} /></div>
         </div>
 

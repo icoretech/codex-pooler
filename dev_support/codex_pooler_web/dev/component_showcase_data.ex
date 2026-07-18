@@ -103,6 +103,14 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
         bucket(~U[2026-07-17 11:00:00Z], 7_000, 2_000, 9),
         bucket(~U[2026-07-17 12:00:00Z], 5_000, 2_000, 7)
       ],
+      model_buckets: [
+        %{bucket_index: 0, label: "alpha-model", total_tokens: 5_500},
+        %{bucket_index: 1, label: "alpha-model", total_tokens: 4_000},
+        %{bucket_index: 0, label: "beta-model", total_tokens: 2_800},
+        %{bucket_index: 1, label: "beta-model", total_tokens: 2_000},
+        %{bucket_index: 0, label: "gamma-model", total_tokens: 1_200},
+        %{bucket_index: 1, label: "gamma-model", total_tokens: 1_000}
+      ],
       outcomes: [
         outcome(~U[2026-07-17 12:00:00Z], "succeeded", "alpha-model", nil),
         outcome(~U[2026-07-17 11:58:00Z], "in_progress", "beta-model", nil),
@@ -219,8 +227,12 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
   defp bucket(started_at, input, cached_input, requests) do
     %{
       started_at: started_at,
-      tokens: %{input: input, cached_input: cached_input},
-      requests: %{total: requests}
+      tokens: %{input: input, cached_input: cached_input, total: input + div(input, 2)},
+      requests: %{total: requests},
+      cost: %{
+        settled: %{status: "settled", micros: input * 100},
+        estimated: %{status: "estimated", micros: 0}
+      }
     }
   end
 

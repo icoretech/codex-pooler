@@ -1323,6 +1323,21 @@ body {
   font-size: var(--observatory-type-fact-value-lead-size);
 }
 
+.observatory-fact-value-row {
+  @apply gap-3;
+
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.observatory-trend {
+  flex-shrink: 0;
+  font-size: var(--observatory-type-control-size);
+  font-weight: var(--font-weight-medium);
+}
+
 .observatory-fact-detail {
   @apply leading-5;
 
@@ -1357,24 +1372,6 @@ body {
 
 #observatory-outcomes-table tbody tr:nth-child(odd) {
   background: color-mix(in oklab, var(--color-base-200) 40%, transparent);
-}
-
-#observatory-outcomes-table tbody tr > td:first-child {
-  @apply border-s-2;
-
-  border-inline-start-color: var(--color-base-300);
-}
-
-#observatory-outcomes-table tbody tr[data-status="ok"] > td:first-child {
-  border-inline-start-color: var(--color-success);
-}
-
-#observatory-outcomes-table tbody tr[data-status="warn"] > td:first-child {
-  border-inline-start-color: var(--color-warning);
-}
-
-#observatory-outcomes-table tbody tr[data-status="err"] > td:first-child {
-  border-inline-start-color: var(--color-error);
 }
 
 #observatory-page,

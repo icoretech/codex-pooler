@@ -18,13 +18,18 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
       <dl id="observatory-overview-facts" class="divide-y divide-base-300/70">
         <div id="observatory-fact-success" class="observatory-fact observatory-fact-lead">
           <dt class="observatory-fact-label">Success rate</dt>
-          <dd class="observatory-fact-value font-mono tabular-nums">
-            {text(@overview, :success_rate, :label, "Unavailable")}
+          <dd class="observatory-fact-value-row">
+            <span class="observatory-fact-value font-mono tabular-nums">
+              {text(@overview, :success_rate, :label, "Unavailable")}
+            </span>
             <span
               id="observatory-success-trend"
               data-role="observatory-trend"
               data-direction={trend_direction(@overview, :success_rate)}
-              class={trend_class(@overview, :success_rate)}
+              class={[
+                "observatory-trend font-mono tabular-nums",
+                trend_class(@overview, :success_rate)
+              ]}
             >
               {trend_text(@overview, :success_rate)}
             </span>
@@ -50,13 +55,15 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
 
         <div id="observatory-fact-cache" class="observatory-fact">
           <dt class="observatory-fact-label">Cache rate</dt>
-          <dd class="observatory-fact-value font-mono tabular-nums">
-            {text(@overview, :cache_rate, :label, "Unavailable")}
+          <dd class="observatory-fact-value-row">
+            <span class="observatory-fact-value font-mono tabular-nums">
+              {text(@overview, :cache_rate, :label, "Unavailable")}
+            </span>
             <span
               id="observatory-cache-trend"
               data-role="observatory-trend"
               data-direction={trend_direction(@overview, :cache_rate)}
-              class={trend_class(@overview, :cache_rate)}
+              class={["observatory-trend font-mono tabular-nums", trend_class(@overview, :cache_rate)]}
             >
               {trend_text(@overview, :cache_rate)}
             </span>
@@ -68,7 +75,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
 
         <div id="observatory-fact-cost" class="observatory-fact">
           <dt class="observatory-fact-label">Cost</dt>
-          <dd class="flex flex-wrap items-center gap-2">
+          <dd class="flex flex-wrap items-center justify-between gap-2">
             <span class="observatory-fact-value font-mono tabular-nums">
               {text(@overview, :cost, :settled, :label, "Unavailable")}
             </span>
@@ -89,13 +96,15 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
 
         <div id="observatory-fact-throughput" class="observatory-fact">
           <dt class="observatory-fact-label">Throughput</dt>
-          <dd class="observatory-fact-value font-mono tabular-nums">
-            {text(@overview, :throughput, :p50_label, "Unavailable")}
+          <dd class="observatory-fact-value-row">
+            <span class="observatory-fact-value font-mono tabular-nums">
+              {text(@overview, :throughput, :p50_label, "Unavailable")}
+            </span>
             <span
               id="observatory-throughput-trend"
               data-role="observatory-trend"
               data-direction={trend_direction(@overview, :throughput)}
-              class={trend_class(@overview, :throughput)}
+              class={["observatory-trend font-mono tabular-nums", trend_class(@overview, :throughput)]}
             >
               {trend_text(@overview, :throughput)}
             </span>
@@ -105,7 +114,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
 
         <div id="observatory-fact-latency" class="observatory-fact">
           <dt class="observatory-fact-label">Latency</dt>
-          <dd class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <dd class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <span class="observatory-fact-value font-mono tabular-nums">
               P50 {text(@overview, :latency, :p50_label, "Unavailable")}
             </span>
@@ -129,14 +138,14 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
         <h2 id="observatory-models-title" class="text-base font-semibold">Models</h2>
         <p class="text-xs leading-5 text-base-content/60">Settled tokens</p>
       </header>
-      <ol class="divide-y divide-base-300/70 px-4">
+      <ol class="grid gap-0.5 px-4 py-2">
         <li
           :for={{model, rank} <- ranked_models(@models)}
           id={"observatory-model-#{rank}"}
           data-role="observatory-model-row"
-          class="observatory-model-row grid min-w-0 items-center gap-3 py-3"
+          class="observatory-model-row grid min-w-0 items-center gap-3 py-1.5"
         >
-          <span class="min-w-0 truncate text-sm font-medium">{safe_model_label(model)}</span>
+          <span class="min-w-0 truncate text-xs font-medium">{safe_model_label(model)}</span>
           <div
             data-role="observatory-model-bar"
             class="h-1.5 min-w-0 overflow-hidden rounded-full bg-base-300"
@@ -151,7 +160,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Telemetry do
               style={"width: #{bar_percent(model)}%"}
             ></span>
           </div>
-          <span class="text-right text-sm font-mono tabular-nums text-base-content/75">
+          <span class="text-right text-xs font-mono tabular-nums text-base-content/75">
             {safe_model_tokens(model)}
           </span>
         </li>

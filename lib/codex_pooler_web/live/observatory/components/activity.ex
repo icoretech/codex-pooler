@@ -4,7 +4,6 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
-  alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   @max_outcomes 12
 
@@ -23,13 +22,22 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
       )
 
     ~H"""
-    <div id="observatory-activity" class="grid min-w-0 gap-4">
-      <AdminComponents.admin_surface
+    <div id="observatory-activity" class="grid min-w-0 gap-8">
+      <section
         id="observatory-traffic"
-        title="Traffic"
-        description={@traffic.total_label}
+        class="grid min-w-0 gap-4"
+        aria-labelledby="observatory-traffic-heading"
       >
-        <:header_actions>
+        <header class="flex flex-wrap items-end justify-between gap-3 border-b border-base-300/50 pb-3">
+          <div class="grid min-w-0 gap-1">
+            <h2
+              id="observatory-traffic-heading"
+              class="text-lg font-semibold tracking-tight text-base-content"
+            >
+              Traffic
+            </h2>
+            <p class="text-xs tabular-nums text-base-content/55">{@traffic.total_label}</p>
+          </div>
           <div
             id="observatory-traffic-mode-control"
             class="observatory-segmented-control"
@@ -54,11 +62,11 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
               {label}
             </button>
           </div>
-        </:header_actions>
+        </header>
 
         <div
           id="observatory-traffic-scroll"
-          class="observatory-chart-scroll min-w-0 overflow-x-auto overscroll-x-contain p-3 pb-2 sm:p-4 sm:pb-2"
+          class="observatory-chart-scroll min-w-0 overflow-x-auto overscroll-x-contain"
           data-role="chart-scroll-region"
         >
           <div
@@ -75,7 +83,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
             data-chart-units={@traffic.chart.units}
             data-chart-value-kinds={@traffic.chart.value_kinds}
             data-chart-yaxis={@traffic.chart.yaxis}
-            data-chart-height="232"
+            data-chart-height="264"
             data-chart-colors={@traffic.chart.colors}
             data-chart-legend="always"
             data-chart-safe-tooltip="true"
@@ -91,7 +99,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
 
         <p id="observatory-traffic-title" class="sr-only">Traffic over time</p>
         <p id="observatory-traffic-desc" class="sr-only">
-          Token activity shown for each time bucket.
+          Token activity by model, with cost, shown for each time bucket.
         </p>
         <p id="observatory-traffic-mode-description" class="sr-only" aria-live="polite">
           {if @traffic_mode == :cumulative do
@@ -107,7 +115,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
           aria-label="Underlying interval values for Traffic over time"
         >
           <li :for={row <- @traffic.fallback.rows}>
-            {row.label}: {row.total_label}, {row.requests_label}
+            {row.label}: {row.total_label}, {row.cost_label}
           </li>
         </ul>
         <div id="observatory-traffic-table-fallback" class="sr-only">
@@ -116,42 +124,36 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
             <thead>
               <tr>
                 <th scope="col">Time</th>
-                <th scope="col">Fresh tokens</th>
-                <th scope="col">Cached tokens</th>
-                <th scope="col">Total</th>
-                <th scope="col">Requests</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Cost</th>
               </tr>
             </thead>
             <tbody>
               <tr :for={row <- @traffic.fallback.rows}>
                 <th scope="row">{row.label}</th>
-                <td>{row.fresh_label}</td>
-                <td>{row.cached_label}</td>
                 <td>{row.total_label}</td>
-                <td>{row.requests_label}</td>
+                <td>{row.cost_label}</td>
               </tr>
             </tbody>
           </table>
           <p id="observatory-traffic-fallback-total">Total: {@traffic.fallback.total_label}</p>
         </div>
-      </AdminComponents.admin_surface>
+      </section>
 
-      <AdminComponents.admin_surface
+      <section
         id="observatory-outcomes"
-        title="Recent outcomes"
-        description="metadata only; request content is not shown."
+        class="grid min-w-0 gap-4"
+        aria-labelledby="observatory-outcomes-heading"
       >
-        <:header_actions>
-          <span
-            id="observatory-outcomes-sanitized"
-            class={[
-              AdminBadges.metadata_chip_class(:neutral),
-              "observatory-metadata-chip uppercase !px-2 !py-0.5"
-            ]}
+        <header class="grid min-w-0 gap-1 border-b border-base-300/50 pb-3">
+          <h2
+            id="observatory-outcomes-heading"
+            class="text-lg font-semibold tracking-tight text-base-content"
           >
-            sanitized
-          </span>
-        </:header_actions>
+            Recent outcomes
+          </h2>
+          <p class="text-xs text-base-content/55">metadata only; request content is not shown.</p>
+        </header>
         <div id="observatory-outcomes-scroll" class="overflow-x-auto">
           <table id="observatory-outcomes-table" class="table table-sm min-w-160">
             <caption class="sr-only">Recent request outcomes</caption>
@@ -173,7 +175,9 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
                 data-status={status_data_status(outcome.status.data_status)}
                 class="align-middle"
               >
-                <td class="whitespace-nowrap font-mono text-xs tabular-nums">{outcome.timestamp}</td>
+                <td class="whitespace-nowrap font-mono text-xs tabular-nums text-base-content/55">
+                  {outcome.timestamp}
+                </td>
                 <th scope="row" class="max-w-40 truncate font-medium">{outcome.model}</th>
                 <td class="text-base-content/60">{outcome.endpoint}</td>
                 <td>
@@ -202,7 +206,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
             </tbody>
           </table>
         </div>
-      </AdminComponents.admin_surface>
+      </section>
     </div>
     """
   end

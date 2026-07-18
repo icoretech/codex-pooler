@@ -6,13 +6,12 @@ defmodule CodexPoolerWeb.Observatory.StatesTest do
   alias CodexPoolerWeb.Observatory.Components.States
 
   test "states expose every stable selector with safe accessible copy" do
-    states = [:loading, :empty, :partial_accounting, :stale, :disconnected, :error]
+    states = [:loading, :empty, :stale, :error]
 
     for state <- states do
       html = render_component(&States.state/1, %{state: state})
       fragment = LazyHTML.from_fragment(html)
-      state_id = if state == :partial_accounting, do: "partial-accounting", else: state
-      selector = "#observatory-state-#{state_id}"
+      selector = "#observatory-state-#{state}"
 
       refute fragment |> LazyHTML.query(selector) |> Enum.empty?()
       refute fragment |> LazyHTML.query("#{selector}[role='status']") |> Enum.empty?()
@@ -23,18 +22,14 @@ defmodule CodexPoolerWeb.Observatory.StatesTest do
 
     assert render_component(&States.state/1, %{state: :loading}) =~ "Loading usage"
     assert render_component(&States.state/1, %{state: :empty}) =~ "No usage in this window"
-    assert render_component(&States.state/1, %{state: :partial_accounting}) =~ "estimated"
     assert render_component(&States.state/1, %{state: :stale}) =~ "Updates paused"
-    assert render_component(&States.state/1, %{state: :disconnected}) =~ "Connection interrupted"
     assert render_component(&States.state/1, %{state: :error}) =~ "temporarily unavailable"
   end
 
   test "states render distinct contract anatomy" do
     loading = state_fragment(:loading)
     empty = state_fragment(:empty)
-    partial = state_fragment(:partial_accounting)
     stale = state_fragment(:stale)
-    disconnected = state_fragment(:disconnected)
     error = state_fragment(:error)
 
     refute loading
@@ -47,28 +42,8 @@ defmodule CodexPoolerWeb.Observatory.StatesTest do
            )
            |> Enum.empty?()
 
-    refute partial
-           |> LazyHTML.query(
-             "#observatory-state-partial-accounting [data-accounting-status='settled']"
-           )
-           |> Enum.empty?()
-
-    refute partial
-           |> LazyHTML.query(
-             "#observatory-state-partial-accounting [data-accounting-status='estimated']"
-           )
-           |> Enum.empty?()
-
     refute stale
            |> LazyHTML.query("#observatory-state-stale [data-role='paused-state']")
-           |> Enum.empty?()
-
-    refute disconnected
-           |> LazyHTML.query("#observatory-state-disconnected [data-role='reconnect-flash']")
-           |> Enum.empty?()
-
-    refute disconnected
-           |> LazyHTML.query("#observatory-state-disconnected-spinner")
            |> Enum.empty?()
 
     refute error

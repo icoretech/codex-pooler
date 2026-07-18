@@ -515,6 +515,15 @@ const ApexTimeSeriesChart = {
 			this.setChartMode(event.detail?.mode);
 		};
 		this.el.addEventListener("chart:set-mode", this.handleChartMode);
+		// Colors resolve CSS variables to concrete values at render time, so a
+		// theme switch (which only flips data-theme, without a LiveView patch)
+		// must trigger a re-render or the chart keeps its old-theme palette.
+		this.handleThemeChange = () => this.renderChart();
+		this.themeObserver = new MutationObserver(this.handleThemeChange);
+		this.themeObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["data-theme"],
+		});
 		this.syncChartWheelListener();
 		this.renderChart();
 	},
@@ -526,6 +535,8 @@ const ApexTimeSeriesChart = {
 		this.removeChartWheelListener?.();
 		this.removeChartWheelListener = null;
 		this.el.removeEventListener("chart:set-mode", this.handleChartMode);
+		this.themeObserver?.disconnect();
+		this.themeObserver = null;
 		this.chart?.destroy();
 		this.chart = null;
 	},

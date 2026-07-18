@@ -71,9 +71,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogTest do
     assert MapSet.subset?(
              MapSet.new([
                "#observatory-state-empty-anatomy",
-               "#observatory-state-partial-settled",
-               "#observatory-state-partial-estimated",
-               "#observatory-state-disconnected [data-role='reconnect-flash']"
+               "#observatory-state-stale",
+               "#observatory-state-error"
              ]),
              contract |> Enum.flat_map(& &1.selectors) |> MapSet.new()
            )

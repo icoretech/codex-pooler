@@ -30,7 +30,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
         ),
       models: models(get(p, :models), non_negative(get(tokens, :total))),
       outcomes: outcomes(get(p, :outcomes)),
-      traffic: traffic(get(p, :buckets), tokens, total)
+      traffic: traffic(get(p, :buckets), get(p, :model_buckets), get(p, :models), tokens)
     }
   end
 
@@ -106,47 +106,139 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     max = nullable_integer(get(values, :max))
 
     %{
-      p50_label: integer_label(p50),
-      p95_label: integer_label(p95),
+      p50_label: latency_label(p50),
+      p95_label: latency_label(p95),
       detail: latency_detail(mean, max)
     }
   end
 
   defp latency_detail(mean, max) when is_integer(mean) and is_integer(max),
-    do: "Mean #{mean} ms · slowest settled #{max} ms"
+    do: "Mean #{latency_label(mean)} · slowest settled #{latency_label(max)}"
 
   defp latency_detail(_mean, _max), do: "not available"
 
-  defp traffic(value, tokens, requests) do
-    rows = buckets(value)
-    categories = Enum.map(rows, & &1.label)
-    fresh = Enum.map(rows, & &1.fresh)
-    cached = Enum.map(rows, & &1.cached)
-    input = non_negative(get(tokens, :input))
+  # Cost is the green line; keep green out of the model columns so the two
+  # never collide (mirrors the admin tokens-vs-cost chart palette).
+  @chart_model_colors [
+    "var(--color-primary)",
+    "var(--color-info)",
+    "var(--color-warning)",
+    "var(--color-accent)",
+    "var(--color-secondary)"
+  ]
+  @chart_other_color "color-mix(in oklab, var(--color-base-content) 40%, transparent)"
+  @chart_cost_color "var(--color-success)"
+  @max_chart_models 5
+
+  defp traffic(buckets_value, model_buckets_value, models_value, tokens) do
+    rows = buckets(buckets_value)
+    total = non_negative(get(tokens, :total))
+    cost_micros = Enum.sum(Enum.map(rows, & &1.cost_micros))
 
     %{
-      categories: categories,
-      chart: chart(categories, fresh, cached),
-      total_label: traffic_label(input, requests),
+      categories: Enum.map(rows, & &1.label),
+      chart: chart(rows, model_buckets_value, models_value),
+      total_label: traffic_label(total, cost_micros),
       fallback: %{
-        total_label: traffic_label(input, requests),
+        total_label: traffic_label(total, cost_micros),
         rows: rows
       }
     }
   end
 
-  defp chart(categories, fresh, cached) do
-    units = List.duplicate("tokens", length(categories))
+  # Stacked token columns broken down by model (top models plus a folded
+  # "Other" so the columns sum to total tokens per bucket) with a requests
+  # line on a second axis, mirroring the admin "Traffic over time" chart.
+  defp chart(rows, model_buckets_value, models_value) do
+    totals = Enum.map(rows, & &1.total)
+    cost_values = Enum.map(rows, & &1.cost_usd)
+
+    model_series = model_series(models_value, model_buckets_value, totals, length(rows))
+    column_series = Enum.map(model_series, fn s -> series(s.name, s.data) end)
+    series_names = Enum.map(model_series, & &1.name)
+    token_kinds = List.duplicate("tokens", length(column_series))
 
     Map.new(
-      categories: Jason.encode!(categories),
-      series: Jason.encode!([series("Fresh input", fresh), series("Cached input", cached)]),
-      units: Jason.encode!(units),
-      value_kinds: Jason.encode!(units),
+      categories: Jason.encode!(Enum.map(rows, & &1.label)),
+      series:
+        Jason.encode!(
+          column_series ++ [%{"name" => "Cost", "type" => "line", "data" => cost_values}]
+        ),
+      units: Jason.encode!(token_kinds ++ ["USD"]),
+      value_kinds: Jason.encode!(token_kinds ++ ["usd"]),
       yaxis:
-        "[{\"seriesName\":[\"Fresh input\",\"Cached input\"],\"title\":\"tokens\",\"valueKind\":\"tokens\"}]",
-      colors: Jason.encode!(["var(--color-primary)", "var(--color-info)"])
+        Jason.encode!([
+          %{seriesName: series_names, title: "tokens", valueKind: "tokens"},
+          %{seriesName: "Cost", title: "cost", opposite: true, valueKind: "usd"}
+        ]),
+      colors: Jason.encode!(chart_colors(model_series) ++ [@chart_cost_color])
     )
+  end
+
+  defp model_series(models_value, model_buckets_value, totals, bucket_count) do
+    index = model_bucket_index(model_buckets_value)
+
+    base =
+      models_value
+      |> chart_models()
+      |> Enum.map(fn %{raw: raw, name: name} ->
+        %{name: name, data: Enum.map(0..(bucket_count - 1)//1, &Map.get(index, {&1, raw}, 0))}
+      end)
+      |> Enum.reject(fn %{data: data} -> Enum.sum(data) == 0 end)
+
+    case base do
+      [] -> [%{name: "Tokens", data: totals}]
+      series -> append_other(series, totals)
+    end
+  end
+
+  defp append_other(series, totals) do
+    other =
+      totals
+      |> Enum.with_index()
+      |> Enum.map(fn {total, position} ->
+        covered =
+          Enum.reduce(series, 0, fn %{data: data}, acc -> acc + Enum.at(data, position, 0) end)
+
+        max(total - covered, 0)
+      end)
+
+    if Enum.sum(other) > 0, do: series ++ [%{name: "Other", data: other}], else: series
+  end
+
+  defp chart_models(models) when is_list(models) do
+    models
+    |> Enum.take(@max_chart_models)
+    |> Enum.map(fn model ->
+      raw = get(map(model), :label)
+      %{raw: raw, name: Safety.sanitize_text(raw, "Unknown model")}
+    end)
+  end
+
+  defp chart_models(_models), do: []
+
+  defp model_bucket_index(rows) when is_list(rows) do
+    Enum.reduce(rows, %{}, fn row, acc ->
+      row = map(row)
+
+      Map.put(
+        acc,
+        {integer(get(row, :bucket_index)), get(row, :label)},
+        non_negative(get(row, :total_tokens))
+      )
+    end)
+  end
+
+  defp model_bucket_index(_rows), do: %{}
+
+  defp chart_colors(model_series) do
+    model_series
+    |> Enum.with_index()
+    |> Enum.map(fn {%{name: name}, position} ->
+      if name == "Other",
+        do: @chart_other_color,
+        else: Enum.at(@chart_model_colors, position, @chart_other_color)
+    end)
   end
 
   defp series(name, data), do: %{"name" => name, "type" => "column", "data" => data}
@@ -156,21 +248,20 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   defp bucket(row) do
     row = map(row)
     tokens = map(get(row, :tokens))
-    input = non_negative(get(tokens, :input))
-    cached = min(non_negative(get(tokens, :cached_input)), input)
-    fresh = max(input - cached, 0)
-    requests = non_negative(get(get(row, :requests), :total))
+    total = non_negative(get(tokens, :total))
+    cost = map(get(row, :cost))
+
+    cost_micros =
+      non_negative(get(map(get(cost, :settled)), :micros)) +
+        non_negative(get(map(get(cost, :estimated)), :micros))
 
     %{
       label: category(get(row, :started_at)),
-      fresh: fresh,
-      fresh_label: token_label(fresh),
-      cached: cached,
-      cached_label: token_label(cached),
-      total: input,
-      total_label: token_label(input),
-      requests: requests,
-      requests_label: grouped_integer(requests)
+      total: total,
+      total_label: token_label(total),
+      cost_micros: cost_micros,
+      cost_usd: Float.round(cost_micros / 1_000_000, 4),
+      cost_label: money_label(cost_micros)
     }
   end
 
@@ -206,10 +297,10 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
       code: code,
       cost: cost(get(row, :cost), ["settled", "estimated"]),
       endpoint: endpoint(get(row, :endpoint_class)),
-      latency: %{ms: latency, label: integer_label(latency)},
+      latency: %{ms: latency, label: latency_label(latency)},
       model: Safety.sanitize_text(get(row, :model), "Unknown model"),
       status: status(get(row, :status), code),
-      timestamp: datetime(get(row, :timestamp)),
+      timestamp: outcome_timestamp(get(row, :timestamp)),
       tokens: %{total: tokens, label: token_label(tokens)}
     }
   end
@@ -258,10 +349,9 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   defp percentage(part, total), do: Float.round(non_negative(part) * 100 / total, 1)
   defp percent_label(nil), do: "not available"
   defp percent_label(value), do: "#{value}%"
-  defp traffic_label(tokens, 1), do: "#{token_label(tokens)} tokens · 1 request"
 
-  defp traffic_label(tokens, requests),
-    do: "#{token_label(tokens)} tokens · #{grouped_integer(requests)} requests"
+  defp traffic_label(tokens, cost_micros),
+    do: "#{token_label(tokens)} tokens · #{money_label(cost_micros)}"
 
   defp grouped_integer(value),
     do: Regex.replace(~r/\d(?=(\d{3})+$)/, Integer.to_string(value), &(&1 <> ","))
@@ -276,18 +366,19 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
     do: min(Float.round(non_negative(value) * 100 / total, 1), 100.0)
 
   defp rate_label(nil), do: "not available"
-  defp rate_label(value) when is_float(value), do: "#{Float.round(value, 2)} tok/s"
-  defp rate_label(value), do: "#{integer(value) * 1.0} tok/s"
-  defp integer_label(nil), do: "not available"
-  defp integer_label(value), do: "#{value} ms"
+  defp rate_label(value) when is_number(value), do: "#{grouped_integer(round(value))} tok/s"
+  defp rate_label(_value), do: "not available"
+  defp latency_label(nil), do: "not available"
+  defp latency_label(ms) when is_integer(ms) and ms >= 1000, do: "#{Float.round(ms / 1000, 1)}s"
+  defp latency_label(ms) when is_integer(ms), do: "#{ms} ms"
 
   defp money_label(micros),
     do: :io_lib.format("$~.2f", [micros / 1_000_000]) |> IO.iodata_to_binary()
 
   defp category(%DateTime{} = value), do: Calendar.strftime(value, "%m-%d %H:%M")
   defp category(_value), do: ""
-  defp datetime(%DateTime{} = value), do: value
-  defp datetime(_value), do: nil
+  defp outcome_timestamp(%DateTime{} = value), do: Calendar.strftime(value, "%b %d, %H:%M:%S")
+  defp outcome_timestamp(_value), do: "not recorded"
 
   defp nullable_integer(nil), do: nil
   defp nullable_integer(value), do: integer(value)

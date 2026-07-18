@@ -63,10 +63,11 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
              :observatory_summary,
              :observatory_buckets,
              :observatory_models,
+             :observatory_model_buckets,
              :observatory_outcomes
            ]
 
-    assert length(events) == 5
+    assert length(events) == 6
     assert length(events) <= 8
   end
 
@@ -169,10 +170,11 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
              :observatory_summary,
              :observatory_buckets,
              :observatory_models,
+             :observatory_model_buckets,
              :observatory_outcomes
            ]
 
-    assert length(events) == 5
+    assert length(events) == 6
     assert length(events) <= 8
     assert projection.totals.requests.total == 13
     assert length(projection.outcomes) == 12

@@ -15,7 +15,7 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
     assert empty.overview.throughput.p50_label == "not available"
     assert empty.overview.latency.p50_label == "not available"
     assert empty.overview.latency.p95_label == "not available"
-    assert empty.traffic.total_label == "0 tokens · 0 requests"
+    assert empty.traffic.total_label == "0 tokens · $0.00"
     assert partial.state == :partial
   end
 
@@ -64,7 +64,7 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
           %{
             started_at: ~U[2026-07-17 11:00:00Z],
             requests: %{total: 4_286},
-            tokens: %{input: 138_200_000, cached_input: 80_300_000}
+            tokens: %{input: 138_200_000, cached_input: 80_300_000, total: 138_200_000}
           }
         ],
         models:
@@ -87,8 +87,8 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
 
     assert model.overview.success_rate.detail == "4,200 succeeded · 86 failed"
     assert model.overview.cache_rate.detail == "80.3M of 80.3M input tokens served from cache"
-    assert model.traffic.total_label == "80.3M tokens · 4,286 requests"
-    assert model.traffic.fallback.total_label == "80.3M tokens · 4,286 requests"
+    assert model.traffic.total_label == "398.1M tokens · $0.00"
+    assert model.traffic.fallback.total_label == "398.1M tokens · $0.00"
     assert model.traffic.total_label == model.traffic.fallback.total_label
 
     assert Enum.map(model.models, & &1.token_label) == [
@@ -107,30 +107,26 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
     [row] = model.traffic.fallback.rows
     chart_series = Jason.decode!(model.traffic.chart.series)
 
-    assert row.fresh == 57_900_000
-    assert row.cached == 80_300_000
     assert row.total == 138_200_000
-    assert row.requests == 4_286
-    assert row.fresh_label == "57.9M"
-    assert row.cached_label == "80.3M"
     assert row.total_label == "138.2M"
-    assert row.requests_label == "4,286"
-    assert Enum.map(chart_series, & &1["data"]) == [[57_900_000], [80_300_000]]
+    assert row.cost_usd == 0.0
+    assert row.cost_label == "$0.00"
 
-    assert Enum.map(chart_series, & &1["data"]) == [
-             Enum.map(model.traffic.fallback.rows, & &1.fresh),
-             Enum.map(model.traffic.fallback.rows, & &1.cached)
-           ]
+    token_series = Enum.reject(chart_series, &(&1["name"] == "Cost"))
+    cost_series = Enum.find(chart_series, &(&1["name"] == "Cost"))
+
+    assert Enum.map(token_series, & &1["data"]) == [[138_200_000]]
+    assert cost_series["data"] == [0.0]
   end
 
-  test "uses singular request wording" do
+  test "formats the traffic header as total tokens and cost" do
     model =
       Presentation.build(%{
         totals: %{requests: %{total: 1}, tokens: %{input: 1_000, total: 1_000}},
         accounting: %{status: "complete"}
       })
 
-    assert model.traffic.total_label == "1.0K tokens · 1 request"
+    assert model.traffic.total_label == "1.0K tokens · $0.00"
   end
 
   defp zero_projection do

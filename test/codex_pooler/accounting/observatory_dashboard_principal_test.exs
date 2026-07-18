@@ -150,7 +150,7 @@ defmodule CodexPooler.Accounting.ObservatoryDashboardPrincipalTest do
     end
   end
 
-  test "dashboard read executes one canonical load and four bounded reporting queries" do
+  test "dashboard read executes one canonical load and five bounded reporting queries" do
     pool = pool_fixture()
     api_key = Fixture.opted_in_api_key_fixture(pool)
     Fixture.record_usage(pool, api_key, "bounded-model", 23, @occurred_at)
@@ -168,6 +168,7 @@ defmodule CodexPooler.Accounting.ObservatoryDashboardPrincipalTest do
              :observatory_summary,
              :observatory_buckets,
              :observatory_models,
+             :observatory_model_buckets,
              :observatory_outcomes
            ]
   end

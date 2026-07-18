@@ -72,8 +72,6 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     end
 
     assert has_element?(view, "#observatory-state-empty[role='status'][aria-live='polite']")
-    assert has_element?(view, "#observatory-disconnected.hidden #observatory-state-disconnected")
-    assert html =~ "phx-disconnected:block"
     refute has_element?(view, "#observatory-widgets")
     refute_sensitive_or_forbidden(html, raw_key, cookie_value, api_key, pool)
   end
@@ -110,13 +108,14 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
       output_tokens: 40,
       total_tokens: 160,
       settled_cost_micros: 1_250_000,
+      details: %{"pricing_status" => "priced"},
       occurred_at: observed_at
     })
 
     {:ok, view, _html} = live(conn, @observatory_path)
     activate_initial_refresh(view)
     html = render(view)
-    expected_total_label = "100 tokens · 1 request"
+    expected_total_label = "160 tokens · $1.25"
     state = :sys.get_state(view.pid)
     traffic = state.socket.assigns.observatory_report.traffic
     chart_series = Jason.decode!(traffic.chart.series)
@@ -143,15 +142,15 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
              "Total: #{expected_total_label}"
            )
 
-    assert Enum.map(chart_series, & &1["data"]) == [
-             Enum.map(fallback_rows, & &1.fresh),
-             Enum.map(fallback_rows, & &1.cached)
-           ]
+    token_series = Enum.reject(chart_series, &(&1["name"] == "Cost"))
+    cost_series = Enum.find(chart_series, &(&1["name"] == "Cost"))
 
-    assert Enum.sum(Enum.map(fallback_rows, & &1.fresh)) == 80
-    assert Enum.sum(Enum.map(fallback_rows, & &1.cached)) == 20
-    assert Enum.sum(Enum.map(fallback_rows, & &1.total)) == 100
-    assert Enum.sum(Enum.map(fallback_rows, & &1.requests)) == 1
+    # Token columns are broken down by model and sum to the total-token
+    # universe (160), with a settled-cost line ($1.25) on the second axis.
+    assert Enum.any?(token_series, &(&1["name"] == "safe-observatory-model"))
+    assert Enum.sum(Enum.flat_map(token_series, & &1["data"])) == 160
+    assert Enum.sum(Enum.map(fallback_rows, & &1.total)) == 160
+    assert Enum.sum(cost_series["data"]) == 1.25
 
     assert has_element?(
              view,

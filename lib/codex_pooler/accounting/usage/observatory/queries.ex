@@ -147,6 +147,25 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
     end)
   end
 
+  def model_buckets(identity, window) do
+    identity
+    |> QueryScope.scoped_facts(window)
+    |> then(fn facts ->
+      Repo.all(
+        from(fact in subquery(facts),
+          group_by: [fact.bucket_index, fact.model_label],
+          order_by: [fact.bucket_index, fact.model_label],
+          select: %{
+            bucket_index: fact.bucket_index,
+            model_label: fact.model_label,
+            total_tokens: sum(fact.total_tokens)
+          }
+        ),
+        telemetry_options: [reporting_projection: :observatory_model_buckets]
+      )
+    end)
+  end
+
   def outcomes(identity, window) do
     identity
     |> QueryScope.scoped_facts(window)

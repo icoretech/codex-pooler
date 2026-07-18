@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
     assert model.overview.cost.estimated.label == "$0.30"
     assert model.overview.cost.detail == "+ $0.30 estimated, awaiting settlement"
     assert model.overview.cost.confidence == "estimated"
-    assert model.overview.throughput.p50_label == "125.5 tok/s"
+    assert model.overview.throughput.p50_label == "126 tok/s"
     assert model.overview.latency.p95_label == "200 ms"
     assert model.overview.latency.detail == "Mean 160 ms · slowest settled 240 ms"
 
@@ -60,74 +60,82 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
 
     chart_series = Jason.decode!(chart.series)
 
+    # Token columns broken down by model (top models plus a folded "Other" so
+    # each stack sums to the bucket's total tokens) with a cost line.
     assert chart_series == [
-             %{"name" => "Fresh input", "type" => "column", "data" => [45, 15]},
-             %{"name" => "Cached input", "type" => "column", "data" => [15, 5]}
+             %{"name" => "model-1", "type" => "column", "data" => [50, 20]},
+             %{"name" => "model-2", "type" => "column", "data" => [30, 10]},
+             %{"name" => "model-3", "type" => "column", "data" => [5, 0]},
+             %{"name" => "Other", "type" => "column", "data" => [5, 10]},
+             %{"name" => "Cost", "type" => "line", "data" => [1.0, 0.5]}
            ]
 
-    assert Jason.decode!(chart.units) == ["tokens", "tokens"]
-    assert Jason.decode!(chart.value_kinds) == ["tokens", "tokens"]
+    assert Jason.decode!(chart.units) == ["tokens", "tokens", "tokens", "tokens", "USD"]
+
+    assert Jason.decode!(chart.value_kinds) ==
+             ["tokens", "tokens", "tokens", "tokens", "usd"]
 
     assert Jason.decode!(chart.yaxis) == [
              %{
-               "seriesName" => ["Fresh input", "Cached input"],
+               "seriesName" => ["model-1", "model-2", "model-3", "Other"],
                "title" => "tokens",
                "valueKind" => "tokens"
+             },
+             %{
+               "seriesName" => "Cost",
+               "title" => "cost",
+               "opposite" => true,
+               "valueKind" => "usd"
              }
            ]
 
-    assert Jason.decode!(chart.colors) == ["var(--color-primary)", "var(--color-info)"]
-    assert model.traffic.total_label == "80 tokens · 10 requests"
-    assert model.traffic.fallback.total_label == "80 tokens · 10 requests"
+    assert Jason.decode!(chart.colors) == [
+             "var(--color-primary)",
+             "var(--color-info)",
+             "var(--color-warning)",
+             "color-mix(in oklab, var(--color-base-content) 40%, transparent)",
+             "var(--color-success)"
+           ]
+
+    assert model.traffic.total_label == "130 tokens · $1.50"
+    assert model.traffic.fallback.total_label == "130 tokens · $1.50"
     assert model.traffic.total_label == model.traffic.fallback.total_label
 
     assert model.traffic.fallback.rows == [
              %{
                label: "07-17 11:00",
-               fresh: 45,
-               fresh_label: "45",
-               cached: 15,
-               cached_label: "15",
-               total: 60,
-               total_label: "60",
-               requests: 6,
-               requests_label: "6"
+               total: 90,
+               total_label: "90",
+               cost_micros: 1_000_000,
+               cost_usd: 1.0,
+               cost_label: "$1.00"
              },
              %{
                label: "07-17 12:00",
-               fresh: 15,
-               fresh_label: "15",
-               cached: 5,
-               cached_label: "5",
-               total: 20,
-               total_label: "20",
-               requests: 4,
-               requests_label: "4"
+               total: 40,
+               total_label: "40",
+               cost_micros: 500_000,
+               cost_usd: 0.5,
+               cost_label: "$0.50"
              }
            ]
 
     fallback_rows = model.traffic.fallback.rows
 
-    assert Enum.map(chart_series, & &1["data"]) == [
-             Enum.map(fallback_rows, & &1.fresh),
-             Enum.map(fallback_rows, & &1.cached)
-           ]
+    token_series = Enum.reject(chart_series, &(&1["name"] == "Cost"))
+    cost_series = Enum.find(chart_series, &(&1["name"] == "Cost"))
 
-    chart_row_totals =
-      chart_series
+    # Each bucket's stacked token columns sum to the total-token bucket value,
+    # so the bar height is the total-token universe, never input-only.
+    column_bucket_totals =
+      token_series
       |> Enum.map(& &1["data"])
-      |> Enum.zip()
-      |> Enum.map(fn {fresh, cached} -> fresh + cached end)
+      |> Enum.zip_with(&Enum.sum/1)
 
-    fallback_row_totals = Enum.map(fallback_rows, &(&1.fresh + &1.cached))
-    assert chart_row_totals == fallback_row_totals
-    assert Enum.sum(chart_row_totals) == Enum.sum(Enum.map(fallback_rows, & &1.total))
-    assert Enum.sum(chart_row_totals) == 80
-
-    assert Enum.sum(Enum.map(fallback_rows, & &1.fresh)) == 60
-    assert Enum.sum(Enum.map(fallback_rows, & &1.cached)) == 20
-    assert Enum.sum(Enum.map(fallback_rows, & &1.total)) == 80
-    assert Enum.sum(Enum.map(fallback_rows, & &1.requests)) == 10
+    assert column_bucket_totals == Enum.map(fallback_rows, & &1.total)
+    assert Enum.sum(column_bucket_totals) == 130
+    assert cost_series["data"] == Enum.map(fallback_rows, & &1.cost_usd)
+    assert Enum.sum(Enum.map(fallback_rows, & &1.total)) == 130
 
     assert length(model.outcomes) == 12
     assert Enum.all?(model.outcomes, &(&1.status.data_status in ["ok", "warn", "err", "neutral"]))
@@ -246,11 +254,18 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
       },
       accounting: %{status: "complete"},
       buckets: [
-        bucket(~U[2026-07-17 11:00:00Z], 60, 15, 90, 6),
-        bucket(~U[2026-07-17 12:00:00Z], 20, 5, 40, 4)
+        bucket(~U[2026-07-17 11:00:00Z], 60, 15, 90, 6, 1_000_000),
+        bucket(~U[2026-07-17 12:00:00Z], 20, 5, 40, 4, 500_000)
       ],
       models:
         Enum.map(1..13, &%{label: "model-#{&1}", request_count: &1, total_tokens: 130 - &1}),
+      model_buckets: [
+        %{bucket_index: 0, label: "model-1", total_tokens: 50},
+        %{bucket_index: 1, label: "model-1", total_tokens: 20},
+        %{bucket_index: 0, label: "model-2", total_tokens: 30},
+        %{bucket_index: 1, label: "model-2", total_tokens: 10},
+        %{bucket_index: 0, label: "model-3", total_tokens: 5}
+      ],
       outcomes: Enum.map(1..13, &outcome(&1))
     }
   end
@@ -259,13 +274,16 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
     %{totals: %{requests: %{total: 0}}, accounting: %{status: "missing"}, outcomes: []}
   end
 
-  defp bucket(started_at, input, cached, total, requests) do
+  defp bucket(started_at, input, cached, total, requests, settled_micros) do
     %{
       started_at: started_at,
       ended_at: DateTime.add(started_at, 300, :second),
       requests: %{total: requests},
       tokens: %{input: input, cached_input: cached, total: total},
-      cost: %{}
+      cost: %{
+        settled: %{status: "settled", micros: settled_micros},
+        estimated: %{status: "unavailable", micros: 0}
+      }
     }
   end
 

@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
 
   @dev_routes Application.compile_env(:codex_pooler, :dev_routes, false)
   @showcase_route "/dev/component-showcase/:theme"
-  @states ~w(loading empty partial-accounting stale disconnected error)
+  @states ~w(loading empty stale error)
 
   test "isolated showcase renders real primitives and required states in both themes" do
     for theme <- ~w(light dark) do

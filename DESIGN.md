@@ -770,8 +770,8 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   toolbar, not new ornamentation.
 - **Toolbar** (sticky, 48px, `bg-base-100 border-b border-base-300/70`), left
   to right:
-  1. Wordmark: "Observatory" (900 weight, `text-primary`, `-0.04em`) with a
-     small uppercase "Codex Pooler" suffix in muted ink.
+  1. Wordmark: "Codex Pooler" (900 weight, `text-primary`, `-0.04em`, matching
+     the admin brand) with a small uppercase "Observatory" suffix in muted ink.
   2. Key chip: pill (`border-base-300 bg-base-200 rounded-full`) with a tiny
      key glyph in a `primary/14` circle, the key's display name (600), and
      the safe prefix (`font-mono`, muted, e.g. `sk-cxp-8308…d412`) — never
@@ -780,7 +780,10 @@ and [Observatory rules in `app.css`](assets/css/app.css).
      7d`, `aria-pressed` state, server-validated selection.
   4. Freshness: live dot (success tone, 2.4s opacity pulse, warning + static
      when paused, `prefers-reduced-motion` disables) + "Updated Ns ago".
-  5. Pause/resume icon button and a "Log out" ghost button.
+  5. Pause/resume icon button, a "Log out" ghost button, and the shared
+     `theme_toggle` (system/light/dark) so the holder can switch themes. The
+     ApexTimeSeries chart hook re-renders on `data-theme` change so the chart
+     re-themes immediately rather than on the next data refresh.
 - Toolbar responsiveness: the toolbar is two flex groups — identity
   (wordmark + key chip) and controls (window pill, freshness, pause, logout).
   Above 720px they share one 48px row; the named
@@ -805,7 +808,8 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   `grid-template-columns:
   minmax(0,4fr) minmax(0,8fr)` with 16px gap. The **left rail is sticky**
   below the toolbar (`position: sticky; top: 64px`) and stacks two cards; the
-  right column stacks the chart card over the outcome table. Below 1100px
+  right column is cardless and stacks the traffic section over the outcome
+  table (an instrument-panel rail beside an open canvas). Below 1100px
   everything collapses to one column (rail first, static) and charts scroll
   inside their own `overflow-x-auto` region. No horizontal scroll of primary
   content at any width (375/768/1280 are the checked breakpoints).
@@ -828,21 +832,25 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   (`name | bar | tokens`), bars relative to the leader, series colors in
   fixed order primary → info → success → muted ink mixes; every row is
   direct-labeled so identity never rides on color alone.
-- **Right column, card 1 — traffic**: `admin_surface` anatomy (§5.3) with the
-  window total in the header sub-line ("138.2M tokens · 9,441 requests"), an
-  Interval/Cumulative segmented pill (§5.12) as header action, and the
-  ApexTimeSeriesChart contract (§5.13) in a `chart-scroll` body: stacked
-  columns of fresh vs cached tokens (primary / info) per bucket. Keep the
-  chart short (~210-250px) — it shares vertical space with the table.
-- **Right column, card 2 — recent outcomes**: a zebra table (§5.8 idiom,
-  `table-sm` density) inside its own `overflow-x-auto`. Columns: Time (mono,
-  muted) · Model (500 weight, truncated) · Endpoint class (muted) · Status
+- **Right column — traffic** (cardless: a heading with a hairline rule, no
+  bordered wrapper): the window total in the sub-line ("138.2M tokens ·
+  $79.62" — total tokens and total cost, echoing the chart), an
+  Interval/Cumulative segmented pill (§5.12) beside the heading, and the
+  ApexTimeSeriesChart contract (§5.13) in a `chart-scroll` body: stacked token
+  columns **broken down by model** (top models plus a folded "Other" so the
+  stack sums to total tokens) with a settled+estimated **cost line** on a
+  second (right) axis — the app's shipped "Traffic over time" pattern. Green
+  is reserved for the cost line, so the model columns draw from
+  primary/info/warning/accent/secondary and never collide with it. ~264px tall.
+- **Right column — recent outcomes** (cardless: heading + hairline rule): a
+  zebra table (§5.8 idiom, `table-sm` density) inside its own
+  `overflow-x-auto`. Columns: Time (mono, muted, readable "Jul 16, 23:22:23"
+  format) · Model (500 weight, truncated) · Endpoint class (muted) · Status
   (§5.7 micro chips: ok/warn/err/neutral) · Latency · Tokens · Cost (all
   right-aligned mono). Bounded at 12 rows; only sanitized fields ever appear
   (timestamp, model, endpoint class, safe status/code, latency, settled
-  tokens/cost). Header carries a `sanitized`/`metadata only` neutral chip.
-  Rows may adopt the admin status-stripe pattern (§5.4: a `data-status`
-  attribute painted by CSS, reinforcing the status chip).
+  tokens/cost). No per-row status stripe and no `sanitized` chip — the status
+  chip and the section's "metadata only" subtext carry that.
 
 ### 6.3 Window control and refresh states
 
@@ -854,11 +862,12 @@ and [`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar
 - Windows are the allowlisted `1h / 5h / 24h / 7d` as a segmented pill;
   selection is server-validated (client ids are never authority).
 - Freshness states, each with a stable selector and visible text: `loading`,
-  `empty` (§5.15 empty-state anatomy), `partial-accounting` (labeled
-  estimated/settled per §5.2 cost card conventions), `stale` (paused or
-  hidden-tab), `disconnected` (reuses the flash reconnect pattern), and
-  `error`. Refresh cadence is 30s only while visible; pause/resume is explicit
-  and reflected in the toolbar.
+  `empty` (§5.15 empty-state anatomy), `stale` (paused or hidden-tab), and
+  `error`. Partial (still-settling) accounting is not a banner — the dashboard
+  renders normally and the settled/estimated split is carried by the Cost fact
+  (§5.2). Connection loss surfaces in the freshness pill, not a banner. Refresh
+  cadence is 30s only while visible; pause/resume is explicit and reflected in
+  the toolbar.
 - The named state rendering, window allowlist, and initial loading behavior are
   implemented in the linked sources. The 30-second visibility-aware cadence and
   stale-result behavior are a separate runtime contract and are not claimed as

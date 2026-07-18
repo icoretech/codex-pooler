@@ -147,14 +147,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalogExtended do
 
   defp state_selectors do
     Enum.map(
-      ~w(loading empty partial-accounting stale disconnected error),
+      ~w(loading empty stale error),
       &"#observatory-state-#{&1}"
-    ) ++
-      [
-        "#observatory-state-empty-anatomy",
-        "#observatory-state-partial-settled",
-        "#observatory-state-partial-estimated",
-        "#observatory-state-disconnected [data-role='reconnect-flash']"
-      ]
+    ) ++ ["#observatory-state-empty-anatomy"]
   end
 end

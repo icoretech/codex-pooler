@@ -20,8 +20,8 @@ defmodule CodexPoolerWeb.Observatory.Components.Toolbar do
     >
       <div id="observatory-toolbar-identity" class="observatory-toolbar-identity">
         <div id="observatory-wordmark" class="observatory-wordmark">
-          <span>Observatory</span>
-          <small>Codex Pooler</small>
+          <span>Codex Pooler</span>
+          <small>Observatory</small>
         </div>
 
         <span
@@ -116,6 +116,11 @@ defmodule CodexPoolerWeb.Observatory.Components.Toolbar do
             </button>
           </form>
         </div>
+
+        <CodexPoolerWeb.Layouts.theme_toggle
+          id="observatory-theme-toggle"
+          class="card relative flex h-8 shrink-0 flex-row items-center rounded-full border border-base-300 bg-base-300"
+        />
       </div>
     </header>
     """
