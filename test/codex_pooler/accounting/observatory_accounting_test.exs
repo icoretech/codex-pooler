@@ -122,6 +122,46 @@ defmodule CodexPooler.Accounting.ObservatoryAccountingTest do
     refute rendered =~ "999999999"
   end
 
+  test "counts a request's settled cost even when it settles after the window closes" do
+    pool = pool_fixture()
+    api_key = dashboard_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    model = model_fixture(pool, %{exposed_model_id: "gpt-window-edge"})
+    upper_bound = ~U[2026-07-17 12:00:00Z]
+
+    # Admitted just inside the [11:00, 12:00) window...
+    request =
+      timed_request(pool, api_key, ~U[2026-07-17 11:59:30Z], %{
+        model_id: model.id,
+        status: "succeeded"
+      })
+
+    attempt = timed_attempt(request, assignment, ~U[2026-07-17 11:59:30Z], 400)
+
+    # ...but its settlement is recorded five minutes later, after the window ends.
+    # The scope must still attribute this cost to the in-window request; joining
+    # the settlement per request (not by an occurred_at window) is what makes
+    # that hold and keeps the read from nested-looping settlements.
+    timed_settlement(
+      request,
+      attempt,
+      assignment,
+      identity,
+      ~U[2026-07-17 12:05:00Z],
+      %{total_tokens: 40, settled_cost_micros: 321}
+    )
+
+    assert {:ok, projection} =
+             Observatory.read(principal(pool, api_key), "1h", as_of: upper_bound)
+
+    assert projection.totals.requests.total == 1
+    assert projection.totals.tokens.total == 40
+    assert projection.totals.cost.settled == %{status: "settled", micros: 321}
+
+    assert [%{label: "gpt-window-edge", total_tokens: 40, cost_micros: 321}] =
+             projection.models
+  end
+
   defp principal(pool, api_key) do
     DashboardPrincipal.new(%{
       api_key_id: api_key.id,

@@ -104,14 +104,20 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
   end
 
   def scoped_facts(identity, window) do
+    # Join the settlement per request through the unique
+    # (request_id) WHERE settlement/recorded index. The request is already
+    # scoped to this key/pool/window by `request_scope`, so pool_id, api_key_id,
+    # and an occurred_at window on the settlement are redundant — and adding them
+    # makes the planner fetch every settlement in the window and nested-loop
+    # request_id across it (O(requests × settlements)), which times the read out
+    # for high-volume keys. Matching only on request_id keeps it one indexed
+    # lookup per request and also stops dropping the cost of requests that settle
+    # just after the window closes.
     from request in Request,
       left_join: settlement in LedgerEntry,
       on:
-        settlement.request_id == request.id and settlement.pool_id == ^identity.pool_id and
-          settlement.api_key_id == ^identity.api_key_id and
-          settlement.entry_kind == ^@settlement and settlement.amount_status == ^@recorded and
-          settlement.occurred_at >= ^window.started_at and
-          settlement.occurred_at < ^window.ended_at,
+        settlement.request_id == request.id and
+          settlement.entry_kind == ^@settlement and settlement.amount_status == ^@recorded,
       left_join: fact in RequestLogFact,
       on: fact.request_id == request.id,
       left_join: model in Model,

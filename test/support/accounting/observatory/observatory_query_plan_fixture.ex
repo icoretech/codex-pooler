@@ -10,11 +10,20 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
 
   @scope_indexes [
     "requests_api_key_pool_admitted_idx",
-    "ledger_entries_api_key_pool_settlement_occurred_idx",
-    "ledger_entries_api_key_recorded_occurred_idx"
+    "ledger_entries_settlement_request_uq"
   ]
 
-  def set_statement_timeout, do: Repo.query!("SET LOCAL statement_timeout = '30s'")
+  def set_statement_timeout do
+    Repo.query!("SET LOCAL statement_timeout = '30s'")
+
+    # The representative fixture is orders of magnitude smaller than production,
+    # so the planner would hash-join a seq-scanned ledger for the aggregates.
+    # Force nested-loop index access to assert the production-shape plan: the
+    # scope index paths exist and stay bounded per request.
+    Repo.query!("SET LOCAL enable_seqscan = off")
+    Repo.query!("SET LOCAL enable_hashjoin = off")
+    Repo.query!("SET LOCAL enable_mergejoin = off")
+  end
 
   def refresh_statistics do
     # Repeated sandbox rollbacks leave dead pages in these local test indexes.
