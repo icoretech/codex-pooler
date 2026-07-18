@@ -16,11 +16,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio do
   @encoded_count_chunk_bytes 65_536
   @ascii_whitespace [" ", "\t", "\r", "\n"]
 
-  @type public_format :: String.t()
   @type public_audio :: %{required(String.t()) => binary()}
   @type public_part :: %{required(String.t()) => binary() | public_audio()}
   @type canonical_part :: %{required(String.t()) => binary()}
   @type result :: {:ok, canonical_part()} | {:error, Error.reason()}
+  @typep encoded_scan_result :: {boolean(), boolean()}
 
   @spec supported_format?(term()) :: boolean()
   def supported_format?(format) when is_binary(format), do: Map.has_key?(@canonical_mimes, format)
@@ -31,8 +31,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio do
         "type" => "input_audio",
         "input_audio" => %{"data" => data, "format" => format}
       }) do
-    with :ok <- precheck_encoded_size(data),
-         {:ok, decoded} <- decode_audio(data) do
+    with {:ok, whitespace?} <- precheck_encoded(data),
+         {:ok, decoded} <- decode_audio(data, whitespace?) do
       mime = Map.fetch!(@canonical_mimes, format)
 
       {:ok,
@@ -43,41 +43,64 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio do
     end
   end
 
-  @spec precheck_encoded_size(binary()) :: :ok | {:error, Error.reason()}
-  defp precheck_encoded_size(data) do
-    if encoded_size_exceeded?(data), do: {:error, oversized_error()}, else: :ok
-  end
-
-  @spec encoded_size_exceeded?(binary()) :: boolean()
-  defp encoded_size_exceeded?(data)
-       when byte_size(data) <= @encoded_non_whitespace_max_bytes,
-       do: false
-
-  defp encoded_size_exceeded?(data) do
-    pattern = :binary.compile_pattern(@ascii_whitespace)
-    count_non_whitespace(data, pattern, 0, 0)
-  end
-
-  @spec count_non_whitespace(binary(), :binary.cp(), non_neg_integer(), non_neg_integer()) ::
-          boolean()
-  defp count_non_whitespace(data, _pattern, offset, _count) when offset == byte_size(data),
-    do: false
-
-  defp count_non_whitespace(data, pattern, offset, count) do
-    chunk_size = min(@encoded_count_chunk_bytes, byte_size(data) - offset)
-    chunk = binary_part(data, offset, chunk_size)
-    next_count = count + chunk_size - length(:binary.matches(chunk, pattern))
-
-    if next_count > @encoded_non_whitespace_max_bytes do
-      true
-    else
-      count_non_whitespace(data, pattern, offset + chunk_size, next_count)
+  @spec precheck_encoded(binary()) :: {:ok, boolean()} | {:error, Error.reason()}
+  defp precheck_encoded(data) do
+    case scan_encoded(data) do
+      {true, _whitespace?} -> {:error, oversized_error()}
+      {false, whitespace?} -> {:ok, whitespace?}
     end
   end
 
-  @spec decode_audio(binary()) :: {:ok, binary()} | {:error, Error.reason()}
-  defp decode_audio(data) do
-    case Base.decode64(data, ignore: :whitespace) do
+  @spec scan_encoded(binary()) :: encoded_scan_result()
+  defp scan_encoded(data) do
+    pattern = :binary.compile_pattern(@ascii_whitespace)
+
+    if byte_size(data) <= @encoded_non_whitespace_max_bytes do
+      {false, :binary.match(data, pattern) != :nomatch}
+    else
+      count_non_whitespace(data, pattern, 0, 0, false)
+    end
+  end
+
+  @spec count_non_whitespace(
+          binary(),
+          :binary.cp(),
+          non_neg_integer(),
+          non_neg_integer(),
+          boolean()
+        ) :: encoded_scan_result()
+  defp count_non_whitespace(data, _pattern, offset, _count, whitespace?)
+       when offset == byte_size(data),
+       do: {false, whitespace?}
+
+  defp count_non_whitespace(data, pattern, offset, count, whitespace?) do
+    chunk_size = min(@encoded_count_chunk_bytes, byte_size(data) - offset)
+    chunk = binary_part(data, offset, chunk_size)
+    whitespace_count = length(:binary.matches(chunk, pattern))
+    next_count = count + chunk_size - whitespace_count
+    next_whitespace? = whitespace? or whitespace_count > 0
+
+    if next_count > @encoded_non_whitespace_max_bytes do
+      {true, next_whitespace?}
+    else
+      count_non_whitespace(
+        data,
+        pattern,
+        offset + chunk_size,
+        next_count,
+        next_whitespace?
+      )
+    end
+  end
+
+  @spec decode_audio(binary(), boolean()) :: {:ok, binary()} | {:error, Error.reason()}
+  defp decode_audio(data, whitespace?) do
+    decoded =
+      if whitespace?,
+        do: Base.decode64(data, ignore: :whitespace),
+        else: Base.decode64(data)
+
+    case decoded do
       {:ok, <<>>} -> {:error, invalid_base64_error()}
       {:ok, decoded} when byte_size(decoded) > @decoded_max_bytes -> {:error, oversized_error()}
       {:ok, decoded} -> {:ok, decoded}

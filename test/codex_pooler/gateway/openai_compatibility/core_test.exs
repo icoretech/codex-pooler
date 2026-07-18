@@ -1,6 +1,16 @@
 defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   use ExUnit.Case, async: true
 
+  import CodexPooler.Gateway.OpenAICompatibility.AudioTestSupport,
+    only: [
+      adapter_audio_error: 1,
+      assert_adapter_audio_error!: 2,
+      expected_audio_summary: 2,
+      input_audio_part: 2,
+      safe_audio_part_summary: 1,
+      with_ascii_whitespace: 1
+    ]
+
   alias CodexPooler.Gateway.OpenAICompatibility.{
     Audio,
     Chat,
@@ -3377,49 +3387,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
   end
 
-  describe "Responses input audio baseline" do
-    @tag :input_audio_baseline
-    test "Responses accepts the existing WAV and MP3 public input shapes" do
-      encoded = Base.encode64("baseline audio")
-
-      for format <- ~w(wav mp3) do
-        case Responses.coerce(responses_audio_payload(format, encoded)) do
-          {:ok, _result} -> :ok
-          _other -> flunk("expected #{format} input_audio to be accepted")
-        end
-      end
-    end
-
-    @tag :input_audio_baseline
-    test "Responses rejects malformed and empty Base64 with the sanitized input contract" do
-      expected = %{
-        status: 400,
-        code: "invalid_request",
-        message: "input_audio data must be base64",
-        param: "input"
-      }
-
-      for {label, data} <- [{"malformed", "not base64"}, {"empty", ""}] do
-        assert_sanitized_audio_error(
-          responses_audio_payload("wav", data),
-          expected,
-          "expected #{label} input_audio to be rejected as invalid Base64"
-        )
-      end
-    end
-
-    @tag :input_audio_baseline
-    test "Responses rejects unsupported FLAC input" do
-      expected = %{status: 400, code: "invalid_request", param: "input"}
-
-      assert_sanitized_audio_error(
-        responses_audio_payload("flac", Base.encode64("baseline audio")),
-        expected,
-        "expected FLAC input_audio to be rejected"
-      )
-    end
-  end
-
   describe "Responses input audio backport" do
     @tag :input_audio_backport
     test "Responses canonicalizes exactly the five supported public audio formats" do
@@ -3447,19 +3414,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       source = "whitespace audio"
       encoded = Base.encode64(source)
 
-      encoded_with_whitespace =
-        binary_part(encoded, 0, 4) <>
-          " " <>
-          binary_part(encoded, 4, 4) <>
-          "\t" <>
-          binary_part(encoded, 8, 4) <>
-          "\r" <>
-          binary_part(encoded, 12, 4) <>
-          "\n" <>
-          binary_part(encoded, 16, byte_size(encoded) - 16)
-
       assert_responses_audio_summary(
-        responses_audio_payload("wav", encoded_with_whitespace),
+        responses_audio_payload("wav", with_ascii_whitespace(encoded)),
         expected_audio_summary("audio/wav", source),
         "expected whitespace-bearing input_audio to be canonicalized"
       )
@@ -3467,18 +3423,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     @tag :input_audio_backport
     test "Responses preserves sanitized malformed and empty Base64 errors" do
-      expected = %{
-        status: 400,
-        code: "invalid_request",
-        message: "input_audio data must be base64",
-        param: "input"
-      }
+      expected = adapter_audio_error("input_audio data must be base64")
 
-      for {label, data} <- [{"malformed", "not base64"}, {"empty", ""}] do
-        assert_sanitized_audio_error(
-          responses_audio_payload("wav", data),
-          expected,
-          "expected #{label} input_audio to be rejected as invalid Base64"
+      for data <- ["not base64", ""] do
+        assert_adapter_audio_error!(
+          Responses.coerce(responses_audio_payload("wav", data)),
+          expected
         )
       end
     end
@@ -3496,18 +3446,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         {"nested extra key", put_in(valid_part, ["input_audio", "extra"], true)}
       ]
 
-      expected = %{
-        status: 400,
-        code: "invalid_request",
-        message: "message content part is not translatable",
-        param: "input"
-      }
+      expected = adapter_audio_error("message content part is not translatable")
 
-      for {label, part} <- invalid_parts do
-        assert_sanitized_audio_error(
-          responses_payload([user_audio_message(part)]),
-          expected,
-          "expected #{label} input_audio shape to be rejected"
+      for {_label, part} <- invalid_parts do
+        assert_adapter_audio_error!(
+          Responses.coerce(responses_payload([user_audio_message(part)])),
+          expected
         )
       end
     end
@@ -3532,31 +3476,31 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
          }}
       ]
 
-      expected = %{
-        status: 400,
-        code: "invalid_request",
-        message: "message content part is not translatable",
-        param: "input"
-      }
+      expected = adapter_audio_error("message content part is not translatable")
 
-      for {label, input} <- inputs do
-        assert_sanitized_audio_error(
-          responses_payload([input]),
-          expected,
-          "expected #{label} input_audio to be rejected"
+      for {_label, input} <- inputs do
+        assert_adapter_audio_error!(
+          Responses.coerce(responses_payload([input])),
+          expected
         )
       end
     end
 
     @tag :input_audio_backport
     @tag timeout: 120_000
-    test "Responses accepts exactly 50 MiB of decoded audio" do
+    test "Responses accepts exactly 50 MiB when only ASCII whitespace exceeds the encoded limit" do
       source = :binary.copy(<<0>>, 52_428_800)
+      encoded = Base.encode64(source)
+      encoded_with_whitespace = with_ascii_whitespace(encoded)
+
+      assert byte_size(source) == 52_428_800
+      assert byte_size(encoded) == 69_905_068
+      assert byte_size(encoded_with_whitespace) == 69_905_072
 
       assert_responses_audio_summary(
-        responses_audio_payload("wav", Base.encode64(source)),
+        responses_audio_payload("wav", encoded_with_whitespace),
         expected_audio_summary("audio/wav", source),
-        "expected exactly 50 MiB of decoded input_audio to be accepted"
+        "expected whitespace-only encoded excess at exactly 50 MiB to be accepted"
       )
     end
 
@@ -3565,10 +3509,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     test "Responses rejects decoded audio one byte above 50 MiB" do
       source = :binary.copy(<<0>>, 52_428_801)
 
-      assert_sanitized_audio_error(
-        responses_audio_payload("wav", Base.encode64(source)),
-        oversized_audio_error(),
-        "expected decoded input_audio above 50 MiB to be rejected"
+      assert_adapter_audio_error!(
+        Responses.coerce(responses_audio_payload("wav", Base.encode64(source))),
+        adapter_audio_error("input_audio data must be 50 MiB or smaller")
       )
     end
 
@@ -3577,10 +3520,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     test "Responses rejects an overlong non-whitespace Base64 input before decoding" do
       encoded = :binary.copy("A", 69_905_069)
 
-      assert_sanitized_audio_error(
-        responses_audio_payload("wav", encoded),
-        oversized_audio_error(),
-        "expected overlong encoded input_audio to be rejected"
+      assert_adapter_audio_error!(
+        Responses.coerce(responses_audio_payload("wav", encoded)),
+        adapter_audio_error("input_audio data must be 50 MiB or smaller")
       )
     end
   end
@@ -4454,23 +4396,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   defp user_audio_message(part), do: %{"role" => "user", "content" => [part]}
 
-  defp input_audio_part(format, data) do
-    %{
-      "type" => "input_audio",
-      "input_audio" => %{"data" => data, "format" => format}
-    }
-  end
-
-  defp expected_audio_summary(mime, source) do
-    %{
-      type: "input_audio",
-      mime: mime,
-      canonical_whitespace_free?: true,
-      decoded_bytes: byte_size(source),
-      sha256: :crypto.hash(:sha256, source) |> Base.encode16(case: :lower)
-    }
-  end
-
   defp assert_responses_audio_summary(payload, expected, failure_message) do
     case Responses.coerce(payload) do
       {:ok, result} ->
@@ -4490,46 +4415,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   defp safe_audio_summary(_result), do: {:error, :unexpected_audio_shape}
-
-  defp safe_audio_part_summary(part) when is_map(part) and map_size(part) == 2 do
-    with %{"type" => type, "audio_url" => audio_url} when is_binary(audio_url) <- part,
-         ["data:" <> metadata, encoded] <- String.split(audio_url, ",", parts: 2),
-         [mime, "base64"] <- String.split(metadata, ";", parts: 2),
-         {:ok, decoded} <- Base.decode64(encoded, ignore: :whitespace) do
-      {:ok,
-       %{
-         type: type,
-         mime: mime,
-         canonical_whitespace_free?: encoded == Base.encode64(decoded),
-         decoded_bytes: byte_size(decoded),
-         sha256: :crypto.hash(:sha256, decoded) |> Base.encode16(case: :lower)
-       }}
-    else
-      _value -> {:error, :unexpected_audio_shape}
-    end
-  end
-
-  defp safe_audio_part_summary(_part), do: {:error, :unexpected_audio_shape}
-
-  defp oversized_audio_error do
-    %{
-      status: 400,
-      code: "invalid_request",
-      message: "input_audio data must be 50 MiB or smaller",
-      param: "input"
-    }
-  end
-
-  defp assert_sanitized_audio_error(payload, expected, failure_message) do
-    case Responses.coerce(payload) do
-      {:error, reason} ->
-        safe_reason = Map.take(reason, Map.keys(expected))
-        assert safe_reason == expected, failure_message
-
-      {:ok, _result} ->
-        flunk(failure_message)
-    end
-  end
 
   defp audio_upload_fixture(contents) do
     path =
