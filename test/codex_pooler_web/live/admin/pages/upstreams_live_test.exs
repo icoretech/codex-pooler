@@ -97,6 +97,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
           {"admin-nav-audit-logs", "Audit logs"},
           {"admin-nav-jobs", "System Jobs"},
           {"admin-nav-system", "System Settings"},
+          {"admin-nav-observatory", "Observatory"},
           {"admin-nav-alerts", "Alerts"},
           {"admin-nav-settings", "Settings"},
           {"admin-sidebar-logout", "Log out"}

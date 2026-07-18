@@ -244,6 +244,22 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               />
               <span class="hidden md:block">{item.label}</span>
             </.link>
+
+            <.link
+              id="admin-nav-observatory"
+              href={~p"/observatory/login"}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Observatory"
+              class={admin_nav_item_class(false)}
+              title="Observatory"
+            >
+              <.icon
+                name="hero-sparkles"
+                class="size-5 shrink-0 transition-colors group-hover:text-primary"
+              />
+              <span class="hidden md:block">Observatory</span>
+            </.link>
           </nav>
 
           <div id="admin-sidebar-footer" class="mt-auto grid shrink-0 gap-1">

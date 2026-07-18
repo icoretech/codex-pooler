@@ -317,7 +317,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                     rel="noopener noreferrer"
                     class="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-primary/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
-                    <.icon name="hero-chart-bar-square" class="size-3.5" />
+                    <.icon name="hero-sparkles" class="size-3.5" />
                     <span>Observatory</span>
                   </.link>
                   <.api_key_notes_popover
