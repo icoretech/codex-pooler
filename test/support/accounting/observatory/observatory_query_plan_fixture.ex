@@ -29,6 +29,12 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     # non-matching rows, which is non-deterministic and inflates the bounded
     # relation-work assertion; ample work_mem keeps the bitmap tuple-exact.
     Repo.query!("SET LOCAL work_mem = '256MB'")
+
+    # Assert the single-worker production-shape plan. Parallel workers split the
+    # scoped scan across loops non-deterministically (chosen on cost estimates
+    # that drift with the shared test DB's stats), which is orthogonal to the
+    # per-request bounded-access contract we verify here.
+    Repo.query!("SET LOCAL max_parallel_workers_per_gather = 0")
   end
 
   def refresh_statistics do

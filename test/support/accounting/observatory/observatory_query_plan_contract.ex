@@ -67,7 +67,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
         predicates_present_for_all?(plans, "requests", @request_predicates),
       "result_limits" =>
         plans
-        |> Enum.filter(&(&1.projection in [:observatory_models, :observatory_outcomes]))
+        |> Enum.filter(&(&1.projection == :observatory_outcomes))
         |> Enum.all?(&Support.has_node_type?(&1.root, "Limit"))
     }
   end

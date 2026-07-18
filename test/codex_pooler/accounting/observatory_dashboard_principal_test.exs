@@ -166,10 +166,7 @@ defmodule CodexPooler.Accounting.ObservatoryDashboardPrincipalTest do
 
     assert projections == [
              :observatory_principal,
-             :observatory_summary,
-             :observatory_buckets,
-             :observatory_models,
-             :observatory_model_buckets,
+             :observatory_grid,
              :observatory_outcomes
            ]
   end

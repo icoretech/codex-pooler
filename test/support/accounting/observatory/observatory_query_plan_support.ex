@@ -5,12 +5,10 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanSupport do
 
   @fact_relations ["requests", "request_log_facts"]
   @projections [
-    :observatory_summary,
-    :observatory_buckets,
-    :observatory_models,
+    :observatory_grid,
     :observatory_outcomes
   ]
-  @aggregate_projections [:observatory_summary, :observatory_buckets, :observatory_models]
+  @aggregate_projections [:observatory_grid]
   @condition_fields ["Index Cond", "Recheck Cond", "Filter"]
 
   def fact_relations, do: @fact_relations

@@ -60,14 +60,11 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
 
     assert Enum.map(events, & &1.projection) == [
              :observatory_principal,
-             :observatory_summary,
-             :observatory_buckets,
-             :observatory_models,
-             :observatory_model_buckets,
+             :observatory_grid,
              :observatory_outcomes
            ]
 
-    assert length(events) == 6
+    assert length(events) == 3
     assert length(events) <= 8
   end
 
@@ -167,14 +164,11 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
 
     assert Enum.map(events, & &1.projection) == [
              :observatory_principal,
-             :observatory_summary,
-             :observatory_buckets,
-             :observatory_models,
-             :observatory_model_buckets,
+             :observatory_grid,
              :observatory_outcomes
            ]
 
-    assert length(events) == 6
+    assert length(events) == 3
     assert length(events) <= 8
     assert projection.totals.requests.total == 13
     assert length(projection.outcomes) == 12

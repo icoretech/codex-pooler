@@ -9,7 +9,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.DashboardSessions.Principal, as: DashboardPrincipal
-  alias CodexPooler.Accounting.Usage.Observatory.{Presentation, Principal, Queries}
+  alias CodexPooler.Accounting.Usage.Observatory.{Presentation, Principal, Queries, Rollup}
   alias CodexPooler.Pools.Pool
 
   @windows %{
@@ -44,10 +44,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory do
          {:ok, window} <- normalize_window(window_key, opts),
          {:ok, canonical_principal} <- Principal.load(principal),
          {:ok, identity} <- canonical_identity(canonical_principal) do
-      summary = Queries.summary(identity, window)
-      buckets = Queries.buckets(identity, window)
-      models = Queries.models(identity, window)
-      model_buckets = Queries.model_buckets(identity, window)
+      %{summary: summary, buckets: buckets, models: models, model_buckets: model_buckets} =
+        identity |> Queries.grid(window) |> Rollup.fold()
+
       outcomes = Queries.outcomes(identity, window)
 
       {:ok, Presentation.build(window, summary, buckets, models, outcomes, model_buckets)}
