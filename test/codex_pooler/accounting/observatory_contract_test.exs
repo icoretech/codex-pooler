@@ -188,7 +188,6 @@ defmodule CodexPooler.Accounting.ObservatoryContractTest do
                  :code,
                  :cost,
                  :endpoint_class,
-                 :latency_ms,
                  :model,
                  :response_status_code,
                  :status,

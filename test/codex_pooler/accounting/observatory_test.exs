@@ -127,13 +127,10 @@ defmodule CodexPooler.Accounting.ObservatoryTest do
     assert projection.totals.cost.settled == %{status: "settled", micros: 700}
     assert projection.totals.cost.estimated == %{status: "unavailable", micros: 0}
     assert projection.totals.cost.confidence == "partial"
-    assert projection.performance.latency_ms == %{mean: 1_500, p50: 1_500, p95: 1_950, max: 2_000}
-    assert projection.performance.throughput_tokens_per_second == %{p50: 100.0, p95: 100.0}
 
     assert projection.trends == %{
              success_rate: %{current: 0.0, previous: 50.0, delta: -50.0},
-             cache_rate: %{current: nil, previous: 33.3, delta: nil},
-             throughput: %{current: nil, previous: 100.0, delta: nil}
+             cache_rate: %{current: nil, previous: 33.3, delta: nil}
            }
 
     assert length(projection.buckets) == 12

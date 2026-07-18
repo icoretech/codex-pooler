@@ -10,12 +10,10 @@ defmodule CodexPoolerWeb.Observatory.PresentationTrendsTest do
           requests: %{total: 4, succeeded: 3, failed: 1},
           tokens: %{input: 100, cached_input: 30, total: 180}
         },
-        performance: %{throughput_tokens_per_second: %{p50: 20.0}},
         accounting: %{status: "complete"},
         trends: %{
           success_rate: %{delta: -75.0},
-          cache_rate: %{delta: 30.0},
-          throughput: %{delta: -20.0}
+          cache_rate: %{delta: 30.0}
         }
       })
 
@@ -30,14 +28,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationTrendsTest do
              tone: :success,
              direction: :up
            }
-
-    assert model.overview.throughput.trend == %{
-             label: "-20.0%",
-             tone: :error,
-             direction: :down
-           }
-
-    assert model.overview.throughput.measure == %{value: "20", unit: "tok/s"}
   end
 
   test "renders missing trend data as neutral and finite" do

@@ -7,8 +7,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
   alias CodexPooler.Repo
 
   def summary(identity, window) do
-    half_bucket_count = div(window.bucket_count, 2)
-
     identity
     |> QueryScope.scoped_facts(window)
     |> then(fn facts ->
@@ -30,61 +28,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
             settled_cost_count: sum(fact.settled_cost_available),
             estimated_cost_micros: sum(fact.estimated_cost_micros),
             estimated_cost_count: sum(fact.estimated_cost_available),
-            unavailable_cost_count: sum(fact.cost_unavailable),
-            latency_mean: type(fragment("ROUND(AVG(?))::bigint", fact.latency_ms), :integer),
-            latency_p50:
-              type(
-                fragment(
-                  "ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY ?))::numeric)::bigint",
-                  fact.latency_ms
-                ),
-                :integer
-              ),
-            latency_p95:
-              type(
-                fragment(
-                  "ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY ?))::numeric)::bigint",
-                  fact.latency_ms
-                ),
-                :integer
-              ),
-            latency_max: max(fact.latency_ms),
-            throughput_p50:
-              type(
-                fragment(
-                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?)",
-                  fact.throughput_tokens_per_second
-                ),
-                :float
-              ),
-            throughput_previous_p50:
-              type(
-                fragment(
-                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?) FILTER (WHERE ? < ?)",
-                  fact.throughput_tokens_per_second,
-                  fact.bucket_index,
-                  ^half_bucket_count
-                ),
-                :float
-              ),
-            throughput_current_p50:
-              type(
-                fragment(
-                  "percentile_cont(0.5) WITHIN GROUP (ORDER BY ?) FILTER (WHERE ? >= ?)",
-                  fact.throughput_tokens_per_second,
-                  fact.bucket_index,
-                  ^half_bucket_count
-                ),
-                :float
-              ),
-            throughput_p95:
-              type(
-                fragment(
-                  "percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)",
-                  fact.throughput_tokens_per_second
-                ),
-                :float
-              )
+            unavailable_cost_count: sum(fact.cost_unavailable)
           }
         ),
         telemetry_options: [reporting_projection: :observatory_summary]
@@ -183,7 +127,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Queries do
             status: fact.status,
             code: fact.safe_code,
             response_status_code: fact.response_status_code,
-            latency_ms: fact.latency_ms,
             total_tokens: fact.total_tokens,
             settled_cost_micros: fact.settled_cost_micros,
             settled_cost_available: fact.settled_cost_available,

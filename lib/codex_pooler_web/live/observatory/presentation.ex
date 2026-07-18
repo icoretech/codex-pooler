@@ -25,7 +25,6 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
           requests,
           tokens,
           map(get(totals, :cost)),
-          map(get(p, :performance)),
           map(get(p, :trends))
         ),
       models: models(get(p, :models), non_negative(get(tokens, :total))),
@@ -44,7 +43,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   defp state("partial", _requests), do: :partial
   defp state(_, _requests), do: :empty
 
-  defp overview(requests, tokens, cost, performance, trends) do
+  defp overview(requests, tokens, cost, trends) do
     total = non_negative(get(requests, :total))
     succeeded = non_negative(get(requests, :succeeded))
     input = non_negative(get(tokens, :input))
@@ -76,9 +75,7 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
       tokens: %{
         value: token_label(non_negative(get(tokens, :total))),
         detail: request_detail(total)
-      },
-      throughput: throughput(performance, Safety.trend(get(trends, :throughput), :percent)),
-      latency: latency(performance)
+      }
     }
   end
 
@@ -102,43 +99,6 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
   defp percent_measure(nil), do: %{value: "not available", unit: nil}
   defp percent_measure(percent), do: %{value: "#{percent}", unit: "%"}
-
-  defp throughput(performance, trend) do
-    values = map(get(performance, :throughput_tokens_per_second))
-    %{measure: rate_measure(get(values, :p50)), trend: trend}
-  end
-
-  defp latency(performance) do
-    values = map(get(performance, :latency_ms))
-    mean = nullable_integer(get(values, :mean))
-    max = nullable_integer(get(values, :max))
-
-    %{
-      p50: latency_measure(nullable_integer(get(values, :p50)), "p50"),
-      p95: latency_measure(nullable_integer(get(values, :p95)), "p95"),
-      detail: latency_detail(mean, max)
-    }
-  end
-
-  # Facts split the numeric value from its unit so the render model can show a
-  # big number with a small, muted unit suffix (matching the ledger mockup).
-  defp rate_measure(value) when is_number(value),
-    do: %{value: grouped_integer(round(value)), unit: "tok/s"}
-
-  defp rate_measure(_value), do: %{value: "not available", unit: nil}
-
-  defp latency_measure(nil, _percentile), do: %{value: "not available", unit: nil}
-
-  defp latency_measure(ms, percentile) when is_integer(ms) and ms >= 1000,
-    do: %{value: "#{Float.round(ms / 1000, 1)}", unit: "s #{percentile}"}
-
-  defp latency_measure(ms, percentile) when is_integer(ms),
-    do: %{value: "#{ms}", unit: "ms #{percentile}"}
-
-  defp latency_detail(mean, max) when is_integer(mean) and is_integer(max),
-    do: "Mean #{latency_label(mean)} · slowest settled #{latency_label(max)}"
-
-  defp latency_detail(_mean, _max), do: "not available"
 
   # Cost is the green line; keep green out of the model columns so the two
   # never collide (mirrors the admin tokens-vs-cost chart palette).
@@ -303,10 +263,13 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
         label: Safety.sanitize_text(get(row, :label), "Unknown model"),
         requests_label: request_short(non_negative(get(row, :request_count))),
         share_label: model_share_label(share),
-        token_label: "#{token_label(non_negative(get(row, :total_tokens)))} tks",
-        cost_label: money_label(non_negative(get(row, :cost_micros))),
+        token_label: token_label(non_negative(get(row, :total_tokens))),
+        cost_label: money_amount(non_negative(get(row, :cost_micros))),
         bar_percent: model_bar_percent(share),
-        tone: Enum.at([:primary, :info, :success, :neutral], rem(index, 4)),
+        # Same palette + rank order as the traffic chart columns, so a model's
+        # card tint matches its bar/line in the chart (top-5 colored, rest folded
+        # into the muted "Other" color).
+        color: Enum.at(@chart_model_colors, index, @chart_other_color),
         shine_delay: shine_delay(index)
       }
     end)
@@ -332,7 +295,6 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
 
   defp outcome(value) do
     row = map(value)
-    latency = nullable_integer(get(row, :latency_ms))
     tokens = non_negative(get(row, :total_tokens))
     code = Safety.sanitize_code(get(row, :code))
 
@@ -340,7 +302,6 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
       code: code,
       cost: cost(get(row, :cost), ["settled", "estimated"]),
       endpoint: endpoint(get(row, :endpoint_class)),
-      latency: %{ms: latency, label: latency_label(latency)},
       model: Safety.sanitize_text(get(row, :model), "Unknown model"),
       status: status(get(row, :status), code),
       timestamp: outcome_timestamp(get(row, :timestamp)),
@@ -402,20 +363,19 @@ defmodule CodexPoolerWeb.Observatory.Presentation do
   defp token_label(value) when value < 999_950_000, do: "#{Float.round(value / 1_000_000, 1)}M"
   defp token_label(value), do: "#{Float.round(value / 1_000_000_000, 1)}B"
 
-  defp latency_label(nil), do: "not available"
-  defp latency_label(ms) when is_integer(ms) and ms >= 1000, do: "#{Float.round(ms / 1000, 1)}s"
-  defp latency_label(ms) when is_integer(ms), do: "#{ms} ms"
-
   defp money_label(micros),
     do: :io_lib.format("$~.2f", [micros / 1_000_000]) |> IO.iodata_to_binary()
+
+  # Money without the currency glyph, so the model card can tint the amount but
+  # leave the "$" a neutral color to keep it legible.
+  defp money_amount(micros),
+    do: :io_lib.format("~.2f", [micros / 1_000_000]) |> IO.iodata_to_binary()
 
   defp category(%DateTime{} = value), do: Calendar.strftime(value, "%m-%d %H:%M")
   defp category(_value), do: ""
   defp outcome_timestamp(%DateTime{} = value), do: Calendar.strftime(value, "%b %d, %H:%M:%S")
   defp outcome_timestamp(_value), do: "not recorded"
 
-  defp nullable_integer(nil), do: nil
-  defp nullable_integer(value), do: integer(value)
   defp non_negative(value), do: max(integer(value), 0)
   defp integer(value) when is_integer(value), do: value
   defp integer(value) when is_float(value), do: round(value)

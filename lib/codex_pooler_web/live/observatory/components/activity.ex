@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
 
   attr :traffic, :map, required: true
   attr :outcomes, :list, required: true
+  attr :window, :string, default: nil
   attr :traffic_mode, :atom, default: :interval, values: [:interval, :cumulative]
 
   def activity(assigns) do
@@ -29,7 +30,7 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
         class="grid min-w-0 gap-4"
         aria-labelledby="observatory-traffic-heading"
       >
-        <Section.divider id="observatory-traffic-heading" label="Traffic" />
+        <Section.divider id="observatory-traffic-heading" label="Traffic" suffix={@window} />
         <div class="flex justify-end">
           <div
             id="observatory-traffic-mode-control"
@@ -148,7 +149,6 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
                 <th scope="col">Model</th>
                 <th scope="col">Endpoint</th>
                 <th scope="col" class="text-center">Status</th>
-                <th scope="col" class="text-right">Latency</th>
                 <th scope="col" class="text-right">Tokens</th>
                 <th scope="col" class="text-right">Cost</th>
               </tr>
@@ -182,12 +182,6 @@ defmodule CodexPoolerWeb.Observatory.Components.Activity do
                   >
                     {outcome.status.label}
                   </span>
-                </td>
-                <td
-                  data-label="Latency"
-                  class="observatory-metric whitespace-nowrap text-right font-mono tabular-nums"
-                >
-                  {outcome.latency.label}
                 </td>
                 <td
                   data-label="Tokens"

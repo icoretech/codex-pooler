@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
      |> assign(:loading, not paused)
      |> assign(:observatory_state, if(paused, do: :stale, else: :loading))
      |> assign(:observatory_report, nil)
+     |> assign(:refreshing, false)
      |> assign(:request_generation, 0)
      |> assign(:applied_generation, 0)
      |> assign(:freshness_generation, 0)
@@ -34,7 +35,14 @@ defmodule CodexPoolerWeb.ObservatoryLive do
   @impl true
   def handle_event("select-window", %{"window" => window}, socket) do
     if Presentation.valid_window?(window) do
-      {:noreply, socket |> assign(:selected_window, window) |> request_refresh()}
+      # Show the switching indicator only when a dashboard is already on screen;
+      # the first load has its own loading state, and the periodic auto-refresh
+      # stays silent so the panel does not flicker every 30s.
+      {:noreply,
+       socket
+       |> assign(:selected_window, window)
+       |> assign(:refreshing, not is_nil(socket.assigns.observatory_report))
+       |> request_refresh()}
     else
       {:noreply, socket}
     end
@@ -121,9 +129,21 @@ defmodule CodexPoolerWeb.ObservatoryLive do
         />
 
         <div
+          :if={@refreshing}
+          id="observatory-refreshing"
+          class="mt-4 flex justify-center"
+          aria-live="polite"
+        >
+          <span class="inline-flex items-center gap-2 rounded-full border border-base-300 bg-base-100 px-3 py-1.5 text-xs text-base-content/75 shadow-sm">
+            <span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+            Updating {@selected_window}…
+          </span>
+        </div>
+
+        <div
           :if={@loading or @observatory_state in [:error, :empty, :stale]}
           id="observatory-notices"
-          class="grid gap-3 py-4"
+          class={["grid gap-3 py-4", @refreshing && "opacity-40 transition-opacity"]}
         >
           <div :if={@loading}><States.state state={:loading} /></div>
           <div :if={@observatory_state == :error}><States.state state={:error} /></div>
@@ -134,7 +154,11 @@ defmodule CodexPoolerWeb.ObservatoryLive do
         <div
           :if={@observatory_report && @observatory_state in [:ready, :partial, :stale]}
           id="observatory-widgets"
-          class="mt-4 grid min-w-0 gap-4 observatory-split:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]"
+          class={[
+            "mt-4 grid min-w-0 gap-4 observatory-split:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]",
+            @refreshing && "opacity-40 transition-opacity"
+          ]}
+          aria-busy={to_string(@refreshing)}
         >
           <aside
             id="observatory-left-rail"
@@ -143,6 +167,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
             <Telemetry.telemetry
               overview={@observatory_report.overview}
               models={@observatory_report.models}
+              window={@observatory_report.window.key}
             />
           </aside>
 
@@ -151,6 +176,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
               traffic={@observatory_report.traffic}
               outcomes={@observatory_report.outcomes}
               traffic_mode={@traffic_mode}
+              window={@observatory_report.window.key}
             />
           </div>
         </div>
@@ -189,6 +215,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
       freshness: "0s ago",
       last_applied_at_ms: System.system_time(:millisecond),
       loading: false,
+      refreshing: false,
       observatory_report: presentation,
       observatory_state: presentation.state
     )
@@ -199,6 +226,7 @@ defmodule CodexPoolerWeb.ObservatoryLive do
       applied_generation: generation,
       freshness: "Update unavailable",
       loading: false,
+      refreshing: false,
       observatory_report: nil,
       observatory_state: :error
     )

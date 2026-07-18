@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{LedgerEntry, Request, RequestLogFact}
+  alias CodexPooler.Accounting.{LedgerEntry, Request}
   alias CodexPooler.Catalog.Model
 
   @settlement "settlement"
@@ -118,8 +118,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
       on:
         settlement.request_id == request.id and
           settlement.entry_kind == ^@settlement and settlement.amount_status == ^@recorded,
-      left_join: fact in RequestLogFact,
-      on: fact.request_id == request.id,
       left_join: model in Model,
       on: model.id == request.model_id and model.pool_id == request.pool_id,
       where:
@@ -222,20 +220,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
             settlement.usage_status,
             settlement.details,
             settlement.estimated_cost_micros
-          ),
-        latency_ms: fact.latest_latency_ms,
-        throughput_tokens_per_second:
-          type(
-            fragment(
-              "CASE WHEN ? = ? AND COALESCE(?, 0) > 0 AND COALESCE(?, 0) > 0 THEN (COALESCE(?, 0)::double precision * 1000.0) / ? ELSE NULL END",
-              settlement.usage_status,
-              ^@usage_known,
-              settlement.total_tokens,
-              fact.latest_latency_ms,
-              settlement.total_tokens,
-              fact.latest_latency_ms
-            ),
-            :float
           )
       }
   end

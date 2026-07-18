@@ -58,7 +58,13 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
   end
 
   test "telemetry renders stacked facts and direct-labeled model rows" do
-    html = render_component(&Telemetry.telemetry/1, %{overview: overview(), models: models()})
+    html =
+      render_component(&Telemetry.telemetry/1, %{
+        overview: overview(),
+        models: models(),
+        window: "7d"
+      })
+
     fragment = LazyHTML.from_fragment(html)
 
     assert LazyHTML.query(fragment, "#observatory-overview.observatory-card") != []
@@ -70,9 +76,11 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
     assert LazyHTML.query(fragment, "#observatory-cost-settled") |> Enum.empty?()
     assert LazyHTML.query(fragment, "#observatory-fact-tokens") != []
     assert html =~ "42 requests"
-    assert LazyHTML.query(fragment, "#observatory-fact-throughput") != []
-    assert LazyHTML.query(fragment, "#observatory-fact-latency") != []
+    assert LazyHTML.query(fragment, "#observatory-fact-throughput") |> Enum.empty?()
+    assert LazyHTML.query(fragment, "#observatory-fact-latency") |> Enum.empty?()
     assert LazyHTML.query(fragment, "#observatory-models") != []
+    # the selected window trails the section title
+    assert LazyHTML.query(fragment, "#observatory-models-title") |> LazyHTML.text() =~ "7d"
     assert LazyHTML.query(fragment, "[data-role='observatory-model-row']") |> Enum.count() == 3
     assert LazyHTML.query(fragment, "[data-role='observatory-model-bar']") |> Enum.count() == 3
 
@@ -82,30 +90,31 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
     assert html =~ "alpha-model"
     assert html =~ "9,441 reqs"
     assert html =~ "78.5%"
-    assert html =~ "$79.62"
-    # top model's share value echoes its primary bar color; metrics are not mono
-    assert LazyHTML.query(fragment, "#observatory-model-1 span.text-primary") != []
+    # tokens/cost split the amount (tinted) from the unit/currency (neutral)
+    model_one = LazyHTML.query(fragment, "#observatory-model-1") |> LazyHTML.text()
+    assert model_one =~ "1k tks"
+    assert model_one =~ "$79.62"
+    # the top model's value + bar carry its chart color inline; metrics are not mono
+    assert LazyHTML.query(fragment, "#observatory-model-1 [style*='var(--color-primary)']") != []
 
     assert LazyHTML.query(fragment, "#observatory-model-1 .observatory-metric.font-mono")
            |> Enum.empty?()
 
-    latency = LazyHTML.query(fragment, "#observatory-fact-latency") |> LazyHTML.text()
-    assert latency =~ "120"
-    assert latency =~ "ms p50"
-    assert latency =~ "200"
-    assert latency =~ "ms p95"
-
-    throughput = LazyHTML.query(fragment, "#observatory-fact-throughput") |> LazyHTML.text()
-    assert throughput =~ "125.5"
-    assert throughput =~ "tok/s"
     refute html =~ ~r/\b(admin|Pool|upstream|operator)\b/i
   end
 
   test "activity renders the Apex contract and matching table fallback" do
-    html = render_component(&Activity.activity/1, %{traffic: traffic(), outcomes: outcomes()})
+    html =
+      render_component(&Activity.activity/1, %{
+        traffic: traffic(),
+        outcomes: outcomes(),
+        window: "7d"
+      })
+
     fragment = LazyHTML.from_fragment(html)
 
     assert LazyHTML.query(fragment, "#observatory-traffic") != []
+    assert LazyHTML.query(fragment, "#observatory-traffic-heading") |> LazyHTML.text() =~ "7d"
     assert LazyHTML.query(fragment, "#observatory-traffic-mode-control[role='group']") != []
 
     assert LazyHTML.query(
@@ -199,25 +208,19 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
         confidence: "estimated",
         detail: "+ $0.30 estimated, awaiting settlement"
       },
-      tokens: %{value: "130", detail: "42 requests"},
-      throughput: %{measure: %{value: "125.5", unit: "tok/s"}},
-      latency: %{
-        p50: %{value: "120", unit: "ms p50"},
-        p95: %{value: "200", unit: "ms p95"},
-        detail: "Mean 160 ms · slowest settled 240 ms"
-      }
+      tokens: %{value: "130", detail: "42 requests"}
     }
   end
 
   defp models do
-    for {label, tone, percent, tokens, requests, cost} <- [
-          {"alpha-model", :primary, 78.5, "1k tks", "9,441 reqs", "$79.62"},
-          {"beta-model", :info, 40.0, "400 tks", "512 reqs", "$12.40"},
-          {"gamma-model", :success, 10.0, "100 tks", "88 reqs", "$1.20"}
+    for {label, color, percent, tokens, requests, cost} <- [
+          {"alpha-model", "var(--color-primary)", 78.5, "1k", "9,441 reqs", "79.62"},
+          {"beta-model", "var(--color-info)", 40.0, "400", "512 reqs", "12.40"},
+          {"gamma-model", "var(--color-warning)", 10.0, "100", "88 reqs", "1.20"}
         ] do
       %{
         label: label,
-        tone: tone,
+        color: color,
         bar_percent: percent,
         token_label: tokens,
         share_label: "#{percent}%",
@@ -267,7 +270,6 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTest do
       model: model,
       endpoint: "responses",
       status: %{label: label, tone: tone, data_status: data_status},
-      latency: %{label: "120 ms"},
       tokens: %{label: "10"},
       cost: %{label: "$0.02"}
     }

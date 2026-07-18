@@ -61,54 +61,26 @@ defmodule CodexPoolerWeb.Observatory.Components.Toolbar do
           </button>
         </div>
 
-        <div
-          id="observatory-freshness"
-          class={[
-            "observatory-freshness",
-            @paused && "is-paused"
-          ]}
-          aria-live="polite"
-          aria-label={if @paused, do: "Refresh paused", else: "Refresh live"}
+        <button
+          :if={@paused}
+          id="observatory-resume"
+          type="button"
+          class="btn btn-sm btn-ghost btn-square observatory-icon-button"
+          data-observatory-refresh-action="resume"
+          aria-label="Resume auto-refresh"
         >
-          <span class="observatory-live-dot" aria-hidden="true" />
-          <span data-role="observatory-freshness-label" class="text-base-content/70">
-            {@freshness}
-          </span>
-          <span data-role="observatory-refresh-status" class="sr-only">
-            {if @paused, do: "Paused", else: "Live"}
-          </span>
-          <button
-            :if={@paused}
-            id="observatory-resume"
-            type="button"
-            class="btn btn-sm btn-ghost btn-square observatory-icon-button"
-            data-observatory-refresh-action="resume"
-            aria-label="Resume auto-refresh"
-          >
-            <.icon name="hero-play" class="size-4" />
-          </button>
-          <button
-            :if={!@paused}
-            id="observatory-pause"
-            type="button"
-            class="btn btn-sm btn-ghost btn-square observatory-icon-button"
-            data-observatory-refresh-action="pause"
-            aria-label="Pause auto-refresh"
-          >
-            <.icon name="hero-pause" class="size-4" />
-          </button>
-          <form id="observatory-logout-form" action="/observatory/logout" method="post">
-            <input type="hidden" name="_method" value="delete" />
-            <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
-            <button
-              type="submit"
-              class="btn btn-sm btn-ghost observatory-logout-button"
-              aria-label="Log out"
-            >
-              Log out
-            </button>
-          </form>
-        </div>
+          <.icon name="hero-play" class="size-4" />
+        </button>
+        <button
+          :if={!@paused}
+          id="observatory-pause"
+          type="button"
+          class="btn btn-sm btn-ghost btn-square observatory-icon-button"
+          data-observatory-refresh-action="pause"
+          aria-label="Pause auto-refresh"
+        >
+          <.icon name="hero-pause" class="size-4" />
+        </button>
 
         <div
           id="observatory-theme-toggle"
@@ -134,6 +106,36 @@ defmodule CodexPoolerWeb.Observatory.Components.Toolbar do
             <.icon name={icon} class="size-4" />
           </button>
         </div>
+      </div>
+
+      <div
+        id="observatory-freshness"
+        class={[
+          "observatory-freshness",
+          @paused && "is-paused"
+        ]}
+        aria-live="polite"
+        aria-label={if @paused, do: "Refresh paused", else: "Refresh live"}
+      >
+        <span class="observatory-live-dot" aria-hidden="true" />
+        <span data-role="observatory-freshness-label" class="text-base-content/70">
+          {@freshness}
+        </span>
+        <span data-role="observatory-refresh-status" class="sr-only">
+          {if @paused, do: "Paused", else: "Live"}
+        </span>
+        <form id="observatory-logout-form" action="/observatory/logout" method="post">
+          <input type="hidden" name="_method" value="delete" />
+          <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+          <button
+            type="submit"
+            class="btn btn-sm btn-ghost btn-square observatory-logout-button"
+            aria-label="Log out"
+            title="Log out"
+          >
+            <.icon name="hero-arrow-right-start-on-rectangle" class="size-4" />
+          </button>
+        </form>
       </div>
     </header>
     """

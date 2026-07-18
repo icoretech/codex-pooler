@@ -1401,6 +1401,12 @@ body {
    scrolling table into one stacked card per request, so mobile readers get
    labelled rows instead of a horizontal scrollbar. */
 @variant observatory-outcomes-stacked {
+  /* Let the traffic chart shrink to the viewport instead of forcing a
+     horizontal scroll region; Apex re-renders to the container width. */
+  .observatory-chart {
+    min-width: 0;
+  }
+
   #observatory-outcomes-table {
     min-width: 0;
   }
@@ -1443,20 +1449,24 @@ body {
 }
 
 @variant observatory-toolbar-stacked {
+  /* Two rows max below the content-width breakpoint: identity + freshness/logout
+     share the top row, and the window/pause/theme controls drop to a full-width
+     second row (they no longer fit beside the identity once the theme selector
+     is present). */
   .observatory-toolbar {
-    @apply -mx-3 flex-wrap gap-y-2 px-3 py-2;
+    @apply -mx-3 flex-wrap items-center gap-y-2.5 px-3 py-2;
   }
 
   .observatory-toolbar-identity {
-    @apply basis-full gap-2.5;
-  }
-
-  .observatory-toolbar-controls {
-    @apply ms-0 w-full justify-between gap-2;
+    @apply order-1 flex-1 gap-2.5;
   }
 
   .observatory-freshness {
-    @apply ms-auto;
+    @apply order-2;
+  }
+
+  .observatory-toolbar-controls {
+    @apply order-last ms-0 w-full basis-full flex-wrap items-center justify-between gap-x-2 gap-y-2;
   }
 }
 

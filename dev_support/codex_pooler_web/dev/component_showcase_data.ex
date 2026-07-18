@@ -85,14 +85,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
           confidence: "partial"
         }
       },
-      performance: %{
-        throughput_tokens_per_second: %{p50: 125.5},
-        latency_ms: %{mean: 160, p50: 120, p95: 200, max: 240}
-      },
       trends: %{
         success_rate: %{delta: -2.5},
-        cache_rate: %{delta: 4.0},
-        throughput: %{delta: 12.0}
+        cache_rate: %{delta: 4.0}
       },
       models: [
         %{
@@ -261,7 +256,6 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
       model: model,
       endpoint_class: "responses",
       code: code,
-      latency_ms: 120,
       total_tokens: 640,
       cost: %{status: "settled", micros: 20_000}
     }

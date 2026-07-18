@@ -117,7 +117,7 @@ defmodule CodexPoolerWeb.Observatory.DesignContractTest do
 
     for {id, descriptions} <- [
           {"observatory-fact-cost", 2},
-          {"observatory-fact-latency", 2}
+          {"observatory-fact-tokens", 2}
         ] do
       assert LazyHTML.query(fragment, "##{id} > *") |> Enum.flat_map(&LazyHTML.tag/1) ==
                ["dt" | List.duplicate("dd", descriptions)]

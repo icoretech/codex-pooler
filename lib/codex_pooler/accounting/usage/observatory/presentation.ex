@@ -1,8 +1,6 @@
 defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
   @moduledoc false
 
-  @max_float 1.797_693_134_862_315_7e308
-
   def build(window, summary, sparse_buckets, models, outcomes, model_buckets \\ []) do
     summary = normalize_row(summary)
     normalized_buckets = buckets(window, sparse_buckets)
@@ -10,11 +8,10 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
     %{
       window: Map.take(window, [:key, :started_at, :ended_at, :bucket_seconds, :bucket_count]),
       totals: totals(summary),
-      performance: performance(summary),
       accounting: accounting(summary),
       buckets: normalized_buckets,
       model_buckets: model_bucket_rows(model_buckets),
-      trends: trends(normalized_buckets, summary),
+      trends: trends(normalized_buckets),
       models: model_distribution(models, summary.total_tokens),
       outcomes: Enum.map(outcomes, &outcome/1)
     }
@@ -81,21 +78,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
   defp cost_confidence(_requests, estimated, _unavailable) when estimated > 0, do: "estimated"
   defp cost_confidence(_requests, _estimated, _unavailable), do: "settled"
 
-  defp performance(row) do
-    %{
-      latency_ms: %{
-        mean: nullable_integer(row.latency_mean),
-        p50: nullable_integer(row.latency_p50),
-        p95: nullable_integer(row.latency_p95),
-        max: nullable_integer(row.latency_max)
-      },
-      throughput_tokens_per_second: %{
-        p50: nullable_float(row.throughput_p50),
-        p95: nullable_float(row.throughput_p95)
-      }
-    }
-  end
-
   defp accounting(row) do
     requests = integer(row.request_count)
     settlements = integer(row.settlement_count)
@@ -135,13 +117,12 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
     end
   end
 
-  defp trends(rows, summary) do
+  defp trends(rows) do
     {previous, current} = half_windows(rows)
 
     %{
       success_rate: ratio_trend(previous, current, [:requests, :succeeded], [:requests, :total]),
-      cache_rate: ratio_trend(previous, current, [:tokens, :cached_input], [:tokens, :input]),
-      throughput: throughput_trend(summary)
+      cache_rate: ratio_trend(previous, current, [:tokens, :cached_input], [:tokens, :input])
     }
   end
 
@@ -169,17 +150,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
     }
   end
 
-  defp throughput_trend(row) do
-    previous = nullable_float(row.throughput_previous_p50)
-    current = nullable_float(row.throughput_current_p50)
-
-    %{
-      current: current,
-      previous: previous,
-      delta: relative_difference(current, previous)
-    }
-  end
-
   defp sum_path(rows, path),
     do: Enum.reduce(rows, 0, fn row, total -> total + integer(get_in(row, path)) end)
 
@@ -187,12 +157,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
     do: Float.round(current - previous, 1)
 
   defp difference(_current, _previous), do: nil
-
-  defp relative_difference(current, previous)
-       when is_number(current) and is_number(previous) and previous > 0,
-       do: Float.round((current - previous) * 100 / previous, 1)
-
-  defp relative_difference(_current, _previous), do: nil
 
   defp model_distribution(rows, total_tokens) do
     Enum.map(rows, fn row ->
@@ -228,7 +192,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
       status: row.status,
       code: row.code,
       response_status_code: row.response_status_code,
-      latency_ms: row.latency_ms,
       total_tokens: integer(row.total_tokens),
       cost: cost
     }
@@ -251,15 +214,7 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
       settled_cost_count: 0,
       estimated_cost_micros: 0,
       estimated_cost_count: 0,
-      unavailable_cost_count: 0,
-      latency_mean: nil,
-      latency_p50: nil,
-      latency_p95: nil,
-      latency_max: nil,
-      throughput_p50: nil,
-      throughput_previous_p50: nil,
-      throughput_current_p50: nil,
-      throughput_p95: nil
+      unavailable_cost_count: 0
     }
 
     Map.merge(defaults, row || %{})
@@ -274,18 +229,6 @@ defmodule CodexPooler.Accounting.Usage.Observatory.Presentation do
       Float.round(integer(part) * 100 / total, 1)
     end
   end
-
-  defp nullable_integer(nil), do: nil
-  defp nullable_integer(value), do: integer(value)
-
-  defp nullable_float(nil), do: nil
-
-  defp nullable_float(value)
-       when is_float(value) and value >= -@max_float and value <= @max_float,
-       do: Float.round(value, 2)
-
-  defp nullable_float(value) when is_integer(value), do: value * 1.0
-  defp nullable_float(_value), do: nil
 
   defp integer(%Decimal{} = value), do: value |> Decimal.round(0) |> Decimal.to_integer()
   defp integer(value) when is_integer(value), do: value

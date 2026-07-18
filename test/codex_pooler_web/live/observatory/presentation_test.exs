@@ -33,34 +33,29 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
     assert model.overview.cost.detail == "+ $0.30 estimated, awaiting settlement"
     assert model.overview.cost.confidence == "estimated"
     assert model.overview.tokens == %{value: "130", detail: "10 requests"}
-    assert model.overview.throughput.measure == %{value: "126", unit: "tok/s"}
-    assert model.overview.latency.p50 == %{value: "120", unit: "ms p50"}
-    assert model.overview.latency.p95 == %{value: "200", unit: "ms p95"}
-    assert model.overview.latency.detail == "Mean 160 ms · slowest settled 240 ms"
+    refute Map.has_key?(model.overview, :throughput)
+    refute Map.has_key?(model.overview, :latency)
 
     assert length(model.models) == 12
     top = hd(model.models)
     assert top.bar_percent == 99.2
     assert top.share_label == "99.2%"
     assert top.requests_label == "1 req"
-    assert top.token_label == "129 tks"
-    assert top.cost_label == "$1.29"
+    assert top.token_label == "129"
+    assert top.cost_label == "1.29"
 
-    assert Enum.map(model.models, & &1.tone) ==
+    # Cards reuse the chart palette by rank so a model's tint matches its column:
+    # top-5 get the model colors, the rest fold into the muted "Other" color.
+    other = "color-mix(in oklab, var(--color-base-content) 40%, transparent)"
+
+    assert Enum.map(model.models, & &1.color) ==
              [
-               :primary,
-               :info,
-               :success,
-               :neutral,
-               :primary,
-               :info,
-               :success,
-               :neutral,
-               :primary,
-               :info,
-               :success,
-               :neutral
-             ]
+               "var(--color-primary)",
+               "var(--color-info)",
+               "var(--color-warning)",
+               "var(--color-accent)",
+               "var(--color-secondary)"
+             ] ++ List.duplicate(other, 7)
 
     chart = model.traffic.chart
     assert Jason.decode!(chart.categories) == ["07-17 11:00", "07-17 12:00"]
@@ -163,7 +158,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
                  :code,
                  :cost,
                  :endpoint,
-                 :latency,
                  :model,
                  :status,
                  :timestamp,
@@ -255,10 +249,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
           confidence: "estimated"
         }
       },
-      performance: %{
-        latency_ms: %{mean: 160, p50: 120, p95: 200, max: 240},
-        throughput_tokens_per_second: %{p50: 125.5, p95: 140.0}
-      },
       accounting: %{status: "complete"},
       buckets: [
         bucket(~U[2026-07-17 11:00:00Z], 60, 15, 90, 6, 1_000_000),
@@ -311,7 +301,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
       status: "succeeded",
       response_status_code: 200,
       code: nil,
-      latency_ms: 120,
       total_tokens: 10,
       cost: %{status: "settled", micros: 20_000}
     }
@@ -325,7 +314,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationTest do
       response_status_code: if(index == 2, do: 429, else: nil),
       code: if(index == 2, do: "rate_limited", else: nil),
       metadata: if(index == 2, do: %{"raw" => "raw-outcome-metadata"}, else: nil),
-      latency_ms: index * 10,
       total_tokens: index,
       cost: %{status: "unavailable", micros: 0}
     }

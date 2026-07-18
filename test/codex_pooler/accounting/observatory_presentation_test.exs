@@ -3,35 +3,21 @@ defmodule CodexPooler.Accounting.ObservatoryPresentationTest do
 
   alias CodexPooler.Accounting.Usage.Observatory.Presentation
 
-  test "keeps ratio trends bucket-based and compares throughput p50 medians" do
-    summary = %{throughput_previous_p50: 20.0, throughput_current_p50: 60.0}
-    projection = Presentation.build(window(), summary, buckets(), [], [])
+  test "keeps ratio trends bucket-based across window halves" do
+    projection = Presentation.build(window(), %{}, buckets(), [], [])
 
     assert projection.trends == %{
              success_rate: %{current: 25.0, previous: 100.0, delta: -75.0},
-             cache_rate: %{current: 50.0, previous: 20.0, delta: 30.0},
-             throughput: %{current: 60.0, previous: 20.0, delta: 200.0}
+             cache_rate: %{current: 50.0, previous: 20.0, delta: 30.0}
            }
   end
 
-  test "marks missing, non-finite, or non-positive throughput medians unavailable" do
-    summaries = [
-      %{throughput_previous_p50: nil, throughput_current_p50: 60.0},
-      %{throughput_previous_p50: 20.0, throughput_current_p50: nil},
-      %{throughput_previous_p50: 0.0, throughput_current_p50: 60.0},
-      %{throughput_previous_p50: :infinity, throughput_current_p50: 60.0},
-      %{throughput_previous_p50: 20.0, throughput_current_p50: :infinity}
-    ]
+  test "keeps ratio trend deltas nil and finite when a half-window has no traffic" do
+    projection = Presentation.build(window(), %{}, [bucket(2, 1, 1, 10, 0, 10)], [], [])
 
-    Enum.each(summaries, fn summary ->
-      projection =
-        Presentation.build(window(), summary, [bucket(2, 1, 1, 10, 0, 10)], [], [])
-
-      assert projection.trends.success_rate.delta == nil
-      assert projection.trends.cache_rate.delta == nil
-      assert projection.trends.throughput.delta == nil
-      refute inspect(projection) =~ ~r/(NaN|Infinity)/
-    end)
+    assert projection.trends.success_rate.delta == nil
+    assert projection.trends.cache_rate.delta == nil
+    refute inspect(projection) =~ ~r/(NaN|Infinity)/
   end
 
   defp window do

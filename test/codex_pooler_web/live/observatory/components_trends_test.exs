@@ -5,7 +5,7 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTrendsTest do
 
   alias CodexPoolerWeb.Observatory.Components.Telemetry
 
-  test "renders success, cache, and throughput trend deltas beside their values" do
+  test "renders success and cache trend deltas beside their values" do
     html =
       render_component(&Telemetry.telemetry/1, %{
         overview: %{
@@ -16,10 +16,6 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTrendsTest do
           cache_rate: %{
             measure: %{value: "25.0", unit: "%"},
             trend: trend("+10.0 pp", :success, :up)
-          },
-          throughput: %{
-            measure: %{value: "125.5", unit: "tok/s"},
-            trend: trend("+20.0%", :success, :up)
           }
         },
         models: []
@@ -29,19 +25,13 @@ defmodule CodexPoolerWeb.Observatory.ComponentsTrendsTest do
 
     for {id, direction, label} <- [
           {"success", "down", "-5.0 pp"},
-          {"cache", "up", "+10.0 pp"},
-          {"throughput", "up", "+20.0%"}
+          {"cache", "up", "+10.0 pp"}
         ] do
       assert LazyHTML.query(fragment, "#observatory-#{id}-trend[data-direction='#{direction}']") !=
                []
 
       assert html =~ label
     end
-
-    throughput = LazyHTML.query(fragment, "#observatory-fact-throughput") |> LazyHTML.text()
-    assert throughput =~ "125.5"
-    assert throughput =~ "tok/s"
-    assert html =~ "Median settled token rate"
   end
 
   defp trend(label, tone, direction), do: %{label: label, tone: tone, direction: direction}

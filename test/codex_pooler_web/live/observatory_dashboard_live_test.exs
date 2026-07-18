@@ -125,7 +125,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     assert has_element?(view, "#observatory-widgets")
 
     for selector <-
-          ~w(#observatory-fact-success #observatory-fact-cache #observatory-fact-cost #observatory-fact-tokens #observatory-fact-throughput #observatory-fact-latency #observatory-models #observatory-traffic #observatory-outcomes) do
+          ~w(#observatory-fact-success #observatory-fact-cache #observatory-fact-cost #observatory-fact-tokens #observatory-models #observatory-traffic #observatory-outcomes) do
       assert has_element?(view, selector)
     end
 

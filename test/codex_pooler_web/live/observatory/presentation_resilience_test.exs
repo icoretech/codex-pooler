@@ -13,9 +13,6 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
     assert empty.overview.cache_rate.measure == %{value: "not available", unit: nil}
     assert empty.overview.cost.confidence == "unavailable"
     assert empty.overview.tokens == %{value: "0", detail: "0 requests"}
-    assert empty.overview.throughput.measure == %{value: "not available", unit: nil}
-    assert empty.overview.latency.p50 == %{value: "not available", unit: nil}
-    assert empty.overview.latency.p95 == %{value: "not available", unit: nil}
     assert empty.traffic.total_label == "0 tokens · $0.00"
     assert partial.state == :partial
   end
@@ -39,7 +36,7 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
 
     assert Enum.map(model.models, & &1.label) == ["used"]
     assert hd(model.models).requests_label == "5 reqs"
-    assert hd(model.models).token_label == "100 tks"
+    assert hd(model.models).token_label == "100"
   end
 
   test "accepts nil fields and keeps render output finite and metadata-only" do
@@ -65,10 +62,10 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
 
     assert model.window.key == "1h"
     assert model.traffic.categories == []
-    assert hd(model.models).token_label == "5 tks"
+    assert hd(model.models).token_label == "5"
     assert hd(model.models).requests_label == "0 reqs"
     assert hd(model.models).share_label == "—"
-    assert hd(model.models).cost_label == "$0.00"
+    assert hd(model.models).cost_label == "0.00"
     assert hd(model.outcomes).model == "Unknown model"
     assert hd(model.outcomes).endpoint == "other"
     assert hd(model.outcomes).code == nil
@@ -118,16 +115,16 @@ defmodule CodexPoolerWeb.Observatory.PresentationResilienceTest do
     assert model.traffic.total_label == model.traffic.fallback.total_label
 
     assert Enum.map(model.models, & &1.token_label) == [
-             "999 tks",
-             "1.0K tks",
-             "1.1K tks",
-             "999.9K tks",
-             "1.0M tks",
-             "1.3M tks",
-             "999.9M tks",
-             "1.0B tks",
-             "1.3B tks",
-             "80.3M tks"
+             "999",
+             "1.0K",
+             "1.1K",
+             "999.9K",
+             "1.0M",
+             "1.3M",
+             "999.9M",
+             "1.0B",
+             "1.3B",
+             "80.3M"
            ]
 
     [row] = model.traffic.fallback.rows
