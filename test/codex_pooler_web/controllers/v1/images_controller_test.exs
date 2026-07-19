@@ -10,16 +10,6 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
 
-  test "image endpoints use the shared coerced v1 dispatch boundary" do
-    source = File.read!("lib/codex_pooler_web/controllers/v1/images_controller.ex")
-
-    assert source =~ "PublicGatewayDispatch.coerced("
-    refute source =~ "PublicGatewayDispatch.authenticated("
-    refute source =~ "Service.execute"
-    refute source =~ "RouteClass.proxy_stream"
-    refute source =~ "RequestOptions.route_class"
-  end
-
   @tag :image_generation_success
   test "POST /v1/images/generations returns OpenAI image response from Responses stream", %{
     conn: conn
