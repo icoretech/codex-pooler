@@ -18,11 +18,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   end
 
   def image_generations(conn, _params) do
-    proxy(conn, "/backend-api/codex/images/generations", "/backend-api/codex/images/generations")
+    proxy(
+      conn,
+      "/backend-api/codex/images/generations",
+      "/backend-api/codex/images/generations",
+      native_image_request?: true
+    )
   end
 
   def image_edits(conn, _params) do
-    proxy(conn, "/backend-api/codex/images/edits", "/backend-api/codex/images/edits")
+    proxy(
+      conn,
+      "/backend-api/codex/images/edits",
+      "/backend-api/codex/images/edits",
+      native_image_request?: true
+    )
   end
 
   def responses(conn, _params) do
@@ -95,10 +105,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   end
 
   defp proxy(conn, local_endpoint, upstream_endpoint) do
-    proxy(conn, local_endpoint, upstream_endpoint, local_endpoint)
+    proxy(conn, local_endpoint, upstream_endpoint, local_endpoint, [])
   end
 
-  defp proxy(conn, local_endpoint, upstream_endpoint, accounting_endpoint) do
+  defp proxy(conn, local_endpoint, upstream_endpoint, private_opts) when is_list(private_opts) do
+    proxy(conn, local_endpoint, upstream_endpoint, local_endpoint, private_opts)
+  end
+
+  defp proxy(conn, local_endpoint, upstream_endpoint, accounting_endpoint)
+       when is_binary(accounting_endpoint) do
+    proxy(conn, local_endpoint, upstream_endpoint, accounting_endpoint, [])
+  end
+
+  defp proxy(conn, local_endpoint, upstream_endpoint, accounting_endpoint, private_opts) do
     result =
       with {:ok, auth} <- GatewayHelpers.authenticate(conn),
            {:ok, payload} <- GatewayHelpers.read_json_body(conn) do
@@ -108,7 +127,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
           upstream_endpoint,
           accounting_endpoint,
           auth,
-          payload
+          payload,
+          private_opts
         )
       end
 
@@ -121,11 +141,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
          upstream_endpoint,
          accounting_endpoint,
          auth,
-         payload
+         payload,
+         private_opts
        ) do
     opts =
       conn
       |> GatewayHelpers.request_opts()
+      |> Map.merge(Map.new(private_opts))
 
     case CompactionTrigger.prepare_bridge(local_endpoint, payload) do
       :passthrough ->

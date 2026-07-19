@@ -19,6 +19,26 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   describe "hydrated model visibility" do
+    test "catalog presence canonicalizes identifiers and includes every model status" do
+      for status <- ~w(active stale retired suppressed) do
+        pool = pool_fixture()
+        identifier = unique_model_id("catalog-presence-#{status}")
+
+        _model =
+          model_fixture(pool, %{
+            exposed_model_id: identifier,
+            status: status
+          })
+
+        assert CandidateEligibility.catalog_model_present?(
+                 pool,
+                 "  #{String.upcase(identifier)}  "
+               )
+
+        refute CandidateEligibility.catalog_model_present?(pool, "absent-#{identifier}")
+      end
+    end
+
     test "uses one hydrated assignment snapshot for visible models and routable candidates" do
       pool = pool_fixture()
       routed = upstream_assignment_fixture(pool, %{plan_family: "pro"})

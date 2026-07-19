@@ -96,6 +96,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :idempotency_key,
     :interrupt_reason,
     :media_upload,
+    :native_image_request?,
     :now,
     :openai_source_endpoint,
     :openai_translated_endpoint,
@@ -421,10 +422,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   end
 
   defp payload_context(opts) do
-    %PayloadContext{
-      media_upload: Map.get(opts, :media_upload),
-      forced_transcription_model: Map.get(opts, :forced_transcription_model)
-    }
+    PayloadContext.build(opts)
   end
 
   defp usage_authentication(opts) do

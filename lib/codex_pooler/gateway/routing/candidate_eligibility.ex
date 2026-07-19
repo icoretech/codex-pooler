@@ -173,6 +173,21 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
 
   def visible_model_context(_pool_or_id, _requested_model), do: nil
 
+  @spec catalog_model_present?(pool_ref(), String.t()) :: boolean()
+  def catalog_model_present?(pool_or_id, model_identifier) when is_binary(model_identifier) do
+    canonical_identifier = model_identifier |> String.trim() |> String.downcase()
+
+    canonical_identifier != "" and
+      Repo.exists?(
+        from model in Model,
+          where:
+            model.pool_id == ^pool_id(pool_or_id) and
+              fragment("lower(btrim(?))", model.exposed_model_id) == ^canonical_identifier
+      )
+  end
+
+  def catalog_model_present?(_pool_or_id, _model_identifier), do: false
+
   @spec policy_visible_models([Model.t()], map()) :: [Model.t()]
   def policy_visible_models(visible_models, policy) when is_list(visible_models) do
     Enum.filter(visible_models, &model_visible_to_policy?(&1, policy))

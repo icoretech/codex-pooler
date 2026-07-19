@@ -1016,7 +1016,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       end
     end
 
-    test "documents backend image proxy surface as explicit authenticated JSON proxy routes" do
+    test "documents model-agnostic native image routing through eligible visible capacity" do
       feature = CompatibilityMatrix.by_slug!(:backend_image_proxy_surface)
       fixture = CompatibilityMatrix.fixture!(:backend_image_proxy_surface)
 
@@ -1033,12 +1033,18 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              ]
 
       assert feature.contract =~ "JSON proxy routes"
+      assert feature.contract =~ "any policy-authorized effective image model"
+      assert feature.contract =~ "genuinely absent from the Pool catalog"
+      assert feature.contract =~ "eligible visible host capacity"
+      assert feature.contract =~ "preserving that effective identifier exactly"
+      assert feature.contract =~ "catalog-present invisible targets remain invalid"
       assert feature.contract =~ "public /v1 image translator surface"
       refute feature.contract =~ "placeholder"
 
       assert fixture.auth == "required_bearer_api_key"
       assert fixture.default_enabled == true
       assert fixture.route_class == "proxy_http"
+      assert fixture.json["model"] == "gpt-image-2"
 
       assert fixture.routes == [
                "/backend-api/codex/images/generations",

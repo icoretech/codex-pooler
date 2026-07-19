@@ -66,7 +66,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       payload
       |> Map.new(fn {key, value} -> {to_string(key), value} end)
       |> normalize_reasoning_aliases()
-      |> Map.put("model", model.upstream_model_id)
+      |> Map.put("model", upstream_model_id(model, endpoint, request_options))
 
     requested_effort = reasoning_effort(payload)
 
@@ -124,6 +124,23 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {:ok, {:multipart, [file_part | fields]}, request_options}
     end
   end
+
+  defp upstream_model_id(
+         %Model{},
+         endpoint,
+         %RequestOptions{
+           payload_context: %{native_image_request?: true},
+           routing: %{effective_model: effective_model}
+         }
+       )
+       when endpoint in [
+              "/backend-api/codex/images/generations",
+              "/backend-api/codex/images/edits"
+            ] and is_binary(effective_model) and effective_model != "",
+       do: effective_model
+
+  defp upstream_model_id(%Model{} = model, _endpoint, %RequestOptions{}),
+    do: model.upstream_model_id
 
   defp upload_stream(%{path: path}) when is_binary(path) do
     with {:ok, %File.Stat{type: :regular}} <- File.stat(path),

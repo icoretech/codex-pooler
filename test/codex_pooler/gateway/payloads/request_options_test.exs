@@ -93,6 +93,23 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.extra == %{}
     end
 
+    test "preserves ordinary request option context defaults" do
+      options =
+        RequestOptions.build(
+          %{
+            media_upload: %{size: 10},
+            forced_transcription_model: "gpt-4o-transcribe"
+          },
+          "/backend-api/codex/responses",
+          %{"model" => "example-model", "stream" => true}
+        )
+
+      assert options.payload_context.media_upload == %{size: 10}
+      assert options.payload_context.forced_transcription_model == "gpt-4o-transcribe"
+      assert options.transport.route_class == "proxy_stream"
+      assert options.extra == %{}
+    end
+
     test "for_websocket retargets typed options without caller-side transport maps" do
       options =
         %{request_id: "req_ws"}
@@ -164,6 +181,64 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.file_bridge.endpoint == "/backend-api/files"
       assert options.file_bridge.route_metadata == %{"routing_strategy" => "affinity"}
       assert options.file_bridge.forwarded_headers == [{"x-codex-client", "fixture"}]
+    end
+  end
+
+  describe "native image request context" do
+    test "defaults false and normalizes only literal true while consuming the option" do
+      endpoint = "/backend-api/codex/images/generations"
+      payload = %{"model" => "example-model"}
+
+      cases = [
+        {:default, %{}, false},
+        {false, %{native_image_request?: false}, false},
+        {nil, %{native_image_request?: nil}, false},
+        {:string, %{native_image_request?: "true"}, false},
+        {:integer, %{native_image_request?: 1}, false},
+        {:map, %{native_image_request?: %{}}, false},
+        {:literal_true, %{native_image_request?: true}, true}
+      ]
+
+      for {label, opts, expected} <- cases do
+        options = RequestOptions.build(opts, endpoint, payload)
+
+        assert options.payload_context.native_image_request? == expected,
+          message: "case: #{label}"
+
+        assert options.extra == %{}, message: "case: #{label}"
+      end
+    end
+
+    test "retargeting cannot manufacture the marker from request JSON" do
+      options = RequestOptions.build(%{}, "/backend-api/codex/responses", %{})
+
+      retargeted =
+        RequestOptions.retarget(
+          options,
+          "/backend-api/codex/images/generations",
+          %{"model" => "example-model", "native_image_request?" => true}
+        )
+
+      refute retargeted.payload_context.native_image_request?
+      assert retargeted.extra == %{}
+    end
+
+    test "client request payloads cannot activate the server-owned marker" do
+      for endpoint <- [
+            "/backend-api/codex/images/generations",
+            "/backend-api/codex/images/edits",
+            "/v1/images/generations",
+            "/v1/images/edits"
+          ] do
+        options =
+          RequestOptions.build(%{}, endpoint, %{
+            "model" => "example-model",
+            "native_image_request?" => true
+          })
+
+        refute options.payload_context.native_image_request?
+        assert options.extra == %{}
+      end
     end
   end
 

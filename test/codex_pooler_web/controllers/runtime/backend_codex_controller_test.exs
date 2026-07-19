@@ -714,116 +714,124 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  test "POST /backend-api/codex/images/generations proxies authenticated JSON image requests and keeps metadata sanitized",
+  @tag :native_backend_image_routing
+  test "POST /backend-api/codex/images/generations preserves the native Codex image contract",
        %{conn: conn} do
     upstream_response = %{
       "created" => 1_717_171_717,
-      "data" => [%{"b64_json" => "backend-image-generation-b64-sentinel"}]
+      "background" => "opaque",
+      "data" => [%{"b64_json" => "backend-image-generation-b64-sentinel"}],
+      "output_format" => "png",
+      "quality" => "medium",
+      "size" => "1024x1536",
+      "usage" => %{
+        "input_tokens" => 17,
+        "output_tokens" => 23,
+        "total_tokens" => 40
+      }
     }
 
     upstream = start_upstream(FakeUpstream.json_response(upstream_response))
     setup = gateway_setup(upstream)
     prompt_sentinel = "backend-image-generation-prompt-sentinel-do-not-log"
+    image_model = "gpt-image-2"
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Repo.update!()
+
+    payload = %{
+      "model" => image_model,
+      "prompt" => prompt_sentinel,
+      "background" => "auto",
+      "quality" => "auto",
+      "size" => "auto"
+    }
 
     conn =
       conn
       |> auth(setup)
       |> put_req_header("content-type", "application/json")
-      |> post("/backend-api/codex/images/generations", %{
-        "model" => setup.model.exposed_model_id,
-        "prompt" => prompt_sentinel,
-        "size" => "1024x1024"
-      })
+      |> post("/backend-api/codex/images/generations", payload)
 
     assert json_response(conn, 200) == upstream_response
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/generations"
-    assert captured.json["model"] == setup.model.upstream_model_id
-    assert captured.json["prompt"] == prompt_sentinel
-    assert captured.json["size"] == "1024x1024"
+    assert captured.json == payload
 
-    request =
-      Repo.one!(
-        from request in Request,
-          where:
-            request.pool_id == ^setup.pool.id and
-              request.endpoint == "/backend-api/codex/images/generations",
-          order_by: [desc: request.admitted_at],
-          limit: 1
-      )
-
-    assert request.endpoint == "/backend-api/codex/images/generations"
-    assert request.transport == "http_json"
-    assert request.status == "succeeded"
-    assert request.response_status_code == 200
-    assert get_in(request.request_metadata, ["routing", "route_class"]) in [nil, "proxy_http"]
-
-    metadata_text = inspect(request.request_metadata)
-    refute metadata_text =~ prompt_sentinel
-    refute metadata_text =~ "backend-image-generation-b64-sentinel"
+    assert_native_image_accounting!(
+      setup,
+      "/backend-api/codex/images/generations",
+      image_model,
+      [prompt_sentinel, "backend-image-generation-b64-sentinel"]
+    )
   end
 
-  test "POST /backend-api/codex/images/edits proxies authenticated JSON image edit requests and keeps metadata sanitized",
+  @tag :native_backend_image_routing
+  test "POST /backend-api/codex/images/edits preserves the native Codex image contract",
        %{conn: conn} do
     upstream_response = %{
       "created" => 1_818_181_818,
-      "data" => [%{"b64_json" => "backend-image-edit-b64-sentinel"}]
+      "background" => "opaque",
+      "data" => [%{"b64_json" => "backend-image-edit-b64-sentinel"}],
+      "output_format" => "png",
+      "quality" => "medium",
+      "size" => "1024x1536"
     }
 
     upstream = start_upstream(FakeUpstream.json_response(upstream_response))
     setup = gateway_setup(upstream)
     prompt_sentinel = "backend-image-edit-prompt-sentinel-do-not-log"
-    image_reference_sentinel = "https://example.com/backend-image-edit-source-sentinel.png"
+    image_model = "gpt-image-2"
+    image_sentinel = "backend-image-edit-source-base64-sentinel"
+    image_data_url = "data:image/png;base64,#{image_sentinel}"
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Repo.update!()
+
+    payload = %{
+      "model" => image_model,
+      "prompt" => prompt_sentinel,
+      "background" => "auto",
+      "quality" => "auto",
+      "size" => "auto",
+      "images" => [%{"image_url" => image_data_url}]
+    }
 
     conn =
       conn
       |> auth(setup)
       |> put_req_header("content-type", "application/json")
-      |> post("/backend-api/codex/images/edits", %{
-        "model" => setup.model.exposed_model_id,
-        "prompt" => prompt_sentinel,
-        "size" => "1024x1024",
-        "images" => [%{"image_url" => image_reference_sentinel}]
-      })
+      |> post("/backend-api/codex/images/edits", payload)
 
     assert json_response(conn, 200) == upstream_response
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/edits"
-    assert captured.json["model"] == setup.model.upstream_model_id
-    assert captured.json["prompt"] == prompt_sentinel
-    assert captured.json["size"] == "1024x1024"
-    assert captured.json["images"] == [%{"image_url" => image_reference_sentinel}]
+    assert captured.json == payload
 
-    request =
-      Repo.one!(
-        from request in Request,
-          where:
-            request.pool_id == ^setup.pool.id and
-              request.endpoint == "/backend-api/codex/images/edits",
-          order_by: [desc: request.admitted_at],
-          limit: 1
-      )
-
-    assert request.endpoint == "/backend-api/codex/images/edits"
-    assert request.transport == "http_json"
-    assert request.status == "succeeded"
-    assert request.response_status_code == 200
-    assert get_in(request.request_metadata, ["routing", "route_class"]) in [nil, "proxy_http"]
-
-    metadata_text = inspect(request.request_metadata)
-    refute metadata_text =~ prompt_sentinel
-    refute metadata_text =~ image_reference_sentinel
-    refute metadata_text =~ "backend-image-edit-b64-sentinel"
+    assert_native_image_accounting!(
+      setup,
+      "/backend-api/codex/images/edits",
+      image_model,
+      [
+        prompt_sentinel,
+        image_data_url,
+        image_sentinel,
+        "backend-image-edit-b64-sentinel"
+      ]
+    )
   end
 
+  @tag :native_backend_image_routing
   test "POST /backend-api/codex/images/generations requires a bearer token before upstream dispatch",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
-    _setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream)
 
     conn =
       conn
@@ -835,7 +843,272 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"error" => %{"code" => "api_key_missing"}} = json_response(conn, 401)
-    assert FakeUpstream.count(upstream) == 0
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  @tag :native_backend_image_routing
+  test "native generation dispatches a future absent catalog image model unchanged",
+       %{conn: conn} do
+    upstream_response = %{
+      "created" => 1_919_191_919,
+      "data" => [%{"b64_json" => "future-image-returned-base64-sentinel"}]
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(upstream_response))
+    setup = gateway_setup(upstream)
+    image_model = "future-image-model-fixture"
+    prompt_sentinel = "future-image-generation-prompt-sentinel"
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Repo.update!()
+
+    payload = %{
+      "model" => image_model,
+      "prompt" => prompt_sentinel,
+      "background" => "auto",
+      "quality" => "auto",
+      "size" => "auto"
+    }
+
+    response =
+      conn
+      |> auth(setup)
+      |> put_req_header("content-type", "application/json")
+      |> post("/backend-api/codex/images/generations", payload)
+
+    assert json_response(response, 200) == upstream_response
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/images/generations"
+    assert captured.json == payload
+
+    assert_native_image_accounting!(
+      setup,
+      "/backend-api/codex/images/generations",
+      image_model,
+      [prompt_sentinel, "future-image-returned-base64-sentinel"]
+    )
+  end
+
+  @tag :native_backend_image_routing
+  test "native absent image model is authorized instead of its visible host", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: ["unrelated-image-model"])
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/images/generations", %{
+        "model" => "future-image-model-fixture",
+        "prompt" => "synthetic policy denial"
+      })
+
+    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  @tag :native_backend_image_routing
+  test "native enforced-model mismatch wins before catalog and host lookup", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+
+    setup.model
+    |> Ecto.Changeset.change(
+      supports_responses: false,
+      supports_streaming: false,
+      supports_tools: false
+    )
+    |> Repo.update!()
+
+    setup.api_key
+    |> Ecto.Changeset.change(
+      allowed_model_identifiers: ["gpt-image-2"],
+      enforced_model_identifier: "gpt-image-2"
+    )
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/images/generations", %{
+        "model" => "future-image-model-fixture",
+        "prompt" => "synthetic enforced mismatch"
+      })
+
+    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  @tag :native_backend_image_routing
+  test "native enforced-model comparison accepts trim and case equivalents", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+
+    setup.api_key
+    |> Ecto.Changeset.change(
+      allowed_model_identifiers: ["gpt-image-2"],
+      enforced_model_identifier: "gpt-image-2"
+    )
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/images/generations", %{
+        "model" => " GPT-IMAGE-2 ",
+        "prompt" => "synthetic canonical model"
+      })
+
+    assert %{"created" => 1, "data" => []} = json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/images/generations"
+    assert captured.json["model"] == "gpt-image-2"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.requested_model == " GPT-IMAGE-2 "
+    assert request.request_metadata["effective_model"] == "gpt-image-2"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert attempt.upstream_identity_id == setup.identity.id
+    assert attempt.status == "succeeded"
+  end
+
+  @tag :native_backend_image_routing
+  test "ordinary Responses keeps enforced-model override semantics", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_enforced_override"}))
+    setup = gateway_setup(upstream)
+
+    setup.api_key
+    |> Ecto.Changeset.change(
+      allowed_model_identifiers: [setup.model.exposed_model_id],
+      enforced_model_identifier: setup.model.exposed_model_id
+    )
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => "client-requested-model-fixture",
+        "input" => "synthetic enforced override"
+      })
+
+    assert %{"id" => "resp_enforced_override"} = json_response(response, 200)
+    assert FakeUpstream.count(upstream) == 1
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.requested_model == "client-requested-model-fixture"
+    assert request.request_metadata["effective_model"] == setup.model.exposed_model_id
+  end
+
+  @tag :native_backend_image_routing
+  test "native host fallback requires both the marker and an exact image route" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => "future-image-model-fixture", "input" => "synthetic"}
+
+    assert {:error, %{status: 400, code: "invalid_model"}} =
+             execute_gateway(
+               auth_context,
+               "/backend-api/codex/responses",
+               payload,
+               %{native_image_request?: true}
+             )
+
+    assert {:error, %{status: 400, code: "invalid_model"}} =
+             execute_gateway(
+               auth_context,
+               "/backend-api/codex/images/generations",
+               payload,
+               %{}
+             )
+
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  @tag :native_backend_image_routing
+  test "catalog-present invisible native image models cannot borrow a visible host", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+
+    _suppressed_model =
+      model_fixture(setup.pool, %{
+        exposed_model_id: "future-image-model-fixture",
+        status: "suppressed",
+        metadata: %{"source_assignment_ids" => [setup.assignment.id]}
+      })
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/images/generations", %{
+        "model" => "future-image-model-fixture",
+        "prompt" => "synthetic suppressed model"
+      })
+
+    assert %{"error" => %{"code" => "invalid_model"}} = json_response(response, 400)
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  @tag :native_backend_image_routing
+  test "native absent image model requires a Responses streaming tools host", %{conn: conn} do
+    capability_cases = [
+      {:supports_responses, false},
+      {:supports_streaming, false},
+      {:supports_tools, false}
+    ]
+
+    for {capability, supported?} <- capability_cases do
+      upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+      setup = gateway_setup(upstream)
+
+      setup.model
+      |> Ecto.Changeset.change(%{capability => supported?})
+      |> Repo.update!()
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/backend-api/codex/images/generations", %{
+          "model" => "future-image-model-fixture",
+          "prompt" => "synthetic host capability"
+        })
+
+      assert %{"error" => %{"code" => "invalid_model"}} = json_response(response, 400)
+      assert_no_native_dispatch!(upstream, setup.pool.id)
+    end
+  end
+
+  @tag :native_backend_image_routing
+  test "qualifying native image host without a routable candidate returns 503", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+
+    setup.assignment
+    |> Ecto.Changeset.change(health_status: "degraded")
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/images/generations", %{
+        "model" => "future-image-model-fixture",
+        "prompt" => "synthetic no candidate"
+      })
+
+    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(response, 503)
+    assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
   test "GET /backend-api/codex/models passes through guarded upstream model metadata fields", %{
@@ -10260,6 +10533,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp execute_gateway(auth, endpoint, payload, opts) do
     request_options = RequestOptions.build(opts, endpoint, payload)
     RuntimeGateway.execute(auth, endpoint, payload, request_options)
+  end
+
+  defp assert_native_image_accounting!(setup, endpoint, image_model, forbidden_values) do
+    assert [request] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id and r.endpoint == ^endpoint
+               )
+             )
+
+    assert request.model_id == setup.model.id
+    assert request.requested_model == image_model
+    assert request.transport == "http_json"
+    assert request.status == "succeeded"
+    assert request.response_status_code == 200
+    assert request.request_metadata["requested_model"] == image_model
+    assert request.request_metadata["effective_model"] == image_model
+
+    assert get_in(request.request_metadata, ["routing", "selected_bridge_candidate_id"]) ==
+             setup.assignment.id
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.attempt_number == 1
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert attempt.upstream_identity_id == setup.identity.id
+    assert attempt.model_id == setup.model.id
+    assert attempt.upstream_model_id == setup.model.upstream_model_id
+    assert attempt.status == "succeeded"
+    assert attempt.upstream_status_code == 200
+
+    metadata_text = inspect({request.request_metadata, attempt.response_metadata})
+
+    Enum.each(forbidden_values, fn forbidden_value ->
+      refute metadata_text =~ forbidden_value
+    end)
+  end
+
+  defp assert_no_native_dispatch!(upstream, pool_id) do
+    assert FakeUpstream.count(upstream) == 0
+
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^pool_id))
+    request_ids = Enum.map(requests, & &1.id)
+
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id in ^request_ids), :count) == 0
   end
 
   defp execute_stream_after_releasing_barrier(

@@ -139,14 +139,14 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td><code>/backend-api/codex/images/generations</code></td>
       <td>No public <code>/v1</code> image translation</td>
       <td>Supported</td>
-      <td>Explicit authenticated backend image proxy route; image prompt and source fields stay image-specific.</td>
+      <td>Explicit authenticated native image proxy route. On either native image route, a policy-authorized effective image model that is genuinely absent from the Pool catalog may use eligible visible host capacity while its effective identifier is preserved exactly. A catalog-present but invisible target remains invalid. Image prompt and source fields stay image-specific. This does not add public <code>/v1</code> image behavior.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/images/edits</code></td>
       <td><code>/backend-api/codex/images/edits</code></td>
       <td>No public <code>/v1</code> image translation</td>
       <td>Supported</td>
-      <td>Explicit authenticated backend image edit proxy route.</td>
+      <td>Explicit authenticated native image edit proxy route. The same policy-authorized, catalog-absent native image routing applies: eligible visible host capacity anchors the request while the effective image identifier is preserved exactly. A catalog-present but invisible target remains invalid. This does not add public <code>/v1</code> image behavior.</td>
     </tr>
   </tbody>
 </table>

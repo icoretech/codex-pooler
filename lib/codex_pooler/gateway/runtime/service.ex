@@ -27,6 +27,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Repo
 
   @backend_transcription_model "gpt-4o-transcribe"
+  @native_image_endpoints [
+    "/backend-api/codex/images/generations",
+    "/backend-api/codex/images/edits"
+  ]
 
   @type auth :: Access.auth_context()
   @type payload :: map()
@@ -63,11 +67,23 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp effective_model_name(%{enforced_model_identifier: model}, _requested_model)
-       when is_binary(model),
-       do: model
+  defp effective_model_name(
+         %{enforced_model_identifier: enforced_model},
+         requested_model,
+         endpoint,
+         %RequestOptions{} = request_options
+       )
+       when is_binary(enforced_model) do
+    if native_image_request?(endpoint, request_options) and
+         canonical_model_identifier(requested_model) != canonical_model_identifier(enforced_model) do
+      {:error, error(403, "model_not_allowed", "api key is not allowed to use this model")}
+    else
+      {:ok, enforced_model}
+    end
+  end
 
-  defp effective_model_name(_policy, requested_model), do: requested_model
+  defp effective_model_name(_policy, requested_model, _endpoint, _opts),
+    do: {:ok, requested_model}
 
   defp policy_request_opts(
          %RequestOptions{} = request_options,
@@ -117,25 +133,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp execute_requested_model(auth, endpoint, payload, request_options, model_name) do
     case normalize_policy_or_log(auth, endpoint, payload, request_options) do
       {:ok, policy} ->
-        effective_model_name = effective_model_name(policy, model_name)
+        case effective_model_name(policy, model_name, endpoint, request_options) do
+          {:ok, effective_model_name} ->
+            request_options =
+              policy_request_opts(request_options, policy, model_name, effective_model_name)
 
-        request_options =
-          policy_request_opts(request_options, policy, model_name, effective_model_name)
-
-        case visible_model_context(auth.pool, effective_model_name, request_options) do
-          %{visible_model: %Model{} = model} = visible_model_data ->
-            execute_visible_model(
+            execute_effective_model(
               auth,
               endpoint,
               payload,
               request_options,
-              model,
-              visible_model_data
+              effective_model_name
             )
 
-          nil ->
-            reason = error(400, "invalid_model", "model is not available for this pool", "model")
-
+          {:error, reason} ->
             Denials.log_gateway(
               denial_context(auth, nil, reason, endpoint, payload, request_options)
             )
@@ -143,6 +154,27 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       {:error, %{code: _code} = reason} ->
         {:error, reason}
+    end
+  end
+
+  @spec execute_effective_model(auth(), String.t(), payload(), opts(), String.t()) ::
+          {:ok, gateway_result()} | {:error, gateway_error()}
+  defp execute_effective_model(auth, endpoint, payload, request_options, effective_model_name) do
+    case visible_model_context(auth.pool, effective_model_name, endpoint, request_options) do
+      %{visible_model: %Model{} = model} = visible_model_data ->
+        execute_visible_model(
+          auth,
+          endpoint,
+          payload,
+          request_options,
+          model,
+          visible_model_data
+        )
+
+      nil ->
+        reason = error(400, "invalid_model", "model is not available for this pool", "model")
+
+        Denials.log_gateway(denial_context(auth, nil, reason, endpoint, payload, request_options))
     end
   end
 
@@ -392,39 +424,70 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     )
   end
 
-  defp visible_model_context(pool, requested_model, %RequestOptions{} = request_options) do
+  defp visible_model_context(
+         pool,
+         requested_model,
+         endpoint,
+         %RequestOptions{} = request_options
+       ) do
     case CandidateEligibility.visible_model_context(pool, requested_model) do
       %{visible_model: %Model{}} = context ->
         context
 
       nil ->
-        media_host_model_context(pool, requested_model, request_options)
+        media_host_model_context(pool, requested_model, endpoint, request_options)
     end
   end
 
-  defp media_host_model_context(pool, requested_model, %RequestOptions{} = request_options) do
+  defp media_host_model_context(
+         pool,
+         requested_model,
+         endpoint,
+         %RequestOptions{} = request_options
+       ) do
+    if native_image_request?(endpoint, request_options) and
+         not CandidateEligibility.catalog_model_present?(pool, requested_model) do
+      visible_media_host_context(pool, requested_model)
+    else
+      legacy_media_host_model_context(pool, requested_model, request_options)
+    end
+  end
+
+  defp visible_media_host_context(pool, requested_model) do
+    hydration = CandidateEligibility.hydrate_model_visibility(pool)
+
+    hydration.visible_models
+    |> Enum.find(&media_host_model?/1)
+    |> media_host_context(hydration, requested_model)
+  end
+
+  defp legacy_media_host_model_context(pool, requested_model, request_options) do
     hydration = CandidateEligibility.hydrate_model_visibility(pool)
 
     hydration.visible_models
     |> Enum.find(&media_host_model?(&1, request_options))
-    |> case do
-      %Model{} = model ->
-        Map.merge(hydration, %{
-          requested_model: requested_model,
-          effective_model: requested_model,
-          visible_model: model,
-          candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
-        })
+    |> media_host_context(hydration, requested_model)
+  end
 
-      nil ->
-        nil
-    end
+  defp media_host_context(%Model{} = model, hydration, requested_model) do
+    Map.merge(hydration, %{
+      requested_model: requested_model,
+      effective_model: requested_model,
+      visible_model: model,
+      candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
+    })
+  end
+
+  defp media_host_context(nil, _hydration, _requested_model), do: nil
+
+  defp media_host_model?(%Model{} = model) do
+    model.supports_responses and model.supports_streaming and model.supports_tools
   end
 
   defp media_host_model?(%Model{} = model, %RequestOptions{
          openai_compatibility: %{collect_openai_image_stream: true}
        }) do
-    model.supports_responses and model.supports_streaming and model.supports_tools
+    media_host_model?(model)
   end
 
   defp media_host_model?(%Model{}, %RequestOptions{
@@ -434,6 +497,17 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        do: true
 
   defp media_host_model?(%Model{}, %RequestOptions{}), do: false
+
+  defp native_image_request?(endpoint, %RequestOptions{
+         payload_context: %{native_image_request?: true}
+       }),
+       do: endpoint in @native_image_endpoints
+
+  defp native_image_request?(_endpoint, %RequestOptions{}), do: false
+
+  defp canonical_model_identifier(model_identifier) do
+    model_identifier |> String.trim() |> String.downcase()
+  end
 
   defp requested_model(payload) do
     case Map.get(payload, "model") || Map.get(payload, :model) do

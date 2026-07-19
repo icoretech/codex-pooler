@@ -475,6 +475,51 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       refute Process.get({:codex_gateway_debug_payload, "payload-debug-explicit"})
     end
 
+    test "preserves the effective image model on marked native generation and edit routes" do
+      model = %Model{upstream_model_id: "provider-text-model"}
+
+      for endpoint <- [
+            "/backend-api/codex/images/generations",
+            "/backend-api/codex/images/edits"
+          ],
+          effective_model <- ["gpt-image-2", "future-image-model-fixture"] do
+        payload = %{"model" => "client-controlled-model", "input" => "hello"}
+
+        request_options =
+          RequestOptions.build(
+            %{native_image_request?: true, effective_model: effective_model},
+            endpoint,
+            payload
+          )
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert Jason.decode!(encoded)["model"] == effective_model
+      end
+    end
+
+    test "keeps the host model outside marked native image routes" do
+      model = %Model{upstream_model_id: "provider-text-model"}
+
+      for {endpoint, options} <- [
+            {"/backend-api/codex/responses",
+             %{native_image_request?: true, effective_model: "gpt-image-2"}},
+            {"/backend-api/codex/images/generations", %{effective_model: "gpt-image-2"}},
+            {"/backend-api/codex/images/generations", %{native_image_request?: true}},
+            {"/backend-api/codex/images/edits",
+             %{native_image_request?: true, effective_model: ""}}
+          ] do
+        payload = %{"model" => "client-controlled-model", "input" => "hello"}
+        request_options = RequestOptions.build(options, endpoint, payload)
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert Jason.decode!(encoded)["model"] == "provider-text-model"
+      end
+    end
+
     test "returns a gateway error when a transcription upload path is unreadable" do
       request_options =
         RequestOptions.build(

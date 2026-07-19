@@ -55,7 +55,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :backend_image_proxy_surface,
       contract:
-        "backend image generation and edit routes are explicit authenticated JSON proxy routes under /backend-api/codex/images, keep image-specific prompt and source fields intact, and stay distinct from the public /v1 image translator surface"
+        "backend image generation and edit routes are explicit authenticated JSON proxy routes under /backend-api/codex/images; on either exact native route, any policy-authorized effective image model genuinely absent from the Pool catalog may use eligible visible host capacity while preserving that effective identifier exactly, but catalog-present invisible targets remain invalid; image-specific prompt and source fields stay intact, and the native routes remain distinct from the public /v1 image translator surface"
     },
     %{
       slug: :backend_models_etag,
@@ -473,7 +473,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         "/backend-api/codex/images/edits"
       ],
       json: %{
-        "model" => "gpt-fixture-image",
+        "model" => "gpt-image-2",
         "prompt" => "synthetic backend image proxy request"
       }
     },
