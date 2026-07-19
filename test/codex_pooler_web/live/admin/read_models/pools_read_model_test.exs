@@ -76,7 +76,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModelTest do
       compat_flags: %{
         v1_compatibility_enabled: true,
         request_compression_enabled: false,
-        upstream_websocket_bridge_enabled: false
+        allow_image_generation: true
       }
     }
   end

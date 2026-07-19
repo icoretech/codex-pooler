@@ -39,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
   @type compat_flags :: %{
           required(:v1_compatibility_enabled) => boolean(),
           required(:request_compression_enabled) => boolean(),
-          required(:upstream_websocket_bridge_enabled) => boolean()
+          required(:allow_image_generation) => boolean()
         }
   @type pool_row :: %{
           required(:pool) => Pool.t(),
@@ -198,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         compat_flags: %{
           v1_compatibility_enabled: settings.v1_compatibility_enabled,
           request_compression_enabled: settings.request_compression_enabled,
-          upstream_websocket_bridge_enabled: settings.upstream_websocket_bridge_enabled
+          allow_image_generation: settings.allow_image_generation
         }
       }
     end)
