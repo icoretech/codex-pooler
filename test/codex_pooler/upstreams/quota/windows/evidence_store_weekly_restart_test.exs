@@ -464,6 +464,107 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
              Routing.eligibility_from_windows([row], at: row.observed_at)
   end
 
+  test "a bounded idle zero reanchor requires a strictly later provider observation" do
+    t0 = DateTime.utc_now() |> DateTime.add(-12, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    canonical_reset = DateTime.add(t0, 5, :day)
+    canonical_reset_after = DateTime.diff(canonical_reset, t0, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(t0,
+                 reset_at: canonical_reset,
+                 reset_after_seconds: canonical_reset_after
+               ),
+               t0
+             )
+
+    candidate_at = DateTime.add(t0, 5, :minute)
+    drifted_reset = DateTime.add(canonical_reset, 301, :second)
+    candidate_reset_after = DateTime.diff(drifted_reset, candidate_at, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(candidate_at,
+                 reset_at: drifted_reset,
+                 reset_after_seconds: candidate_reset_after
+               ),
+               candidate_at
+             )
+
+    equal_provider_at = DateTime.add(candidate_at, 4, :minute)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(equal_provider_at,
+                 reset_at: drifted_reset,
+                 reset_after_seconds: candidate_reset_after
+               ),
+               equal_provider_at
+             )
+
+    pending = account_row(identity)
+    assert DateTime.compare(pending.reset_at, canonical_reset) == :eq
+    assert DateTime.compare(pending.observed_at, t0) == :eq
+
+    advanced_at = DateTime.add(equal_provider_at, 1, :second)
+    advanced_reset_after = candidate_reset_after - 1
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(advanced_at,
+                 reset_at: drifted_reset,
+                 reset_after_seconds: advanced_reset_after
+               ),
+               advanced_at
+             )
+
+    confirmed = account_row(identity)
+    assert Decimal.equal?(confirmed.used_percent, Decimal.new("0"))
+    assert DateTime.compare(confirmed.reset_at, drifted_reset) == :eq
+    assert DateTime.compare(confirmed.observed_at, advanced_at) == :eq
+
+    replayed_at = DateTime.add(advanced_at, 1, :minute)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(replayed_at,
+                 reset_at: drifted_reset,
+                 reset_after_seconds: advanced_reset_after
+               ),
+               replayed_at
+             )
+
+    replayed = account_row(identity)
+    assert DateTime.compare(replayed.reset_at, drifted_reset) == :eq
+    assert DateTime.compare(replayed.observed_at, advanced_at) == :eq
+
+    stale_at = DateTime.add(t0, -20, :minute)
+
+    stale_exhausted = %{
+      replayed
+      | id: Ecto.UUID.generate(),
+        used_percent: Decimal.new("100"),
+        reset_at: canonical_reset,
+        observed_at: stale_at,
+        last_sync_at: stale_at,
+        freshness_state: "stale",
+        metadata: %{}
+    }
+
+    result = Routing.eligibility_from_windows([stale_exhausted, replayed], at: replayed_at)
+
+    assert result.eligible?
+    assert result.routing_state == :weekly_only_probe
+    assert result.selection.secondary == replayed
+    refute result.selection.secondary.id == stale_exhausted.id
+  end
+
   test "a cached superseded reset cannot keep an accepted weekly zero fresh" do
     t0 = DateTime.utc_now() |> DateTime.add(-20, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()

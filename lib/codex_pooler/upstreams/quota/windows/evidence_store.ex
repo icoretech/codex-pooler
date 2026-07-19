@@ -561,7 +561,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp restart_confirmed?(candidate, evidence, existing, metadata, timestamp) do
     restart_candidate_progressing?(candidate, evidence, existing, metadata, timestamp) and
-      confirmation_span_reached?(candidate, evidence)
+      confirmation_span_reached?(candidate, evidence) and
+      restart_confirmation_advances?(evidence, existing, metadata, timestamp)
+  end
+
+  defp restart_confirmation_advances?(evidence, existing, metadata, timestamp) do
+    not bounded_idle_zero_forward_anchor?(evidence, existing) or
+      RelativeLiveness.candidate_advances?(metadata, evidence, timestamp)
   end
 
   # The three restart proofs, each evidence-driven and cache-safe: a live
@@ -618,9 +624,27 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     candidate_valid?(candidate, timestamp) and
       zero_candidate?(candidate) and
       reset_times_equivalent?(candidate.reset_at, evidence.reset_at) and
-      exhausted_by_used_percent?(existing) and
+      (exhausted_by_used_percent?(existing) or
+         bounded_idle_zero_forward_anchor?(evidence, existing)) and
       forward_of_existing_cycle?(evidence, existing)
   end
+
+  defp bounded_idle_zero_forward_anchor?(
+         %Evidence{reset_at: %DateTime{} = incoming_reset, used_percent: %Decimal{} = incoming} =
+           evidence,
+         %Quota.AccountQuotaWindow{
+           reset_at: %DateTime{} = existing_reset,
+           used_percent: %Decimal{} = existing
+         } = window
+       ) do
+    zero_percent?(incoming) and
+      zero_percent?(existing) and
+      anchored_forward_weekly_cycle?(evidence, window) and
+      DateTime.diff(incoming_reset, existing_reset, :second) <=
+        @usage_reset_reanchor_min_shift_seconds
+  end
+
+  defp bounded_idle_zero_forward_anchor?(_evidence, _existing), do: false
 
   defp forward_of_existing_cycle?(
          %Evidence{reset_at: %DateTime{} = incoming_reset},
