@@ -136,12 +136,12 @@ defmodule CodexPooler.Pools.Routing do
               settings.request_compression_enabled
             )
           ),
-        upstream_websocket_bridge_enabled:
-          parse_boolean(
+        allow_image_generation:
+          parse_required_boolean(
             routing_attr(
               attrs,
-              "upstream_websocket_bridge_enabled",
-              settings.upstream_websocket_bridge_enabled
+              "allow_image_generation",
+              settings.allow_image_generation
             )
           ),
         metadata: settings.metadata || %{},
@@ -158,7 +158,7 @@ defmodule CodexPooler.Pools.Routing do
             sticky_http_sessions: settings.sticky_http_sessions,
             prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
             request_compression_enabled: settings.request_compression_enabled,
-            upstream_websocket_bridge_enabled: settings.upstream_websocket_bridge_enabled
+            allow_image_generation: settings.allow_image_generation
           })
 
           maybe_broadcast_routing_change(opts, pool, settings)
@@ -196,7 +196,7 @@ defmodule CodexPooler.Pools.Routing do
       prompt_cache_affinity_enabled: true,
       v1_compatibility_enabled: true,
       request_compression_enabled: false,
-      upstream_websocket_bridge_enabled: false,
+      allow_image_generation: true,
       metadata: %{},
       created_at: now,
       updated_at: now
@@ -263,6 +263,9 @@ defmodule CodexPooler.Pools.Routing do
   defp parse_boolean(value) when value in ["true", "on", "1", "yes"], do: true
   defp parse_boolean(value) when value in ["false", "0", "no", ""], do: false
   defp parse_boolean(_value), do: false
+
+  defp parse_required_boolean(nil), do: nil
+  defp parse_required_boolean(value), do: parse_boolean(value)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

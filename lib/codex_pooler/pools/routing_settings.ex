@@ -19,7 +19,7 @@ defmodule CodexPooler.Pools.RoutingSettings do
     field :prompt_cache_affinity_enabled, :boolean, default: true
     field :v1_compatibility_enabled, :boolean, default: true
     field :request_compression_enabled, :boolean, default: false
-    field :upstream_websocket_bridge_enabled, :boolean, default: false
+    field :allow_image_generation, :boolean, default: true
     field :metadata, :map
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
@@ -37,7 +37,7 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :prompt_cache_affinity_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
-      :upstream_websocket_bridge_enabled,
+      :allow_image_generation,
       :metadata,
       :created_at,
       :updated_at
@@ -51,7 +51,7 @@ defmodule CodexPooler.Pools.RoutingSettings do
       :prompt_cache_affinity_enabled,
       :v1_compatibility_enabled,
       :request_compression_enabled,
-      :upstream_websocket_bridge_enabled,
+      :allow_image_generation,
       :metadata,
       :created_at,
       :updated_at

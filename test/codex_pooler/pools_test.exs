@@ -161,7 +161,8 @@ defmodule CodexPooler.PoolsTest do
                sticky_http_sessions: false,
                prompt_cache_affinity_enabled: true,
                v1_compatibility_enabled: true,
-               request_compression_enabled: false
+               request_compression_enabled: false,
+               allow_image_generation: true
              } = Pools.routing_settings_with_defaults(pool)
 
       assert pool_id == pool.id
@@ -171,7 +172,8 @@ defmodule CodexPooler.PoolsTest do
                routing_strategy: "bridge_ring",
                prompt_cache_affinity_enabled: true,
                v1_compatibility_enabled: true,
-               request_compression_enabled: false
+               request_compression_enabled: false,
+               allow_image_generation: true
              } =
                Pools.ensure_routing_settings(pool)
 
@@ -188,11 +190,13 @@ defmodule CodexPooler.PoolsTest do
                  "sticky_http_sessions" => true,
                  "prompt_cache_affinity_enabled" => false,
                  "v1_compatibility_enabled" => false,
-                 "request_compression_enabled" => "true"
+                 "request_compression_enabled" => "true",
+                 "allow_image_generation" => false
                })
 
       refute Pools.get_routing_settings(routed_pool).prompt_cache_affinity_enabled
       assert Pools.get_routing_settings(routed_pool).request_compression_enabled
+      refute Pools.get_routing_settings(routed_pool).allow_image_generation
       refute Pools.routing_settings_with_defaults(routed_pool).prompt_cache_affinity_enabled
 
       assert Pools.routing_settings_with_defaults(routed_pool).request_compression_enabled
@@ -276,21 +280,50 @@ defmodule CodexPooler.PoolsTest do
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
                  v1_compatibility_enabled: true,
-                 request_compression_enabled: false
+                 request_compression_enabled: false,
+                 allow_image_generation: true
                },
                ^routed_pool_id => %RoutingSettings{
                  routing_strategy: "deterministic_rotation",
                  prompt_cache_affinity_enabled: true,
                  v1_compatibility_enabled: true,
-                 request_compression_enabled: false
+                 request_compression_enabled: false,
+                 allow_image_generation: false
                },
                ^missing_pool_id => %RoutingSettings{
                  routing_strategy: "bridge_ring",
                  prompt_cache_affinity_enabled: true,
                  v1_compatibility_enabled: true,
-                 request_compression_enabled: false
+                 request_compression_enabled: false,
+                 allow_image_generation: true
                }
              } = settings_by_pool_id
+    end
+
+    test "routing settings persist false image generation permission and reject nil" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => "image-permission-owner@example.com"})
+      scope = Scope.for_user(owner, ["instance_owner"])
+
+      assert {:ok, pool} =
+               Pools.create_pool(scope, %{
+                 slug: "image-generation-permission",
+                 name: "Image Generation Permission"
+               })
+
+      assert {:ok, %RoutingSettings{allow_image_generation: false}} =
+               Pools.update_routing_settings(scope, pool, %{
+                 "allow_image_generation" => false
+               })
+
+      assert Repo.get!(RoutingSettings, pool.id).allow_image_generation == false
+
+      assert {:error, changeset} =
+               Pools.update_routing_settings(scope, pool, %{
+                 "allow_image_generation" => nil
+               })
+
+      assert %{allow_image_generation: ["can't be blank"]} = errors_on(changeset)
+      assert Repo.get!(RoutingSettings, pool.id).allow_image_generation == false
     end
 
     test "routing settings persist boolean request compression enablement" do
