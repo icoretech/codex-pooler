@@ -165,6 +165,10 @@ OpenAI Realtime SDK compatibility.
 {
   "$schema": "https://opencode.ai/config.json",
   "small_model": "openai/gpt-5.6-luna",
+  "compaction": {
+    "auto": true,
+    "reserved": 20000
+  },
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai",
@@ -188,8 +192,7 @@ OpenAI Realtime SDK compatibility.
             "textVerbosity": "medium",
             "include": ["reasoning.encrypted_content"],
             // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority",
-            "store": false
+            // "serviceTier": "priority"
           },
           "modalities": {
             "input": ["text", "image"],
@@ -197,7 +200,7 @@ OpenAI Realtime SDK compatibility.
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 252560,
             "output": 64000
           }
         },
@@ -215,8 +218,7 @@ OpenAI Realtime SDK compatibility.
             "textVerbosity": "medium",
             "include": ["reasoning.encrypted_content"],
             // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority",
-            "store": false
+            // "serviceTier": "priority"
           },
           "modalities": {
             "input": ["text", "image"],
@@ -224,7 +226,7 @@ OpenAI Realtime SDK compatibility.
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 252560,
             "output": 64000
           }
         },
@@ -242,8 +244,7 @@ OpenAI Realtime SDK compatibility.
             "textVerbosity": "medium",
             "include": ["reasoning.encrypted_content"],
             // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority",
-            "store": false
+            // "serviceTier": "priority"
           },
           "modalities": {
             "input": ["text", "image"],
@@ -251,7 +252,7 @@ OpenAI Realtime SDK compatibility.
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 252560,
             "output": 64000
           }
         }
@@ -288,13 +289,17 @@ connection settings such as `baseURL` and `apiKey` in provider-level `options`.
 The commented `serviceTier` line shows how to opt into priority processing.
 Enable it only when your Pool and upstream offer it and you intentionally accept
 the potentially higher cost; leave it commented to use the default tier.
+Do not add `store`: Codex Pooler sets `store: false` on its upstream streaming
+request.
 
 OpenCode subtracts its compaction reserve from `limit.input` before deciding a
-conversation is full. The `194400` value leaves 174.4k usable input tokens after
-OpenCode's default 20k reserve, so 174.4k input plus a 64k output cap stays inside
-the 258.4k GPT-5.6 window used by these examples. OpenCode's request layer caps
-output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000`
-only if you want OpenCode to request the full 64k cap.
+conversation is full. These examples set `limit.input` to `252560` and reserve
+`20000`, so OpenCode starts compaction at `232560` tokens: the same automatic
+compaction boundary Codex publishes for GPT-5.6. `limit.input` is the local
+pre-compaction boundary, not a simultaneous input-plus-output envelope.
+OpenCode's request layer caps output at 32k by default; set
+`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only if you want OpenCode to
+request the full 64k cap.
 
 #### Oh My OpenAgent (OMO)
 
