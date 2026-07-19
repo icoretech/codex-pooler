@@ -45,6 +45,17 @@ defmodule CodexPooler.Pools.Routing do
 
   def v1_compatibility_enabled?(_pool_id), do: true
 
+  @spec allow_image_generation?(Pool.t() | Ecto.UUID.t() | term()) :: boolean()
+  def allow_image_generation?(%Pool{id: pool_id}), do: allow_image_generation?(pool_id)
+
+  def allow_image_generation?(pool_id) when is_binary(pool_id) do
+    case routing_settings_with_defaults(pool_id) do
+      %RoutingSettings{allow_image_generation: allowed} -> allowed
+    end
+  end
+
+  def allow_image_generation?(_pool_id), do: true
+
   def ensure_routing_settings(%Pool{id: pool_id}), do: ensure_routing_settings(pool_id)
 
   def ensure_routing_settings(pool_id) when is_binary(pool_id) do

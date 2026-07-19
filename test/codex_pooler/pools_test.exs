@@ -178,6 +178,9 @@ defmodule CodexPooler.PoolsTest do
                Pools.ensure_routing_settings(pool)
 
       assert Pools.v1_compatibility_enabled?(pool)
+      assert Pools.allow_image_generation?(pool)
+      assert Pools.allow_image_generation?(Ecto.UUID.generate())
+      assert Pools.allow_image_generation?(nil)
 
       assert {:ok, routed_pool} =
                Pools.create_pool(scope, %{slug: "routing-custom", name: "Routing Custom"})
@@ -197,6 +200,7 @@ defmodule CodexPooler.PoolsTest do
       refute Pools.get_routing_settings(routed_pool).prompt_cache_affinity_enabled
       assert Pools.get_routing_settings(routed_pool).request_compression_enabled
       refute Pools.get_routing_settings(routed_pool).allow_image_generation
+      refute Pools.allow_image_generation?(routed_pool)
       refute Pools.routing_settings_with_defaults(routed_pool).prompt_cache_affinity_enabled
 
       assert Pools.routing_settings_with_defaults(routed_pool).request_compression_enabled
@@ -261,6 +265,16 @@ defmodule CodexPooler.PoolsTest do
       assert Enum.all?(audits, &is_boolean(&1.details["prompt_cache_affinity_enabled"]))
       assert Enum.all?(audits, &is_boolean(&1.details["request_compression_enabled"]))
 
+      assert Enum.map(audits, & &1.details["allow_image_generation"]) == [
+               false,
+               false,
+               false,
+               false
+             ]
+
+      assert Enum.all?(audits, &is_boolean(&1.details["allow_image_generation"]))
+      refute Enum.any?(audits, &Map.has_key?(&1.details, "upstream_websocket_bridge_enabled"))
+
       assert Enum.map(audits, & &1.pool_id) == [
                routed_pool.id,
                routed_pool.id,
@@ -316,6 +330,16 @@ defmodule CodexPooler.PoolsTest do
                })
 
       assert Repo.get!(RoutingSettings, pool.id).allow_image_generation == false
+      refute Pools.allow_image_generation?(pool)
+
+      audit =
+        Repo.get_by!(AuditEvent,
+          action: "pool.routing_update",
+          target_id: pool.id
+        )
+
+      assert audit.details["allow_image_generation"] == false
+      refute Map.has_key?(audit.details, "upstream_websocket_bridge_enabled")
 
       assert {:error, changeset} =
                Pools.update_routing_settings(scope, pool, %{
@@ -323,6 +347,20 @@ defmodule CodexPooler.PoolsTest do
                })
 
       assert %{allow_image_generation: ["can't be blank"]} = errors_on(changeset)
+      assert Repo.get!(RoutingSettings, pool.id).allow_image_generation == false
+
+      admin = user_fixture(%{"email" => "image-permission-admin@example.com"})
+
+      assert {:ok, _membership} =
+               Pools.create_membership(scope, %{user_id: admin.id, role: "instance_admin"})
+
+      admin_scope = Scope.for_user(admin)
+
+      assert {:error, %{code: :capability_denied}} =
+               Pools.update_routing_settings(admin_scope, pool, %{
+                 "allow_image_generation" => true
+               })
+
       assert Repo.get!(RoutingSettings, pool.id).allow_image_generation == false
     end
 

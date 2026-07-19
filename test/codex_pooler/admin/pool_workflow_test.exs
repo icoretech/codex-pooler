@@ -318,48 +318,50 @@ defmodule CodexPooler.Admin.PoolWorkflowTest do
       assert settings.v1_compatibility_enabled == false
     end
 
-    test "creation persists the upstream websocket bridge routing setting when enabled" do
+    test "creation defaults image generation permission on" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
 
       assert {:ok, pool} =
                PoolWorkflow.create_pool_with_related_settings(scope, %{
-                 "name" => "Bridge Workflow Create",
-                 "routing_strategy" => "bridge_ring",
-                 "upstream_websocket_bridge_enabled" => "true"
+                 "name" => "Image Generation Workflow Create",
+                 "routing_strategy" => "bridge_ring"
                })
 
-      assert Pools.get_routing_settings(pool).upstream_websocket_bridge_enabled == true
+      assert Pools.get_routing_settings(pool).allow_image_generation == true
+      assert Pools.allow_image_generation?(pool)
     end
 
-    test "update toggles the upstream websocket bridge routing setting both ways" do
+    test "update toggles image generation permission both ways" do
       %{user: owner} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
       scope = Scope.for_user(owner, ["instance_owner"])
-      pool = pool_fixture(%{slug: "bridge-workflow-edit", name: "Bridge Workflow Edit"})
-
-      assert {:ok, enabled_pool} =
-               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
-                 "name" => "Bridge Workflow Enabled",
-                 "status" => "active",
-                 "routing_strategy" => "bridge_ring",
-                 "upstream_websocket_bridge_enabled" => "true",
-                 "upstream_identity_ids" => [],
-                 "api_key_ids" => []
-               })
-
-      assert Pools.get_routing_settings(enabled_pool).upstream_websocket_bridge_enabled == true
+      pool = pool_fixture(%{slug: "image-workflow-edit", name: "Image Workflow Edit"})
 
       assert {:ok, disabled_pool} =
-               PoolWorkflow.update_pool_with_related_settings(scope, enabled_pool, %{
-                 "name" => "Bridge Workflow Disabled",
+               PoolWorkflow.update_pool_with_related_settings(scope, pool, %{
+                 "name" => "Image Workflow Disabled",
                  "status" => "active",
                  "routing_strategy" => "bridge_ring",
-                 "upstream_websocket_bridge_enabled" => "false",
+                 "allow_image_generation" => "false",
                  "upstream_identity_ids" => [],
                  "api_key_ids" => []
                })
 
-      assert Pools.get_routing_settings(disabled_pool).upstream_websocket_bridge_enabled == false
+      assert Pools.get_routing_settings(disabled_pool).allow_image_generation == false
+      refute Pools.allow_image_generation?(disabled_pool)
+
+      assert {:ok, enabled_pool} =
+               PoolWorkflow.update_pool_with_related_settings(scope, disabled_pool, %{
+                 "name" => "Image Workflow Enabled",
+                 "status" => "active",
+                 "routing_strategy" => "bridge_ring",
+                 "allow_image_generation" => "true",
+                 "upstream_identity_ids" => [],
+                 "api_key_ids" => []
+               })
+
+      assert Pools.get_routing_settings(enabled_pool).allow_image_generation == true
+      assert Pools.allow_image_generation?(enabled_pool)
     end
   end
 
