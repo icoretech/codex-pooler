@@ -3,14 +3,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   Dispatches a downstream HTTP SSE turn upstream over the session's Codex
   websocket owner connection to reuse the provider prompt cache.
 
-  Opt-in per Pool (`upstream_websocket_bridge_enabled`) and bounded to public
-  OpenAI-compatible streaming turns whose continuity session is unpinned or
-  pinned to the selected assignment. The upstream payload is rebuilt with the
-  same normalizer pipeline the native websocket path uses, then submitted
-  through the owner-session machinery; the resulting event stream feeds the
-  unchanged HTTP SSE relay via `WebsocketBridgeStream`. Every failure before
-  the first upstream event falls back to plain HTTP dispatch on the same
-  candidate and attempt.
+  Bounded to public OpenAI-compatible streaming turns whose continuity session
+  is unpinned or pinned to the selected assignment. The upstream payload is
+  rebuilt with the same normalizer pipeline the native websocket path uses,
+  then submitted through the owner-session machinery; the resulting event
+  stream feeds the unchanged HTTP SSE relay via `WebsocketBridgeStream`. Every
+  failure before the first upstream event falls back to plain HTTP dispatch on
+  the same candidate and attempt.
   """
 
   require Logger
@@ -34,19 +33,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   @spec eligible?(PreparedContext.t()) :: boolean()
   def eligible?(%PreparedContext{context: context}) do
     opts = context.request_options
-    settings = context.route_state && context.route_state.routing_settings
 
-    bridge_enabled?(settings) and
-      opts.transport.transport == "http_sse" and
+    opts.transport.transport == "http_sse" and
       is_nil(opts.transport.websocket_writer) and
       opts.openai_compatibility.public_openai_responses_stream == true and
       RouteClass.streaming?(context.payload) and
       Websocket.websocket_owner_forwarding_enabled?() and
       session_assignment_ok?(opts.continuity.codex_session, context.assignment)
   end
-
-  defp bridge_enabled?(%{upstream_websocket_bridge_enabled: true}), do: true
-  defp bridge_enabled?(_settings), do: false
 
   defp session_assignment_ok?(%CodexSession{pool_upstream_assignment_id: nil}, _assignment),
     do: true

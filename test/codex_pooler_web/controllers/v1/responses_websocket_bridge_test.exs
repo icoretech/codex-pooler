@@ -64,13 +64,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     :ok
   end
 
-  defp enable_bridge!(pool) do
-    pool
-    |> PoolRouting.ensure_routing_settings()
-    |> Ecto.Changeset.change(upstream_websocket_bridge_enabled: true)
-    |> Repo.update!()
-  end
-
   defp enable_request_compression!(pool) do
     pool
     |> PoolRouting.ensure_routing_settings()
@@ -260,7 +253,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "bridge-session-#{System.unique_integer([:positive])}"
 
     first = post_stream(conn, setup, session, stream_payload(setup, "turn one"))
@@ -341,28 +333,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert Enum.all?(requests, &(&1.transport == "http_sse"))
   end
 
-  test "bridged turns produce the same downstream SSE as HTTP dispatch", %{conn: conn} do
-    events = fn -> [created_event("resp_parity"), completed_event("resp_parity")] end
+  test "bridged turns preserve the downstream SSE", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([created_event("resp_parity"), completed_event("resp_parity")])
+      )
 
-    bodies =
-      for bridge? <- [false, true] do
-        upstream = start_upstream(FakeUpstream.sse_stream(events.()))
-        setup = gateway_setup(upstream)
-        if bridge?, do: enable_bridge!(setup.pool)
-        session = "parity-session-#{System.unique_integer([:positive])}"
+    setup = gateway_setup(upstream)
+    session = "parity-session-#{System.unique_integer([:positive])}"
 
-        response = post_stream(conn, setup, session, stream_payload(setup, "parity turn"))
-        assert response.status == 200
-        assert completed_id(response.resp_body) == "resp_parity"
-
-        expected_ws_connections = if bridge?, do: 1, else: 0
-        assert FakeUpstream.websocket_connection_count(upstream) == expected_ws_connections
-
-        response.resp_body
-      end
-
-    assert [http_body, bridged_body] = bodies
-    assert bridged_body == http_body
+    response = post_stream(conn, setup, session, stream_payload(setup, "parity turn"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_parity"
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert event_types(response.resp_body) == ["response.created", "response.completed"]
   end
 
   test "a bridged attempt records payload compression metadata for the websocket envelope", %{
@@ -370,7 +354,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   } do
     upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_compression")]))
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     enable_request_compression!(setup.pool)
     session = "compression-session-#{System.unique_integer([:positive])}"
     omitted_sentinel = "bridged compression omitted marker"
@@ -431,7 +414,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "multi-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "multi turn"))
@@ -456,7 +438,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "fallback-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "fallback turn"))
@@ -476,7 +457,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "keeps HTTP dispatch when the pool toggle is off", %{conn: conn} do
+  test "uses the websocket bridge without a Pool toggle", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_off_t1")]))
     setup = gateway_setup(upstream)
     session = "off-session-#{System.unique_integer([:positive])}"
@@ -484,7 +465,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     response = post_stream(conn, setup, session, stream_payload(setup, "off turn"))
     assert response.status == 200
     assert completed_id(response.resp_body) == "resp_off_t1"
-    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
   end
 
   test "a bridged stream dying after visible output finalizes as a failed request", %{conn: conn} do
@@ -494,7 +475,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     upstream = start_upstream(FakeUpstream.websocket_sse_then_close([created_event]))
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "dead-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "dead turn"))
@@ -542,7 +522,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "previsible-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "previsible turn"))
@@ -610,7 +589,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "failed-reconnect-session-#{System.unique_integer([:positive])}"
 
     initial = post_stream(conn, setup, session, stream_payload(setup, "initial turn"))
@@ -686,7 +664,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "completion-fallback-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "completion fallback"))
@@ -751,7 +728,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "codex-buffered-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "codex buffering"))
@@ -825,7 +801,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "timeout-fallback-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "timeout fallback"))
@@ -868,7 +843,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "incomplete-fallback-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "fallback incomplete"))
@@ -909,7 +883,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     upstream = start_upstream(FakeUpstream.sse_stream([compact_completed]))
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "compact-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "compact turn"))
@@ -947,7 +920,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     setup = gateway_setup(upstream)
-    enable_bridge!(setup.pool)
     session = "disconnect-session-#{System.unique_integer([:positive])}"
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
