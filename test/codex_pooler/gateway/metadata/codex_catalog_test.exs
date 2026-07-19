@@ -22,6 +22,33 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert first.etag == second.etag
   end
 
+  test "keeps the existing effective context projection contract" do
+    result = CodexCatalog.build([context_model()], unrestricted_policy(), %{})
+    [model] = result.body["models"]
+
+    assert model["context_window"] == 258_400
+    assert model["max_context_window"] == 272_000
+    assert model["auto_compact_token_limit"] == 232_560
+    assert model["effective_context_window_percent"] == 95
+  end
+
+  test "projects GPT-5.6 raw context into the effective Codex metadata" do
+    result =
+      CodexCatalog.build(
+        [model("gpt-5.6-context", gpt56_context_metadata())],
+        unrestricted_policy(),
+        %{},
+        %{}
+      )
+
+    [model] = result.body["models"]
+
+    assert model["context_window"] == 258_400
+    assert model["max_context_window"] == 272_000
+    assert model["auto_compact_token_limit"] == 232_560
+    assert model["effective_context_window_percent"] == 95
+  end
+
   test "builds a slug-sorted catalog with an exact deterministic weak revision" do
     result = CodexCatalog.build(Enum.reverse(models()), unrestricted_policy(), %{})
 
@@ -185,6 +212,15 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       "max_context_window" => 272_000,
       "auto_compact_token_limit" => nil
     })
+  end
+
+  defp gpt56_context_metadata do
+    %{
+      "context_window" => 272_000,
+      "max_context_window" => 272_000,
+      "effective_context_window_percent" => 95,
+      "auto_compact_token_limit" => nil
+    }
   end
 
   defp put_context_window_override(context_window) do

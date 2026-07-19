@@ -199,4 +199,36 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     refute Map.has_key?(model, "auto_compact_token_limit")
     refute Map.has_key?(model, "comp_hash")
   end
+
+  test "GET /v1/models agrees with the backend Codex effective context projection", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{
+            "context_window" => 272_000,
+            "max_context_window" => 272_000,
+            "effective_context_window_percent" => 95,
+            "auto_compact_token_limit" => nil
+          }
+        }
+      )
+
+    backend_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+    public_conn = conn |> recycle() |> auth(setup) |> get("/v1/models")
+
+    assert %{"models" => [backend_model]} = json_response(backend_conn, 200)
+    assert %{"object" => "list", "data" => [public_model]} = json_response(public_conn, 200)
+
+    assert backend_model["context_window"] == 258_400
+    assert backend_model["max_context_window"] == 272_000
+    assert backend_model["auto_compact_token_limit"] == 232_560
+    assert backend_model["effective_context_window_percent"] == 95
+    assert public_model["context_length"] == backend_model["context_window"]
+    assert public_model["context_length"] == 258_400
+    assert FakeUpstream.count(upstream) == 0
+  end
 end
