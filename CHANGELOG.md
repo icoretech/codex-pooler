@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.5.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.33...codex-pooler-v0.5.0) (2026-07-19)
+
+
+### Features
+
+* **admin:** add an Observatory nav link with a celestial icon ([c575797](https://github.com/icoretech/codex-pooler/commit/c5757974d4d66057583c25a24f2930a41b7f5fef))
+* **admin:** manage image generation policy ([bd7d9c4](https://github.com/icoretech/codex-pooler/commit/bd7d9c41074453b662456cb9d4d38246f52f0cd1))
+* **admin:** surface Observatory access on API keys and refine the rows ([c4c0ebe](https://github.com/icoretech/codex-pooler/commit/c4c0ebe45945e098df66c411c09ec01a060e45a2))
+* **observatory:** add per-key usage dashboard ([07dd826](https://github.com/icoretech/codex-pooler/commit/07dd826eae9ce3f75e06be256ddb84f7771c6466))
+* **observatory:** drop latency/throughput, align model tints, refine mobile ([89aae6d](https://github.com/icoretech/codex-pooler/commit/89aae6dc3a981ad57c537821231fa440e8319e4e))
+* **observatory:** drop the key prefix from the dashboard toolbar ([c8b1410](https://github.com/icoretech/codex-pooler/commit/c8b1410ce624f1aba94fea6f20acc25c5c5dd2f5))
+* **observatory:** rework facts, model distribution, and toolbar ([5e31b58](https://github.com/icoretech/codex-pooler/commit/5e31b58d049bad6dd7fb582241646d36db85190d))
+* **observatory:** rework the dashboard chart, header, and layout ([f98e92c](https://github.com/icoretech/codex-pooler/commit/f98e92c8f92bd660901c8a4b9bb5244afab1bad1))
+* **observatory:** spin the pressed window button instead of a badge ([2bc4469](https://github.com/icoretech/codex-pooler/commit/2bc44696255b4b96b8eb3037f679008b24117890))
+* **openai:** accept bounded Responses audio formats ([0dd89da](https://github.com/icoretech/codex-pooler/commit/0dd89da435c75929a7f796ae18cd74ade6983ad1))
+* **pools:** add image generation permission ([d419baa](https://github.com/icoretech/codex-pooler/commit/d419baabc386c14507d342ca0a8d80f93be8da9d))
+* **pools:** expose image generation policy ([a9f0141](https://github.com/icoretech/codex-pooler/commit/a9f0141ace6d71f9ee75337d31825be12ae73903))
+* **pools:** project image generation policy ([e77e528](https://github.com/icoretech/codex-pooler/commit/e77e528615833e8c21fd8d4c3e712992fdb66bc4))
+* **runtime:** enforce pool image generation policy ([d1c03e8](https://github.com/icoretech/codex-pooler/commit/d1c03e8b4622e79ec094f2d3a1e34eb288d56b64))
+
+
+### Bug Fixes
+
+* **admin:** clear upstream cockpit quality warnings ([ffc8aab](https://github.com/icoretech/codex-pooler/commit/ffc8aab86dc3aaa8a48cd616782f54a0bbbe2d0b))
+* **deps:** update dependency astro to v7.1.1 ([#191](https://github.com/icoretech/codex-pooler/issues/191)) ([1c18d01](https://github.com/icoretech/codex-pooler/commit/1c18d017c0a6713c5b82c32b5248a362a5b7c477))
+* **gateway:** remove retired websocket bridge gate ([e50523c](https://github.com/icoretech/codex-pooler/commit/e50523c0f5c84c7173935495b744afc103e66174))
+* **gateway:** route native image requests through visible capacity ([f0fec85](https://github.com/icoretech/codex-pooler/commit/f0fec85f3f321fc1cd48ac1f69a89a3fa3262aa3))
+* **observatory:** stop the per-key read timing out on the settlement join ([b271250](https://github.com/icoretech/codex-pooler/commit/b2712508d74c6957172cad7d8e4253c05ca72c7a))
+* **openai:** tighten bounded audio handling ([d995718](https://github.com/icoretech/codex-pooler/commit/d99571814fcfbf53a70fbb33756770011f3622dc))
+* **quota:** require live provider advance for idle reanchors ([60ab78d](https://github.com/icoretech/codex-pooler/commit/60ab78d5b38d8655126a7d4f66a63361958059d9))
+* **streaming:** keep completed tool items terminal-only ([4b32b2d](https://github.com/icoretech/codex-pooler/commit/4b32b2d88636982da1a53b0d5aa20ed7ec94ea9f))
+
+
+### Performance Improvements
+
+* **admin:** move the pools traffic read off the LiveView process ([eb2a84d](https://github.com/icoretech/codex-pooler/commit/eb2a84d1d7e6b818de25e1b8c83c022160fd635f))
+* **observatory:** collapse the four aggregate reads into one grid scan ([a260136](https://github.com/icoretech/codex-pooler/commit/a2601367197ca064f76daaa7d0b9d6060a62317c))
+* **observatory:** read per-key tokens and cost from the fact projection ([4ba7a4c](https://github.com/icoretech/codex-pooler/commit/4ba7a4cd268665f9d78dcbe199e3cb68db10a7d7))
+
+
+### Miscellaneous Chores
+
+* release 0.5.0 ([7d3571f](https://github.com/icoretech/codex-pooler/commit/7d3571fbc8229ca1f6a6bbb5ee088f07d7cedf19))
+
 ## [0.4.33](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.4.32...codex-pooler-v0.4.33) (2026-07-17)
 
 
