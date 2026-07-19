@@ -201,19 +201,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "upstream websocket bridge compatibility contract" do
-    test "connects the documented pool gate to the production routing schema" do
+    test "keeps owner-retention and rolling-deploy contracts explicit" do
       feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
       fixture = CompatibilityMatrix.fixture!(:upstream_websocket_bridge)
 
       assert feature.status == :supported
-      assert feature.current == :pool_gated_owner_websocket_cache_bridge
+      assert feature.current == :owner_websocket_cache_bridge
       assert feature.routes == [%{method: :post, path: "/v1/responses"}]
-
-      setting = :upstream_websocket_bridge_enabled
-      assert setting in RoutingSettings.__schema__(:fields)
-      assert Map.fetch!(%RoutingSettings{}, setting) == false
-      assert fixture.pool_gate.setting == Atom.to_string(setting)
-      assert fixture.pool_gate.default_enabled == false
 
       assert fixture.owner_retention == %{
                setting: "websocket_owner_idle_timeout_ms",
@@ -250,6 +244,33 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                old_owner_native_attach: "compatible_without_connection_metadata",
                old_owner_bridge_attach: "fail_closed_http_fallback"
              }
+    end
+  end
+
+  describe "image generation compatibility contract" do
+    test "connects the documented Pool gate to the production routing schema" do
+      feature = CompatibilityMatrix.by_slug!(:image_generation_permission)
+      fixture = CompatibilityMatrix.fixture!(:image_generation_permission)
+
+      assert feature.status == :supported
+      assert feature.current == :pool_gated_image_generation_permission
+
+      assert feature.routes == [
+               %{method: :post, path: "/backend-api/codex/images/generations"},
+               %{method: :post, path: "/backend-api/codex/images/edits"},
+               %{method: :post, path: "/v1/images/generations"},
+               %{method: :post, path: "/v1/images/edits"}
+             ]
+
+      setting = :allow_image_generation
+      assert setting in RoutingSettings.__schema__(:fields)
+      assert Map.fetch!(%RoutingSettings{}, setting) == true
+      assert fixture.pool_gate.setting == Atom.to_string(setting)
+      assert fixture.pool_gate.default_enabled == true
+      assert fixture.pool_gate.disabled_behavior == "403_image_generation_disabled"
+
+      assert fixture.enforcement ==
+               "after_runtime_authentication_before_request_parsing_or_upstream_dispatch"
     end
   end
 
