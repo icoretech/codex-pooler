@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.Pools
+  alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -332,6 +334,84 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert response(conn, 404) =~ "Not Found"
       assert Repo.aggregate(Request, :count) == 0
+    end
+  end
+
+  describe "image generation permission order" do
+    test "denies the four exact image routes before body parsing", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+      setup = disabled_image_generation_setup()
+
+      for path <- [
+            "/backend-api/codex/images/generations",
+            "/backend-api/codex/images/edits",
+            "/v1/images/generations",
+            "/v1/images/edits"
+          ] do
+        conn =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> put_req_header("content-type", "application/json")
+          |> post(path, ~s({"model":))
+
+        assert %{
+                 "error" => %{
+                   "code" => "image_generation_disabled",
+                   "message" => "Image generation is disabled for this pool",
+                   "param" => nil,
+                   "type" => "invalid_request_error"
+                 }
+               } = json_response(conn, 403)
+      end
+    end
+
+    test "keeps authentication ahead of the image permission", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+
+      for path <- [
+            "/backend-api/codex/images/generations",
+            "/backend-api/codex/images/edits",
+            "/v1/images/generations",
+            "/v1/images/edits"
+          ] do
+        conn =
+          conn
+          |> recycle()
+          |> put_req_header("content-type", "application/json")
+          |> post(path, ~s({"model":))
+
+        assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      end
+    end
+
+    test "denies disabled compressed image requests before decompression", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{max_compressed_body_bytes: 1})
+      setup = disabled_image_generation_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post(
+          "/backend-api/codex/images/generations",
+          "gzip",
+          :zlib.gzip(~s({"model":"x"}))
+        )
+
+      assert json_response(conn, 403)["error"]["code"] == "image_generation_disabled"
+    end
+
+    test "does not gate unsupported image variations", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+      setup = disabled_image_generation_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/images/variations", "{}")
+
+      assert json_response(conn, 404)["error"]["code"] == "unsupported_endpoint"
     end
   end
 
@@ -780,6 +860,20 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     pricing_snapshot!(model)
     Map.merge(key, %{identity: upstream.identity, assignment: upstream.assignment, model: model})
+  end
+
+  defp disabled_image_generation_setup do
+    setup = active_api_key_fixture()
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(allow_image_generation: false)
+    |> Repo.update!()
+
+    assert %RoutingSettings{allow_image_generation: false} =
+             Pools.get_routing_settings(setup.pool)
+
+    setup
   end
 
   defp gateway_upstream(pool, upstream, token) do

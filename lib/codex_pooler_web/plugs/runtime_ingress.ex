@@ -65,6 +65,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         |> authenticate_multipart_transcribe_request()
         |> authenticate_protected_backend_raw_request()
         |> authenticate_protected_backend_json_request()
+        |> enforce_image_generation_permission()
         |> maybe_decode_compressed_body(settings)
 
       true ->
@@ -319,6 +320,35 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   defp ensure_v1_compatibility(conn), do: conn
+
+  defp enforce_image_generation_permission(%Plug.Conn{halted: true} = conn), do: conn
+
+  defp enforce_image_generation_permission(
+         %Plug.Conn{private: %{runtime_api_auth: %{pool: pool}}} = conn
+       ) do
+    if image_generation_request?(conn) and not PoolRouting.allow_image_generation?(pool) do
+      send_runtime_error(conn, %{
+        status: 403,
+        code: "image_generation_disabled",
+        message: "Image generation is disabled for this pool"
+      })
+    else
+      conn
+    end
+  end
+
+  defp enforce_image_generation_permission(conn), do: conn
+
+  defp image_generation_request?(%Plug.Conn{method: "POST", path_info: path_info}) do
+    path_info in [
+      ["backend-api", "codex", "images", "generations"],
+      ["backend-api", "codex", "images", "edits"],
+      ["v1", "images", "generations"],
+      ["v1", "images", "edits"]
+    ]
+  end
+
+  defp image_generation_request?(_conn), do: false
 
   defp multipart_transcribe_request?(conn) do
     conn.method == "POST" and conn.path_info == ["backend-api", "transcribe"] and
