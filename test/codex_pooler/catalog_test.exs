@@ -338,6 +338,11 @@ defmodule CodexPooler.CatalogTest do
                 "id" => "gpt-shared",
                 "additional_speed_tiers" => [],
                 "service_tiers" => [],
+                "visibility" => "hide",
+                "upgrade" => %{
+                  "model" => "gpt-source-a-replacement",
+                  "migration_markdown" => "Use the replacement model."
+                },
                 "capabilities" => %{"responses" => true, "streaming" => true}
               },
               %{"id" => "gpt-masterkain-only"}
@@ -353,6 +358,8 @@ defmodule CodexPooler.CatalogTest do
                 "id" => "gpt-shared",
                 "additional_speed_tiers" => ["fast"],
                 "tool_mode" => "code_mode_only",
+                "visibility" => "list",
+                "upgrade" => nil,
                 "service_tiers" => [
                   %{
                     "id" => "priority",
@@ -404,6 +411,22 @@ defmodule CodexPooler.CatalogTest do
                  "description" => "1.5x speed, increased usage"
                }
              ]
+
+      assert shared.metadata["source_assignment_models"][masterkain_assignment.id]["visibility"] ==
+               "hide"
+
+      assert get_in(shared.metadata, [
+               "source_assignment_models",
+               masterkain_assignment.id,
+               "upgrade",
+               "model"
+             ]) == "gpt-source-a-replacement"
+
+      assert shared.metadata["source_assignment_models"][pro_assignment.id]["visibility"] ==
+               "list"
+
+      assert Map.fetch!(shared.metadata["source_assignment_models"][pro_assignment.id], "upgrade") ==
+               nil
 
       assert shared.metadata["upstream_model"]["additional_speed_tiers"] == ["fast"]
       assert shared.metadata["upstream_model"]["tool_mode"] == "code_mode_only"

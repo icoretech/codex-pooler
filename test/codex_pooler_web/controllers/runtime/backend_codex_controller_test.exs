@@ -1197,6 +1197,106 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ setup.raw_key
   end
 
+  test "GET /backend-api/codex/models normalizes source-specific lifecycle metadata", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup = gateway_setup(upstream)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => %{
+              "visibility" => "hide",
+              "upgrade" => %{
+                "model" => "gpt-source-replacement",
+                "migration_markdown" => "Use the replacement model."
+              }
+            }
+          },
+          "upstream_model" => %{
+            "visibility" => "hide",
+            "upgrade" => %{
+              "model" => "gpt-source-replacement",
+              "migration_markdown" => "Use the replacement model."
+            }
+          }
+        }
+      })
+      |> Repo.update!()
+
+    setup = %{setup | model: model}
+
+    conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => [model]} = json_response(conn, 200)
+    assert model["visibility"] == "list"
+    assert Map.fetch!(model, "upgrade") == nil
+    refute Map.has_key?(model, "source_assignment_ids")
+    refute Map.has_key?(model, "source_assignment_models")
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "GET /backend-api/codex/models keeps a model routable through its remaining active source",
+       %{
+         conn: conn
+       } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_remaining_catalog_source",
+          "object" => "response",
+          "status" => "completed",
+          "output" => []
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    %{assignment: unavailable_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Unavailable catalog source"
+      })
+
+    unavailable_assignment
+    |> Ecto.Changeset.change(%{
+      status: "disabled",
+      health_status: "disabled",
+      eligibility_status: "ineligible"
+    })
+    |> Repo.update!()
+
+    setup.model
+    |> Ecto.Changeset.change(%{
+      source_assignment_count: 2,
+      metadata: %{
+        "source_assignment_ids" => [setup.assignment.id, unavailable_assignment.id]
+      }
+    })
+    |> Repo.update!()
+
+    catalog = conn |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => [model]} = json_response(catalog, 200)
+    assert model["slug"] == setup.model.exposed_model_id
+
+    response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic remaining source routing"
+      })
+
+    assert %{"id" => "resp_remaining_catalog_source"} = json_response(response, 200)
+    assert FakeUpstream.count(upstream) == 1
+  end
+
   test "GET /backend-api/codex/models neutralizes missing and malformed guarded metadata", %{
     conn: conn
   } do
