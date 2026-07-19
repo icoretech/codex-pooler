@@ -42,8 +42,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         },
@@ -58,8 +58,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         },
@@ -74,8 +74,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         }
@@ -92,7 +92,7 @@ For local setup, change `baseURL` to `http://localhost:4000/v1`.
 
 `{env:CODEX_POOLER_API_KEY}` keeps the Pool API key outside the config file. Define only model ids your assigned Pool can serve. If you add Kilo permissions, use the object form such as `"permission": {"bash": "allow"}`; do not set `"permission": "ask"`, which is not a valid Kilo config shape.
 
-Kilo uses OpenCode-style `limit.{context,input,output}` fields but includes reasoning tokens in overflow accounting and supports `compaction.threshold_percent` for preflight compaction. `limit.input: 289400` leaves 269.4k usable input tokens after the default 20k reserve; the optional 75% threshold asks Kilo to compact even earlier.
+Kilo uses OpenCode-style `limit.{context,input,output}` fields but includes reasoning tokens in overflow accounting and supports `compaction.threshold_percent` for preflight compaction. `limit.input: 194400` leaves 174.4k usable input tokens after the default 20k reserve; the optional 75% threshold asks Kilo to compact even earlier. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
 
 For GPT-5 OpenAI-compatible models, Kilo suppresses the outgoing max-token request field to avoid incompatible `max_tokens`, so `limit.output` is still important for local context math and UI even when it is not forwarded.
 
@@ -105,8 +105,8 @@ Kilo is a chat-completions client. It sends model requests to `POST /v1/chat/com
 Run a tool-using prompt from an isolated directory:
 
 ```bash
-mkdir -p /tmp/codex-pooler-kilo-check
-cd /tmp/codex-pooler-kilo-check
+validation_dir="$(mktemp -d)"
+cd "$validation_dir"
 
 export CODEX_POOLER_API_KEY=<pool-api-key>
 kilo run \

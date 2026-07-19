@@ -60,8 +60,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         },
@@ -87,8 +87,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         },
@@ -114,8 +114,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 353400,
-            "input": 289400,
+            "context": 258400,
+            "input": 194400,
             "output": 64000
           }
         }
@@ -131,7 +131,7 @@ OpenCode uses `small_model` for background helpers such as automatic session tit
 
 Request-time OpenAI options belong under each model's `options` block. Keep only connection settings such as `baseURL` and `apiKey` in provider-level `options`. The commented `serviceTier` line shows how to opt into priority processing. Enable it only when your Pool and upstream offer it and you intentionally accept the potentially higher cost; leave it commented to use the default tier.
 
-OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. `289400` leaves 269.4k usable input tokens after the default 20k reserve, so 269.4k input plus a 64k output cap stays inside the 353.4k GPT-5.6 window used by these examples. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap.
+OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. `194400` leaves 174.4k usable input tokens after the default 20k reserve, so 174.4k input plus a 64k output cap stays inside the 258.4k GPT-5.6 window used by these examples. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
 
 ## Oh My OpenAgent (OMO) routing
 
