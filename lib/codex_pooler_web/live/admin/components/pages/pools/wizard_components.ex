@@ -249,13 +249,12 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                     </div>
                     <div class="routing-matrix-option">
                       <.input
-                        field={@form[:upstream_websocket_bridge_enabled]}
+                        field={@form[:allow_image_generation]}
                         type="checkbox"
-                        label="Upstream websocket bridge"
+                        label="Allow Image Generation"
                       />
                       <p class="routing-option-help">
-                        Carries public streaming turns upstream over the session's
-                        Codex websocket to reuse the provider prompt cache.
+                        Permits image generation and edits for requests using this Pool.
                       </p>
                     </div>
                   </div>

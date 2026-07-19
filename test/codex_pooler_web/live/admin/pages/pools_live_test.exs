@@ -143,7 +143,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-empty-create-action")
   end
 
-  test "compat flag icons disclose an inline panel and toggle routing options", %{
+  test "compat flag icons disclose one inline panel and toggle image generation", %{
     conn: conn,
     scope: scope
   } do
@@ -176,18 +176,26 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              ~s(#pool-row-#{pool.id}-compat-v1-docs-link[href="https://docs.codex-pooler.com/operators/pools/#compatibility"])
            )
 
-    view |> element("#pool-row-#{pool.id}-compat-ws-bridge") |> render_click()
-    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "Upstream websocket bridge")
-    assert has_element?(view, ~s([data-role="pool-compat-experimental"]))
-
     assert has_element?(
              view,
-             ~s(#pool-row-#{pool.id}-compat-ws-bridge-issue-link[href="https://github.com/icoretech/codex-pooler/issues/171"])
+             "#pool-row-#{pool.id}-compat-v1 + #pool-row-#{pool.id}-compat-compression + #pool-row-#{pool.id}-compat-image-generation"
            )
 
-    refute has_element?(view, "#pool-row-#{pool.id}-compat-ws-bridge-docs-link")
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-ws-bridge")
 
-    view |> element("#pool-row-#{pool.id}-compat-ws-bridge") |> render_click()
+    view |> element("#pool-row-#{pool.id}-compat-image-generation") |> render_click()
+
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-panel", "Allow Image Generation")
+    assert has_element?(view, "#pool-row-#{pool.id}-compat-image-generation-toggle[checked]")
+
+    html =
+      view |> element("#pool-row-#{pool.id}-compat-image-generation-toggle") |> render_click()
+
+    assert html =~ "Allow Image Generation disabled on Compat Panel Pool"
+    refute PoolRouting.get_routing_settings(pool.id).allow_image_generation
+    refute has_element?(view, "#pool-row-#{pool.id}-compat-image-generation-toggle[checked]")
+
+    view |> element("#pool-row-#{pool.id}-compat-image-generation") |> render_click()
     refute has_element?(view, "#pool-row-#{pool.id}-compat-panel")
     _ = await_pool_traffic(view)
   end
@@ -1151,7 +1159,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = await_pool_traffic(view)
   end
 
-  test "creates pools with routing strategy, compatibility, compression, websocket bridge, and upstream identities",
+  test "creates pools with routing strategy, compatibility, compression, image generation, and upstream identities",
        %{conn: conn} do
     first_identity =
       active_identity_fixture(account_label: "First create account", plan_label: "pro")
@@ -1189,7 +1197,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "request_compression_enabled" => "true",
-        "upstream_websocket_bridge_enabled" => "true",
+        "allow_image_generation" => "false",
         "upstream_identity_ids" => [first_identity.id, second_identity.id]
       }
     })
@@ -1203,7 +1211,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert settings.request_compression_enabled == true
-    assert settings.upstream_websocket_bridge_enabled == true
+    assert settings.allow_image_generation == false
 
     assert Enum.map(assignments, & &1.upstream_identity_id) |> Enum.sort() ==
              [first_identity.id, second_identity.id] |> Enum.sort()
@@ -1386,7 +1394,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-edit-routing-controls #pool_edit_upstream_websocket_bridge_enabled"
+             "#pool-edit-routing-controls #pool_edit_allow_image_generation"
            )
 
     assert has_element?(view, "#pool_edit_routing_strategy")
@@ -1958,7 +1966,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "sticky_http_sessions" => true,
         "prompt_cache_affinity_enabled" => false,
         "request_compression_enabled" => true,
-        "upstream_websocket_bridge_enabled" => true
+        "allow_image_generation" => false
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
@@ -1968,7 +1976,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#pool_edit_prompt_cache_affinity_enabled[checked]")
     assert has_element?(view, "#pool_edit_request_compression_enabled[checked]")
-    assert has_element?(view, "#pool_edit_upstream_websocket_bridge_enabled[checked]")
+    refute has_element?(view, "#pool_edit_allow_image_generation[checked]")
 
     view
     |> element("#pool-edit-form")
@@ -1981,7 +1989,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "prompt_cache_affinity_enabled" => "false",
         "v1_compatibility_enabled" => "false",
         "request_compression_enabled" => "false",
-        "upstream_websocket_bridge_enabled" => "false",
+        "allow_image_generation" => "true",
         "upstream_identity_ids" => []
       }
     })
@@ -1995,7 +2003,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.prompt_cache_affinity_enabled == false
     assert settings.v1_compatibility_enabled == false
     assert settings.request_compression_enabled == false
-    assert settings.upstream_websocket_bridge_enabled == false
+    assert settings.allow_image_generation == true
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
     refute has_element?(view, "#pool-edit-dialog")
     _ = await_pool_traffic(view)

@@ -587,7 +587,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   @compat_flag_labels %{
     "v1_compatibility_enabled" => "/v1 compatibility",
     "request_compression_enabled" => "Request compression",
-    "upstream_websocket_bridge_enabled" => "Upstream websocket bridge"
+    "allow_image_generation" => "Allow Image Generation"
   }
 
   defp compat_flag_label(flag) do

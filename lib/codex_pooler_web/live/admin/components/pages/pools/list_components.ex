@@ -707,14 +707,12 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       description: "Shrinks eligible Responses tool outputs before upstream dispatch."
     },
     %{
-      key: :upstream_websocket_bridge_enabled,
-      id_suffix: "ws-bridge",
-      icon: "hero-link",
-      label: "Upstream websocket bridge",
-      experimental: true,
-      issue_number: 171,
-      description:
-        "Carries public streaming turns upstream over the session's Codex websocket to reuse the provider prompt cache."
+      key: :allow_image_generation,
+      id_suffix: "image-generation",
+      icon: "hero-photo",
+      label: "Allow Image Generation",
+      docs_url: "https://docs.codex-pooler.com/operators/pools/#compatibility",
+      description: "Permits image generation and edits for requests using this Pool."
     }
   ]
 
