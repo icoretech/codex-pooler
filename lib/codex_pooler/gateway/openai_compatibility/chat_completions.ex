@@ -122,10 +122,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     text_delta_chunk(decoded_string(decoded, "delta") || "", state)
   end
 
-  defp normalize_stream_event(type, decoded, state)
-       when type in ["response.output_item.added", "response.output_item.done"] do
+  defp normalize_stream_event("response.output_item.added", decoded, state) do
     state = sync_response_state(state, decoded)
     tool_call_item_chunk(decoded["item"], decoded, state)
+  end
+
+  defp normalize_stream_event("response.output_item.done", decoded, state) do
+    {[], sync_response_state(state, decoded)}
   end
 
   defp normalize_stream_event("response.function_call_arguments.delta", decoded, state) do

@@ -111,5 +111,51 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       refute delta_chunk =~ "response.output_text.delta"
       refute state.discarding_oversized?
     end
+
+    test "emits function-call arguments only when the item is added" do
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+      arguments = ~s({"timezone":"UTC"})
+
+      item = %{
+        "type" => "function_call",
+        "id" => "call_terminal_only",
+        "name" => "lookup_time",
+        "arguments" => arguments
+      }
+
+      stream =
+        [
+          sse_event("response.output_item.added", %{
+            "type" => "response.output_item.added",
+            "output_index" => 0,
+            "item" => item
+          }),
+          sse_event("response.output_item.done", %{
+            "type" => "response.output_item.done",
+            "output_index" => 0,
+            "item" => item
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {normalized, _state} = ChatCompletions.normalize_stream_data(stream, state)
+
+      tool_calls =
+        normalized
+        |> normalized_sse_payloads()
+        |> Enum.flat_map(&(get_in(&1, ["choices", Access.at(0), "delta", "tool_calls"]) || []))
+
+      assert Enum.map(tool_calls, &get_in(&1, ["function", "arguments"])) == [arguments]
+      assert Enum.map(tool_calls, & &1["id"]) == ["call_terminal_only"]
+    end
+  end
+
+  defp sse_event(type, data), do: ["event: ", type, "\n", "data: ", Jason.encode!(data), "\n\n"]
+
+  defp normalized_sse_payloads(normalized) do
+    normalized
+    |> String.split("\n\n", trim: true)
+    |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
+    |> Enum.map(&Jason.decode!/1)
   end
 end
