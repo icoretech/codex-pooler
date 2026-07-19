@@ -30,7 +30,8 @@ A Pool controls:
 5. continuity settings, which decide when related requests should prefer the same upstream
 6. compatibility settings, such as OpenAI-style `/v1` routes
 7. request compression, which can reduce upstream-bound Responses tool-output payloads for eligible route families
-8. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
+8. image-generation permission for the supported image generation and edit routes
+9. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
 
 ## Page Metrics
 
@@ -232,6 +233,19 @@ Eligible families are backend Responses, backend `/v1/responses`, backend and pu
 Request compression is fail-open. If scanning, token counting, rewriting, or limits fail, the original request body is sent upstream and request logs record a safe `payload_compression` status and reason. JSON bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process using tokenizer data shipped with the application; it does not call OpenAI or load a local model.
 
 Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable.
+
+`Allow image generation` controls these exact authenticated POST routes:
+
+1. `/backend-api/codex/images/generations`
+2. `/backend-api/codex/images/edits`
+3. `/v1/images/generations`
+4. `/v1/images/edits`
+
+It is on by default for new Pools and for existing routing rows that do not yet
+have a saved value. When disabled, the runtime returns `403` with code
+`image_generation_disabled` after Pool API-key authentication, before request
+body decompression, parsing, coercion, admission, or upstream dispatch. This
+keeps a disabled Pool from accepting image payloads at the parser boundary.
 
 ## Upstreams Step
 

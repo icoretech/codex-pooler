@@ -139,14 +139,14 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td><code>/backend-api/codex/images/generations</code></td>
       <td>No public <code>/v1</code> image translation</td>
       <td>Supported</td>
-      <td>Explicit authenticated native image proxy route. On either native image route, a policy-authorized effective image model that is genuinely absent from the Pool catalog may use eligible visible host capacity while its effective identifier is preserved exactly. A catalog-present but invisible target remains invalid. Image prompt and source fields stay image-specific. This does not add public <code>/v1</code> image behavior.</td>
+      <td>Explicit authenticated native image proxy route. Pool image permission applies before body parsing. On either native image route, a policy-authorized effective image model that is genuinely absent from the Pool catalog may use eligible visible host capacity while its effective identifier is preserved exactly. A catalog-present but invisible target remains invalid. Image prompt and source fields stay image-specific.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/images/edits</code></td>
       <td><code>/backend-api/codex/images/edits</code></td>
       <td>No public <code>/v1</code> image translation</td>
       <td>Supported</td>
-      <td>Explicit authenticated native image edit proxy route. The same policy-authorized, catalog-absent native image routing applies: eligible visible host capacity anchors the request while the effective image identifier is preserved exactly. A catalog-present but invisible target remains invalid. This does not add public <code>/v1</code> image behavior.</td>
+      <td>Explicit authenticated native image edit proxy route. Pool image permission applies before body parsing. The same policy-authorized, catalog-absent native image routing applies: eligible visible host capacity anchors the request while the effective image identifier is preserved exactly. A catalog-present but invisible target remains invalid.</td>
     </tr>
   </tbody>
 </table>
@@ -380,17 +380,28 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td><code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI image generation request is converted to Codex Responses-compatible image work.</td>
+      <td>OpenAI image generation request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
     </tr>
     <tr>
       <td><code>POST /v1/images/edits</code></td>
       <td><code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI image edit request is converted to Codex Responses-compatible image work.</td>
+      <td>OpenAI image edit request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
     </tr>
   </tbody>
 </table>
+
+### Pool image permission
+
+One Pool setting, `allow_image_generation`, controls exactly four authenticated
+POST routes: `/backend-api/codex/images/generations`,
+`/backend-api/codex/images/edits`, `/v1/images/generations`, and
+`/v1/images/edits`. It defaults to `true` for new Pools and existing routing
+rows without a stored value. When it is disabled, runtime ingress authenticates
+the Pool API key, then returns `403` with code `image_generation_disabled`
+before decompression, request parsing, compatibility coercion, admission, or
+upstream dispatch.
 
 `POST /v1/responses` accepts `reasoning.context` only for `auto`,
 `current_turn`, and `all_turns` after trimming and lowercasing. Unknown, empty,
@@ -601,7 +612,14 @@ The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP
 
 Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic: it can improve the chance that compatible work reaches a reusable upstream connection, but it never guarantees a provider cache hit or cached-token accounting.
 
-When a Pool enables the upstream websocket bridge, an eligible streaming `POST /v1/responses` request keeps HTTP SSE as its downstream contract while first attempting upstream dispatch through the continuity owner's websocket. Internal upstream events remain buffered and do not commit the bridge. The bridge commits only when the first event that public Responses normalization would expose is forwarded downstream.
+An otherwise-qualified streaming `POST /v1/responses` request keeps HTTP SSE as
+its downstream contract while first attempting upstream dispatch through the
+continuity owner's websocket. This has no Pool-level enablement toggle.
+Qualification requires websocket owner forwarding, no attached websocket
+writer, and a continuity session that is unpinned or pinned to the selected
+assignment. Internal upstream events remain buffered and do not commit the
+bridge. The bridge commits only when the first event that public Responses
+normalization would expose is forwarded downstream.
 
 Any bridge failure before that commit boundary falls back to plain HTTP on the same candidate and attempt, with one settlement. After a public event has committed the websocket transport, Codex Pooler does not replay the turn over HTTP; a later upstream websocket failure ends the request as failed. Reusing an owner websocket is a cache-locality heuristic, never a cache guarantee.
 
