@@ -222,12 +222,12 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
                 id={"#{row.dom_id}-effective"}
                 data-role="pool-model-serving-effective"
                 data-effective-mode={row.effective_badge.mode}
-                class={effective_pill_class(row)}
+                class="inline-flex items-baseline gap-1 whitespace-nowrap"
               >
-                <span class="text-[0.56rem] font-semibold uppercase tracking-wide opacity-80">
+                <span class="text-[0.6rem] font-semibold uppercase tracking-wide text-base-content/45">
                   {effective_pill_prefix(row)}
                 </span>
-                {effective_pill_text(row)}
+                <span class={effective_mode_class(row)}>{effective_pill_text(row)}</span>
               </span>
             </div>
 
@@ -292,21 +292,12 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp effective_pill_text(%{effective_badge: %{mode: "removed"}}), do: "—"
   defp effective_pill_text(%{effective_badge: %{mode: mode}}), do: String.capitalize(mode)
 
-  defp effective_pill_class(row) do
-    [
-      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[0.68rem] font-bold",
-      effective_pill_tone(row)
-    ]
-  end
+  defp effective_mode_class(%{available?: false}), do: "text-xs font-bold text-base-content/45"
 
-  defp effective_pill_tone(%{available?: false}),
-    do: "border-dashed border-base-content/25 text-base-content/50"
+  defp effective_mode_class(%{effective_badge: %{mode: "lite"}}),
+    do: "text-xs font-bold text-info"
 
-  defp effective_pill_tone(%{effective_badge: %{mode: "lite"}}),
-    do: "border-info/40 bg-info/15 text-info"
-
-  defp effective_pill_tone(_row),
-    do: "border-base-300 bg-base-content/5 text-base-content/70"
+  defp effective_mode_class(_row), do: "text-xs font-bold text-base-content/75"
 
   defp availability_warning_label(%{configured_mode: "auto"}),
     do: "Will be removed on save."
