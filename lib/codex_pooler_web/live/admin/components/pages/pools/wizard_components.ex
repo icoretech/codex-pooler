@@ -66,6 +66,28 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     }
   }
 
+  @pool_status_choices [
+    %{
+      value: "active",
+      label: "Active",
+      dot: "bg-success",
+      description:
+        "Receives new runtime work when an active API key and eligible upstreams are assigned."
+    },
+    %{
+      value: "disabled",
+      label: "Disabled",
+      dot: "bg-warning",
+      description: "Stays configured and visible for operations; does not admit new runtime work."
+    },
+    %{
+      value: "archived",
+      label: "Archived",
+      dot: "bg-base-content/40",
+      description: "Kept for historical reporting and cleanup."
+    }
+  ]
+
   @pool_step_headings %{
     "details" => %{
       title: "Pool details",
@@ -113,6 +135,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
       |> assign(:docs_url, @pool_docs_url)
       |> assign(:steps, pool_wizard_steps(assigns.mode))
       |> assign(:step_heading, pool_step_heading(assigns.current_step))
+      |> assign(:status_choices, @pool_status_choices)
 
     ~H"""
     <div
@@ -147,24 +170,88 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "details")}
           >
             <section id={"#{@id}-step-details-panel"} class="grid min-w-0 gap-5">
-              <div class={[
-                @mode == :edit && "grid gap-4 md:grid-cols-2",
-                @mode == :create && "grid gap-4"
-              ]}>
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label="Name"
-                  placeholder="Production Pool"
-                  required
-                />
-                <.input
-                  :if={@mode == :edit}
-                  field={@form[:status]}
-                  type="select"
-                  label="Status"
-                  options={PoolForm.status_options()}
-                />
+              <div class="grid min-w-0 gap-1">
+                <div class="max-w-md">
+                  <.input
+                    field={@form[:name]}
+                    type="text"
+                    label="Name"
+                    placeholder="Production Pool"
+                    required
+                  />
+                </div>
+                <p class="text-xs leading-4 text-base-content/55">
+                  Operator-facing — shown across the admin, alerts, and audit history.
+                </p>
+              </div>
+
+              <fieldset :if={@mode == :edit} class="grid min-w-0 gap-2">
+                <legend class="label mb-1">Status</legend>
+                <div
+                  id="pool_edit_status"
+                  role="radiogroup"
+                  aria-label="Pool status"
+                  class="grid min-w-0 gap-2 md:grid-cols-3"
+                >
+                  <label
+                    :for={choice <- @status_choices}
+                    class="flex min-w-0 cursor-pointer items-start gap-2.5 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[:checked]:border-primary/60 has-[:checked]:bg-primary/5"
+                  >
+                    <input
+                      id={"pool_edit_status_#{choice.value}"}
+                      type="radio"
+                      class="radio radio-primary radio-xs mt-0.5 shrink-0"
+                      name="pool_edit[status]"
+                      value={choice.value}
+                      checked={to_string(@form[:status].value) == choice.value}
+                    />
+                    <span class="grid min-w-0 gap-0.5">
+                      <span class="flex items-center gap-1.5 text-[13px] font-semibold leading-tight text-base-content">
+                        <span class={["size-1.5 rounded-full", choice.dot]}></span>
+                        {choice.label}
+                      </span>
+                      <span class="text-xs leading-4 text-base-content/60">
+                        {choice.description}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+                <p class="flex items-center gap-1.5 text-xs text-base-content/55">
+                  <.icon name="hero-information-circle" class="size-4 shrink-0" />
+                  Hard deletion is available only after a Pool is archived.
+                </p>
+              </fieldset>
+
+              <p
+                :if={@mode == :create}
+                class="flex items-center gap-1.5 text-xs text-base-content/55"
+              >
+                <.icon name="hero-information-circle" class="size-4 shrink-0" />
+                Lifecycle status becomes editable after the Pool is created.
+              </p>
+
+              <div
+                :if={@mode == :edit}
+                class="flex min-w-0 flex-wrap items-center gap-3 rounded-box border border-dashed border-base-content/20 px-3 py-2"
+              >
+                <span class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                  Pool ID
+                </span>
+                <span class="break-all text-[10.5px] font-normal tracking-[0.015em] text-base-content/55">
+                  {@form[:id].value}
+                </span>
+                <button
+                  id="pool-edit-pool-id-copy"
+                  type="button"
+                  phx-hook="ClipboardCopy"
+                  data-copy-text={@form[:id].value}
+                  data-copy-label="Copy"
+                  data-copied-label="Copied"
+                  class="btn btn-ghost btn-xs ml-auto gap-1.5 text-base-content/60 hover:text-base-content"
+                >
+                  <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
+                  <span data-copy-label>Copy</span>
+                </button>
               </div>
             </section>
           </div>
