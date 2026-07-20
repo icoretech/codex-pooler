@@ -28,49 +28,50 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingFormTest do
     assert [
              %{
                index: 0,
+               exposed_model_id: "gpt-zeta",
+               display_name: "Zeta",
+               configured_mode: "auto",
+               effective_mode: "full",
+               source: "catalog",
+               available?: true,
+               warning: nil,
+               identifier_name: "pool_model_serving[rows][0][exposed_model_id]",
+               mode_name: "pool_model_serving[rows][0][mode]",
+               effective_badge: %{label: "Effective: Full", mode: "full"}
+             },
+             %{
+               index: 1,
                exposed_model_id: "gpt-beta",
                display_name: "Beta",
                configured_mode: "lite",
                effective_mode: "lite",
                source: "override",
                available?: true,
-               warning: nil,
-               identifier_name: "pool_model_serving[rows][0][exposed_model_id]",
-               mode_name: "pool_model_serving[rows][0][mode]"
-             },
-             %{
-               index: 1,
-               exposed_model_id: "gpt-zeta",
-               configured_mode: "auto",
-               effective_mode: "full",
-               source: "catalog",
-               available?: true,
-               warning: nil,
-               effective_badge: %{label: "Effective: Full", mode: "full"}
+               warning: nil
              },
              %{
                index: 2,
-               exposed_model_id: "gpt-a-unavailable",
-               configured_mode: "lite",
-               effective_mode: "lite",
-               source: "override",
-               available?: false,
-               warning: "gpt-a-unavailable is not available in the current routable catalog"
-             },
-             %{
-               index: 3,
                exposed_model_id: "gpt-z-unavailable",
                configured_mode: "full",
                effective_mode: "full",
                source: "override",
                available?: false,
                warning: "gpt-z-unavailable is not available in the current routable catalog"
+             },
+             %{
+               index: 3,
+               exposed_model_id: "gpt-a-unavailable",
+               configured_mode: "lite",
+               effective_mode: "lite",
+               source: "override",
+               available?: false,
+               warning: "gpt-a-unavailable is not available in the current routable catalog"
              }
            ] = projection.rows
 
     assert projection.warnings == [
-             "gpt-a-unavailable is not available in the current routable catalog",
-             "gpt-z-unavailable is not available in the current routable catalog"
+             "gpt-z-unavailable is not available in the current routable catalog",
+             "gpt-a-unavailable is not available in the current routable catalog"
            ]
   end
 
@@ -84,24 +85,24 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingFormTest do
 
     [first, second] = PoolForm.model_serving_form(snapshot, visible_models).rows
 
-    assert first.effective_mode == "lite"
+    assert first.effective_mode == "full"
     assert first.source == "catalog"
-    assert second.effective_mode == "full"
+    assert second.effective_mode == "lite"
     assert first.dom_id != second.dom_id
     assert first.dom_id =~ ~r/^pool-model-serving-row-gpt-alpha-[a-f0-9]{8}$/
     assert second.dom_id =~ ~r/^pool-model-serving-row-gpt-alpha-[a-f0-9]{8}$/
 
-    assert first.labels == %{
+    assert second.labels == %{
              fieldset: "Model serving mode for gpt alpha",
              auto: "Auto for gpt alpha",
              lite: "Lite for gpt alpha",
              full: "Full for gpt alpha"
            }
 
-    assert first.input_ids == %{
-             auto: first.dom_id <> "-auto",
-             lite: first.dom_id <> "-lite",
-             full: first.dom_id <> "-full"
+    assert second.input_ids == %{
+             auto: second.dom_id <> "-auto",
+             lite: second.dom_id <> "-lite",
+             full: second.dom_id <> "-full"
            }
   end
 

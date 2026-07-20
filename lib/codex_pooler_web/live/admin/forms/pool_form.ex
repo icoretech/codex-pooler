@@ -307,7 +307,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     submitted_modes = submitted_modes(submitted_attrs, available_ids, snapshot.overrides)
 
     (available_rows ++ unavailable_rows)
-    |> Enum.sort_by(&{not &1.available?, &1.exposed_model_id})
+    |> Enum.sort_by(&{&1.available?, &1.exposed_model_id}, :desc)
     |> Enum.with_index()
     |> Enum.map(fn {row, index} ->
       row
