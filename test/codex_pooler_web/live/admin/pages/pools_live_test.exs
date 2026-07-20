@@ -948,31 +948,31 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Strategy and fan-out size used for runtime requests."
+             "Strategy and fan-out size used for runtime requests"
            )
 
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Identity-aware routing behavior."
+             "Identity-aware routing behavior"
            )
 
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Keep related prompt-cache-key requests near the same upstream for routing locality only."
+             "Sends requests that share a prompt cache to the same upstream."
            )
 
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Codex Pooler does not store prompts or responses for this control."
+             "Sends requests that share a prompt cache to the same upstream."
            )
 
     assert has_element?(
              view,
              "#pool-create-routing-controls",
-             "Optional client surfaces."
+             "Optional client surfaces"
            )
 
     assert has_element?(
@@ -987,10 +987,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "Shrinks eligible Responses tool outputs before upstream dispatch."
            )
 
-    assert has_element?(view, "#pool_routing_strategy option", "Bridge ring")
-    assert has_element?(view, "#pool_routing_strategy option", "Deterministic rotation")
-    assert has_element?(view, "#pool_routing_strategy option", "Least recent success")
-    assert has_element?(view, "#pool_routing_strategy option", "Quota first")
+    assert has_element?(view, "#pool_routing_strategy", "Bridge ring")
+    assert has_element?(view, "#pool_routing_strategy", "Deterministic rotation")
+    assert has_element?(view, "#pool_routing_strategy", "Least recent success")
+    assert has_element?(view, "#pool_routing_strategy", "Quota first")
     view |> element("#pool-create-dialog-tab-upstreams") |> render_click()
 
     assert has_element?(view, "#pool-create-dialog-tab-upstreams[aria-selected='true']")
@@ -1287,7 +1287,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     })
 
     assert has_element?(view, "#pool-create-dialog[open]")
-    assert has_element?(view, "#pool_routing_strategy option[selected][value='quota_first']")
+    assert has_element?(view, "#pool_routing_strategy_quota_first[checked]")
 
     assert has_element?(
              view,
@@ -2398,31 +2398,31 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "#pool-edit-routing-controls",
-             "Strategy and fan-out size used for runtime requests."
+             "Strategy and fan-out size used for runtime requests"
            )
 
     assert has_element?(
              view,
              "#pool-edit-routing-controls",
-             "Identity-aware routing behavior."
+             "Identity-aware routing behavior"
            )
 
     assert has_element?(
              view,
              "#pool-edit-routing-controls",
-             "Keep related prompt-cache-key requests near the same upstream for routing locality only."
+             "Sends requests that share a prompt cache to the same upstream."
            )
 
     assert has_element?(
              view,
              "#pool-edit-routing-controls",
-             "Codex Pooler does not store prompts or responses for this control."
+             "Sends requests that share a prompt cache to the same upstream."
            )
 
     assert has_element?(
              view,
              "#pool-edit-routing-controls",
-             "Optional client surfaces."
+             "Optional client surfaces"
            )
 
     assert has_element?(
@@ -3092,7 +3092,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool_edit_routing_strategy option[selected][value='deterministic_rotation']"
+             "#pool_edit_routing_strategy_deterministic_rotation[checked]"
            )
 
     assert has_element?(

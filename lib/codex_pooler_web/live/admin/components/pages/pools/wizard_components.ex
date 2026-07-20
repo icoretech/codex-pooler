@@ -113,6 +113,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
       |> assign(:docs_url, @pool_docs_url)
       |> assign(:steps, pool_wizard_steps(assigns.mode))
       |> assign(:step_heading, pool_step_heading(assigns.current_step))
+      |> assign(:strategy_options, PoolForm.routing_strategy_options())
 
     ~H"""
     <div
@@ -176,113 +177,123 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "routing")}
           >
             <section id={"#{@id}-step-routing-panel"} class="grid min-w-0 gap-5">
-              <div id={@routing_controls_id} class="pool-routing-policy-form grid">
-                <div class="pool-routing-policy-row">
-                  <div class="min-w-0">
-                    <p class="text-sm font-semibold text-base-content">Selection policy</p>
-                    <p class="text-xs leading-5 text-base-content/55">
-                      Strategy and fan-out size used for runtime requests.
+              <div id={@routing_controls_id} class="grid min-w-0 gap-5">
+                <div class="group/selpolicy grid min-w-0 gap-2">
+                  <div class="flex min-w-0 flex-wrap items-center gap-2">
+                    <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                      Selection policy
+                      <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
+                        Strategy and fan-out size used for runtime requests
+                      </span>
                     </p>
+                    <span class="ml-auto hidden items-center gap-2 group-has-[.strategy-bridge:checked]/selpolicy:flex">
+                      <label
+                        for={@form[:bridge_ring_size].id}
+                        class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/55"
+                      >
+                        Ring size
+                      </label>
+                      <input
+                        id={@form[:bridge_ring_size].id}
+                        type="number"
+                        min="1"
+                        name={@form[:bridge_ring_size].name}
+                        value={@form[:bridge_ring_size].value}
+                        class="input input-sm w-14 text-center tabular-nums"
+                      />
+                    </span>
                   </div>
-                  <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-                    <.input
-                      field={@form[:routing_strategy]}
-                      type="select"
-                      label="Routing strategy"
-                      class="select select-bordered w-full"
-                      options={PoolForm.routing_strategy_options()}
-                    />
-                    <.input
-                      field={@form[:bridge_ring_size]}
-                      type="number"
-                      label="Ring size"
-                      class="input input-bordered w-full"
-                      min="1"
-                    />
+                  <div
+                    id={@form[:routing_strategy].id}
+                    role="radiogroup"
+                    aria-label="Routing strategy"
+                    class="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-4"
+                  >
+                    <div
+                      :for={{label, value} <- @strategy_options}
+                      class="relative min-w-0 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5"
+                    >
+                      <span
+                        :if={value == "bridge_ring"}
+                        class="absolute right-2.5 top-2 text-[0.56rem] font-bold uppercase tracking-wide text-primary/70"
+                      >
+                        Default
+                      </span>
+                      <label class="flex min-w-0 cursor-pointer items-start gap-2.5">
+                        <input
+                          id={"#{@form[:routing_strategy].id}_#{value}"}
+                          type="radio"
+                          class={[
+                            "strategy-radio radio radio-primary radio-xs mt-0.5 shrink-0",
+                            value == "bridge_ring" && "strategy-bridge"
+                          ]}
+                          name={@form[:routing_strategy].name}
+                          value={value}
+                          checked={to_string(@form[:routing_strategy].value) == value}
+                        />
+                        <span class="grid min-w-0 gap-0.5">
+                          <span class="text-[13px] font-semibold leading-tight text-base-content">
+                            {label}
+                          </span>
+                          <span class="text-[11px] leading-4 text-base-content/55">
+                            {pool_strategy_description(value)}
+                          </span>
+                        </span>
+                      </label>
+                    </div>
                   </div>
                 </div>
 
-                <div class="routing-matrix">
-                  <div class="routing-matrix-section">
-                    <div class="min-w-0">
-                      <p class="text-sm font-semibold text-base-content">Continuity</p>
-                      <p class="text-xs leading-5 text-base-content/55">
-                        Identity-aware routing behavior.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-options">
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:sticky_websocket_sessions]}
-                          type="checkbox"
-                          label="Sticky websocket sessions"
-                        />
-                        <p class="routing-option-help">
-                          Same upstream for websocket sessions with continuity identity.
-                        </p>
-                      </div>
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:sticky_http_sessions]}
-                          type="checkbox"
-                          label="HTTP affinity"
-                        />
-                        <p class="routing-option-help">
-                          Same upstream preference for related HTTP requests.
-                        </p>
-                      </div>
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:prompt_cache_affinity_enabled]}
-                          type="checkbox"
-                          label="Prompt cache affinity"
-                        />
-                        <p class="routing-option-help">
-                          Keep related prompt-cache-key requests near the same upstream for routing locality only.
-                          Codex Pooler does not store prompts or responses for this control.
-                        </p>
-                      </div>
+                <div class="grid min-w-0 items-start gap-4 md:grid-cols-2">
+                  <div class="grid min-w-0 content-start gap-2">
+                    <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                      Continuity
+                      <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
+                        Identity-aware routing behavior
+                      </span>
+                    </p>
+                    <div class="overflow-hidden rounded-box border border-base-300 bg-base-100">
+                      <.routing_toggle_row
+                        field={@form[:sticky_websocket_sessions]}
+                        label="Sticky websocket sessions"
+                        help="Same upstream for websocket sessions with continuity identity."
+                      />
+                      <.routing_toggle_row
+                        field={@form[:sticky_http_sessions]}
+                        label="HTTP affinity"
+                        help="Same upstream preference for related HTTP requests."
+                      />
+                      <.routing_toggle_row
+                        field={@form[:prompt_cache_affinity_enabled]}
+                        label="Prompt cache affinity"
+                        help="Sends requests that share a prompt cache to the same upstream."
+                      />
                     </div>
                   </div>
 
-                  <div class="routing-matrix-section">
-                    <div class="min-w-0">
-                      <p class="text-sm font-semibold text-base-content">Compatibility</p>
-                      <p class="text-xs leading-5 text-base-content/55">
-                        Optional client surfaces.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-options">
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:v1_compatibility_enabled]}
-                          type="checkbox"
-                          label="Allow /v1 compatibility"
-                        />
-                        <p class="routing-option-help">
-                          OpenAI-style `/v1` compatibility routes.
-                        </p>
-                      </div>
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:request_compression_enabled]}
-                          type="checkbox"
-                          label="Request compression"
-                        />
-                        <p class="routing-option-help">
-                          Shrinks eligible Responses tool outputs before upstream dispatch.
-                        </p>
-                      </div>
-                      <div class="routing-matrix-option">
-                        <.input
-                          field={@form[:allow_image_generation]}
-                          type="checkbox"
-                          label="Allow Image Generation"
-                        />
-                        <p class="routing-option-help">
-                          Permits image generation and edits for requests using this Pool.
-                        </p>
-                      </div>
+                  <div class="grid min-w-0 content-start gap-2">
+                    <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                      Compatibility
+                      <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
+                        Optional client surfaces
+                      </span>
+                    </p>
+                    <div class="overflow-hidden rounded-box border border-base-300 bg-base-100">
+                      <.routing_toggle_row
+                        field={@form[:v1_compatibility_enabled]}
+                        label="Allow /v1 compatibility"
+                        help="OpenAI-style /v1 compatibility routes."
+                      />
+                      <.routing_toggle_row
+                        field={@form[:request_compression_enabled]}
+                        label="Request compression"
+                        help="Shrinks eligible Responses tool outputs before upstream dispatch."
+                      />
+                      <.routing_toggle_row
+                        field={@form[:allow_image_generation]}
+                        label="Allow Image Generation"
+                        help="Permits image generation and edits for requests using this Pool."
+                      />
                     </div>
                   </div>
                 </div>
@@ -380,6 +391,30 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         </:actions>
       </PolicyEditorComponents.policy_editor_dialog>
     </div>
+    """
+  end
+
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :help, :string, required: true
+
+  defp routing_toggle_row(assigns) do
+    ~H"""
+    <label class="flex min-w-0 cursor-pointer items-start gap-2.5 border-b border-base-300/70 px-3 py-2 transition-colors last:border-b-0 hover:bg-base-200/40">
+      <input type="hidden" name={@field.name} value="false" />
+      <input
+        id={@field.id}
+        type="checkbox"
+        class="toggle toggle-primary toggle-sm mt-0.5 shrink-0"
+        name={@field.name}
+        value="true"
+        checked={Phoenix.HTML.Form.normalize_value("checkbox", @field.value)}
+      />
+      <span class="grid min-w-0 gap-0.5">
+        <span class="text-[13px] font-semibold leading-tight text-base-content">{@label}</span>
+        <span class="text-xs leading-4 text-base-content/60">{@help}</span>
+      </span>
+    </label>
     """
   end
 
@@ -486,6 +521,20 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
 
   defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
+
+  defp pool_strategy_description("bridge_ring"),
+    do: "Balances work across upstreams, honoring continuity, cache locality, and quota evidence."
+
+  defp pool_strategy_description("deterministic_rotation"),
+    do: "Rotates which upstream goes first per session, in a fixed, predictable order."
+
+  defp pool_strategy_description("least_recent_success"),
+    do: "Prefers the upstream that has waited longest since its last successful request."
+
+  defp pool_strategy_description("quota_first"),
+    do: "Prefers the upstream with the most remaining quota for the requested model."
+
+  defp pool_strategy_description(_strategy), do: nil
 
   defp sort_selected_first(options, field) do
     Enum.sort_by(options, fn option ->
