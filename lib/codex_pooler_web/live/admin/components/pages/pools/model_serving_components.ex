@@ -176,7 +176,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             <div class="min-w-0">
               <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <p class={[
-                  "text-sm font-semibold",
+                  "text-[13px] font-semibold leading-tight",
                   (row.available? && "text-base-content") || "text-base-content/60"
                 ]}>
                   {row.display_name}
@@ -189,7 +189,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
                 </span>
               </div>
               <p class={[
-                "break-all text-[0.69rem] font-medium leading-4 tracking-wide text-base-content/50",
+                "break-all text-[10.5px] font-normal leading-[1.3] tracking-[0.015em] text-base-content/50",
                 !row.available? && "line-through decoration-base-content/40"
               ]}>
                 {row.exposed_model_id}
