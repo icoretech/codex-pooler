@@ -16,7 +16,7 @@ Use this page when you need to answer:
 
 The page is a lifecycle and policy registry, not an analytics page. It shows display names, safe key prefixes, Pool grouping and filtering, status, dashboard-access state, last-used and expiry state, model-policy summaries and warnings, operator notes, and action menus. It does not show usage totals or charts, and it does not show raw Pool API keys after the one-time secret dialog is closed.
 
-Use the [API Key Observatory](/clients/api-key-observatory/) for read-only analytics scoped to one API key. Use the admin Stats page for Pool-level aggregate request, token, and cost analytics, and [Request logs](/operators/request-logs/) for request-level investigation, including API key context, outcomes, and available settled usage metadata.
+Use the [API Key Observatory](/operators/api-key-observatory/) for read-only analytics scoped to one API key. Use the admin Stats page for Pool-level aggregate request, token, and cost analytics, and [Request logs](/operators/request-logs/) for request-level investigation, including API key context, outcomes, and available settled usage metadata.
 
 ![API keys page overview](/operators/api-keys/api-keys-overview.png)
 
@@ -121,7 +121,7 @@ Expiry is optional. Use it for temporary automation or time-bounded access. Leav
 
 ## Dashboard access
 
-`Dashboard access` is a separate, disabled-by-default capability on the API key. Enable it in the Basics step when the key holder should be able to open the read-only [API Key Observatory](/clients/api-key-observatory/). The same policy wizard manages this setting; there is no separate dashboard settings page.
+`Dashboard access` is a separate, disabled-by-default capability on the API key. Enable it in the Basics step when the key holder should be able to open the read-only [API Key Observatory](/operators/api-key-observatory/). The same policy wizard manages this setting; there is no separate dashboard settings page.
 
 This capability does not replace runtime API-key permission. Runtime requests still use the key's active status, Pool, model policy, limits, expiry, and the Pool's routing eligibility. It also does not grant an instance-owner or instance-admin browser session, access to `/admin/*`, or visibility into other keys.
 
