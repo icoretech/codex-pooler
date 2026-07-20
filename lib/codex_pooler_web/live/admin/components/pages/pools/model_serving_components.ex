@@ -260,7 +260,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp row_class(row) do
     [
       "grid min-w-0 grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-base-300/70 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem]",
-      !row.available? && "bg-base-content/3"
+      (row.available? && "even:bg-base-200/40") || "bg-base-content/3"
     ]
   end
 
