@@ -297,23 +297,13 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "upstreams")}
           >
             <section id={"#{@id}-step-upstreams-panel"} class="grid min-w-0 gap-5">
-              <div
-                id={"#{@id}-step-upstreams-panel-header"}
-                class="flex flex-wrap items-center justify-end gap-3"
-              >
-                <span
-                  id={@upstream_count_id}
-                  class={AdminBadges.count_chip_class()}
-                >
-                  {length(@upstream_options)} available
-                </span>
-              </div>
               <.assignment_checkbox_cards
                 id={@upstream_options_id}
                 field={@form[@upstream_field]}
                 options={@upstream_options}
                 empty_label={@upstream_empty_label}
                 filter_placeholder="Filter accounts…"
+                count_id={@upstream_count_id}
               />
             </section>
           </div>
@@ -325,23 +315,13 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "api-keys")}
           >
             <section id={"#{@id}-step-api-keys-panel"} class="grid min-w-0 gap-5">
-              <div
-                id={"#{@id}-step-api-keys-panel-header"}
-                class="flex flex-wrap items-center justify-end gap-3"
-              >
-                <span
-                  id={@access_count_id}
-                  class={AdminBadges.count_chip_class()}
-                >
-                  {length(@api_key_options)} available
-                </span>
-              </div>
               <.assignment_checkbox_cards
                 id={@access_options_id}
                 field={@form[:api_key_ids]}
                 options={@api_key_options}
                 empty_label="No API keys are available yet."
                 filter_placeholder="Filter keys…"
+                count_id={@access_count_id}
               />
             </section>
           </div>
@@ -408,6 +388,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   attr :options, :list, required: true
   attr :empty_label, :string, required: true
   attr :filter_placeholder, :string, default: "Filter…"
+  attr :count_id, :string, required: true
 
   defp assignment_checkbox_cards(assigns) do
     assigns = assign(assigns, :options, sort_selected_first(assigns.options, assigns.field))
@@ -415,8 +396,9 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     ~H"""
     <section id={@id} class="grid gap-2" phx-hook="AssignmentTools">
       <input type="hidden" name={PoolForm.field_array_name(@field)} value="" />
-      <div :if={@options != []} class="flex min-w-0 flex-wrap items-center gap-2">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
         <input
+          :if={@options != []}
           id={"#{@id}-filter"}
           type="text"
           data-role="assignment-filter"
@@ -425,7 +407,10 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
           autocomplete="off"
           class="input input-sm w-52 max-w-full"
         />
-        <div class="ml-auto flex items-center gap-1">
+        <span id={@count_id} class={AdminBadges.count_chip_class()}>
+          {length(@options)} available
+        </span>
+        <div :if={@options != []} class="ml-auto flex items-center gap-1">
           <button
             id={"#{@id}-select-all"}
             type="button"
@@ -451,7 +436,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         <label
           :for={option <- @options}
           id={"#{@id}-card-#{PoolForm.dom_token(PoolForm.option_value(option))}"}
-          class="flex min-h-10 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-1.5 transition-colors hover:border-primary/50 hover:bg-primary/5"
+          class="flex min-h-10 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-1.5 transition-colors hover:border-primary/50 hover:bg-primary/5 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5"
         >
           <input
             type="checkbox"
