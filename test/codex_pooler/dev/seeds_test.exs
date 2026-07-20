@@ -448,9 +448,9 @@ defmodule CodexPooler.Dev.SeedsTest do
                row.available?
              }
            end) == [
-             {"gpt-5.4", "full", "full", true},
-             {"gpt-5.4-mini", "auto", "lite", true},
              {"gpt-5.5", "auto", "full", true},
+             {"gpt-5.4-mini", "auto", "lite", true},
+             {"gpt-5.4", "full", "full", true},
              {"gpt-5.5-pro", "lite", "lite", false}
            ]
 
