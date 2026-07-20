@@ -407,7 +407,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
           autocomplete="off"
           class="input input-sm w-52 max-w-full"
         />
-        <span id={@count_id} class={AdminBadges.count_chip_class()}>
+        <span id={@count_id} class="text-xs font-semibold tabular-nums text-base-content/60">
           {length(@options)} available
         </span>
         <div :if={@options != []} class="ml-auto flex items-center gap-1">
