@@ -36,27 +36,11 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
       aria-busy={to_string(@status in [:idle, :loading])}
       class="grid min-w-0 gap-5"
     >
-      <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div class="grid min-w-0 gap-1">
-          <h3 id="pool-model-serving-title" class="text-lg font-semibold text-base-content">
-            Model serving modes
-          </h3>
-          <p class="text-sm leading-6 text-base-content/65">
-            Choose the Responses serving path for each model currently known to this Pool.
-          </p>
-        </div>
-        <div :if={@projection} class="flex shrink-0 flex-wrap items-center gap-2">
-          <span
-            :if={@dirty?}
-            id="pool-model-serving-dirty-status"
-            class={AdminBadges.metadata_chip_class(:warning)}
-          >
-            Unsaved changes
-          </span>
-          <span class={AdminBadges.count_chip_class()}>
-            {length(@projection.rows)} models
-          </span>
-        </div>
+      <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <h3 id="pool-model-serving-title" class="sr-only">Model serving modes</h3>
+        <span :if={@projection} class={AdminBadges.count_chip_class()}>
+          {length(@projection.rows)} models
+        </span>
       </div>
 
       <AdminComponents.extended_notice

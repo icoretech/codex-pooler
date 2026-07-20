@@ -898,7 +898,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-create-dialog[open]")
     assert has_element?(view, "#pool-create-form")
-    assert has_element?(view, "#pool-create-dialog-header", "Pool configuration")
+    assert has_element?(view, "#pool-create-dialog-header", "Create Pool")
     refute has_element?(view, "#pool-create-dialog-header", "Pool lifecycle")
     assert_policy_editor_docs_link(view, "pool-create-dialog")
     assert has_element?(view, "#pool-create-dialog-tabs[role='tablist']")
@@ -997,7 +997,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-create-dialog-step-upstreams-panel",
+             "#pool-create-dialog-header",
              "Pool upstream assignments"
            )
 
@@ -1012,7 +1012,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     view |> element("#pool-create-dialog-tab-api-keys") |> render_click()
 
     assert has_element?(view, "#pool-create-dialog-tab-api-keys[aria-selected='true']")
-    assert has_element?(view, "#pool-create-dialog-step-api-keys-panel", "API Keys")
+    assert has_element?(view, "#pool-create-dialog-header", "API Keys")
     assert has_element?(view, "#pool-create-api-key-options")
     assert has_element?(view, "#pool-create-api-key-options [data-assignment-scroll]")
 
@@ -2349,7 +2349,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
-    assert has_element?(view, "#pool-edit-dialog-header", "Pool configuration")
+    assert has_element?(view, "#pool-edit-dialog-header", "Edit Pool")
     refute has_element?(view, "#pool-edit-dialog-header", "Pool lifecycle")
 
     view |> element("#pool-edit-dialog-tab-routing") |> render_click()
@@ -2437,7 +2437,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(
              view,
-             "#pool-edit-dialog-step-upstreams-panel",
+             "#pool-edit-dialog-header",
              "Pool upstream assignments"
            )
 
@@ -2480,7 +2480,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-edit-dialog-tab-api-keys[aria-selected='true']")
     assert has_element?(view, "#pool-edit-dialog-section-api-keys[role='tabpanel']")
-    assert has_element?(view, "#pool-edit-dialog-step-api-keys-panel", "API Keys")
+    assert has_element?(view, "#pool-edit-dialog-header", "API Keys")
     assert has_element?(view, "#pool-edit-dialog-step-api-keys-panel-header")
     assert has_element?(view, "#pool-edit-api-key-count", "2 available")
 

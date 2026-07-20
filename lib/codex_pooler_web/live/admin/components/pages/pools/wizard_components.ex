@@ -66,6 +66,30 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     }
   }
 
+  @pool_step_headings %{
+    "details" => %{
+      title: "Pool details",
+      description: "Set the operator-facing name and lifecycle state for this Pool."
+    },
+    "routing" => %{
+      title: "Routing strategy",
+      description: "Choose how this Pool selects upstream accounts for runtime requests."
+    },
+    "upstreams" => %{
+      title: "Pool upstream assignments",
+      description: "Select the upstream accounts available to this Pool."
+    },
+    "api-keys" => %{
+      title: "API Keys",
+      description: "Select the API keys assigned to this Pool."
+    },
+    "models" => %{
+      title: "Model serving modes",
+      description:
+        "Choose the Responses serving path for each model currently known to this Pool."
+    }
+  }
+
   def normalize_step(step) when step in @pool_wizard_step_ids, do: step
   def normalize_step(_step), do: "details"
 
@@ -88,6 +112,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
       |> assign(pool_wizard_config(assigns.mode))
       |> assign(:docs_url, @pool_docs_url)
       |> assign(:steps, pool_wizard_steps(assigns.mode))
+      |> assign(:step_heading, pool_step_heading(assigns.current_step))
 
     ~H"""
     <div
@@ -96,9 +121,9 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     >
       <PolicyEditorComponents.policy_editor_dialog
         id={@id}
-        eyebrow="Pool configuration"
-        title={@title}
-        description={@description}
+        eyebrow={@title}
+        title={@step_heading.title}
+        description={@step_heading.description}
         steps={@steps}
         current_step={@current_step}
         sections_label="Pool sections"
@@ -122,12 +147,6 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "details")}
           >
             <section id={"#{@id}-step-details-panel"} class="grid min-w-0 gap-5">
-              <div class="grid gap-1">
-                <h3 class="text-lg font-semibold text-base-content">Pool details</h3>
-                <p class="text-sm leading-6 text-base-content/65">
-                  Set the operator-facing name and lifecycle state for this Pool.
-                </p>
-              </div>
               <div class={[
                 @mode == :edit && "grid gap-4 md:grid-cols-2",
                 @mode == :create && "grid gap-4"
@@ -157,12 +176,6 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             class={step_panel_class(@current_step, "routing")}
           >
             <section id={"#{@id}-step-routing-panel"} class="grid min-w-0 gap-5">
-              <div class="grid gap-1">
-                <h3 class="text-lg font-semibold text-base-content">Routing strategy</h3>
-                <p class="text-sm leading-6 text-base-content/65">
-                  Choose how this Pool selects upstream accounts for runtime requests.
-                </p>
-              </div>
               <div id={@routing_controls_id} class="pool-routing-policy-form grid">
                 <div class="pool-routing-policy-row">
                   <div class="min-w-0">
@@ -286,14 +299,8 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             <section id={"#{@id}-step-upstreams-panel"} class="grid min-w-0 gap-5">
               <div
                 id={"#{@id}-step-upstreams-panel-header"}
-                class="flex flex-wrap items-start justify-between gap-3"
+                class="flex flex-wrap items-center justify-end gap-3"
               >
-                <div class="grid gap-1">
-                  <h3 class="text-lg font-semibold text-base-content">Pool upstream assignments</h3>
-                  <p class="text-sm leading-6 text-base-content/65">
-                    Select the upstream accounts available to this Pool.
-                  </p>
-                </div>
                 <span
                   id={@upstream_count_id}
                   class={AdminBadges.count_chip_class()}
@@ -319,14 +326,8 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
             <section id={"#{@id}-step-api-keys-panel"} class="grid min-w-0 gap-5">
               <div
                 id={"#{@id}-step-api-keys-panel-header"}
-                class="flex flex-wrap items-start justify-between gap-3"
+                class="flex flex-wrap items-center justify-end gap-3"
               >
-                <div class="grid gap-1">
-                  <h3 class="text-lg font-semibold text-base-content">API Keys</h3>
-                  <p class="text-sm leading-6 text-base-content/65">
-                    Select the API keys assigned to this Pool.
-                  </p>
-                </div>
                 <span
                   id={@access_count_id}
                   class={AdminBadges.count_chip_class()}
@@ -360,6 +361,13 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         </div>
 
         <:actions>
+          <span
+            :if={@mode == :edit && @current_step == "models" && @model_serving_dirty?}
+            id="pool-model-serving-dirty-status"
+            class={[AdminBadges.metadata_chip_class(:warning), "self-center"]}
+          >
+            Unsaved changes
+          </span>
           <AdminComponents.action_button
             id={@cancel_id}
             label="Cancel"
@@ -454,6 +462,8 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   end
 
   defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
+
+  defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
 
   defp pool_wizard_steps(:edit), do: @pool_wizard_steps
   defp pool_wizard_steps(:create), do: Enum.reject(@pool_wizard_steps, &(&1.id == :models))
