@@ -183,6 +183,58 @@ const buildChartTooltip = ({
 		},
 	};
 };
+const AssignmentTools = {
+	mounted() {
+		this.filterInput = this.el.querySelector("[data-role='assignment-filter']");
+
+		this.onInput = (event) => {
+			if (event.target === this.filterInput) {
+				this.applyFilter();
+			}
+		};
+
+		this.onClick = (event) => {
+			const action = event.target.closest("[data-assignment-action]");
+
+			if (!action || !this.el.contains(action)) {
+				return;
+			}
+
+			const check = action.dataset.assignmentAction === "select-all";
+
+			for (const card of this.visibleCards()) {
+				const box = card.querySelector("input[type='checkbox']");
+
+				if (box && !box.disabled) {
+					box.checked = check;
+				}
+			}
+		};
+
+		this.el.addEventListener("input", this.onInput);
+		this.el.addEventListener("click", this.onClick);
+	},
+	updated() {
+		this.applyFilter();
+	},
+	destroyed() {
+		this.el.removeEventListener("input", this.onInput);
+		this.el.removeEventListener("click", this.onClick);
+	},
+	cards() {
+		return Array.from(this.el.querySelectorAll("[data-assignment-scroll] label"));
+	},
+	visibleCards() {
+		return this.cards().filter((card) => !card.hidden);
+	},
+	applyFilter() {
+		const query = (this.filterInput?.value || "").trim().toLowerCase();
+
+		for (const card of this.cards()) {
+			card.hidden = query !== "" && !card.textContent.toLowerCase().includes(query);
+		}
+	},
+};
 const ClipboardCopy = {
 	mounted() {
 		this.el.addEventListener("click", async () => {
@@ -1218,6 +1270,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		AdminFilterDropdowns,
 		ApexBarChart,
 		ApexTimeSeriesChart,
+		AssignmentTools,
 		CallyDatePicker,
 		ClipboardCopy,
 		FlashAutoDismiss,

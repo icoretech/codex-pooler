@@ -995,6 +995,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-create-dialog-tab-upstreams[aria-selected='true']")
 
+    refute has_element?(view, "#pool-create-upstream-identity-options-filter")
+    refute has_element?(view, "#pool-create-upstream-identity-options-select-all")
+
     assert has_element?(
              view,
              "#pool-create-dialog-header",
@@ -2451,6 +2454,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-edit-upstream-assignment-options")
     assert has_element?(view, "#pool-edit-upstream-assignment-options [data-assignment-scroll]")
+    assert has_element?(view, "#pool-edit-upstream-assignment-options-filter")
+    assert has_element?(view, "#pool-edit-upstream-assignment-options-select-all", "Select all")
+    assert has_element?(view, "#pool-edit-upstream-assignment-options-clear", "Clear")
 
     refute has_element?(
              view,
@@ -2491,6 +2497,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     assert has_element?(view, "#pool-edit-api-key-options")
     assert has_element?(view, "#pool-edit-api-key-options [data-assignment-scroll]")
+    assert has_element?(view, "#pool-edit-api-key-options-filter")
+    assert has_element?(view, "#pool-edit-api-key-options-select-all", "Select all")
+    assert has_element?(view, "#pool-edit-api-key-options-clear", "Clear")
     assert has_element?(view, "#pool-edit-api-key-options", "Keep linked key")
     assert has_element?(view, "#pool-edit-api-key-options", "Move linked key")
     assert has_element?(view, "#pool-edit-api-key-options", "Editable Routing")

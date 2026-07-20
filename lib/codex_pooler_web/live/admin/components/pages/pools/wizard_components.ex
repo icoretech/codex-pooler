@@ -313,6 +313,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 field={@form[@upstream_field]}
                 options={@upstream_options}
                 empty_label={@upstream_empty_label}
+                filter_placeholder="Filter accounts…"
               />
             </section>
           </div>
@@ -340,6 +341,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                 field={@form[:api_key_ids]}
                 options={@api_key_options}
                 empty_label="No API keys are available yet."
+                filter_placeholder="Filter keys…"
               />
             </section>
           </div>
@@ -405,16 +407,51 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   attr :field, Phoenix.HTML.FormField, required: true
   attr :options, :list, required: true
   attr :empty_label, :string, required: true
+  attr :filter_placeholder, :string, default: "Filter…"
 
   defp assignment_checkbox_cards(assigns) do
+    assigns = assign(assigns, :options, sort_selected_first(assigns.options, assigns.field))
+
     ~H"""
-    <section id={@id} class="grid gap-2">
+    <section id={@id} class="grid gap-2" phx-hook="AssignmentTools">
       <input type="hidden" name={PoolForm.field_array_name(@field)} value="" />
-      <div class="grid max-h-[8.5rem] gap-2 overflow-y-auto" data-assignment-scroll="true">
+      <div :if={@options != []} class="flex min-w-0 flex-wrap items-center gap-2">
+        <input
+          id={"#{@id}-filter"}
+          type="text"
+          data-role="assignment-filter"
+          placeholder={@filter_placeholder}
+          aria-label={@filter_placeholder}
+          autocomplete="off"
+          class="input input-sm w-52 max-w-full"
+        />
+        <div class="ml-auto flex items-center gap-1">
+          <button
+            id={"#{@id}-select-all"}
+            type="button"
+            data-assignment-action="select-all"
+            class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
+          >
+            Select all
+          </button>
+          <button
+            id={"#{@id}-clear"}
+            type="button"
+            data-assignment-action="clear"
+            class="btn btn-ghost btn-xs text-base-content/60 hover:text-base-content"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+      <div
+        class="grid max-h-[max(8.5rem,calc(100dvh-23rem))] content-start gap-2 overflow-y-auto sm:grid-cols-2"
+        data-assignment-scroll="true"
+      >
         <label
           :for={option <- @options}
           id={"#{@id}-card-#{PoolForm.dom_token(PoolForm.option_value(option))}"}
-          class="flex min-h-12 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/5"
+          class="flex min-h-10 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-1.5 transition-colors hover:border-primary/50 hover:bg-primary/5"
         >
           <input
             type="checkbox"
@@ -464,6 +501,13 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
 
   defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
+
+  defp sort_selected_first(options, field) do
+    Enum.sort_by(options, fn option ->
+      selected? = PoolForm.selected_value?(field.value, PoolForm.option_value(option))
+      {!selected?, String.downcase(to_string(PoolForm.option_label(option)))}
+    end)
+  end
 
   defp pool_wizard_steps(:edit), do: @pool_wizard_steps
   defp pool_wizard_steps(:create), do: Enum.reject(@pool_wizard_steps, &(&1.id == :models))
