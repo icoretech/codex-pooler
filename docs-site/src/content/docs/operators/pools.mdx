@@ -32,6 +32,7 @@ A Pool controls:
 7. request compression, which can reduce upstream-bound Responses tool-output payloads for eligible route families
 8. image-generation permission for the supported image generation and edit routes
 9. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
+10. per-model serving mode, which chooses Auto, Lite, or Full backend Responses behavior without changing the model id clients use
 
 ## Page Metrics
 
@@ -273,6 +274,49 @@ The edit Details step includes the Pool name and lifecycle status. Status is the
 
 The edit Routing step uses the same routing controls as create. Changes apply to new runtime work after the Pool is saved. In-flight requests and already-open streams keep the routing state they started with.
 
+### Model Serving Modes
+
+The edit-only `Models` step controls the serving mode for each model available to the Pool. A saved choice belongs to one Pool-model pair. The same model can therefore use different modes in different Pools, while each Pool continues to expose one client-visible model id.
+
+![Edit Pool model serving modes step](/operators/pools/pools-edit-dialog-models.png)
+
+Use `Auto` unless a provider-specific requirement calls for an override:
+
+<table>
+  <thead>
+    <tr>
+      <th>Mode</th>
+      <th>Behavior</th>
+      <th>Operator guidance</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Auto</td>
+      <td>Uses Lite when any routable catalog source reports literal <code>true</code> for Lite support. False, missing, or malformed source values do not count; otherwise the effective mode is Full. For legacy catalog rows without a source-assignment map, a literal top-level <code>use_responses_lite: true</code> selects Lite; every other legacy value selects Full.</td>
+      <td>Recommended. It follows current catalog evidence as assignments and provider capabilities change.</td>
+    </tr>
+    <tr>
+      <td>Lite</td>
+      <td>Forces the Lite backend request shape for this Pool-model pair.</td>
+      <td>Use when the selected provider requires the Lite-compatible request shape.</td>
+    </tr>
+    <tr>
+      <td>Full</td>
+      <td>Preserves ordinary Responses options such as the client's <code>parallel_tool_calls</code> value and removes the Lite marker.</td>
+      <td>Advanced and provider-dependent. An upstream can reject it now or after a provider change.</td>
+    </tr>
+  </tbody>
+</table>
+
+Codex, OpenCode, and other supported public OpenAI-compatible clients keep their existing Pool API key, base URL, configuration, and model id. Codex Pooler changes only the backend request selected for that Pool-model pair. `GET /v1/models` remains unchanged and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
+
+One HTTP request or one websocket `response.create` turn keeps the mode it started with across retries, assignment failover, and cross-node owner forwarding. A later websocket turn can pick up a saved change. Mode selection does not remove otherwise eligible assignments from the candidate set.
+
+Full never silently downgrades. A generic ordinary Responses HTTP failure under the explicit Full override keeps the upstream status but returns only a fixed server-owned error; provider message, body, code, param, and extra fields are not returned. Request logs classify a non-rate-limit 4xx as `full_upstream_rejection`, a 429 as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`, alongside the configured/effective/source mode labels. They do not retain the upstream error text, request payload, prompt, response body, or credentials. Auto, Lite, compact or unrelated routes, and established model-unavailability responses keep their existing response behavior. Review provider support, then explicitly select `Auto` or `Lite` and retry as a new request or turn.
+
+Serving modes are database-backed Pool configuration. There is no global environment variable or Helm value for them.
+
 ## Operational Checklist
 
 When a Pool is not behaving as expected, check it in this order:
@@ -285,6 +329,7 @@ When a Pool is not behaving as expected, check it in this order:
 6. inspect recent Requests 5h, TPS 5h, and Traffic 24h for changes in load
 7. open Request logs filtered from the card footer for request-level metadata
 8. for request-compression questions, inspect `payload_compression` status, reason, route class, candidate counts, and savings display in the Request log row
-9. check Audit logs when a Pool, upstream assignment, API key, or routing setting changed recently
+9. for explicit Full failures, inspect `full_upstream_rejection` for non-rate-limit 4xx, `upstream_rate_limited` for 429, or `upstream_status` for 5xx, the upstream status, and only the three bounded serving-mode labels before selecting `Auto` or `Lite`
+10. check Audit logs when a Pool, upstream assignment, API key, routing setting, or model serving mode changed recently
 
 If all upstreams fail eligibility, routing cannot use them even if the Pool card looks active. The card shows Pool-level configuration, while final routing also depends on upstream status, model support, quota evidence, route health, and continuity constraints.
