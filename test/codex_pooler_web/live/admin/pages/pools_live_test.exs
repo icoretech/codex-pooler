@@ -2,22 +2,29 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
+  import Ecto.Query
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport
   import ExUnit.CaptureLog
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts
+  alias CodexPooler.Catalog
+  alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
+  alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
+  alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
 
   setup :register_and_log_in_user
@@ -897,6 +904,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-dialog-tabs[role='tablist']")
     assert has_element?(view, "#pool-create-dialog-tab-details[aria-selected='true']")
     assert has_element?(view, "#pool-create-dialog-tab-routing[role='tab']")
+    refute has_element?(view, "#pool-create-dialog-tab-models")
+    refute has_element?(view, "#pool-create-dialog-section-models")
+    refute has_element?(view, "#pool-model-serving-form")
 
     assert has_element?(
              view,
@@ -911,6 +921,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-create-dialog-section-api-keys[role='tabpanel']")
     assert has_element?(view, "#pool-create-dialog-step-details-panel")
     assert has_element?(view, "#pool_name")
+
+    render_click(view, "pool_wizard_step", %{"step" => "models"})
+    assert has_element?(view, "#pool-create-dialog-tab-details[aria-selected='true']")
 
     view |> element("#pool-create-dialog-tab-routing") |> render_click()
 
@@ -1303,6 +1316,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-edit-dialog-tabs[role='tablist']")
     assert has_element?(view, "#pool-edit-dialog-tab-details[aria-selected='true']")
     assert has_element?(view, "#pool-edit-dialog-tab-routing[role='tab']")
+    assert has_element?(view, "#pool-edit-dialog-tab-models[role='tab']")
     assert has_element?(view, "#pool-edit-dialog-tab-upstreams[role='tab']")
     assert has_element?(view, "#pool-edit-dialog-tab-api-keys[role='tab']")
     assert has_element?(view, "#pool-edit-dialog-section-details[role='tabpanel']")
@@ -1331,6 +1345,975 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-status", "disabled")
     refute has_element?(view, "#pool-row-#{pool.id}", "editable-pool")
     _ = await_pool_traffic(view)
+  end
+
+  test "keeps Models last in the edit wizard while Create stays four tabs", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "wizard-tab-order", name: "Wizard Tab Order"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    open_create_dialog(view)
+
+    assert_pool_wizard_tab_order(view, "pool-create-dialog", [
+      {"details", "Details"},
+      {"routing", "Routing"},
+      {"upstreams", "Upstreams"},
+      {"api-keys", "API keys"}
+    ])
+
+    view |> element("#pool-create-cancel") |> render_click()
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    assert_pool_wizard_tab_order(view, "pool-edit-dialog", [
+      {"details", "Details"},
+      {"routing", "Routing"},
+      {"upstreams", "Upstreams"},
+      {"api-keys", "API keys"},
+      {"models", "Models"}
+    ])
+  end
+
+  test "saves model modes through the edit-only form without overwriting concurrent Pool state",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "model-modes", name: "Model Modes"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    model_fixture(pool, %{
+      exposed_model_id: "gpt-model-modes",
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
+
+    %{api_key: api_key} = api_key_fixture(pool, %{display_name: "Model mode key", scope: scope})
+    assert {:ok, snapshot} = Pools.model_serving_modes_snapshot(scope, pool)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert has_element?(view, "#pool-edit-dialog-tab-models[aria-selected='true']")
+    assert has_element?(view, "#pool-edit-dialog-section-models[role='tabpanel']")
+    assert has_element?(view, "#pool-model-serving-form")
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[name='pool_model_serving[rows][0][exposed_model_id]'][value='gpt-model-modes']"
+           )
+
+    pool
+    |> Ecto.Changeset.change(
+      name: "Concurrently renamed",
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    )
+    |> Repo.update!()
+
+    assert {:ok, _settings} =
+             PoolRouting.update_routing_settings(scope, pool, %{
+               "routing_strategy" => "quota_first"
+             })
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => snapshot.revision,
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-model-modes", "mode" => "lite"}
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: "gpt-model-modes"
+             )
+
+    assert Repo.get!(Pool, pool.id).name == "Concurrently renamed"
+    assert PoolRouting.get_routing_settings(pool).routing_strategy == "quota_first"
+    assert Repo.get!(PoolUpstreamAssignment, assignment.id).status == "active"
+    assert Repo.get!(APIKey, api_key.id).pool_id == pool.id
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-models[aria-selected='true']")
+    assert has_element?(view, "#pool-edit-form")
+    _ = render_async(view)
+    _ = await_pool_traffic(view)
+  end
+
+  @tag :task_15_acceptance
+  test "issue 180 routes an Edit Pool mode save through the authenticated gateway", %{
+    conn: conn,
+    scope: scope
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_task_15_red",
+          "object" => "response",
+          "status" => "completed",
+          "output" => []
+        })
+      )
+
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "task-15-red", name: "Task 15 Red"})
+    setup = active_api_key_fixture(pool, %{scope: scope})
+    upstream_ref = gateway_upstream(pool, upstream, "synthetic-upstream-token", [])
+    prime_routing_quota!(upstream_ref.identity)
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-task-15-red",
+        upstream_model_id: "provider-gpt-task-15-red",
+        metadata: %{"source_assignment_ids" => [upstream_ref.assignment.id]}
+      })
+
+    setup =
+      Map.merge(setup, %{
+        identity: upstream_ref.identity,
+        assignment: upstream_ref.assignment,
+        model: model
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    revision = model_serving_revision(view)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => revision,
+        "rows" => %{
+          "0" => %{"exposed_model_id" => model.exposed_model_id, "mode" => "lite"}
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: model.exposed_model_id
+             )
+
+    catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => true}]} =
+             json_response(catalog_response, 200)
+
+    response =
+      build_conn()
+      |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-full")
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 red input",
+        "parallel_tool_calls" => true
+      })
+
+    assert %{"id" => "resp_task_15_red"} = json_response(response, 200)
+    assert [%{json: payload, headers: headers}] = FakeUpstream.requests(upstream)
+    assert payload["model"] == model.upstream_model_id
+    assert payload["parallel_tool_calls"] == false
+    assert Map.new(headers)["x-openai-internal-codex-responses-lite"] == "true"
+
+    pool_id = pool.id
+
+    assert [request] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^pool_id and r.endpoint == "/backend-api/codex/responses"
+               )
+             )
+
+    assert get_in(request.request_metadata, ["routing", "model_serving_mode"]) == "lite"
+    request_id = request.id
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_id))
+    assert get_in(attempt.response_metadata, ["routing", "model_serving_mode"]) == "lite"
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    full_revision = model_serving_revision(view)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => full_revision,
+        "rows" => %{
+          "0" => %{"exposed_model_id" => model.exposed_model_id, "mode" => "full"}
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "full"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: model.exposed_model_id
+             )
+
+    full_catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+             json_response(full_catalog_response, 200)
+
+    full_payloads = [
+      %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 full absent input"
+      },
+      %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 full true input",
+        "parallel_tool_calls" => true
+      },
+      %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 full false input",
+        "parallel_tool_calls" => false
+      }
+    ]
+
+    Enum.each(full_payloads, fn payload ->
+      response =
+        build_conn()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", payload)
+
+      assert %{"id" => "resp_task_15_red"} = json_response(response, 200)
+    end)
+
+    assert [lite_capture, full_absent, full_true, full_false] = FakeUpstream.requests(upstream)
+    assert lite_capture.json["model"] == model.upstream_model_id
+    assert lite_capture.json["parallel_tool_calls"] == false
+    assert Map.new(lite_capture.headers)["x-openai-internal-codex-responses-lite"] == "true"
+
+    for capture <- [full_absent, full_true, full_false] do
+      assert capture.json["model"] == model.upstream_model_id
+      refute Map.has_key?(Map.new(capture.headers), "x-openai-internal-codex-responses-lite")
+    end
+
+    refute Map.has_key?(full_absent.json, "parallel_tool_calls")
+    assert full_true.json["parallel_tool_calls"] == true
+    assert full_false.json["parallel_tool_calls"] == false
+
+    full_requests =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^pool_id and r.endpoint == "/backend-api/codex/responses",
+          order_by: [asc: r.admitted_at]
+        )
+      )
+
+    assert length(full_requests) == 4
+
+    for request <- full_requests do
+      expected = %{
+        "model_serving_mode_configured" =>
+          if(request == hd(full_requests), do: "lite", else: "full"),
+        "model_serving_mode" => if(request == hd(full_requests), do: "lite", else: "full"),
+        "model_serving_mode_source" => "override"
+      }
+
+      assert Map.take(request.request_metadata["routing"], Map.keys(expected)) == expected
+      request_id = request.id
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_id))
+      assert Map.take(attempt.response_metadata["routing"], Map.keys(expected)) == expected
+    end
+
+    raw_provider_failure = "raw-task-15-provider-response-sentinel"
+
+    FakeUpstream.set_mode(
+      upstream,
+      FakeUpstream.http_500_json_error(%{
+        "error" => %{
+          "code" => "server_error",
+          "message" => raw_provider_failure,
+          "provider_body" => raw_provider_failure
+        }
+      })
+    )
+
+    invalid_response =
+      build_conn()
+      |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 invalid full input"
+      })
+
+    assert %{"error" => %{"code" => "server_error"}} = json_response(invalid_response, 500)
+    refute invalid_response.resp_body =~ raw_provider_failure
+
+    assert %ModelServingOverride{mode: "full"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: model.exposed_model_id
+             )
+
+    [failed_request | _successful_requests] =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^pool_id and r.endpoint == "/backend-api/codex/responses",
+          order_by: [desc: r.admitted_at]
+        )
+      )
+
+    assert failed_request.status == "failed"
+    assert failed_request.last_error_code == "upstream_status"
+    failed_request_id = failed_request.id
+
+    assert [failed_attempt] =
+             Repo.all(from(a in Attempt, where: a.request_id == ^failed_request_id))
+
+    assert failed_attempt.status == "failed"
+    refute inspect(failed_request.request_metadata) =~ raw_provider_failure
+    refute inspect(failed_attempt.response_metadata) =~ raw_provider_failure
+
+    FakeUpstream.set_mode(
+      upstream,
+      FakeUpstream.json_response(%{
+        "id" => "resp_task_15_after_full_failure",
+        "object" => "response",
+        "status" => "completed",
+        "output" => []
+      })
+    )
+
+    retained_response =
+      build_conn()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic task 15 retained full input"
+      })
+
+    assert %{"id" => "resp_task_15_after_full_failure"} =
+             json_response(retained_response, 200)
+
+    retained_capture = List.last(FakeUpstream.requests(upstream))
+    assert retained_capture.json["model"] == model.upstream_model_id
+
+    refute Map.has_key?(
+             Map.new(retained_capture.headers),
+             "x-openai-internal-codex-responses-lite"
+           )
+
+    retained_catalog = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+
+    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+             json_response(retained_catalog, 200)
+  end
+
+  test "rejects stale model mode edits and preserves the submitted form state", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "stale-model-modes", name: "Stale Modes"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    model_fixture(pool, %{
+      exposed_model_id: "gpt-stale-modes",
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
+
+    assert {:ok, initial} = Pools.model_serving_modes_snapshot(scope, pool)
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert {:ok, committed} =
+             Pools.update_model_serving_modes(
+               scope,
+               pool,
+               [%{exposed_model_id: "gpt-stale-modes", mode: "lite"}],
+               initial.revision
+             )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => initial.revision,
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-stale-modes", "mode" => "full"}
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-models[aria-selected='true']")
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='radio'][value='full'][checked]"
+           )
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: "gpt-stale-modes"
+             )
+
+    assert committed.revision != initial.revision
+    assert model_serving_revision(view) == committed.revision
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => committed.revision,
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-stale-modes", "mode" => "full"}
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "full"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: "gpt-stale-modes"
+             )
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+  end
+
+  test "loads the edit-only Models panel and renders accessible mode controls", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "model-controls", name: "Model Controls"})
+
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _auto_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-auto-model",
+        display_name: "Auto model",
+        metadata: %{
+          "source_assignment_ids" => [assignment.id],
+          "use_responses_lite" => true
+        }
+      })
+
+    unavailable_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-saved-unavailable",
+        display_name: "Saved unavailable",
+        metadata: %{
+          "source_assignment_ids" => [assignment.id],
+          "use_responses_lite" => false
+        }
+      })
+
+    assert {:ok, snapshot} = Pools.model_serving_modes_snapshot(scope, pool)
+
+    assert {:ok, _result} =
+             Pools.update_model_serving_modes(
+               scope,
+               pool,
+               [%{exposed_model_id: unavailable_model.exposed_model_id, mode: "full"}],
+               snapshot.revision
+             )
+
+    assert {:ok, _retired_model} = Catalog.retire_model(unavailable_model)
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    loading_html = view |> element("#edit-pool-#{pool.id}") |> render_click()
+    assert loading_html =~ ~s(id="pool-model-serving-state-loading")
+
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert has_element?(view, "#pool-edit-dialog-tab-models[aria-selected='true']")
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-panel[data-state='ready'][aria-busy='false']:not([aria-live])"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-state-ready[role='status'][aria-live='polite']",
+             "Model serving modes loaded"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form[phx-change='validate_pool_model_serving'][aria-labelledby='pool-model-serving-title']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-revision[name='pool_model_serving[revision]']"
+           )
+
+    assert has_element?(view, "#pool-model-serving-guidance[role='note']", "Auto is recommended")
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-guidance",
+             "Full is an advanced provider-dependent override that uses ordinary Responses"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-guidance",
+             "Upstream compatibility can change or reject Full requests"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-guidance",
+             "Pooler never silently downgrades Full"
+           )
+
+    auto_row_id = PoolForm.model_serving_dom_id("gpt-auto-model")
+    unavailable_row_id = PoolForm.model_serving_dom_id("gpt-saved-unavailable")
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}[data-role='pool-model-serving-row'][data-availability='available'][aria-describedby='#{auto_row_id}-effective']"
+           )
+
+    assert has_element?(view, "##{auto_row_id} legend", "Auto model")
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-effective[data-role='pool-model-serving-effective'][data-effective-mode='lite']",
+             "Effective Lite"
+           )
+
+    for mode <- ~w(auto lite full) do
+      assert has_element?(
+               view,
+               "##{auto_row_id}-#{mode}[type='radio'][name='pool_model_serving[rows][0][mode]'][aria-describedby='#{auto_row_id}-#{mode}-help']"
+             )
+    end
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}[data-role='pool-model-serving-row'][data-availability='saved-unavailable']"
+           )
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning[role='status']",
+             "Saved setting retained"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='hidden'][name='pool_model_serving[rows][1][exposed_model_id]'][value='gpt-saved-unavailable']"
+           )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_change(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-auto-model", "mode" => "auto"},
+          "1" => %{"exposed_model_id" => "gpt-saved-unavailable", "mode" => "auto"}
+        }
+      }
+    })
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-effective[data-effective-mode='removed']",
+             "Will be removed on save"
+           )
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning",
+             "Will be removed on save"
+           )
+  end
+
+  test "saving Pool fields keeps unsaved model-mode choices in the open dialog", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "cross-form-state", name: "Cross Form State"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    model_fixture(pool, %{
+      exposed_model_id: "gpt-cross-form-state",
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_change(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-cross-form-state", "mode" => "full"}
+        }
+      }
+    })
+
+    view |> element("#pool-edit-dialog-tab-details") |> render_click()
+
+    view
+    |> element("#pool-edit-form")
+    |> render_submit(%{
+      "pool_edit" => %{
+        "id" => pool.id,
+        "name" => "Cross Form State Updated",
+        "status" => "active",
+        "routing_strategy" => "bridge_ring",
+        "bridge_ring_size" => "3",
+        "sticky_websocket_sessions" => "true",
+        "sticky_http_sessions" => "false",
+        "prompt_cache_affinity_enabled" => "true",
+        "v1_compatibility_enabled" => "true",
+        "request_compression_enabled" => "false",
+        "allow_image_generation" => "false",
+        "upstream_identity_ids" => [assignment.upstream_identity_id]
+      }
+    })
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert Repo.get!(Pool, pool.id).name == "Cross Form State Updated"
+
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='radio'][value='full'][checked]"
+           )
+
+    refute Repo.get_by(ModelServingOverride, pool_id: pool.id)
+  end
+
+  test "Auto shows the same effective mode as runtime after assignment routability filtering", %{
+    conn: conn,
+    scope: scope
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_auto_routability",
+          "object" => "response",
+          "status" => "completed",
+          "output" => []
+        })
+      )
+
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "auto-routability",
+        name: "Auto Routability"
+      })
+
+    setup = active_api_key_fixture(pool, %{scope: scope})
+    active_full = gateway_upstream(pool, upstream, "synthetic-upstream-token", [])
+    prime_routing_quota!(active_full.identity)
+
+    %{assignment: ineligible_lite} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Ineligible Lite source",
+        eligibility_status: "ineligible"
+      })
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-auto-routability",
+        upstream_model_id: "provider-gpt-auto-routability",
+        display_name: "Auto routability",
+        metadata: %{
+          "source_assignment_ids" => [ineligible_lite.id, active_full.assignment.id],
+          "source_assignment_models" => %{
+            ineligible_lite.id => %{"use_responses_lite" => true},
+            active_full.assignment.id => %{"use_responses_lite" => false}
+          },
+          "use_responses_lite" => true
+        }
+      })
+
+    setup =
+      Map.merge(setup, %{
+        identity: active_full.identity,
+        assignment: active_full.assignment,
+        model: model
+      })
+
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    # Given one ineligible Lite source and one active Full source, runtime filters first
+    response =
+      build_conn()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic Auto routability input"
+      })
+
+    assert %{"id" => "resp_auto_routability"} = json_response(response, 200)
+    assert [%{headers: headers}] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(Map.new(headers), "x-openai-internal-codex-responses-lite")
+
+    pool_id = pool.id
+
+    assert [request] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^pool_id and r.endpoint == "/backend-api/codex/responses"
+               )
+             )
+
+    assert get_in(request.request_metadata, ["routing", "model_serving_mode"]) == "full"
+
+    # When the operator opens the Models panel for the same Pool/model
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    row_id = PoolForm.model_serving_dom_id(model.exposed_model_id)
+
+    # Then Auto reports the same Full result rather than counting the ineligible Lite source
+    assert has_element?(
+             view,
+             "##{row_id}-effective[data-role='pool-model-serving-effective'][data-effective-mode='full']",
+             "Effective Full"
+           )
+  end
+
+  test "renders a usable empty Models state with its revision", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-empty", name: "Models Empty"})
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    assert has_element?(view, "#pool-model-serving-panel[data-state='empty']")
+    assert has_element?(view, "#pool-model-serving-state-empty-announcement[role='status']")
+    assert has_element?(view, "#pool-model-serving-state-empty", "No routable models")
+    assert has_element?(view, "#pool-model-serving-revision[value]")
+    refute has_element?(view, "[data-role='pool-model-serving-row']")
+    refute has_element?(view, "#pool-model-serving-submit")
+  end
+
+  test "keeps saved choices usable when the catalog reports an error", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-error", name: "Models Error"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-error-state",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    _sync_run = catalog_sync_run_fixture(pool, "failed")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    assert has_element?(view, "#pool-model-serving-panel[data-state='error']")
+    assert has_element?(view, "#pool-model-serving-state-error[role='alert']")
+    assert has_element?(view, "[data-role='pool-model-serving-row']")
+    assert has_element?(view, "#pool-model-serving-submit:not([disabled])")
+  end
+
+  test "marks a stale catalog without disabling model mode edits", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-stale", name: "Models Stale"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-stale-catalog",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    _sync_run =
+      catalog_sync_run_fixture(pool, "succeeded",
+        finished_at: DateTime.add(DateTime.utc_now(), -2, :day)
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    assert has_element?(view, "#pool-model-serving-panel[data-state='stale']")
+    assert has_element?(view, "#pool-model-serving-state-stale[role='status']")
+    assert has_element?(view, "[data-role='pool-model-serving-row']")
+    assert has_element?(view, "#pool-model-serving-submit:not([disabled])")
+  end
+
+  test "preserves a dirty mode form when model sync completes and refreshes after reopen", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-dirty", name: "Models Dirty"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-dirty-state",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_change(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-dirty-state", "mode" => "full"}
+        }
+      }
+    })
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='radio'][value='full'][checked]"
+           )
+
+    _late_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-after-sync",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    assert {:ok, _event} = Events.broadcast_model_sync(pool, "model_sync_completed")
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#pool-model-serving-state-stale[role='status']")
+    assert has_element?(view, "#pool-model-serving-state-stale", "unsaved choices are preserved")
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='radio'][value='full'][checked]"
+           )
+
+    refute has_element?(
+             view,
+             "#pool-model-serving-form input[type='hidden'][value='gpt-after-sync']"
+           )
+
+    view |> element("#pool-edit-cancel") |> render_click()
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-form input[type='hidden'][value='gpt-after-sync']"
+           )
+  end
+
+  test "rejects a forged model id without synthesizing it into the error form", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-forged", name: "Models Forged"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-known-model",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-known-model", "mode" => "full"},
+          "1" => %{"exposed_model_id" => "forged-model", "mode" => "lite"}
+        }
+      }
+    })
+
+    assert has_element?(view, "#pool-model-serving-panel[data-state='error']")
+    assert has_element?(view, "#pool-model-serving-form input[value='full'][checked]")
+    refute has_element?(view, "#pool-model-serving-form input[value='forged-model']")
+    refute Repo.get_by(ModelServingOverride, pool_id: pool.id)
+  end
+
+  test "rejects an invalid mode without changing persisted state", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "models-invalid", name: "Models Invalid"})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    _model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-valid-mode",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{"exposed_model_id" => "gpt-valid-mode", "mode" => "unsupported"}
+        }
+      }
+    })
+
+    assert has_element?(view, "#pool-model-serving-panel[data-state='error']")
+    assert has_element?(view, "#pool-model-serving-state-error[role='alert']")
+    refute Repo.get_by(ModelServingOverride, pool_id: pool.id)
   end
 
   test "edits routing strategy and selected upstream identity rows", %{conn: conn, scope: scope} do
@@ -1554,7 +2537,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert Repo.get!(PoolUpstreamAssignment, kept_assignment.id).status == "active"
     assert Repo.get!(APIKey, linked_api_key.id).pool_id == pool.id
     assert Repo.get!(APIKey, moved_api_key.id).pool_id == pool.id
-    refute has_element?(view, "#pool-edit-dialog")
+    assert has_element?(view, "#pool-edit-dialog[open]")
     _ = await_pool_traffic(view)
   end
 
@@ -1814,7 +2797,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     state = :sys.get_state(view.pid)
 
     assert state.socket.assigns.subscribed_pool_event_topics ==
-             MapSet.new(["pools", "upstreams", "usage"])
+             MapSet.new(["model_sync", "pools", "upstreams", "usage"])
 
     {_result, request_log_queries} =
       capture_repo_queries(view.pid, fn ->
@@ -2005,7 +2988,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert settings.request_compression_enabled == false
     assert settings.allow_image_generation == true
     assert Repo.get!(Pool, pool.id).name == "Preserved Routing"
-    refute has_element?(view, "#pool-edit-dialog")
+    assert has_element?(view, "#pool-edit-dialog[open]")
     _ = await_pool_traffic(view)
   end
 
@@ -2299,6 +3282,60 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "##{dialog_id}-docs-link [data-role='policy-editor-docs-icon']"
            )
+  end
+
+  defp assert_pool_wizard_tab_order(view, dialog_id, expected_tabs) do
+    Enum.with_index(expected_tabs, 1)
+    |> Enum.each(fn {{step_id, label}, ordinal} ->
+      tab_selector =
+        "##{dialog_id}-tabs > li:nth-child(#{ordinal}) > ##{dialog_id}-tab-#{step_id}"
+
+      assert has_element?(view, "#{tab_selector}[role='tab']", label)
+
+      assert has_element?(
+               view,
+               "#{tab_selector} [data-role='policy-editor-step-marker']",
+               Integer.to_string(ordinal)
+             )
+    end)
+
+    refute has_element?(
+             view,
+             "##{dialog_id}-tabs > li:nth-child(#{length(expected_tabs) + 1})"
+           )
+  end
+
+  defp open_edit_models(view, pool) do
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+  end
+
+  defp model_serving_revision(view) do
+    html = view |> element("#pool-model-serving-revision") |> render()
+    [_, revision] = Regex.run(~r/\bvalue="([a-f0-9]+)"/, html)
+    revision
+  end
+
+  defp catalog_sync_run_fixture(pool, status, opts \\ []) do
+    finished_at = Keyword.get(opts, :finished_at, DateTime.utc_now())
+    started_at = Keyword.get(opts, :started_at, DateTime.add(finished_at, -1, :second))
+
+    %SyncRun{}
+    |> SyncRun.changeset(%{
+      pool_id: pool.id,
+      trigger_kind: "manual",
+      status: status,
+      started_at: started_at,
+      finished_at: if(status in ["succeeded", "failed", "cancelled"], do: finished_at),
+      discovered_model_count: 0,
+      upserted_model_count: 0,
+      stale_marked_count: 0,
+      retired_count: 0,
+      error_message: if(status == "failed", do: "model catalog refresh failed"),
+      stats: %{}
+    })
+    |> Repo.insert!()
   end
 
   defp quota_window_attrs(window_kind, window_minutes, active_limit, used_percent, reset_at) do

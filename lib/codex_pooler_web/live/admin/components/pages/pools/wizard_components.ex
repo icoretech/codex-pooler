@@ -9,12 +9,14 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PolicyEditorComponents
   alias CodexPoolerWeb.Admin.PoolForm
+  alias CodexPoolerWeb.Admin.PoolModelServingComponents
 
   @pool_wizard_steps [
     %{id: :details, label: "Details", description: "Name and lifecycle"},
     %{id: :routing, label: "Routing", description: "Strategy"},
     %{id: :upstreams, label: "Upstreams", description: "Linked accounts"},
-    %{id: "api-keys", label: "API keys", description: "Linked keys"}
+    %{id: "api-keys", label: "API keys", description: "Linked keys"},
+    %{id: :models, label: "Models", description: "Serving mode"}
   ]
 
   @pool_docs_url "https://docs.codex-pooler.com/operators/pools/"
@@ -67,287 +69,327 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   def normalize_step(step) when step in @pool_wizard_step_ids, do: step
   def normalize_step(_step), do: "details"
 
+  def normalize_step("models", :create), do: "details"
+  def normalize_step(step, mode) when mode in [:create, :edit], do: normalize_step(step)
+
   attr :mode, :atom, required: true, values: [:create, :edit]
   attr :form, :any, required: true
   attr :current_step, :string, required: true
   attr :upstream_options, :list, required: true
   attr :api_key_options, :list, required: true
+  attr :model_serving_form, :any, default: nil
+  attr :model_serving_status, :atom, default: :idle
+  attr :model_serving_dirty?, :boolean, default: false
+  attr :model_serving_sync_pending?, :boolean, default: false
 
   def pool_wizard(assigns) do
     assigns =
       assigns
       |> assign(pool_wizard_config(assigns.mode))
       |> assign(:docs_url, @pool_docs_url)
-      |> assign(:steps, @pool_wizard_steps)
+      |> assign(:steps, pool_wizard_steps(assigns.mode))
 
     ~H"""
-    <PolicyEditorComponents.policy_editor_dialog
-      id={@id}
-      eyebrow="Pool configuration"
-      title={@title}
-      description={@description}
-      steps={@steps}
-      current_step={@current_step}
-      sections_label="Pool sections"
-      step_event="pool_wizard_step"
-      backdrop_event={@cancel_event}
-      docs_url={@docs_url}
+    <div
+      id={"#{@id}-responsive-shell"}
+      class="contents sm:[&_.policy-editor-tabs]:grid-cols-2!"
     >
-      <.form
-        id={@form_id}
-        for={@form}
-        phx-submit={@form_submit}
-        autocomplete="off"
-        class="grid min-w-0 gap-4"
+      <PolicyEditorComponents.policy_editor_dialog
+        id={@id}
+        eyebrow="Pool configuration"
+        title={@title}
+        description={@description}
+        steps={@steps}
+        current_step={@current_step}
+        sections_label="Pool sections"
+        step_event="pool_wizard_step"
+        backdrop_event={@cancel_event}
+        docs_url={@docs_url}
       >
-        <.input :if={@mode == :edit} field={@form[:id]} type="hidden" />
-
-        <div
-          id={"#{@id}-section-details"}
-          role="tabpanel"
-          aria-labelledby={"#{@id}-tab-details"}
-          class={step_panel_class(@current_step, "details")}
+        <.form
+          id={@form_id}
+          for={@form}
+          phx-submit={@form_submit}
+          autocomplete="off"
+          class="grid min-w-0 gap-4"
         >
-          <section id={"#{@id}-step-details-panel"} class="grid min-w-0 gap-5">
-            <div class="grid gap-1">
-              <h3 class="text-lg font-semibold text-base-content">Pool details</h3>
-              <p class="text-sm leading-6 text-base-content/65">
-                Set the operator-facing name and lifecycle state for this Pool.
-              </p>
-            </div>
-            <div class={[
-              @mode == :edit && "grid gap-4 md:grid-cols-2",
-              @mode == :create && "grid gap-4"
-            ]}>
-              <.input
-                field={@form[:name]}
-                type="text"
-                label="Name"
-                placeholder="Production Pool"
-                required
-              />
-              <.input
-                :if={@mode == :edit}
-                field={@form[:status]}
-                type="select"
-                label="Status"
-                options={PoolForm.status_options()}
-              />
-            </div>
-          </section>
-        </div>
+          <.input :if={@mode == :edit} field={@form[:id]} type="hidden" />
 
-        <div
-          id={"#{@id}-section-routing"}
-          role="tabpanel"
-          aria-labelledby={"#{@id}-tab-routing"}
-          class={step_panel_class(@current_step, "routing")}
-        >
-          <section id={"#{@id}-step-routing-panel"} class="grid min-w-0 gap-5">
-            <div class="grid gap-1">
-              <h3 class="text-lg font-semibold text-base-content">Routing strategy</h3>
-              <p class="text-sm leading-6 text-base-content/65">
-                Choose how this Pool selects upstream accounts for runtime requests.
-              </p>
-            </div>
-            <div id={@routing_controls_id} class="pool-routing-policy-form grid">
-              <div class="pool-routing-policy-row">
-                <div class="min-w-0">
-                  <p class="text-sm font-semibold text-base-content">Selection policy</p>
-                  <p class="text-xs leading-5 text-base-content/55">
-                    Strategy and fan-out size used for runtime requests.
+          <div
+            id={"#{@id}-section-details"}
+            role="tabpanel"
+            aria-labelledby={"#{@id}-tab-details"}
+            class={step_panel_class(@current_step, "details")}
+          >
+            <section id={"#{@id}-step-details-panel"} class="grid min-w-0 gap-5">
+              <div class="grid gap-1">
+                <h3 class="text-lg font-semibold text-base-content">Pool details</h3>
+                <p class="text-sm leading-6 text-base-content/65">
+                  Set the operator-facing name and lifecycle state for this Pool.
+                </p>
+              </div>
+              <div class={[
+                @mode == :edit && "grid gap-4 md:grid-cols-2",
+                @mode == :create && "grid gap-4"
+              ]}>
+                <.input
+                  field={@form[:name]}
+                  type="text"
+                  label="Name"
+                  placeholder="Production Pool"
+                  required
+                />
+                <.input
+                  :if={@mode == :edit}
+                  field={@form[:status]}
+                  type="select"
+                  label="Status"
+                  options={PoolForm.status_options()}
+                />
+              </div>
+            </section>
+          </div>
+
+          <div
+            id={"#{@id}-section-routing"}
+            role="tabpanel"
+            aria-labelledby={"#{@id}-tab-routing"}
+            class={step_panel_class(@current_step, "routing")}
+          >
+            <section id={"#{@id}-step-routing-panel"} class="grid min-w-0 gap-5">
+              <div class="grid gap-1">
+                <h3 class="text-lg font-semibold text-base-content">Routing strategy</h3>
+                <p class="text-sm leading-6 text-base-content/65">
+                  Choose how this Pool selects upstream accounts for runtime requests.
+                </p>
+              </div>
+              <div id={@routing_controls_id} class="pool-routing-policy-form grid">
+                <div class="pool-routing-policy-row">
+                  <div class="min-w-0">
+                    <p class="text-sm font-semibold text-base-content">Selection policy</p>
+                    <p class="text-xs leading-5 text-base-content/55">
+                      Strategy and fan-out size used for runtime requests.
+                    </p>
+                  </div>
+                  <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
+                    <.input
+                      field={@form[:routing_strategy]}
+                      type="select"
+                      label="Routing strategy"
+                      class="select select-bordered w-full"
+                      options={PoolForm.routing_strategy_options()}
+                    />
+                    <.input
+                      field={@form[:bridge_ring_size]}
+                      type="number"
+                      label="Ring size"
+                      class="input input-bordered w-full"
+                      min="1"
+                    />
+                  </div>
+                </div>
+
+                <div class="routing-matrix">
+                  <div class="routing-matrix-section">
+                    <div class="min-w-0">
+                      <p class="text-sm font-semibold text-base-content">Continuity</p>
+                      <p class="text-xs leading-5 text-base-content/55">
+                        Identity-aware routing behavior.
+                      </p>
+                    </div>
+                    <div class="routing-matrix-options">
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:sticky_websocket_sessions]}
+                          type="checkbox"
+                          label="Sticky websocket sessions"
+                        />
+                        <p class="routing-option-help">
+                          Same upstream for websocket sessions with continuity identity.
+                        </p>
+                      </div>
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:sticky_http_sessions]}
+                          type="checkbox"
+                          label="HTTP affinity"
+                        />
+                        <p class="routing-option-help">
+                          Same upstream preference for related HTTP requests.
+                        </p>
+                      </div>
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:prompt_cache_affinity_enabled]}
+                          type="checkbox"
+                          label="Prompt cache affinity"
+                        />
+                        <p class="routing-option-help">
+                          Keep related prompt-cache-key requests near the same upstream for routing locality only.
+                          Codex Pooler does not store prompts or responses for this control.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="routing-matrix-section">
+                    <div class="min-w-0">
+                      <p class="text-sm font-semibold text-base-content">Compatibility</p>
+                      <p class="text-xs leading-5 text-base-content/55">
+                        Optional client surfaces.
+                      </p>
+                    </div>
+                    <div class="routing-matrix-options">
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:v1_compatibility_enabled]}
+                          type="checkbox"
+                          label="Allow /v1 compatibility"
+                        />
+                        <p class="routing-option-help">
+                          OpenAI-style `/v1` compatibility routes.
+                        </p>
+                      </div>
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:request_compression_enabled]}
+                          type="checkbox"
+                          label="Request compression"
+                        />
+                        <p class="routing-option-help">
+                          Shrinks eligible Responses tool outputs before upstream dispatch.
+                        </p>
+                      </div>
+                      <div class="routing-matrix-option">
+                        <.input
+                          field={@form[:allow_image_generation]}
+                          type="checkbox"
+                          label="Allow Image Generation"
+                        />
+                        <p class="routing-option-help">
+                          Permits image generation and edits for requests using this Pool.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div
+            id={"#{@id}-section-upstreams"}
+            role="tabpanel"
+            aria-labelledby={"#{@id}-tab-upstreams"}
+            class={step_panel_class(@current_step, "upstreams")}
+          >
+            <section id={"#{@id}-step-upstreams-panel"} class="grid min-w-0 gap-5">
+              <div
+                id={"#{@id}-step-upstreams-panel-header"}
+                class="flex flex-wrap items-start justify-between gap-3"
+              >
+                <div class="grid gap-1">
+                  <h3 class="text-lg font-semibold text-base-content">Pool upstream assignments</h3>
+                  <p class="text-sm leading-6 text-base-content/65">
+                    Select the upstream accounts available to this Pool.
                   </p>
                 </div>
-                <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-                  <.input
-                    field={@form[:routing_strategy]}
-                    type="select"
-                    label="Routing strategy"
-                    class="select select-bordered w-full"
-                    options={PoolForm.routing_strategy_options()}
-                  />
-                  <.input
-                    field={@form[:bridge_ring_size]}
-                    type="number"
-                    label="Ring size"
-                    class="input input-bordered w-full"
-                    min="1"
-                  />
-                </div>
+                <span
+                  id={@upstream_count_id}
+                  class={AdminBadges.count_chip_class()}
+                >
+                  {length(@upstream_options)} available
+                </span>
               </div>
+              <.assignment_checkbox_cards
+                id={@upstream_options_id}
+                field={@form[@upstream_field]}
+                options={@upstream_options}
+                empty_label={@upstream_empty_label}
+              />
+            </section>
+          </div>
 
-              <div class="routing-matrix">
-                <div class="routing-matrix-section">
-                  <div class="min-w-0">
-                    <p class="text-sm font-semibold text-base-content">Continuity</p>
-                    <p class="text-xs leading-5 text-base-content/55">
-                      Identity-aware routing behavior.
-                    </p>
-                  </div>
-                  <div class="routing-matrix-options">
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:sticky_websocket_sessions]}
-                        type="checkbox"
-                        label="Sticky websocket sessions"
-                      />
-                      <p class="routing-option-help">
-                        Same upstream for websocket sessions with continuity identity.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:sticky_http_sessions]}
-                        type="checkbox"
-                        label="HTTP affinity"
-                      />
-                      <p class="routing-option-help">
-                        Same upstream preference for related HTTP requests.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:prompt_cache_affinity_enabled]}
-                        type="checkbox"
-                        label="Prompt cache affinity"
-                      />
-                      <p class="routing-option-help">
-                        Keep related prompt-cache-key requests near the same upstream for routing locality only.
-                        Codex Pooler does not store prompts or responses for this control.
-                      </p>
-                    </div>
-                  </div>
+          <div
+            id={"#{@id}-section-api-keys"}
+            role="tabpanel"
+            aria-labelledby={"#{@id}-tab-api-keys"}
+            class={step_panel_class(@current_step, "api-keys")}
+          >
+            <section id={"#{@id}-step-api-keys-panel"} class="grid min-w-0 gap-5">
+              <div
+                id={"#{@id}-step-api-keys-panel-header"}
+                class="flex flex-wrap items-start justify-between gap-3"
+              >
+                <div class="grid gap-1">
+                  <h3 class="text-lg font-semibold text-base-content">API Keys</h3>
+                  <p class="text-sm leading-6 text-base-content/65">
+                    Select the API keys assigned to this Pool.
+                  </p>
                 </div>
-
-                <div class="routing-matrix-section">
-                  <div class="min-w-0">
-                    <p class="text-sm font-semibold text-base-content">Compatibility</p>
-                    <p class="text-xs leading-5 text-base-content/55">
-                      Optional client surfaces.
-                    </p>
-                  </div>
-                  <div class="routing-matrix-options">
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:v1_compatibility_enabled]}
-                        type="checkbox"
-                        label="Allow /v1 compatibility"
-                      />
-                      <p class="routing-option-help">
-                        OpenAI-style `/v1` compatibility routes.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:request_compression_enabled]}
-                        type="checkbox"
-                        label="Request compression"
-                      />
-                      <p class="routing-option-help">
-                        Shrinks eligible Responses tool outputs before upstream dispatch.
-                      </p>
-                    </div>
-                    <div class="routing-matrix-option">
-                      <.input
-                        field={@form[:allow_image_generation]}
-                        type="checkbox"
-                        label="Allow Image Generation"
-                      />
-                      <p class="routing-option-help">
-                        Permits image generation and edits for requests using this Pool.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                <span
+                  id={@access_count_id}
+                  class={AdminBadges.count_chip_class()}
+                >
+                  {length(@api_key_options)} available
+                </span>
               </div>
-            </div>
-          </section>
-        </div>
+              <.assignment_checkbox_cards
+                id={@access_options_id}
+                field={@form[:api_key_ids]}
+                options={@api_key_options}
+                empty_label="No API keys are available yet."
+              />
+            </section>
+          </div>
+        </.form>
 
         <div
-          id={"#{@id}-section-upstreams"}
+          :if={@mode == :edit}
+          id={"#{@id}-section-models"}
+          class={step_panel_class(@current_step, "models")}
           role="tabpanel"
-          aria-labelledby={"#{@id}-tab-upstreams"}
-          class={step_panel_class(@current_step, "upstreams")}
+          aria-labelledby={"#{@id}-tab-models"}
         >
-          <section id={"#{@id}-step-upstreams-panel"} class="grid min-w-0 gap-5">
-            <div
-              id={"#{@id}-step-upstreams-panel-header"}
-              class="flex flex-wrap items-start justify-between gap-3"
-            >
-              <div class="grid gap-1">
-                <h3 class="text-lg font-semibold text-base-content">Pool upstream assignments</h3>
-                <p class="text-sm leading-6 text-base-content/65">
-                  Select the upstream accounts available to this Pool.
-                </p>
-              </div>
-              <span
-                id={@upstream_count_id}
-                class={AdminBadges.count_chip_class()}
-              >
-                {length(@upstream_options)} available
-              </span>
-            </div>
-            <.assignment_checkbox_cards
-              id={@upstream_options_id}
-              field={@form[@upstream_field]}
-              options={@upstream_options}
-              empty_label={@upstream_empty_label}
-            />
-          </section>
+          <PoolModelServingComponents.model_serving_panel
+            projection={@model_serving_form}
+            status={@model_serving_status}
+            dirty?={@model_serving_dirty?}
+            sync_pending?={@model_serving_sync_pending?}
+          />
         </div>
 
-        <div
-          id={"#{@id}-section-api-keys"}
-          role="tabpanel"
-          aria-labelledby={"#{@id}-tab-api-keys"}
-          class={step_panel_class(@current_step, "api-keys")}
-        >
-          <section id={"#{@id}-step-api-keys-panel"} class="grid min-w-0 gap-5">
-            <div
-              id={"#{@id}-step-api-keys-panel-header"}
-              class="flex flex-wrap items-start justify-between gap-3"
-            >
-              <div class="grid gap-1">
-                <h3 class="text-lg font-semibold text-base-content">API Keys</h3>
-                <p class="text-sm leading-6 text-base-content/65">
-                  Select the API keys assigned to this Pool.
-                </p>
-              </div>
-              <span
-                id={@access_count_id}
-                class={AdminBadges.count_chip_class()}
-              >
-                {length(@api_key_options)} available
-              </span>
-            </div>
-            <.assignment_checkbox_cards
-              id={@access_options_id}
-              field={@form[:api_key_ids]}
-              options={@api_key_options}
-              empty_label="No API keys are available yet."
-            />
-          </section>
-        </div>
-      </.form>
-
-      <:actions>
-        <AdminComponents.action_button
-          id={@cancel_id}
-          label="Cancel"
-          variant={:ghost}
-          phx-click={@cancel_event}
-        />
-        <AdminComponents.action_button
-          id={@submit_id}
-          icon={@submit_icon}
-          label={@submit_label}
-          type="submit"
-          form={@form_id}
-          variant={:primary}
-        />
-      </:actions>
-    </PolicyEditorComponents.policy_editor_dialog>
+        <:actions>
+          <AdminComponents.action_button
+            id={@cancel_id}
+            label="Cancel"
+            variant={:ghost}
+            phx-click={@cancel_event}
+          />
+          <AdminComponents.action_button
+            :if={
+              @mode == :edit && @current_step == "models" && @model_serving_form &&
+                @model_serving_form.rows != []
+            }
+            id="pool-model-serving-submit"
+            icon="hero-check"
+            label="Save model modes"
+            type="submit"
+            form="pool-model-serving-form"
+            variant={:primary}
+          />
+          <AdminComponents.action_button
+            :if={@current_step != "models"}
+            id={@submit_id}
+            icon={@submit_icon}
+            label={@submit_label}
+            type="submit"
+            form={@form_id}
+            variant={:primary}
+          />
+        </:actions>
+      </PolicyEditorComponents.policy_editor_dialog>
+    </div>
     """
   end
 
@@ -412,4 +454,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   end
 
   defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
+
+  defp pool_wizard_steps(:edit), do: @pool_wizard_steps
+  defp pool_wizard_steps(:create), do: Enum.reject(@pool_wizard_steps, &(&1.id == :models))
 end

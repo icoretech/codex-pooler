@@ -5,14 +5,17 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Catalog
+  alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
+  alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
 
   import CodexPooler.AccountsFixtures
@@ -428,8 +431,33 @@ defmodule CodexPooler.Dev.SeedsTest do
     api_key_audit_event = Enum.find(result.audit_events, &(&1.action == "api_key.create"))
     assert api_key_audit_event.details["key_prefix"] == "sk-cxp-docs00000001"
 
+    primary_pool = Enum.find(result.pools, &(&1.name == "Example Production"))
+    owner_scope = Scope.for_user(result.owner, ["instance_owner"])
+
+    assert %{status: :synced} = Catalog.catalog_read_state(primary_pool)
+    assert {:ok, snapshot} = Pools.model_serving_modes_snapshot(owner_scope, primary_pool)
+
+    projection =
+      PoolForm.model_serving_form(snapshot, Catalog.list_visible_models(primary_pool))
+
+    assert Enum.map(projection.rows, fn row ->
+             {
+               row.exposed_model_id,
+               row.configured_mode,
+               row.effective_mode,
+               row.available?
+             }
+           end) == [
+             {"gpt-5.4", "full", "full", true},
+             {"gpt-5.4-mini", "auto", "lite", true},
+             {"gpt-5.5", "auto", "full", true},
+             {"gpt-5.5-pro", "lite", "lite", false}
+           ]
+
     assert Repo.aggregate(Pool, :count) == 3
     assert Repo.aggregate(APIKey, :count) == 4
+    assert Repo.aggregate(SyncRun, :count) == 3
+    assert Repo.aggregate(ModelServingOverride, :count) == 2
   end
 
   defp statuses_for(schema) do

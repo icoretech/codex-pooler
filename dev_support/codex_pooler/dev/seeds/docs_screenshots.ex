@@ -2,8 +2,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
   @moduledoc false
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Catalog.{Model, SyncRun}
   alias CodexPooler.Dev.Seeds.Full
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -42,6 +43,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     api_keys = update_api_keys!(result.api_keys)
     upstream_identities = update_identities!(result.upstream_identities)
     assignments = update_assignments!(result.assignments)
+    models = update_models!(result.models, pools)
+    catalog_sync_runs = seed_catalog_sync_runs!(pools, models)
+    model_serving_overrides = seed_model_serving_overrides!(pools)
 
     request_logs =
       update_request_logs!(
@@ -57,6 +61,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
       api_keys: api_keys,
       upstream_identities: upstream_identities,
       assignments: assignments,
+      models: models,
+      catalog_sync_runs: catalog_sync_runs,
+      model_serving_overrides: model_serving_overrides,
       request_logs: request_logs,
       audit_events: audit_events
     })
@@ -107,6 +114,79 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
       |> PoolUpstreamAssignment.changeset(%{assignment_label: label})
       |> Repo.update!()
     end)
+  end
+
+  defp update_models!(models, pools) do
+    primary_pool = pool_by_name!(pools, "Example Production")
+
+    Enum.map(models, fn model ->
+      if model.pool_id == primary_pool.id and model.exposed_model_id == "gpt-5.4-mini" do
+        source_models =
+          model.metadata
+          |> Map.fetch!("source_assignment_models")
+          |> Map.new(fn {assignment_id, source_metadata} ->
+            {assignment_id, Map.put(source_metadata, "use_responses_lite", true)}
+          end)
+
+        model
+        |> Model.changeset(%{
+          metadata: Map.put(model.metadata, "source_assignment_models", source_models)
+        })
+        |> Repo.update!()
+      else
+        model
+      end
+    end)
+  end
+
+  defp seed_catalog_sync_runs!(pools, models) do
+    finished_at = DateTime.utc_now()
+
+    Enum.map(pools, fn pool ->
+      model_count = Enum.count(models, &(&1.pool_id == pool.id))
+
+      %SyncRun{}
+      |> SyncRun.changeset(%{
+        pool_id: pool.id,
+        trigger_kind: "bootstrap",
+        status: "succeeded",
+        started_at: DateTime.add(finished_at, -1, :second),
+        finished_at: finished_at,
+        discovered_model_count: model_count,
+        upserted_model_count: model_count,
+        stale_marked_count: 0,
+        retired_count: 0,
+        stats: %{"seed" => "docs_screenshots"}
+      })
+      |> Repo.insert!()
+    end)
+  end
+
+  defp seed_model_serving_overrides!(pools) do
+    primary_pool = pool_by_name!(pools, "Example Production")
+    timestamp = DateTime.utc_now()
+
+    [
+      {"gpt-5.4", "full"},
+      {"gpt-5.5-pro", "lite"}
+    ]
+    |> Enum.map(fn {exposed_model_id, mode} ->
+      %ModelServingOverride{
+        pool_id: primary_pool.id,
+        created_at: timestamp,
+        updated_at: timestamp
+      }
+      |> ModelServingOverride.changeset(%{
+        exposed_model_id: exposed_model_id,
+        mode: mode
+      })
+      |> Repo.insert!()
+    end)
+  end
+
+  defp pool_by_name!(pools, name) do
+    Enum.find(pools, &(&1.name == name)) ||
+      raise "documentation screenshot seed is missing #{name}"
   end
 
   defp update_request_logs!(request_logs, original_identities, identities) do

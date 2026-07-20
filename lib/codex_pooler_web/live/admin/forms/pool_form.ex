@@ -4,7 +4,10 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Access
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingMode
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Upstreams
@@ -31,6 +34,49 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
           required(String.t()) => String.t()
         }
   @type option :: {String.t(), String.t()}
+  @type model_serving_snapshot :: %{
+          required(:overrides) => [ModelServingOverride.t()],
+          required(:revision) => String.t()
+        }
+  @type model_serving_catalog_entry :: Model.t() | {Model.t(), [Ecto.UUID.t()]}
+  @type model_serving_row :: %{
+          required(:index) => non_neg_integer(),
+          required(:exposed_model_id) => String.t(),
+          required(:display_name) => String.t(),
+          required(:configured_mode) => String.t(),
+          required(:effective_mode) => String.t(),
+          required(:source) => String.t(),
+          required(:effective_badge) => %{
+            required(:label) => String.t(),
+            required(:mode) => String.t()
+          },
+          required(:available?) => boolean(),
+          required(:warning) => String.t() | nil,
+          required(:dom_id) => String.t(),
+          required(:identifier_name) => String.t(),
+          required(:mode_name) => String.t(),
+          required(:input_ids) => %{
+            required(:auto) => String.t(),
+            required(:lite) => String.t(),
+            required(:full) => String.t()
+          },
+          required(:labels) => %{
+            required(:fieldset) => String.t(),
+            required(:auto) => String.t(),
+            required(:lite) => String.t(),
+            required(:full) => String.t()
+          }
+        }
+  @type model_serving_projection :: %{
+          required(:revision) => String.t(),
+          required(:revision_name) => String.t(),
+          required(:rows) => [model_serving_row()],
+          required(:warnings) => [String.t()]
+        }
+  @type model_serving_submission :: %{
+          required(:revision) => String.t() | nil,
+          required(:rows) => [map()]
+        }
 
   @spec filter(map() | keyword()) :: filter_values()
   def filter(attrs \\ %{}) do
@@ -97,6 +143,38 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     |> normalize_multi_select("upstream_identity_ids")
     |> normalize_multi_select("api_key_ids")
     |> to_form(as: :pool_edit, errors: errors)
+  end
+
+  @spec model_serving_form(
+          model_serving_snapshot(),
+          [model_serving_catalog_entry()],
+          map() | keyword()
+        ) ::
+          model_serving_projection()
+  def model_serving_form(snapshot, visible_models, submitted_attrs \\ %{})
+      when is_map(snapshot) and is_list(visible_models) do
+    submitted_attrs = Map.new(submitted_attrs)
+    rows = model_serving_rows(snapshot, visible_models, submitted_attrs)
+
+    %{
+      revision: submitted_revision(submitted_attrs, snapshot.revision),
+      revision_name: "pool_model_serving[revision]",
+      rows: rows,
+      warnings: rows |> Enum.map(& &1.warning) |> Enum.reject(&is_nil/1)
+    }
+  end
+
+  @spec model_serving_submission(map() | keyword()) :: model_serving_submission()
+  def model_serving_submission(attrs) do
+    attrs = Map.new(attrs)
+
+    %{
+      revision: Map.get(attrs, "revision", Map.get(attrs, :revision)),
+      rows:
+        attrs
+        |> Map.get("rows", Map.get(attrs, :rows, %{}))
+        |> submitted_rows()
+    }
   end
 
   def delete_form(pool \\ nil, attrs \\ %{}) do
@@ -208,6 +286,263 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     |> normalize_multi_select("upstream_identity_ids")
     |> normalize_multi_select("api_key_ids")
   end
+
+  @spec model_serving_rows(model_serving_snapshot(), [model_serving_catalog_entry()], map()) ::
+          [model_serving_row()]
+  defp model_serving_rows(snapshot, visible_models, submitted_attrs) do
+    overrides_by_id = Map.new(snapshot.overrides, &{&1.exposed_model_id, &1})
+
+    available_rows =
+      visible_models
+      |> Enum.map(&available_model_row(&1, overrides_by_id))
+      |> Enum.reject(&is_nil/1)
+
+    available_ids = MapSet.new(available_rows, & &1.exposed_model_id)
+
+    unavailable_rows =
+      snapshot.overrides
+      |> Enum.reject(&MapSet.member?(available_ids, &1.exposed_model_id))
+      |> Enum.map(&unavailable_model_row/1)
+
+    submitted_modes = submitted_modes(submitted_attrs, available_ids, snapshot.overrides)
+
+    (available_rows ++ unavailable_rows)
+    |> Enum.sort_by(&{not &1.available?, &1.exposed_model_id})
+    |> Enum.with_index()
+    |> Enum.map(fn {row, index} ->
+      row
+      |> Map.put(
+        :configured_mode,
+        Map.get(submitted_modes, row.exposed_model_id, row.configured_mode)
+      )
+      |> project_model_serving_row(index)
+    end)
+  end
+
+  @spec available_model_row(
+          model_serving_catalog_entry(),
+          %{optional(String.t()) => ModelServingOverride.t()}
+        ) ::
+          map() | nil
+  defp available_model_row({%Model{} = model, routable_source_ids}, overrides_by_id) do
+    with exposed_model_id when is_binary(exposed_model_id) <-
+           ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id) do
+      %{
+        exposed_model_id: exposed_model_id,
+        display_name: model.display_name || exposed_model_id,
+        metadata: model.metadata || %{},
+        routable_source_ids: routable_source_ids,
+        configured_mode: configured_mode(Map.get(overrides_by_id, exposed_model_id)),
+        available?: true,
+        warning: nil
+      }
+    end
+  end
+
+  defp available_model_row(%Model{} = model, overrides_by_id) do
+    available_model_row({model, source_assignment_ids(model)}, overrides_by_id)
+  end
+
+  @spec unavailable_model_row(ModelServingOverride.t()) :: map()
+  defp unavailable_model_row(%ModelServingOverride{} = override) do
+    %{
+      exposed_model_id: override.exposed_model_id,
+      display_name: override.exposed_model_id,
+      metadata: %{},
+      routable_source_ids: [],
+      configured_mode: override.mode,
+      available?: false,
+      warning: "#{override.exposed_model_id} is not available in the current routable catalog"
+    }
+  end
+
+  @spec project_model_serving_row(map(), non_neg_integer()) :: model_serving_row()
+  defp project_model_serving_row(
+         %{available?: false, configured_mode: "auto"} = row,
+         index
+       ) do
+    row
+    |> Map.merge(%{
+      configured_mode: "auto",
+      effective_mode: "removed",
+      source: "removal",
+      effective_badge: %{label: "Will be removed on save", mode: "removed"}
+    })
+    |> model_serving_row(index)
+  end
+
+  defp project_model_serving_row(
+         %{available?: false, configured_mode: mode} = row,
+         index
+       )
+       when mode in ~w(lite full) do
+    row
+    |> Map.merge(%{
+      configured_mode: mode,
+      effective_mode: mode,
+      source: "override",
+      effective_badge: %{
+        label: "Effective: #{String.capitalize(mode)}",
+        mode: mode
+      }
+    })
+    |> model_serving_row(index)
+  end
+
+  defp project_model_serving_row(row, index) do
+    {:ok, resolution} =
+      ModelServingMode.resolve(
+        configured_override(row.configured_mode),
+        row.metadata,
+        row.routable_source_ids
+      )
+
+    row
+    |> Map.merge(%{
+      configured_mode: resolution.configured_mode,
+      effective_mode: resolution.effective_mode,
+      source: resolution.source,
+      effective_badge: %{
+        label: "Effective: #{String.capitalize(resolution.effective_mode)}",
+        mode: resolution.effective_mode
+      }
+    })
+    |> model_serving_row(index)
+  end
+
+  defp model_serving_row(row, index) do
+    dom_id = model_serving_dom_id(row.exposed_model_id)
+
+    %{
+      index: index,
+      exposed_model_id: row.exposed_model_id,
+      display_name: row.display_name,
+      configured_mode: row.configured_mode,
+      effective_mode: row.effective_mode,
+      source: row.source,
+      effective_badge: row.effective_badge,
+      available?: row.available?,
+      warning: row.warning,
+      dom_id: dom_id,
+      identifier_name: "pool_model_serving[rows][#{index}][exposed_model_id]",
+      mode_name: "pool_model_serving[rows][#{index}][mode]",
+      input_ids: mode_input_ids(dom_id),
+      labels: mode_labels(row.exposed_model_id)
+    }
+  end
+
+  @spec submitted_modes(map(), MapSet.t(String.t()), [ModelServingOverride.t()]) :: %{
+          optional(String.t()) => String.t()
+        }
+  defp submitted_modes(submitted_attrs, available_ids, overrides) do
+    known_ids = Enum.reduce(overrides, available_ids, &MapSet.put(&2, &1.exposed_model_id))
+
+    submitted_attrs
+    |> Map.get("rows", Map.get(submitted_attrs, :rows, %{}))
+    |> submitted_rows()
+    |> Enum.reduce(%{}, fn submitted_row, modes ->
+      with exposed_model_id when is_binary(exposed_model_id) <-
+             ModelServingOverride.canonical_exposed_model_id(
+               submitted_value(submitted_row, "exposed_model_id")
+             ),
+           mode when mode in ["auto", "lite", "full"] <-
+             normalize_submitted_mode(submitted_value(submitted_row, "mode")),
+           true <- MapSet.member?(known_ids, exposed_model_id) do
+        Map.put_new(modes, exposed_model_id, mode)
+      else
+        _invalid_or_unknown -> modes
+      end
+    end)
+  end
+
+  @spec submitted_rows(term()) :: [map()]
+  defp submitted_rows(rows) when is_list(rows), do: Enum.filter(rows, &is_map/1)
+
+  defp submitted_rows(rows) when is_map(rows) do
+    rows
+    |> Enum.sort_by(fn {index, _row} -> sortable_row_index(index) end)
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp submitted_rows(_rows), do: []
+
+  @spec submitted_revision(map(), String.t()) :: String.t()
+  defp submitted_revision(attrs, default) do
+    case Map.get(attrs, "revision", Map.get(attrs, :revision)) do
+      revision when is_binary(revision) -> revision
+      _missing -> default
+    end
+  end
+
+  @spec submitted_value(map(), String.t()) :: term()
+  defp submitted_value(row, "exposed_model_id"),
+    do: Map.get(row, "exposed_model_id", Map.get(row, :exposed_model_id))
+
+  defp submitted_value(row, "mode"), do: Map.get(row, "mode", Map.get(row, :mode))
+
+  @spec normalize_submitted_mode(term()) :: String.t() | nil
+  defp normalize_submitted_mode(mode) when is_binary(mode),
+    do: mode |> String.trim() |> String.downcase()
+
+  defp normalize_submitted_mode(_mode), do: nil
+
+  @spec sortable_row_index(term()) :: {non_neg_integer(), String.t()}
+  defp sortable_row_index(index) do
+    case Integer.parse(to_string(index)) do
+      {number, ""} -> {number, to_string(index)}
+      _invalid -> {9_999_999, to_string(index)}
+    end
+  end
+
+  @spec source_assignment_ids(Model.t()) :: [Ecto.UUID.t()]
+  defp source_assignment_ids(%Model{} = model) do
+    case get_in(model.metadata || %{}, ["source_assignment_ids"]) do
+      ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+      _missing_or_invalid -> []
+    end
+  end
+
+  @spec model_serving_dom_id(String.t()) :: String.t()
+  @doc false
+  def model_serving_dom_id(exposed_model_id) do
+    token = dom_token(exposed_model_id)
+
+    digest =
+      exposed_model_id
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 8)
+
+    "pool-model-serving-row-#{token}-#{digest}"
+  end
+
+  @spec mode_input_ids(String.t()) :: %{auto: String.t(), lite: String.t(), full: String.t()}
+  defp mode_input_ids(dom_id),
+    do: %{auto: dom_id <> "-auto", lite: dom_id <> "-lite", full: dom_id <> "-full"}
+
+  @spec mode_labels(String.t()) :: %{
+          fieldset: String.t(),
+          auto: String.t(),
+          lite: String.t(),
+          full: String.t()
+        }
+  defp mode_labels(exposed_model_id) do
+    %{
+      fieldset: "Model serving mode for #{exposed_model_id}",
+      auto: "Auto for #{exposed_model_id}",
+      lite: "Lite for #{exposed_model_id}",
+      full: "Full for #{exposed_model_id}"
+    }
+  end
+
+  @spec configured_mode(ModelServingOverride.t() | nil) :: String.t()
+  defp configured_mode(%ModelServingOverride{mode: mode}), do: mode
+  defp configured_mode(nil), do: "auto"
+
+  @spec configured_override(String.t()) :: String.t() | nil
+  defp configured_override("auto"), do: nil
+  defp configured_override(mode), do: mode
 
   defp normalize_multi_select(attrs, key) do
     Map.update(attrs, key, [], fn value ->

@@ -2,7 +2,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   use CodexPoolerWeb, :admin_live_view
 
   alias CodexPooler.Admin.PoolWorkflow
+  alias CodexPooler.Catalog
   alias CodexPooler.Events
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
@@ -12,7 +14,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPoolerWeb.Admin.PoolsReadModel
   alias CodexPoolerWeb.Admin.PoolWizardComponents
 
-  @pool_event_topics ["pools", "upstreams", "usage"]
+  @pool_event_topics ["model_sync", "pools", "upstreams", "usage"]
   @pool_traffic_refresh_delay_ms 1_000
 
   @impl true
@@ -29,6 +31,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        delete_form_version: 0,
        create_form: PoolForm.create_form(),
        edit_form: nil,
+       model_serving_form: nil,
+       model_serving_snapshot: nil,
+       model_serving_models: [],
+       model_serving_status: :idle,
+       model_serving_dirty?: false,
+       model_serving_sync_pending?: false,
+       model_serving_pending_attrs: nil,
+       model_serving_load_token: nil,
        delete_form: PoolForm.delete_form(),
        pool_wizard_step: "details",
        pool_filters: PoolForm.filter(),
@@ -122,12 +132,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          |> assign(:edit_form, PoolForm.edit_form(pool))
          |> assign(:pool_wizard_step, "details")
          |> clear_deleting()
+         |> begin_model_serving_load(pool)
          |> defer_pool_traffic_refresh()}
     end
   end
 
   def handle_event("pool_wizard_step", %{"step" => step}, socket) do
-    {:noreply, assign(socket, :pool_wizard_step, PoolWizardComponents.normalize_step(step))}
+    mode = if socket.assigns.creating_pool, do: :create, else: :edit
+
+    {:noreply, assign(socket, :pool_wizard_step, PoolWizardComponents.normalize_step(step, mode))}
   end
 
   def handle_event("cancel_edit", _params, socket) do
@@ -138,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     pool_id = pool_params["id"]
 
     with :ok <- ensure_can_manage_pools(socket),
-         {:ok, _pool} <-
+         {:ok, pool} <-
            PoolWorkflow.update_pool_with_related_settings(
              socket.assigns.current_scope,
              pool_id,
@@ -148,7 +161,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        socket
        |> put_flash(:info, "Pool updated")
        |> clear_pool_traffic_refresh()
-       |> clear_editing()
+       |> assign(editing_pool: pool, edit_form: PoolForm.edit_form(pool))
        |> load_structural()
        |> start_pool_traffic_load()}
     else
@@ -170,6 +183,72 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
          socket
          |> put_flash(:error, error_message(reason))
          |> assign(:edit_form, PoolForm.edit_form(socket.assigns.editing_pool, pool_params))}
+    end
+  end
+
+  def handle_event(
+        "validate_pool_model_serving",
+        %{"pool_model_serving" => attrs},
+        socket
+      ) do
+    if socket.assigns.editing_pool && socket.assigns.model_serving_snapshot do
+      {:noreply,
+       socket
+       |> assign(
+         :model_serving_form,
+         PoolForm.model_serving_form(
+           socket.assigns.model_serving_snapshot,
+           socket.assigns.model_serving_models,
+           attrs
+         )
+       )
+       |> assign(model_serving_dirty?: true, model_serving_pending_attrs: attrs)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_pool_model_serving", %{"pool_model_serving" => attrs}, socket) do
+    submission = PoolForm.model_serving_submission(attrs)
+    pool = socket.assigns.editing_pool
+
+    with %{} <- pool,
+         {:ok, _result} <-
+           Pools.update_model_serving_modes(
+             socket.assigns.current_scope,
+             pool,
+             submission.rows,
+             submission.revision
+           ) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Model serving modes updated")
+       |> clear_pool_traffic_refresh()
+       |> assign(pool_wizard_step: "models", model_serving_dirty?: false)
+       |> begin_model_serving_load(pool, reset?: false)}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "Pool was not found")}
+
+      {:error, reason} ->
+        socket = put_flash(socket, :error, error_message(reason))
+
+        if match?(%{code: :stale_revision}, reason) do
+          {:noreply,
+           socket
+           |> assign(pool_wizard_step: "models", model_serving_dirty?: true)
+           |> begin_model_serving_load(pool, reset?: false, pending_attrs: attrs)}
+        else
+          socket = reproject_model_serving_error(socket, attrs)
+
+          {:noreply,
+           assign(socket,
+             pool_wizard_step: "models",
+             model_serving_status: model_serving_error_status(reason),
+             model_serving_dirty?: true,
+             model_serving_pending_attrs: attrs
+           )}
+        end
     end
   end
 
@@ -284,6 +363,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   @impl true
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
     case pool_event_kind(topics, pool_id) do
+      :model_sync -> {:noreply, reload_model_serving_or_defer(socket, pool_id)}
       :lifecycle -> {:noreply, reload_pools_or_defer(socket)}
       :usage -> {:noreply, schedule_pool_traffic_refresh(socket)}
       :ignore -> {:noreply, socket}
@@ -302,6 +382,43 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_async(
+        {:pool_model_serving, load_token, pool_id},
+        {:ok, {:ok, data}},
+        socket
+      ) do
+    if socket.assigns.model_serving_load_token == load_token and
+         match?(%{id: ^pool_id}, socket.assigns.editing_pool) do
+      {:noreply, apply_model_serving_load(socket, data)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async(
+        {:pool_model_serving, load_token, pool_id},
+        result,
+        socket
+      )
+      when result in [{:ok, {:error, :load_failed}}, {:exit, :normal}] do
+    if socket.assigns.model_serving_load_token == load_token and
+         match?(%{id: ^pool_id}, socket.assigns.editing_pool) do
+      {:noreply, model_serving_load_error(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:pool_model_serving, load_token, pool_id}, {:exit, _reason}, socket) do
+    if socket.assigns.model_serving_load_token == load_token and
+         match?(%{id: ^pool_id}, socket.assigns.editing_pool) do
+      {:noreply, model_serving_load_error(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
 
   @impl true
   def handle_async(:pool_traffic, {:ok, traffic}, socket) do
@@ -342,6 +459,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     case Events.validate_topics(topics) do
       {:ok, topics} ->
         cond do
+          "model_sync" in topics -> :model_sync
           Enum.any?(topics, &(&1 in ["pools", "upstreams"])) -> :lifecycle
           "usage" in topics -> :usage
           true -> :ignore
@@ -451,6 +569,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           current_step={@pool_wizard_step}
           upstream_options={@upstream_identity_options}
           api_key_options={@api_key_options}
+          model_serving_form={nil}
+          model_serving_status={:idle}
+          model_serving_dirty?={false}
+          model_serving_sync_pending?={false}
         />
 
         <PoolWizardComponents.pool_wizard
@@ -462,6 +584,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
             PoolForm.edit_upstream_identity_options(@editing_pool, @upstream_identity_options)
           }
           api_key_options={@api_key_options}
+          model_serving_form={@model_serving_form}
+          model_serving_status={@model_serving_status}
+          model_serving_dirty?={@model_serving_dirty?}
+          model_serving_sync_pending?={@model_serving_sync_pending?}
         />
 
         <PoolListComponents.pool_inventory
@@ -615,7 +741,20 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     )
   end
 
-  defp clear_editing(socket), do: assign(socket, editing_pool: nil, edit_form: nil)
+  defp clear_editing(socket) do
+    assign(socket,
+      editing_pool: nil,
+      edit_form: nil,
+      model_serving_form: nil,
+      model_serving_snapshot: nil,
+      model_serving_models: [],
+      model_serving_status: :idle,
+      model_serving_dirty?: false,
+      model_serving_sync_pending?: false,
+      model_serving_pending_attrs: nil,
+      model_serving_load_token: nil
+    )
+  end
 
   defp clear_deleting(socket),
     do: assign(socket, deleting_pool: nil, delete_form: PoolForm.delete_form())
@@ -635,6 +774,146 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       |> start_pool_traffic_load()
     end
   end
+
+  defp reload_model_serving_or_defer(socket, pool_id) do
+    socket = reload_pools_or_defer(socket)
+
+    case socket.assigns.editing_pool do
+      %{id: ^pool_id} = pool ->
+        if socket.assigns.model_serving_dirty? do
+          assign(socket,
+            model_serving_status: :stale,
+            model_serving_sync_pending?: true,
+            model_serving_load_token: nil
+          )
+        else
+          begin_model_serving_load(socket, pool, reset?: false)
+        end
+
+      _other_pool_or_closed ->
+        socket
+    end
+  end
+
+  defp begin_model_serving_load(socket, pool, opts \\ []) do
+    reset? = Keyword.get(opts, :reset?, true)
+    pending_attrs = Keyword.get(opts, :pending_attrs)
+    load_token = make_ref()
+    scope = socket.assigns.current_scope
+
+    socket =
+      socket
+      |> assign(
+        model_serving_status: :loading,
+        model_serving_sync_pending?: false,
+        model_serving_pending_attrs: pending_attrs,
+        model_serving_load_token: load_token
+      )
+      |> start_async({:pool_model_serving, load_token, pool.id}, fn ->
+        load_model_serving_data(scope, pool)
+      end)
+
+    if reset? do
+      assign(socket,
+        model_serving_form: nil,
+        model_serving_snapshot: nil,
+        model_serving_models: [],
+        model_serving_dirty?: false
+      )
+    else
+      socket
+    end
+  end
+
+  defp load_model_serving_data(scope, pool) do
+    case Pools.model_serving_modes_snapshot(scope, pool) do
+      {:ok, snapshot} ->
+        hydration = CandidateEligibility.hydrate_model_visibility(pool)
+
+        models =
+          for model <- hydration.visible_models,
+              {:ok, candidates} <- [CandidateEligibility.routable_candidates(hydration, model)] do
+            source_ids = Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+            {model, source_ids}
+          end
+
+        catalog_state = Catalog.catalog_read_state(pool)
+
+        {:ok, %{snapshot: snapshot, models: models, catalog_state: catalog_state}}
+
+      {:error, _reason} ->
+        {:error, :load_failed}
+    end
+  end
+
+  defp apply_model_serving_load(socket, data) do
+    pending_attrs = socket.assigns.model_serving_pending_attrs
+
+    form =
+      case pending_attrs do
+        attrs when is_map(attrs) ->
+          attrs = Map.put(attrs, "revision", data.snapshot.revision)
+          PoolForm.model_serving_form(data.snapshot, data.models, attrs)
+
+        nil ->
+          PoolForm.model_serving_form(data.snapshot, data.models)
+      end
+
+    pending? = is_map(pending_attrs)
+
+    assign(socket,
+      model_serving_form: form,
+      model_serving_snapshot: data.snapshot,
+      model_serving_models: data.models,
+      model_serving_status:
+        if(pending?, do: :stale, else: model_serving_status(data.catalog_state, form.rows)),
+      model_serving_dirty?: pending?,
+      model_serving_sync_pending?: pending?,
+      model_serving_pending_attrs:
+        if(pending?, do: Map.put(pending_attrs, "revision", data.snapshot.revision)),
+      model_serving_load_token: nil
+    )
+  end
+
+  defp model_serving_load_error(socket) do
+    assign(socket,
+      model_serving_form: nil,
+      model_serving_snapshot: nil,
+      model_serving_models: [],
+      model_serving_status: :error,
+      model_serving_dirty?: false,
+      model_serving_sync_pending?: false,
+      model_serving_pending_attrs: nil,
+      model_serving_load_token: nil
+    )
+  end
+
+  defp reproject_model_serving_error(socket, attrs) do
+    if socket.assigns.model_serving_snapshot do
+      assign(
+        socket,
+        :model_serving_form,
+        PoolForm.model_serving_form(
+          socket.assigns.model_serving_snapshot,
+          socket.assigns.model_serving_models,
+          attrs
+        )
+      )
+    else
+      socket
+    end
+  end
+
+  defp model_serving_status(%{status: :failed}, _rows), do: :error
+  defp model_serving_status(_catalog_state, []), do: :empty
+
+  defp model_serving_status(%{status: status}, _rows)
+       when status in [:stale, :syncing, :unavailable],
+       do: :stale
+
+  defp model_serving_status(_catalog_state, _rows), do: :ready
+
+  defp model_serving_error_status(_reason), do: :error
 
   defp schedule_pool_traffic_refresh(socket) do
     socket = assign(socket, :pool_traffic_dirty?, true)
