@@ -541,7 +541,10 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   end
 
   defp source_assignment_model_metadata(%Model{} = model, assignment) do
-    get_in(model.metadata || %{}, ["source_assignment_models", assignment.id])
+    case Map.get(model.metadata || %{}, "source_assignment_models") do
+      source_models when is_map(source_models) -> Map.get(source_models, assignment.id)
+      _absent_or_malformed -> nil
+    end
   end
 
   defp endpoint_compatible?(

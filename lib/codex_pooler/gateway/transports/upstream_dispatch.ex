@@ -644,21 +644,28 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp mark_visible_output(_request, _data), do: :ok
 
   defp maybe_put_responses_lite_header(headers, %RequestOptions{} = request_options) do
-    if responses_lite_request?(request_options) do
+    headers =
+      Enum.reject(headers, fn
+        {name, _value} when is_binary(name) ->
+          String.downcase(name) == @responses_lite_header_name
+
+        _header ->
+          false
+      end)
+
+    if RequestOptions.use_responses_lite?(request_options) and
+         regular_responses_endpoint?(request_options) do
       [{@responses_lite_header_name, "true"} | headers]
     else
       headers
     end
   end
 
-  defp responses_lite_request?(%RequestOptions{
-         routing: %{use_responses_lite?: true},
+  defp regular_responses_endpoint?(%RequestOptions{
          transport: %{upstream_endpoint: endpoint}
        }) do
     endpoint in @regular_runtime_metadata_endpoints
   end
-
-  defp responses_lite_request?(%RequestOptions{}), do: false
 
   defp response_processed_response_id(payload) do
     case clean_string(Map.get(payload, "response_id")) do

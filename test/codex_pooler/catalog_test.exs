@@ -624,6 +624,62 @@ defmodule CodexPooler.CatalogTest do
       assert model.metadata["source_assignment_models"][source_b.id]["source_marker"] == "b-third"
     end
 
+    test "preserves per-assignment Lite evidence shapes through partial catalog churn" do
+      pool = pool_fixture()
+
+      assignments =
+        for label <- ~w(true false absent malformed partial anchor) do
+          {_pool, assignment} =
+            active_assignment_fixture(pool, %{}, %{
+              account_label: "Synthetic #{label} Lite evidence source",
+              assignment_label: "Synthetic #{label} Lite evidence assignment"
+            })
+
+          {label, assignment}
+        end
+        |> Map.new()
+
+      first_models = %{
+        assignments["true"].id => [shared_sync_model(%{"use_responses_lite" => true})],
+        assignments["false"].id => [shared_sync_model(%{"use_responses_lite" => false})],
+        assignments["absent"].id => [shared_sync_model(%{"source_marker" => "absent"})],
+        assignments["malformed"].id => [shared_sync_model(%{"use_responses_lite" => "true"})],
+        assignments["partial"].id => [
+          shared_sync_model(%{"use_responses_lite" => true, "partial_marker" => true})
+        ],
+        assignments["anchor"].id => [shared_sync_model(%{"source_marker" => "anchor-first"})]
+      }
+
+      assert {:ok, %{models: [_model]}} = sync_catalog_step(pool, first_models)
+
+      assert {:ok, %{models: [_model]}} =
+               sync_catalog_step(pool, %{
+                 assignments["true"].id => [],
+                 assignments["false"].id => [],
+                 assignments["absent"].id => [],
+                 assignments["malformed"].id => [],
+                 assignments["partial"].id => [],
+                 assignments["anchor"].id => [
+                   shared_sync_model(%{"source_marker" => "anchor-current"})
+                 ]
+               })
+
+      source_models =
+        pool
+        |> Catalog.get_model_by_exposed_id("gpt-preserved-shared")
+        |> then(& &1.metadata["source_assignment_models"])
+
+      assert source_models[assignments["true"].id]["use_responses_lite"] == true
+      assert source_models[assignments["false"].id]["use_responses_lite"] == false
+      refute Map.has_key?(source_models[assignments["absent"].id], "use_responses_lite")
+      assert source_models[assignments["malformed"].id]["use_responses_lite"] == "true"
+
+      assert source_models[assignments["partial"].id] ==
+               Map.fetch!(first_models, assignments["partial"].id) |> hd()
+
+      assert source_models[assignments["anchor"].id]["source_marker"] == "anchor-current"
+    end
+
     test "does not preserve disabled absent sources" do
       assert_absent_source_not_preserved("disabled", fn _pool, assignment ->
         assert {:ok, _assignment} = PoolAssignments.disable_pool_assignment(assignment)

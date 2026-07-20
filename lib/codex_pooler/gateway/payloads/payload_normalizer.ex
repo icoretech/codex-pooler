@@ -82,6 +82,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     upstream_payload =
       payload
       |> maybe_strip_unsupported_upstream_fields(endpoint)
+      |> remove_client_supplied_responses_lite_metadata()
       |> strip_backend_codex_fields(endpoint, request_options)
 
     debug_payload =
@@ -244,36 +245,40 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp normalize_backend_codex_responses_lite(
          payload,
-         %RequestOptions{routing: %{use_responses_lite?: true}}
+         %RequestOptions{} = request_options
        ) do
-    reasoning =
-      payload |> Map.get("reasoning") |> reasoning_map() |> Map.put("context", "all_turns")
+    if RequestOptions.use_responses_lite?(request_options) do
+      reasoning =
+        payload |> Map.get("reasoning") |> reasoning_map() |> Map.put("context", "all_turns")
 
-    payload
-    |> Map.put("reasoning", reasoning)
-    |> Map.put("parallel_tool_calls", false)
+      payload
+      |> Map.put("reasoning", reasoning)
+      |> Map.put("parallel_tool_calls", false)
+    else
+      payload
+    end
   end
-
-  defp normalize_backend_codex_responses_lite(payload, %RequestOptions{}), do: payload
 
   defp normalize_backend_codex_responses_lite_input(
          payload,
-         %RequestOptions{routing: %{use_responses_lite?: true}}
+         %RequestOptions{} = request_options
        ) do
-    {tools_present?, tools, payload} = pop_responses_lite_tools(payload)
-    {instructions, payload} = Map.pop(payload, "instructions")
-    input = Map.get(payload, "input", [])
-    input = if is_list(input), do: input, else: []
-    {prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
+    if RequestOptions.use_responses_lite?(request_options) do
+      {tools_present?, tools, payload} = pop_responses_lite_tools(payload)
+      {instructions, payload} = Map.pop(payload, "instructions")
+      input = Map.get(payload, "input", [])
+      input = if is_list(input), do: input, else: []
+      {prefix, input} = responses_lite_tools_prefix(input, tools_present?, tools)
 
-    input =
-      [prefix | maybe_responses_lite_instructions(instructions) ++ input]
-      |> Enum.map(&strip_responses_lite_image_details/1)
+      input =
+        [prefix | maybe_responses_lite_instructions(instructions) ++ input]
+        |> Enum.map(&strip_responses_lite_image_details/1)
 
-    Map.put(payload, "input", input)
+      Map.put(payload, "input", input)
+    else
+      payload
+    end
   end
-
-  defp normalize_backend_codex_responses_lite_input(payload, %RequestOptions{}), do: payload
 
   defp normalize_noncompact_backend_responses_envelope(payload, %RequestOptions{} = opts) do
     reasoning = payload |> Map.get("reasoning") |> reasoning_map()
@@ -650,20 +655,37 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp maybe_put_websocket_responses_lite_client_metadata(
          payload,
-         %RequestOptions{routing: %{use_responses_lite?: true}}
+         %RequestOptions{} = request_options
        ) do
-    Map.update(
+    if RequestOptions.use_responses_lite?(request_options) do
+      Map.update(
+        payload,
+        "client_metadata",
+        %{@websocket_responses_lite_client_metadata_key => "true"},
+        fn
+          %{} = metadata ->
+            Map.put(metadata, @websocket_responses_lite_client_metadata_key, "true")
+
+          _metadata ->
+            %{@websocket_responses_lite_client_metadata_key => "true"}
+        end
+      )
+    else
+      payload
+    end
+  end
+
+  defp remove_client_supplied_responses_lite_metadata(
+         %{"client_metadata" => %{} = metadata} = payload
+       ) do
+    Map.put(
       payload,
       "client_metadata",
-      %{@websocket_responses_lite_client_metadata_key => "true"},
-      fn
-        %{} = metadata -> Map.put(metadata, @websocket_responses_lite_client_metadata_key, "true")
-        _metadata -> %{@websocket_responses_lite_client_metadata_key => "true"}
-      end
+      Map.delete(metadata, @websocket_responses_lite_client_metadata_key)
     )
   end
 
-  defp maybe_put_websocket_responses_lite_client_metadata(payload, %RequestOptions{}), do: payload
+  defp remove_client_supplied_responses_lite_metadata(payload), do: payload
 
   defp maybe_strip_unsupported_upstream_fields(payload, "/backend-api/codex/responses") do
     Map.drop(payload, @unsupported_upstream_fields)

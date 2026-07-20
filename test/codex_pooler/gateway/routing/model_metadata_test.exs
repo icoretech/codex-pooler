@@ -178,6 +178,29 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadataTest do
     assert is_nil(payload["default_reasoning_level"])
   end
 
+  test "effective serving mode overrides aggregate Lite metadata without changing tool capability" do
+    cases = [
+      {:full_overrides_true, %{"use_responses_lite" => true}, "full", false},
+      {:lite_overrides_false, %{"use_responses_lite" => false}, "lite", true},
+      {:missing_defaults_full, %{"use_responses_lite" => true}, nil, false},
+      {:missing_stays_full, %{"use_responses_lite" => false}, nil, false},
+      {:malformed_defaults_full, %{"use_responses_lite" => true}, "auto", false},
+      {:malformed_falls_back_false, %{"use_responses_lite" => false}, :lite, false}
+    ]
+
+    for {_case_label, metadata, effective_mode, expected_lite?} <- cases do
+      payload =
+        metadata
+        |> reasoning_model()
+        |> ModelMetadata.codex_model_payload(%{}, nil, %{}, effective_mode)
+
+      assert payload["use_responses_lite"] == expected_lite?
+      assert payload["supports_parallel_tool_calls"]
+    end
+
+    assert model_payload(%{"use_responses_lite" => true})["use_responses_lite"]
+  end
+
   test "returns explicit or fallback reasoning levels with their default" do
     explicit =
       reasoning_model(%{

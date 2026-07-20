@@ -61,6 +61,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
           affinity: affinity_context(),
           demotions: demotion_map(),
           locality: map(),
+          model_serving_mode_snapshot: RequestOptions.Routing.model_serving_mode_snapshot() | nil,
           request_metadata: map(),
           selected_assignment_id: Ecto.UUID.t() | nil
         }
@@ -118,6 +119,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     candidates = Enum.take(ordered, ring_size)
     selected = List.first(candidates)
     prompt_cache_locality = finalize_prompt_cache_locality(prompt_cache_locality, selected)
+    model_serving_mode_snapshot = RequestOptions.model_serving_mode_snapshot(request_options)
 
     %{
       strategy: settings.routing_strategy,
@@ -126,8 +128,16 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       affinity: affinity,
       demotions: demotions,
       locality: prompt_cache_locality,
+      model_serving_mode_snapshot: model_serving_mode_snapshot,
       request_metadata:
-        Metadata.request_metadata(settings, affinity, demotions, selected, prompt_cache_locality),
+        Metadata.request_metadata(
+          settings,
+          affinity,
+          demotions,
+          selected,
+          prompt_cache_locality,
+          model_serving_mode_snapshot
+        ),
       selected_assignment_id: selected && elem(selected, 0).id
     }
   end

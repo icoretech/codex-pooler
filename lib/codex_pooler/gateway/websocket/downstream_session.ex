@@ -128,6 +128,31 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   def accept_downstream_message(_message, _state), do: :drop
 
+  @spec accept_recovered_runtime(term(), socket_state()) :: {:ok, socket_state()} | :drop
+  def accept_recovered_runtime(
+        {:websocket_owner_runtime_recovered, correlation_id, epoch,
+         %{
+           codex_session: %{owner_lease_token: owner_lease_token},
+           websocket_owner_lease_token: owner_lease_token,
+           websocket_owner_downstream: %{
+             correlation_id: correlation_id,
+             epoch: epoch
+           }
+         } = runtime},
+        %{
+          websocket_owner_downstream: %{
+            correlation_id: correlation_id,
+            epoch: epoch
+          }
+        } = state
+      )
+      when is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
+             is_binary(owner_lease_token) do
+    {:ok, state |> clear_monitor() |> put_runtime(runtime)}
+  end
+
+  def accept_recovered_runtime(_message, _state), do: :drop
+
   @spec retarget_error_payload(term()) :: {:error, term()}
   def retarget_error_payload(reason) do
     case WebsocketOwnerContract.safe_error_payload(reason, nil) do

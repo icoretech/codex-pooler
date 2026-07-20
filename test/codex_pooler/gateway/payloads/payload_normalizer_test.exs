@@ -646,14 +646,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       http_options =
         RequestOptions.build(
-          %{use_responses_lite?: true},
+          serving_mode_opts("lite"),
           "/backend-api/codex/responses",
           payload
         )
 
       compact_options =
         RequestOptions.build(
-          %{use_responses_lite?: true},
+          serving_mode_opts("lite"),
           "/backend-api/codex/responses/compact",
           payload
         )
@@ -686,7 +686,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       request_options =
         RequestOptions.build(
-          %{use_responses_lite?: true},
+          serving_mode_opts("lite"),
           "/backend-api/codex/responses",
           payload
         )
@@ -702,6 +702,142 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       upstream = Jason.decode!(encoded)
       assert upstream["reasoning"] == %{"context" => "all_turns"}
       assert upstream["parallel_tool_calls"] == false
+    end
+
+    test "full mode preserves parallel_tool_calls tri-state and removes Lite-only shaping" do
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for endpoint <- [
+            "/backend-api/codex/responses",
+            "/backend-api/codex/responses/compact"
+          ],
+          {name, parallel_fields} <- [
+            {"absent", %{}},
+            {"true", %{"parallel_tool_calls" => true}},
+            {"false", %{"parallel_tool_calls" => false}}
+          ] do
+        payload =
+          Map.merge(
+            %{
+              "model" => "gpt-5.6-terra",
+              "instructions" => "preserve separately",
+              "tools" => [%{"type" => "custom", "name" => "lookup"}],
+              "input" => [%{"type" => "message", "role" => "user", "content" => []}],
+              "reasoning" => %{"effort" => "high", "context" => "current_turn"},
+              "client_metadata" => %{
+                "trace" => "safe-test-value",
+                "ws_request_header_x_openai_internal_codex_responses_lite" => "true"
+              }
+            },
+            parallel_fields
+          )
+
+        options = RequestOptions.build(serving_mode_opts("full"), endpoint, payload)
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, options)
+
+        upstream = Jason.decode!(encoded)
+        label = "#{endpoint}, #{name}"
+
+        assert Map.has_key?(upstream, "parallel_tool_calls") ==
+                 Map.has_key?(parallel_fields, "parallel_tool_calls"),
+               label
+
+        assert Map.get(upstream, "parallel_tool_calls") ==
+                 Map.get(parallel_fields, "parallel_tool_calls"),
+               label
+
+        assert upstream["instructions"] == payload["instructions"], label
+        assert upstream["tools"] == payload["tools"], label
+        assert upstream["input"] == payload["input"], label
+        assert get_in(upstream, ["reasoning", "context"]) == "current_turn", label
+        assert upstream["client_metadata"] == %{"trace" => "safe-test-value"}, label
+      end
+    end
+
+    test "effective snapshot survives compact and websocket retargeting without legacy flag control" do
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "input" => "hello",
+        "parallel_tool_calls" => true,
+        "client_metadata" => %{
+          "ws_request_header_x_openai_internal_codex_responses_lite" => "client-value"
+        }
+      }
+
+      lite_options =
+        RequestOptions.build(serving_mode_opts("lite"), "/backend-api/codex/responses", payload)
+
+      for request_options <- [
+            RequestOptions.retarget(
+              lite_options,
+              "/backend-api/codex/responses/compact",
+              payload
+            ),
+            RequestOptions.for_websocket(lite_options, payload)
+          ] do
+        assert RequestOptions.model_serving_mode_snapshot(request_options) == %{
+                 configured_mode: "lite",
+                 effective_mode: "lite",
+                 source: "override"
+               }
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   %Model{upstream_model_id: "provider-model"},
+                   request_options.transport.upstream_endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+        assert upstream["parallel_tool_calls"] == false
+        assert get_in(upstream, ["reasoning", "context"]) == "all_turns"
+
+        if request_options.transport.transport == "websocket" do
+          assert get_in(upstream, [
+                   "client_metadata",
+                   "ws_request_header_x_openai_internal_codex_responses_lite"
+                 ]) == "true"
+        end
+      end
+    end
+
+    test "full websocket envelopes scrub client Lite metadata without changing payload fields" do
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "input" => [%{"type" => "message", "role" => "user", "content" => []}],
+        "instructions" => "keep websocket instructions",
+        "tools" => [%{"type" => "custom", "name" => "lookup"}],
+        "parallel_tool_calls" => true,
+        "reasoning" => %{"context" => "current_turn"},
+        "client_metadata" => %{
+          "trace" => "safe-test-value",
+          "ws_request_header_x_openai_internal_codex_responses_lite" => "true"
+        }
+      }
+
+      options =
+        serving_mode_opts("full")
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "provider-model"},
+                 options.transport.upstream_endpoint,
+                 options
+               )
+
+      upstream = Jason.decode!(encoded)
+      assert upstream["parallel_tool_calls"] == true
+      assert upstream["instructions"] == payload["instructions"]
+      assert upstream["tools"] == payload["tools"]
+      assert upstream["input"] == payload["input"]
+      assert upstream["reasoning"]["context"] == "current_turn"
+      assert upstream["client_metadata"] == %{"trace" => "safe-test-value"}
     end
 
     test "normalizes the final non-compact reasoning and encrypted include envelope" do
@@ -1022,6 +1158,21 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert first["input"] == payload["input"]
       assert first["parallel_tool_calls"] == false
       assert get_in(first, ["reasoning", "context"]) == "all_turns"
+
+      alias_options =
+        serving_mode_opts("lite")
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.put_transport(upstream_endpoint: "/backend-api/codex/responses/compact")
+
+      assert {:ok, alias_encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "provider-model"},
+                 "/backend-api/codex/responses",
+                 alias_options
+               )
+
+      assert Jason.decode!(alias_encoded) == first
     end
 
     test "uses the pre-dispatch applied effort for compact payloads without re-deciding policy" do
@@ -1597,7 +1748,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   end
 
   defp prepare_lite_payload(payload, endpoint \\ "/backend-api/codex/responses") do
-    request_options = RequestOptions.build(%{use_responses_lite?: true}, endpoint, payload)
+    request_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
 
     assert {:ok, encoded, _request_options} =
              PayloadNormalizer.prepare_upstream_payload(
@@ -1608,6 +1759,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
 
     Jason.decode!(encoded)
+  end
+
+  defp serving_mode_opts(mode) when mode in ["lite", "full"] do
+    %{
+      model_serving_mode_configured: mode,
+      model_serving_mode: mode,
+      model_serving_mode_source: "override"
+    }
   end
 
   defp remove_encrypted_markers(%{} = value) do

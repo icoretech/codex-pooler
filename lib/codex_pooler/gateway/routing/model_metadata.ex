@@ -39,6 +39,7 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
   @type metadata_input :: Model.t() | metadata()
   @type pricing_buckets :: Catalog.pricing_bucket_map()
   @type context_window_overrides :: %{optional(String.t()) => pos_integer()}
+  @type effective_model_serving_mode :: String.t() | nil
 
   @spec codex_model_payload(Model.t(), pricing_buckets()) :: map()
   def codex_model_payload(%Model{} = model, pricing_buckets),
@@ -78,6 +79,26 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     |> base_codex_model_payload(metadata, reasoning_projection)
     |> maybe_put_reasoning_summary_capabilities(metadata)
     |> maybe_put_comp_hash(metadata)
+  end
+
+  @spec codex_model_payload(
+          Model.t(),
+          pricing_buckets(),
+          MetadataProjection.t() | nil,
+          context_window_overrides(),
+          effective_model_serving_mode()
+        ) :: map()
+  def codex_model_payload(
+        %Model{} = model,
+        pricing_buckets,
+        reasoning_projection,
+        context_window_overrides,
+        effective_model_serving_mode
+      )
+      when is_map(context_window_overrides) do
+    model
+    |> codex_model_payload(pricing_buckets, reasoning_projection, context_window_overrides)
+    |> Map.put("use_responses_lite", effective_model_serving_mode == "lite")
   end
 
   defp base_codex_model_payload(model, metadata, reasoning_projection) do

@@ -12,6 +12,9 @@ defmodule CodexPooler.Gateway.Metadata do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingMode
+  alias CodexPooler.Pools.ModelServingOverride
 
   @type auth :: Access.auth_context()
   @type opts :: RequestOptions.t()
@@ -51,12 +54,16 @@ defmodule CodexPooler.Gateway.Metadata do
       pricing_buckets = Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
+      effective_model_serving_modes =
+        effective_model_serving_modes(auth, hydration, visible_models)
+
       catalog =
         CodexCatalog.build(
-          hydration.visible_models,
+          visible_models,
           policy,
           pricing_buckets,
-          context_window_overrides
+          context_window_overrides,
+          effective_model_serving_modes
         )
 
       {:ok,
@@ -65,6 +72,47 @@ defmodule CodexPooler.Gateway.Metadata do
          source_identity: CandidateEligibility.model_source_identity(hydration, visible_models)
        })}
     end
+  end
+
+  @spec effective_model_serving_modes(
+          auth(),
+          CandidateEligibility.model_visibility_hydration(),
+          [Model.t()]
+        ) :: CodexCatalog.effective_model_serving_modes()
+  defp effective_model_serving_modes(auth, hydration, visible_models) do
+    overrides =
+      auth.pool.id
+      |> then(&Pools.model_serving_modes_by_pool_ids([&1]))
+      |> Map.get(auth.pool.id, %{})
+
+    Map.new(visible_models, fn model ->
+      resolution =
+        ModelServingMode.resolve(
+          Map.get(
+            overrides,
+            ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id)
+          ),
+          ModelMetadata.metadata(model),
+          routable_source_ids(hydration, model)
+        )
+
+      effective_mode =
+        case resolution do
+          {:ok, resolved} -> resolved.effective_mode
+          :no_runtime_model -> nil
+        end
+
+      {model.exposed_model_id, effective_mode}
+    end)
+  end
+
+  @spec routable_source_ids(CandidateEligibility.model_visibility_hydration(), Model.t()) ::
+          [Ecto.UUID.t()]
+  defp routable_source_ids(hydration, model) do
+    hydration
+    |> Map.get(:candidates_by_model_id, %{})
+    |> Map.get(model.id, [])
+    |> Enum.map(fn {assignment, _identity} -> assignment.id end)
   end
 
   @spec serve_openai_models(auth(), opts()) :: {:ok, gateway_result()} | {:error, gateway_error()}

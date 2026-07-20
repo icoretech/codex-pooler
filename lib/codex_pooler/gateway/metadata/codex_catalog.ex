@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   @type result :: %{required(:body) => body(), required(:etag) => String.t()}
   @type pricing_buckets :: Catalog.pricing_bucket_map()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
+  @type effective_model_serving_modes :: %{optional(String.t()) => String.t()}
 
   @spec build([Model.t()], normalized_policy()) :: result()
   def build(routable_models, normalized_policy)
@@ -47,16 +48,49 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     |> build_visible(normalized_policy, pricing_buckets, context_window_overrides)
   end
 
+  @spec build(
+          [Model.t()],
+          normalized_policy(),
+          pricing_buckets(),
+          context_window_overrides(),
+          effective_model_serving_modes()
+        ) :: result()
+  def build(
+        routable_models,
+        normalized_policy,
+        pricing_buckets,
+        context_window_overrides,
+        effective_model_serving_modes
+      )
+      when is_list(routable_models) and is_map(normalized_policy) and is_map(pricing_buckets) and
+             is_map(context_window_overrides) and is_map(effective_model_serving_modes) do
+    routable_models
+    |> policy_visible_models(normalized_policy)
+    |> build_visible(
+      normalized_policy,
+      pricing_buckets,
+      context_window_overrides,
+      effective_model_serving_modes
+    )
+  end
+
   defp build_visible(
          visible_models,
          normalized_policy,
          pricing_buckets,
-         context_window_overrides \\ %{}
+         context_window_overrides \\ %{},
+         effective_model_serving_modes \\ nil
        ) do
     models =
       visible_models
       |> Enum.map(
-        &model_payload(&1, normalized_policy, pricing_buckets, context_window_overrides)
+        &model_payload(
+          &1,
+          normalized_policy,
+          pricing_buckets,
+          context_window_overrides,
+          effective_model_serving_modes
+        )
       )
       |> Enum.sort_by(&Map.fetch!(&1, "slug"))
 
@@ -79,19 +113,37 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     @etag_prefix <> digest <> ~s(")
   end
 
-  defp model_payload(%Model{} = model, policy, pricing_buckets, context_window_overrides) do
+  defp model_payload(
+         %Model{} = model,
+         policy,
+         pricing_buckets,
+         context_window_overrides,
+         effective_model_serving_modes
+       ) do
     {reasoning_levels, reasoning_default} =
       ModelMetadata.reasoning_level_maps_and_default(model)
 
     reasoning_projection =
       Access.project_reasoning_effort_metadata(policy, reasoning_levels, reasoning_default)
 
-    ModelMetadata.codex_model_payload(
-      model,
-      pricing_buckets,
-      reasoning_projection,
-      context_window_overrides
-    )
+    case effective_model_serving_modes do
+      nil ->
+        ModelMetadata.codex_model_payload(
+          model,
+          pricing_buckets,
+          reasoning_projection,
+          context_window_overrides
+        )
+
+      effective_modes ->
+        ModelMetadata.codex_model_payload(
+          model,
+          pricing_buckets,
+          reasoning_projection,
+          context_window_overrides,
+          Map.get(effective_modes, model.exposed_model_id)
+        )
+    end
   end
 
   defp canonical_json(value) when is_map(value) do

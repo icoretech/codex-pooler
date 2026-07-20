@@ -137,15 +137,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
          ) do
       {:ok, request} ->
         request_options =
-          RequestOptions.put_routing(context.request_options,
-            routing_attempt_metadata: selection.attempt_metadata,
-            use_responses_lite?:
-              selected_uses_responses_lite?(context.model, selection.assignment),
-            supports_reasoning_summary_parameter?:
-              selected_supports_reasoning_summary_parameter?(
-                context.model,
-                selection.assignment
-              )
+          RequestOptions.put_routing(
+            context.request_options,
+            route_selection_updates(context, selection)
           )
 
         selected_context =
@@ -163,6 +157,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
           nil,
           reason
         )
+    end
+  end
+
+  @spec route_selection_updates(dispatch_context(), RoutingSelection.t()) :: keyword()
+  defp route_selection_updates(context, %RoutingSelection{} = selection) do
+    updates = [
+      routing_attempt_metadata: selection.attempt_metadata,
+      supports_reasoning_summary_parameter?:
+        selected_supports_reasoning_summary_parameter?(
+          context.model,
+          selection.assignment
+        )
+    ]
+
+    case RequestOptions.model_serving_mode_snapshot(context.request_options) do
+      nil ->
+        Keyword.put(
+          updates,
+          :use_responses_lite?,
+          selected_uses_responses_lite?(context.model, selection.assignment)
+        )
+
+      _resolved_snapshot ->
+        updates
     end
   end
 

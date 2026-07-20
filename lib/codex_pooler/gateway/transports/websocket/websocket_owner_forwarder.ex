@@ -9,8 +9,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   """
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -165,7 +167,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       when is_binary(codex_session_id) and is_map(downstream) and
              is_struct(request, UpstreamWebsocketSession.Request) do
     with {:ok, {owner_pid, downstream}} <- ensure_remote_owner(codex_session_id, downstream, opts) do
-      WebsocketOwnerSession.submit_request(owner_pid, downstream, request)
+      submit_remote_owner_request(owner_pid, codex_session_id, downstream, request, opts)
     end
   end
 
@@ -232,9 +234,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          codex_session_id,
          downstream,
          request,
-         _opts
+         opts
        ) do
-    remote_submit_request(codex_session_id, downstream, request)
+    remote_submit_request(codex_session_id, downstream, request, opts)
   end
 
   defp dispatch_submit_request(
@@ -273,20 +275,99 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         {:ok, {owner_pid, downstream}}
 
       {:error, :owner_unavailable} ->
-        recover_remote_owner(codex_session_id, downstream, opts)
+        with {:ok, {owner_pid, recovered_downstream, _recovery_session}} <-
+               recover_remote_owner(codex_session_id, downstream, opts) do
+          {:ok, {owner_pid, recovered_downstream}}
+        end
     end
   end
 
-  defp recover_remote_owner(codex_session_id, downstream, opts) do
+  defp recover_remote_owner(codex_session_id, downstream, opts),
+    do: recover_remote_owner(codex_session_id, downstream, opts, :reuse_lease)
+
+  defp recover_remote_owner(codex_session_id, downstream, opts, lease_recovery) do
     with %CodexSession{} = session <- Repo.get(CodexSession, codex_session_id),
          :ok <- require_local_owner_session(session, opts),
-         {:ok, owner_pid} <- start_recovered_remote_owner(session, opts),
+         {:ok, recovery_session} <- recover_remote_owner_lease(session, opts, lease_recovery),
+         {:ok, owner_pid} <- start_recovered_remote_owner(recovery_session, opts),
          {:ok, downstream} <- attach_recovered_downstream(owner_pid, downstream) do
-      {:ok, {owner_pid, downstream}}
+      {:ok, {owner_pid, downstream, recovery_session}}
     else
       nil -> {:error, :owner_unavailable}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp submit_remote_owner_request(owner_pid, codex_session_id, downstream, request, opts) do
+    {request, visibility} = track_request_visibility(request)
+
+    do_submit_remote_owner_request(
+      owner_pid,
+      codex_session_id,
+      downstream,
+      request,
+      visibility,
+      opts
+    )
+  end
+
+  defp do_submit_remote_owner_request(
+         owner_pid,
+         codex_session_id,
+         downstream,
+         request,
+         visibility,
+         opts
+       ) do
+    WebsocketOwnerSession.submit_request(owner_pid, downstream, request)
+  catch
+    :exit, reason ->
+      if Process.alive?(owner_pid) or :atomics.get(visibility, 1) == 1 or
+           not recoverable_owner_exit?(reason) do
+        {:error, :owner_crashed}
+      else
+        with {:ok, {replacement_pid, replacement_downstream, replacement_session}} <-
+               recover_remote_owner(
+                 codex_session_id,
+                 downstream,
+                 opts,
+                 :replace_unavailable_lease
+               ),
+             :ok <- notify_recovered_runtime(replacement_session, replacement_downstream) do
+          WebsocketOwnerSession.submit_request(replacement_pid, replacement_downstream, request)
+        end
+      end
+  end
+
+  defp recoverable_owner_exit?({reason, {GenServer, :call, _details}}),
+    do: recoverable_owner_exit?(reason)
+
+  defp recoverable_owner_exit?(reason) when reason in [:normal, :shutdown], do: false
+  defp recoverable_owner_exit?({:shutdown, _details}), do: false
+  defp recoverable_owner_exit?(_reason), do: true
+
+  defp track_request_visibility(%UpstreamWebsocketSession.Request{} = request) do
+    visibility = :atomics.new(1, [])
+    observer = request.frame_observer
+
+    tracked_observer = fn frame ->
+      if is_function(observer, 1), do: observer.(frame)
+      unless StreamProtocol.internal_rate_limit_event?(frame), do: :atomics.put(visibility, 1, 1)
+    end
+
+    {%{request | frame_observer: tracked_observer}, visibility}
+  end
+
+  defp recover_remote_owner_lease(session, _opts, :reuse_lease), do: {:ok, session}
+
+  defp recover_remote_owner_lease(session, opts, :replace_unavailable_lease) do
+    takeover_opts =
+      RequestOptions.for_websocket(
+        owner_instance_id: local_node_string(opts),
+        request_id: Keyword.get(opts, :request_id)
+      )
+
+    SessionContinuity.replace_unavailable_owner_lease(session, takeover_opts)
   end
 
   defp require_local_owner_session(
@@ -327,12 +408,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
-  defp attach_recovered_downstream(owner_pid, %{pid: pid, correlation_id: correlation_id})
-       when is_pid(pid) and is_binary(correlation_id) do
-    WebsocketOwnerSession.attach_downstream(owner_pid, %{pid: pid, correlation_id: correlation_id})
+  defp attach_recovered_downstream(
+         owner_pid,
+         %{pid: pid, epoch: epoch, correlation_id: correlation_id} = downstream
+       )
+       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
+    WebsocketOwnerSession.restore_downstream(owner_pid, downstream)
   end
 
   defp attach_recovered_downstream(_owner_pid, _downstream), do: {:error, :stale_downstream}
+
+  defp notify_recovered_runtime(
+         %CodexSession{} = session,
+         %{pid: pid, correlation_id: correlation_id, epoch: epoch} = downstream
+       )
+       when is_pid(pid) and is_binary(correlation_id) and is_integer(epoch) and epoch > 0 do
+    send(
+      pid,
+      {:websocket_owner_runtime_recovered, correlation_id, epoch,
+       %{
+         codex_session: session,
+         websocket_owner_lease_token: session.owner_lease_token,
+         websocket_owner_downstream: downstream
+       }}
+    )
+
+    :ok
+  end
 
   defp best_effort_cancel_downstream(node, codex_session_id, downstream, opts) do
     _result =

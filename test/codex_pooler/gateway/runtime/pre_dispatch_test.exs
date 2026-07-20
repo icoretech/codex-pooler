@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
 
@@ -167,6 +168,308 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     inherited = RouteState.put_candidates(prepared.route_state, Enum.reverse(prepared.candidates))
     assert RouteState.codex_models_etag(inherited) == expected.etag
+  end
+
+  test "prepare resolves the policy-effective model once and reuses its mode map for the catalog ETag" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    requested_model =
+      CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{
+        exposed_model_id: "gpt-pre-dispatch-requested",
+        upstream_model_id: "provider-gpt-pre-dispatch-requested",
+        display_name: "Pre-dispatch Requested",
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => "malformed",
+          "use_responses_lite" => true
+        }
+      })
+
+    put_model_serving_override!(setup.pool.id, requested_model.exposed_model_id, "lite")
+    put_model_serving_override!(setup.pool.id, setup.model.exposed_model_id, "full")
+
+    policy = %{
+      allowed_model_identifiers: nil,
+      enforced_model_identifier: setup.model.exposed_model_id,
+      enforced_reasoning_effort: nil,
+      enforced_service_tier: nil,
+      metadata: %{}
+    }
+
+    payload = %{"model" => requested_model.exposed_model_id, "input" => "enforced model"}
+
+    options =
+      request_options(auth, payload,
+        requested_model: requested_model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+      |> RequestOptions.put_routing(api_key_policy: policy)
+
+    context = CandidateEligibility.visible_model_context(setup.pool, setup.model.exposed_model_id)
+
+    {result, queries} =
+      count_repo_sources(fn ->
+        PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model, context)
+      end)
+
+    assert {:ok, prepared} = result
+
+    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == %{
+             configured_mode: "full",
+             effective_mode: "full",
+             source: "override"
+           }
+
+    assert Map.get(queries, "pool_model_serving_overrides", 0) == 1
+
+    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
+
+    expected_catalog =
+      CodexCatalog.build(context.visible_models, policy, pricing, %{}, %{
+        requested_model.exposed_model_id => "lite",
+        setup.model.exposed_model_id => "full"
+      })
+
+    assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
+  end
+
+  test "prepare finds a canonical override for a case-preserving catalog model id" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    # Given a catalog model whose source casing differs from its persisted override key
+    model =
+      CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{
+        exposed_model_id: "GPT-5",
+        upstream_model_id: "provider-gpt-5-case",
+        display_name: "GPT-5 Case",
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => %{"use_responses_lite" => true}
+          },
+          "use_responses_lite" => true
+        }
+      })
+
+    put_model_serving_override!(setup.pool.id, "gpt-5", "full")
+    payload = %{"model" => model.exposed_model_id, "input" => "case identity"}
+
+    options =
+      request_options(auth, payload,
+        requested_model: model.exposed_model_id,
+        effective_model: model.exposed_model_id
+      )
+
+    context = CandidateEligibility.visible_model_context(setup.pool, model.exposed_model_id)
+
+    # When pre-dispatch resolves the effective serving mode
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model, context)
+
+    # Then the lowercase persisted override wins over the source Lite default
+    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == %{
+             configured_mode: "full",
+             effective_mode: "full",
+             source: "override"
+           }
+  end
+
+  test "catalog metadata finds a canonical override for a case-preserving model id" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    # Given a case-preserving catalog model backed by a lowercase Full override
+    _model =
+      CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{
+        exposed_model_id: "GPT-5",
+        upstream_model_id: "provider-gpt-5-case",
+        display_name: "GPT-5 Case",
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => %{"use_responses_lite" => true}
+          },
+          "use_responses_lite" => true
+        }
+      })
+
+    put_model_serving_override!(setup.pool.id, "gpt-5", "full")
+    options = RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+
+    # When catalog metadata is generated from persisted state
+    assert {:ok, snapshot} =
+             Metadata.codex_catalog_snapshot(auth, "/backend-api/codex/models", options)
+
+    catalog_model = Enum.find(snapshot.body["models"], &(&1["slug"] == "GPT-5"))
+
+    # Then clients see the configured Full mode rather than the source Lite default
+    assert catalog_model["use_responses_lite"] == false
+  end
+
+  test "prepare keeps an authorized absent media model on its visible host without a mode snapshot" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    absent_model = "future-media-model-#{System.unique_integer([:positive])}"
+
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(allowed_model_identifiers: [absent_model])
+      |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    auth = %{auth | api_key: api_key}
+    payload = %{"model" => absent_model, "input" => "host fallback"}
+
+    options =
+      request_options(auth, payload,
+        requested_model: absent_model,
+        effective_model: absent_model
+      )
+
+    hydration = CandidateEligibility.hydrate_model_visibility(setup.pool)
+
+    context =
+      Map.merge(hydration, %{
+        requested_model: absent_model,
+        effective_model: absent_model,
+        visible_model: setup.model,
+        candidate_snapshots: Map.get(hydration.candidates_by_model_id, setup.model.id, [])
+      })
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model, context)
+
+    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == nil
+    assert prepared.route_state.effective_model_serving_modes == %{}
+    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+  end
+
+  test "a visible model without a runtime candidate returns the canonical backend error" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    setup.assignment
+    |> Ecto.Changeset.change(health_status: "degraded")
+    |> Repo.update!()
+
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "no runtime candidate"}
+
+    assert {:error,
+            %{
+              status: 503,
+              code: "no_eligible_backend",
+              message: "no healthy eligible backend is currently available",
+              param: "model"
+            }} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               setup.model
+             )
+  end
+
+  test "each websocket turn sees a fresh mode while an already prepared turn stays immutable" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    model = put_assignment_lite_flag!(setup.model, setup.assignment.id, false)
+    payload = %{"model" => model.exposed_model_id, "input" => "websocket turn"}
+
+    base_options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.for_websocket(payload)
+
+    assert {:ok, first_turn} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, base_options, model)
+
+    assert RequestOptions.model_serving_mode(first_turn.request_options) == "full"
+
+    put_model_serving_override!(setup.pool.id, model.exposed_model_id, "lite")
+
+    assert RequestOptions.model_serving_mode(first_turn.request_options) == "full"
+
+    assert {:ok, second_turn} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, base_options, model)
+
+    assert RequestOptions.model_serving_mode_snapshot(second_turn.request_options) == %{
+             configured_mode: "lite",
+             effective_mode: "lite",
+             source: "override"
+           }
+
+    assert RouteState.codex_models_etag(first_turn.route_state) == nil
+    assert RouteState.codex_models_etag(second_turn.route_state) == nil
+  end
+
+  test "opposite assignment Lite source flags do not alter candidate membership" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    %{assignment: fallback_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Candidate invariance fallback upstream"
+      })
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "candidate invariance"}
+    options = request_options(auth, payload, [])
+
+    lite_model =
+      put_assignment_lite_flags!(setup.model, %{
+        setup.assignment.id => true,
+        fallback_assignment.id => false
+      })
+
+    assert {:ok, lite_prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, lite_model)
+
+    full_model =
+      put_assignment_lite_flags!(lite_model, %{
+        setup.assignment.id => false,
+        fallback_assignment.id => false
+      })
+
+    assert {:ok, full_prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, full_model)
+
+    assert candidate_ids(lite_prepared.candidates) == candidate_ids(full_prepared.candidates)
+    assert RequestOptions.model_serving_mode(lite_prepared.request_options) == "lite"
+    assert RequestOptions.model_serving_mode(full_prepared.request_options) == "full"
+  end
+
+  test "malformed source metadata falls back to the aggregate Lite flag" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => "malformed",
+          "use_responses_lite" => true
+        }
+      })
+      |> Repo.update!()
+
+    payload = %{"model" => model.exposed_model_id, "input" => "malformed source metadata"}
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               model
+             )
+
+    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == %{
+             configured_mode: "auto",
+             effective_mode: "lite",
+             source: "catalog"
+           }
   end
 
   test "prepare attaches defaulted routing settings to the request-local route state without persisting" do
@@ -615,5 +918,85 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     opts
     |> RequestOptions.build(@endpoint_path, payload)
     |> RequestOptions.put_routing(Keyword.put(routing_attrs, :api_key_policy, policy))
+  end
+
+  defp put_model_serving_override!(pool_id, exposed_model_id, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %ModelServingOverride{
+      pool_id: pool_id,
+      exposed_model_id: exposed_model_id,
+      mode: mode,
+      created_at: timestamp,
+      updated_at: timestamp
+    }
+    |> Repo.insert!()
+  end
+
+  defp put_assignment_lite_flag!(model, assignment_id, enabled?) do
+    source_models = Map.get(model.metadata, "source_assignment_models", %{})
+
+    model
+    |> Ecto.Changeset.change(%{
+      metadata:
+        Map.put(
+          model.metadata,
+          "source_assignment_models",
+          Map.put(source_models, assignment_id, %{"use_responses_lite" => enabled?})
+        )
+    })
+    |> Repo.update!()
+  end
+
+  defp put_assignment_lite_flags!(model, flags) do
+    source_models =
+      Map.new(flags, fn {assignment_id, enabled?} ->
+        {assignment_id, %{"use_responses_lite" => enabled?}}
+      end)
+
+    model
+    |> Ecto.Changeset.change(%{
+      metadata:
+        model.metadata
+        |> Map.put("source_assignment_ids", Map.keys(flags))
+        |> Map.put("source_assignment_models", source_models)
+    })
+    |> Repo.update!()
+  end
+
+  defp candidate_ids(candidates),
+    do: Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+
+  defp count_repo_sources(fun) do
+    parent = self()
+    handler_id = "pre-dispatch-query-count-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and is_binary(metadata[:source]) do
+            send(parent, {handler_id, metadata.source})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_sources(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_sources(handler_id, counts) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_sources(handler_id, Map.update(counts, source, 1, &(&1 + 1)))
+    after
+      0 -> counts
+    end
   end
 end

@@ -132,6 +132,74 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert unrestricted.etag == maximum.etag
   end
 
+  test "effective serving modes determine only the emitted Lite boolean and final-body revision" do
+    aggregate_lite_model = model("gpt-a", %{"use_responses_lite" => true})
+    aggregate_full_model = model("gpt-a", %{"use_responses_lite" => false})
+
+    aggregate_lite =
+      CodexCatalog.build(
+        [aggregate_lite_model],
+        unrestricted_policy(),
+        %{},
+        %{}
+      )
+
+    explicit_lite =
+      CodexCatalog.build(
+        [aggregate_full_model],
+        unrestricted_policy(),
+        %{},
+        %{},
+        %{"gpt-a" => "lite"}
+      )
+
+    explicit_full =
+      CodexCatalog.build(
+        [aggregate_lite_model],
+        unrestricted_policy(),
+        %{},
+        %{},
+        %{"gpt-a" => "full"}
+      )
+
+    assert get_in(aggregate_lite.body, ["models", Access.at(0), "use_responses_lite"])
+    assert explicit_lite.body == aggregate_lite.body
+    assert explicit_lite.etag == aggregate_lite.etag
+
+    refute get_in(explicit_full.body, ["models", Access.at(0), "use_responses_lite"])
+    refute explicit_full.body == aggregate_lite.body
+    refute explicit_full.etag == aggregate_lite.etag
+
+    assert get_in(explicit_full.body, ["models", Access.at(0), "supports_parallel_tool_calls"])
+  end
+
+  test "missing and malformed effective mode entries default to Full without aggregate fallback" do
+    aggregate_lite_model = model("gpt-a", %{"use_responses_lite" => true})
+
+    aggregate_fallback =
+      CodexCatalog.build([aggregate_lite_model], unrestricted_policy(), %{}, %{})
+
+    for effective_modes <- [
+          %{"other-model" => "full"},
+          %{"gpt-a" => "auto"},
+          %{"gpt-a" => true},
+          %{gpt_a: "full"}
+        ] do
+      result =
+        CodexCatalog.build(
+          [aggregate_lite_model],
+          unrestricted_policy(),
+          %{},
+          %{},
+          effective_modes
+        )
+
+      refute get_in(result.body, ["models", Access.at(0), "use_responses_lite"])
+      refute result.body == aggregate_fallback.body
+      refute result.etag == aggregate_fallback.etag
+    end
+  end
+
   test "filters the complete routable list through normalized model policy" do
     result =
       CodexCatalog.build(

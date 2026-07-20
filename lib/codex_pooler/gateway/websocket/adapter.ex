@@ -30,6 +30,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     DownstreamSession.accept_downstream_message(message, state)
   end
 
+  @spec accept_recovered_runtime(term(), socket_state()) :: {:ok, socket_state()} | :drop
+  def accept_recovered_runtime(message, state) do
+    DownstreamSession.accept_recovered_runtime(message, state)
+  end
+
   @spec handle_monitor_down(socket_state(), pid(), term()) :: DownstreamSession.monitor_result()
   def handle_monitor_down(state, owner_pid, reason) do
     DownstreamSession.handle_monitor_down(state, owner_pid, reason)

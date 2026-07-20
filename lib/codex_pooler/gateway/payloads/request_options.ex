@@ -96,6 +96,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :idempotency_key,
     :interrupt_reason,
     :media_upload,
+    :model_serving_mode,
+    :model_serving_mode_configured,
+    :model_serving_mode_source,
     :native_image_request?,
     :now,
     :openai_source_endpoint,
@@ -228,7 +231,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       options
       | request_metadata: request_metadata(options, endpoint, payload),
         transport: retargeted_transport(options.transport, endpoint, payload),
-        routing: struct!(options.routing, prompt_cache_key: nil)
+        routing: Routing.update(options.routing, prompt_cache_key: nil)
     }
   end
 
@@ -269,7 +272,38 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec put_routing(t(), keyword()) :: t()
   def put_routing(%__MODULE__{} = options, updates) when is_list(updates) do
-    %{options | routing: struct!(options.routing, updates)}
+    %{options | routing: Routing.update(options.routing, updates)}
+  end
+
+  @spec put_model_serving_mode(t(), Routing.model_serving_mode_snapshot() | keyword()) :: t()
+  def put_model_serving_mode(%__MODULE__{} = options, snapshot)
+      when is_map(snapshot) or is_list(snapshot) do
+    %{options | routing: Routing.put_model_serving_mode(options.routing, snapshot)}
+  end
+
+  @spec model_serving_mode_snapshot(t()) :: Routing.model_serving_mode_snapshot() | nil
+  def model_serving_mode_snapshot(%__MODULE__{routing: routing}) do
+    Routing.model_serving_mode_snapshot(routing)
+  end
+
+  @spec model_serving_mode_configured(t()) :: Routing.configured_model_serving_mode() | nil
+  def model_serving_mode_configured(%__MODULE__{routing: routing}),
+    do: routing.model_serving_mode_configured
+
+  @spec model_serving_mode(t()) :: Routing.effective_model_serving_mode()
+  def model_serving_mode(%__MODULE__{routing: %{model_serving_mode: nil}}), do: "full"
+  def model_serving_mode(%__MODULE__{routing: routing}), do: routing.model_serving_mode
+
+  @spec model_serving_mode_source(t()) :: Routing.model_serving_mode_source() | nil
+  def model_serving_mode_source(%__MODULE__{routing: routing}),
+    do: routing.model_serving_mode_source
+
+  @spec use_responses_lite?(t()) :: boolean()
+  def use_responses_lite?(%__MODULE__{routing: routing} = options) do
+    case Routing.model_serving_mode_snapshot(routing) do
+      nil -> routing.use_responses_lite? == true
+      _snapshot -> model_serving_mode(options) == "lite"
+    end
   end
 
   @spec put_transport(t(), keyword()) :: t()
@@ -417,8 +451,27 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
         Map.get(opts, :supports_reasoning_summary_parameter?, true) != false,
       routing_attempt_metadata: Map.get(opts, :routing_attempt_metadata),
       routing_circuit_state: Map.get(opts, :routing_circuit_state),
+      model_serving_mode_configured: Map.get(opts, :model_serving_mode_configured),
+      model_serving_mode: Map.get(opts, :model_serving_mode),
+      model_serving_mode_source: Map.get(opts, :model_serving_mode_source),
       use_responses_lite?: Map.get(opts, :use_responses_lite?, false) == true
     }
+    |> validate_routing_model_serving_mode!()
+  end
+
+  defp validate_routing_model_serving_mode!(%Routing{} = routing) do
+    case Routing.model_serving_mode_snapshot(routing) do
+      nil ->
+        routing
+
+      snapshot ->
+        routing
+        |> Map.put(:model_serving_mode_configured, nil)
+        |> Map.put(:model_serving_mode, nil)
+        |> Map.put(:model_serving_mode_source, nil)
+        |> Map.put(:use_responses_lite?, false)
+        |> Routing.put_model_serving_mode(snapshot)
+    end
   end
 
   defp payload_context(opts) do

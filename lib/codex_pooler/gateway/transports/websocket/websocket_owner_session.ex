@@ -137,6 +137,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     )
   end
 
+  @spec restore_downstream(GenServer.server(), downstream()) ::
+          {:ok, downstream()} | {:error, term()}
+  def restore_downstream(
+        owner,
+        %{pid: pid, epoch: epoch, correlation_id: correlation_id} = downstream
+      )
+      when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
+    GenServer.call(owner, {:restore_downstream, downstream}, owner_call_timeout())
+  end
+
   @spec detach_downstream(GenServer.server(), map()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def detach_downstream(owner, %{pid: pid, epoch: epoch, correlation_id: correlation_id})
@@ -258,6 +268,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:reply, {:error, :owner_busy}, state}
     else
       attach_downstream_now(state, pid, correlation_id)
+    end
+  end
+
+  def handle_call({:restore_downstream, _downstream}, _from, %{draining?: true} = state) do
+    {:reply, {:error, :owner_drained}, state}
+  end
+
+  def handle_call(
+        {:restore_downstream, downstream},
+        _from,
+        %{downstream: nil, active_turn: nil} = state
+      ) do
+    attach_downstream_now(state, downstream)
+  end
+
+  def handle_call({:restore_downstream, downstream}, _from, state) do
+    case DownstreamState.downstream_status(state.downstream, downstream) do
+      :active -> {:reply, {:ok, state.downstream}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -499,20 +528,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   defp attach_downstream_now(state, pid, correlation_id) do
+    downstream = %{
+      pid: pid,
+      epoch: DownstreamState.next_downstream_epoch(state.downstream),
+      correlation_id: correlation_id
+    }
+
+    attach_downstream_now(state, downstream)
+  end
+
+  defp attach_downstream_now(state, downstream) do
     state =
       state
       |> DownstreamState.demonitor_downstream()
       |> DownstreamState.cancel_idle_shutdown()
 
-    epoch = DownstreamState.next_downstream_epoch(state.downstream)
-    monitor = Process.monitor(pid)
-
-    downstream = %{
-      pid: pid,
-      epoch: epoch,
-      correlation_id: correlation_id,
-      active_turn_reconnect?: DownstreamState.active_turn?(state)
-    }
+    monitor = Process.monitor(downstream.pid)
+    downstream = Map.put(downstream, :active_turn_reconnect?, DownstreamState.active_turn?(state))
 
     state = DownstreamState.put_active_turn_downstream(state, downstream)
 

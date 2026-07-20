@@ -1,8 +1,95 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+
+  test "classifies only resolved Full ordinary Responses HTTP rejections" do
+    ordinary_endpoints = [
+      "/backend-api/codex/responses",
+      "/backend-api/codex/v1/responses",
+      "/backend-api/codex/v1/chat/completions",
+      "/v1/responses",
+      "/v1/chat/completions"
+    ]
+
+    for endpoint <- ordinary_endpoints do
+      options =
+        %{}
+        |> RequestOptions.build(endpoint, %{"model" => "example-model"})
+        |> RequestOptions.put_model_serving_mode(
+          configured_mode: "full",
+          effective_mode: "full",
+          source: "override"
+        )
+
+      assert Metadata.upstream_status_error_code(400, options) ==
+               "full_upstream_rejection"
+
+      assert Metadata.upstream_status_error_code(429, options) ==
+               "upstream_rate_limited"
+    end
+
+    full_options =
+      %{}
+      |> RequestOptions.build("/backend-api/codex/responses", %{"model" => "example-model"})
+      |> RequestOptions.put_model_serving_mode(
+        configured_mode: "auto",
+        effective_mode: "full",
+        source: "catalog"
+      )
+
+    lite_options =
+      %{}
+      |> RequestOptions.build("/backend-api/codex/responses", %{"model" => "example-model"})
+      |> RequestOptions.put_model_serving_mode(
+        configured_mode: "auto",
+        effective_mode: "lite",
+        source: "catalog"
+      )
+
+    compact_full_options =
+      %{}
+      |> RequestOptions.build("/backend-api/codex/responses/compact", %{
+        "model" => "example-model"
+      })
+      |> RequestOptions.put_model_serving_mode(
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      )
+
+    translated_compact_full_options =
+      compact_full_options
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        "/backend-api/codex/responses/compact"
+      )
+
+    unresolved_options =
+      RequestOptions.build(
+        %{},
+        "/backend-api/codex/responses",
+        %{"model" => "example-model"}
+      )
+
+    assert Metadata.upstream_status_error_code(400, lite_options) == "upstream_status"
+    assert Metadata.upstream_status_error_code(400, compact_full_options) == "upstream_status"
+
+    assert Metadata.upstream_status_error_code(400, translated_compact_full_options) ==
+             "upstream_status"
+
+    assert Metadata.upstream_status_error_code(400, unresolved_options) == "upstream_status"
+    assert Metadata.upstream_status_error_code(400, full_options) == "upstream_status"
+    assert Metadata.upstream_status_error_code(200, full_options) == "upstream_status"
+
+    assert Metadata.upstream_status_error_code(400, %{
+             transport: %{upstream_endpoint: "/backend-api/codex/responses"},
+             model_serving_mode: "full",
+             error: "untrusted upstream text"
+           }) == "upstream_status"
+  end
 
   test "characterization preserves existing websocket response metadata output" do
     frame_headers = %{

@@ -24,6 +24,17 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
   ]
+  @ordinary_responses_endpoints [
+    "/backend-api/codex/responses",
+    "/backend-api/codex/v1/responses",
+    "/backend-api/codex/v1/chat/completions",
+    "/v1/responses",
+    "/v1/chat/completions"
+  ]
+  @compact_responses_endpoints [
+    "/backend-api/codex/responses/compact",
+    "/backend-api/codex/v1/responses/compact"
+  ]
 
   @public_openai_responses_stream_keys ~w(
     schema_version
@@ -79,6 +90,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(metadata)
   end
 
+  @spec upstream_status_error_code(integer(), RequestOptions.t() | term()) :: String.t()
+  def upstream_status_error_code(429, %RequestOptions{}), do: "upstream_rate_limited"
+
+  def upstream_status_error_code(status, %RequestOptions{} = request_options)
+      when status >= 400 and status <= 499 do
+    if explicit_full_ordinary_responses?(request_options) do
+      "full_upstream_rejection"
+    else
+      "upstream_status"
+    end
+  end
+
+  def upstream_status_error_code(_status, _request_options), do: "upstream_status"
+
   defp upstream_websocket_bridge_attempt_metadata(%RequestOptions{
          transport: %{upstream_websocket_bridge?: true}
        }) do
@@ -86,6 +111,28 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp upstream_websocket_bridge_attempt_metadata(_opts), do: %{}
+
+  @spec explicit_full_ordinary_responses?(RequestOptions.t() | term()) :: boolean()
+  def explicit_full_ordinary_responses?(%RequestOptions{} = request_options) do
+    RequestOptions.model_serving_mode_snapshot(request_options) == %{
+      configured_mode: "full",
+      effective_mode: "full",
+      source: "override"
+    } and ordinary_responses_endpoint?(request_options)
+  end
+
+  def explicit_full_ordinary_responses?(_request_options), do: false
+
+  defp ordinary_responses_endpoint?(%RequestOptions{} = request_options) do
+    upstream_endpoint = request_options.transport.upstream_endpoint
+
+    source_endpoint =
+      request_options.openai_compatibility.source_endpoint ||
+        upstream_endpoint
+
+    upstream_endpoint not in @compact_responses_endpoints and
+      source_endpoint in @ordinary_responses_endpoints
+  end
 
   @spec response_body_limit_exceeded?(Req.Response.t()) :: boolean()
   def response_body_limit_exceeded?(%Req.Response{} = response),

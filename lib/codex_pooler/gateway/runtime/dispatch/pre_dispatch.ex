@@ -15,6 +15,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingMode
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.RouteClass
 
@@ -78,6 +81,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          :ok <- ensure_model_supports(model, endpoint, payload, request_options),
          :ok <- StrictSchema.validate(payload),
          :ok <- InputShape.validate(payload),
+         {:ok, request_options, effective_model_serving_modes} <-
+           resolve_model_serving_modes(
+             auth,
+             model,
+             visible_model_context,
+             visible_models,
+             request_options
+           ),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
          route_state =
@@ -85,6 +96,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              visible_model_context: visible_model_context,
              visible_model: visible_model,
              visible_models: visible_models,
+             effective_model_serving_modes: effective_model_serving_modes,
              candidate_snapshots: candidate_snapshots,
              candidates: candidate_snapshots,
              routing_settings: PoolRouting.routing_settings_with_defaults(auth.pool)
@@ -133,17 +145,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     if codex_models_etag_eligible?(endpoint, request_options) do
       policy = request_options.routing.api_key_policy
 
-      visible_models =
-        case policy do
-          %{} = policy ->
-            CandidateEligibility.policy_visible_models(
-              visible_models(route_state),
-              policy
-            )
-
-          nil ->
-            visible_models(route_state)
-        end
+      visible_models = policy_visible_models(route_state, policy)
 
       pricing_buckets = CodexPooler.Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
@@ -153,7 +155,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           route_state.visible_models,
           policy,
           pricing_buckets,
-          context_window_overrides
+          context_window_overrides,
+          route_state.effective_model_serving_modes
         )
 
       RouteState.put_codex_models_etag(route_state, etag)
@@ -177,6 +180,79 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
   defp visible_models(%RouteState{visible_models: models}) do
     Enum.filter(models, &match?(%Model{}, &1))
+  end
+
+  defp policy_visible_models(%RouteState{} = route_state, %{} = policy) do
+    route_state
+    |> visible_models()
+    |> CandidateEligibility.policy_visible_models(policy)
+  end
+
+  defp policy_visible_models(%RouteState{} = route_state, nil), do: visible_models(route_state)
+
+  defp resolve_model_serving_modes(
+         auth,
+         %Model{} = effective_model,
+         visible_model_context,
+         visible_models,
+         %RequestOptions{} = request_options
+       ) do
+    policy_visible_models =
+      case request_options.routing.api_key_policy do
+        %{} = policy -> CandidateEligibility.policy_visible_models(visible_models, policy)
+        nil -> visible_models
+      end
+
+    overrides =
+      auth.pool.id
+      |> then(&Pools.model_serving_modes_by_pool_ids([&1]))
+      |> Map.get(auth.pool.id, %{})
+
+    resolutions =
+      Map.new(policy_visible_models, fn model ->
+        resolution =
+          ModelServingMode.resolve(
+            Map.get(
+              overrides,
+              ModelServingOverride.canonical_exposed_model_id(model.exposed_model_id)
+            ),
+            ModelMetadata.metadata(model),
+            routable_source_ids(visible_model_context, model)
+          )
+
+        {model.exposed_model_id, resolution}
+      end)
+
+    effective_modes =
+      Map.new(resolutions, fn
+        {model_identifier, {:ok, resolution}} ->
+          {model_identifier, resolution.effective_mode}
+
+        {model_identifier, :no_runtime_model} ->
+          {model_identifier, nil}
+      end)
+
+    case Map.get(resolutions, effective_model.exposed_model_id) do
+      {:ok, resolution} ->
+        {:ok, RequestOptions.put_model_serving_mode(request_options, resolution), effective_modes}
+
+      :no_runtime_model ->
+        CandidateEligibility.routable_candidates(visible_model_context, effective_model)
+
+      nil
+      when request_options.routing.effective_model != effective_model.exposed_model_id ->
+        {:ok, request_options, effective_modes}
+
+      nil ->
+        {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
+    end
+  end
+
+  defp routable_source_ids(visible_model_context, %Model{} = model) do
+    visible_model_context
+    |> Map.get(:candidates_by_model_id, %{})
+    |> Map.get(model.id, [])
+    |> Enum.map(fn {assignment, _identity} -> assignment.id end)
   end
 
   defp authorize_model_policy(

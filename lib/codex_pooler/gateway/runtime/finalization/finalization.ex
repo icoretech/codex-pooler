@@ -24,6 +24,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
+  @canonical_full_failure_body %{
+    "error" => %{
+      "code" => "server_error",
+      "message" => "upstream request failed",
+      "type" => "server_error"
+    }
+  }
+
   @type callbacks :: %{
           required(:register_continuity) => (term(), term(), term() -> term()),
           required(:stream_result) => StreamTypes.stream_result_callback()
@@ -53,7 +61,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         }
   @type stream_failure :: StreamProtocol.terminal_failure()
   @type stream_finalization_result :: {:ok, term()} | {:error, map()}
-
   @spec handle_http_response(
           Req.Response.t(),
           SelectedCandidateContext.t(),
@@ -301,7 +308,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       if context.allow_retry? do
         record_assignment_model_unavailable_retry(response, context)
       else
-        finalize_upstream_status_failure(response, context, body)
+        finalize_upstream_status_failure(response, context, body,
+          failure_projection: :passthrough
+        )
       end
     end
   end
@@ -413,14 +422,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     } = context
 
     status = response.status
+    error_code = Metadata.upstream_status_error_code(status, request_options)
 
     attrs =
       SettlementAttrs.failure(
         context,
         status,
-        "upstream_status",
+        error_code,
         "upstream returned #{status}",
-        Metadata.response_metadata(response, "upstream_status", request_options),
+        Metadata.response_metadata(response, error_code, request_options),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"}
       )
@@ -433,16 +443,26 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
       {:ok, _finalized} ->
-        {:ok,
-         %{
-           status: status,
-           headers:
-             Metadata.response_headers(response, RouteClass.streaming?(payload), request_options),
-           raw_body: body
-         }}
+        headers =
+          Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
+
+        result = failure_result(status, headers, body, request_options, opts)
+
+        {:ok, result}
 
       {:error, gateway_error} ->
         {:error, gateway_error}
+    end
+  end
+
+  defp failure_result(status, headers, body, request_options, opts) do
+    case {Keyword.get(opts, :failure_projection, :mode_scoped),
+          Metadata.explicit_full_ordinary_responses?(request_options)} do
+      {:mode_scoped, true} ->
+        %{status: status, headers: headers, body: @canonical_full_failure_body}
+
+      {_projection, _explicit_full?} ->
+        %{status: status, headers: headers, raw_body: body}
     end
   end
 

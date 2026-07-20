@@ -57,6 +57,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
   end
 
+  def handle_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
+    case Adapter.accept_recovered_runtime(message, state) do
+      {:ok, state} -> {:ok, state}
+      :drop -> {:ok, state}
+    end
+  end
+
   def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
     case Adapter.accept_downstream_message(message, state) do
       {:ok, {:data, data}} ->

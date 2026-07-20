@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     :visible_model,
     visible_model_context: %{},
     visible_models: [],
+    effective_model_serving_modes: %{},
     candidate_snapshots: [],
     candidates: [],
     routing_settings: nil,
@@ -43,12 +44,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           required(:quota_window_dimension_keys) => [map()]
         }
   @type extensions :: %{optional(atom() | String.t()) => term()}
+  @type effective_model_serving_modes :: %{optional(String.t()) => String.t() | nil}
   @codex_models_etag_extension :codex_models_etag
 
   @type t :: %__MODULE__{
           visible_model: Model.t(),
           visible_model_context: visible_model_context(),
           visible_models: [Model.t()],
+          effective_model_serving_modes: effective_model_serving_modes(),
           candidate_snapshots: [candidate()],
           candidates: [candidate()],
           routing_settings: RoutingSettings.t() | nil,
@@ -64,6 +67,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           required(:candidates) => [candidate()],
           optional(:visible_model_context) => visible_model_context(),
           optional(:visible_models) => [Model.t()],
+          optional(:effective_model_serving_modes) => effective_model_serving_modes(),
           optional(:candidate_snapshots) => [candidate()],
           optional(:routing_settings) => RoutingSettings.t() | nil,
           optional(:quota_window_snapshots) => quota_window_snapshots(),
@@ -81,6 +85,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       visible_model_context:
         Map.get(attrs, :visible_model_context, %{visible_model: visible_model}),
       visible_models: Map.get(attrs, :visible_models, [visible_model]),
+      effective_model_serving_modes: Map.get(attrs, :effective_model_serving_modes, %{}),
       candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
       candidates: candidates,
       routing_settings: Map.get(attrs, :routing_settings),

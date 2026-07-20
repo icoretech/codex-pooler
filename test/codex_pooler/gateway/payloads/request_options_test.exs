@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
 
   setup do
@@ -19,6 +20,189 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    test "defaults unresolved legacy inputs to Full without manufacturing a resolved snapshot" do
+      options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", %{"model" => "example-model"})
+
+      assert RequestOptions.model_serving_mode_configured(options) == nil
+      assert RequestOptions.model_serving_mode(options) == "full"
+      assert RequestOptions.model_serving_mode_source(options) == nil
+      refute RequestOptions.use_responses_lite?(options)
+    end
+
+    test "honors the selected-assignment Lite fallback before serving mode resolution" do
+      options =
+        RequestOptions.build(
+          %{use_responses_lite?: true},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      assert RequestOptions.model_serving_mode_snapshot(options) == nil
+      assert RequestOptions.model_serving_mode_configured(options) == nil
+      assert RequestOptions.model_serving_mode(options) == "full"
+      assert RequestOptions.model_serving_mode_source(options) == nil
+      assert RequestOptions.use_responses_lite?(options)
+    end
+
+    test "round trips every valid resolved serving mode snapshot exactly" do
+      snapshots = [
+        %{configured_mode: "auto", effective_mode: "lite", source: "catalog"},
+        %{configured_mode: "auto", effective_mode: "full", source: "catalog"},
+        %{configured_mode: "lite", effective_mode: "lite", source: "override"},
+        %{configured_mode: "full", effective_mode: "full", source: "override"}
+      ]
+
+      for snapshot <- snapshots do
+        options =
+          %{}
+          |> RequestOptions.build(
+            "/backend-api/codex/responses",
+            %{"model" => "example-model"}
+          )
+          |> RequestOptions.put_model_serving_mode(snapshot)
+
+        assert RequestOptions.model_serving_mode_snapshot(options) == snapshot
+        assert RequestOptions.model_serving_mode_configured(options) == snapshot.configured_mode
+        assert RequestOptions.model_serving_mode(options) == snapshot.effective_mode
+        assert RequestOptions.model_serving_mode_source(options) == snapshot.source
+
+        assert RequestOptions.use_responses_lite?(options) ==
+                 (snapshot.effective_mode == "lite")
+      end
+    end
+
+    test "preserves one resolved Lite snapshot through option transformations and owner context" do
+      options =
+        %{}
+        |> RequestOptions.build(
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+        |> RequestOptions.put_model_serving_mode(
+          configured_mode: "auto",
+          effective_mode: "lite",
+          source: "catalog"
+        )
+
+      expected_snapshot = RequestOptions.model_serving_mode_snapshot(options)
+
+      transformed = [
+        RequestOptions.for_payload(
+          options,
+          "/backend-api/codex/responses/compact",
+          %{"model" => "example-model"}
+        ),
+        RequestOptions.retarget(
+          options,
+          "/backend-api/codex/responses/compact",
+          %{"model" => "example-model"}
+        ),
+        RequestOptions.for_websocket(options, %{"model" => "example-model"}),
+        RequestOptions.put_continuity(options,
+          previous_response_id: "resp_123",
+          session_key: "affinity-key"
+        ),
+        RequestOptions.put_routing(options,
+          file_affinity_assignment_id: Ecto.UUID.generate(),
+          routing_attempt_metadata: %{"transform_fixture" => true}
+        ),
+        Websocket.websocket_owner_response_options(options, nil, "lease-token", %{
+          pid: self(),
+          correlation_id: "corr"
+        })
+      ]
+
+      assert Enum.all?(transformed, fn transformed_options ->
+               RequestOptions.model_serving_mode_snapshot(transformed_options) ==
+                 expected_snapshot
+             end)
+
+      assert Enum.all?(transformed, &RequestOptions.use_responses_lite?/1)
+    end
+
+    test "rejects invalid or mutable resolved serving mode states" do
+      endpoint = "/backend-api/codex/responses"
+      payload = %{"model" => "example-model"}
+
+      invalid_snapshots = [
+        %{configured_mode: "auto", effective_mode: "auto", source: "catalog"},
+        %{configured_mode: "auto", effective_mode: "lite", source: "override"},
+        %{configured_mode: "lite", effective_mode: "full", source: "override"},
+        %{configured_mode: "full", effective_mode: "full", source: "catalog"},
+        %{configured_mode: "unknown", effective_mode: "full", source: "override"},
+        %{configured_mode: "full", effective_mode: "full", source: "unknown"}
+      ]
+
+      for snapshot <- invalid_snapshots do
+        assert_raise ArgumentError, fn ->
+          %{}
+          |> RequestOptions.build(endpoint, payload)
+          |> RequestOptions.put_model_serving_mode(snapshot)
+        end
+
+        assert_raise ArgumentError, fn ->
+          RequestOptions.build(
+            %{
+              requested_model: "example-model",
+              model_serving_mode_configured: snapshot.configured_mode,
+              model_serving_mode: snapshot.effective_mode,
+              model_serving_mode_source: snapshot.source
+            },
+            endpoint,
+            payload
+          )
+        end
+      end
+
+      options =
+        %{}
+        |> RequestOptions.build(endpoint, payload)
+        |> RequestOptions.put_model_serving_mode(
+          configured_mode: "full",
+          effective_mode: "full",
+          source: "override"
+        )
+
+      assert_raise ArgumentError, fn ->
+        RequestOptions.put_model_serving_mode(options,
+          configured_mode: "auto",
+          effective_mode: "lite",
+          source: "catalog"
+        )
+      end
+
+      assert_raise ArgumentError, fn ->
+        RequestOptions.put_routing(options, use_responses_lite?: true)
+      end
+    end
+
+    test "accepts a resolved snapshot at construction without losing routing state" do
+      options =
+        RequestOptions.build(
+          %{
+            requested_model: "requested-model",
+            effective_model: "effective-model",
+            model_serving_mode_configured: "lite",
+            model_serving_mode: "lite",
+            model_serving_mode_source: "override"
+          },
+          "/backend-api/codex/responses",
+          %{"model" => "requested-model"}
+        )
+
+      assert options.routing.requested_model == "requested-model"
+      assert options.routing.effective_model == "effective-model"
+
+      assert RequestOptions.model_serving_mode_snapshot(options) == %{
+               configured_mode: "lite",
+               effective_mode: "lite",
+               source: "override"
+             }
+
+      assert RequestOptions.use_responses_lite?(options)
+    end
+
     test "carries the reasoning decision through payload, websocket, and retargeting paths" do
       decision = %Decision{
         mode: :allow_up_to,

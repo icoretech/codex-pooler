@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
@@ -19,6 +20,27 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
   @websocket_frame_timeout 1_000
   @supported_compression_model "gpt-4o"
+
+  test "owner forwarding keeps the rolling RPC argument shapes" do
+    downstream = %{
+      pid: self(),
+      correlation_id: "owner-rpc-contract",
+      epoch: 1
+    }
+
+    assert WebsocketOwnerForwarder.remote_attach_args("session-contract", downstream, []) == [
+             "session-contract",
+             downstream
+           ]
+
+    assert WebsocketOwnerForwarder.remote_attach_args("session-contract", downstream,
+             reject_if_busy: true
+           ) == ["session-contract", downstream, [reject_if_busy: true]]
+
+    assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
+    assert function_exported?(WebsocketOwnerForwarder, :remote_submit_request, 4)
+  end
 
   describe "retarget_websocket_owner_runtime/4" do
     setup do

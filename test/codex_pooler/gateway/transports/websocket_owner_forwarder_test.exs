@@ -48,6 +48,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_frame, "corr-local", 1, :complete}
   end
 
+  test "local missing-owner recovery receives the caller options", %{auth: auth} do
+    local_node_string = Atom.to_string(node())
+    %{session: session, token: token} = owner_session_fixture(auth, local_node_string)
+
+    terminal_frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_local_recovery_options"}
+      })
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("corr-local-recovery-options"),
+               request("local-recovery-options"),
+               upstream: upstream,
+               request_id: "local-recovery-options"
+             )
+
+    assert body =~ "resp_local_recovery_options"
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+  end
+
   test "remote success reaches simulated owner and returns owner result", %{auth: auth} do
     remote_node = :"codex_pooler@owner-app.example"
     remote_node_string = Atom.to_string(remote_node)

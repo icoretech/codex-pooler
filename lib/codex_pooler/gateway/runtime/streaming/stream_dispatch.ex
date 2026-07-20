@@ -440,6 +440,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp stream_candidate_result({:ok, %{raw_body: body}}, conn) when is_binary(body),
     do: update_relay_target(conn, &Plug.Conn.chunk(&1, body))
 
+  defp stream_candidate_result({:ok, %{body: body}}, conn) when is_map(body),
+    do: update_relay_target(conn, &Plug.Conn.chunk(&1, Jason.encode!(body)))
+
   defp stream_candidate_result({:ok, _result}, conn), do: {:ok, conn}
   defp stream_candidate_result({:error, reason}, _conn), do: {:error, reason}
 

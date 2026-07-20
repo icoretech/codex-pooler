@@ -175,6 +175,80 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     refute Map.has_key?(second_headers, "cookie")
   end
 
+  test "regular runtime headers use only the effective serving-mode snapshot for Lite markers" do
+    identity = upstream_identity()
+    payload = %{"model" => "example-model"}
+
+    for endpoint <- [
+          "/backend-api/codex/responses",
+          "/backend-api/codex/responses/compact"
+        ] do
+      lite_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
+
+      lite_headers =
+        UpstreamDispatch.regular_runtime_headers(
+          identity,
+          "redacted",
+          lite_options,
+          [{"X-OpenAI-Internal-Codex-Responses-Lite", "false"}]
+        )
+
+      assert [{"x-openai-internal-codex-responses-lite", "true"}] =
+               header_entries(lite_headers, "x-openai-internal-codex-responses-lite")
+
+      full_options = RequestOptions.build(serving_mode_opts("full"), endpoint, payload)
+
+      full_headers =
+        UpstreamDispatch.regular_runtime_headers(
+          identity,
+          "redacted",
+          full_options,
+          [{"x-openai-internal-codex-responses-lite", "true"}]
+        )
+
+      assert header_entries(full_headers, "x-openai-internal-codex-responses-lite") == []
+    end
+  end
+
+  test "SSE mode and retry retargeting preserve the immutable Lite snapshot" do
+    payload = %{"model" => "example-model", "stream" => true}
+
+    options =
+      serving_mode_opts("lite")
+      |> Map.put(:transport, "http_sse")
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+
+    retried = RequestOptions.retarget(options, "/backend-api/codex/responses", payload)
+
+    assert retried.transport.transport == "http_sse"
+
+    assert RequestOptions.model_serving_mode_snapshot(retried) == %{
+             configured_mode: "lite",
+             effective_mode: "lite",
+             source: "override"
+           }
+
+    headers =
+      UpstreamDispatch.regular_runtime_headers(
+        upstream_identity(),
+        "redacted",
+        retried,
+        []
+      )
+
+    assert [{"x-openai-internal-codex-responses-lite", "true"}] =
+             header_entries(headers, "x-openai-internal-codex-responses-lite")
+
+    assert_raise ArgumentError, "model serving mode snapshot is immutable", fn ->
+      RequestOptions.put_routing(retried,
+        model_serving_mode_configured: "full",
+        model_serving_mode: "full",
+        model_serving_mode_source: "override",
+        use_responses_lite?: false
+      )
+    end
+  end
+
   test "direct websocket request preserves exact connection metadata through result recording" do
     {:ok, upstream} =
       FakeUpstream.start_link(
@@ -288,6 +362,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     opts = %{receive_timeout_ms: 1_000}
     opts = if is_pid(session), do: Map.put(opts, :upstream_websocket_session, session), else: opts
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
+  end
+
+  defp serving_mode_opts(mode) when mode in ["lite", "full"] do
+    %{
+      model_serving_mode_configured: mode,
+      model_serving_mode: mode,
+      model_serving_mode_source: "override"
+    }
+  end
+
+  defp header_entries(headers, name) do
+    Enum.filter(headers, fn
+      {header_name, _value} when is_binary(header_name) ->
+        String.downcase(header_name) == name
+
+      _header ->
+        false
+    end)
   end
 
   defp websocket_dispatch_request(upstream, request_options) do
