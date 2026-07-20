@@ -4,6 +4,35 @@ defmodule CodexPooler.Accounting.MetadataTest do
   alias CodexPooler.Accounting
 
   describe "sanitize_metadata/1" do
+    test "routing serving mode metadata keeps only a valid bounded snapshot" do
+      assert %{
+               "routing" => %{
+                 "model_serving_mode_configured" => "auto",
+                 "model_serving_mode" => "lite",
+                 "model_serving_mode_source" => "catalog",
+                 "strategy" => "bridge_ring"
+               }
+             } =
+               Accounting.sanitize_metadata(%{
+                 "routing" => %{
+                   "model_serving_mode_configured" => "auto",
+                   "model_serving_mode" => "lite",
+                   "model_serving_mode_source" => "catalog",
+                   "strategy" => "bridge_ring"
+                 }
+               })
+
+      assert %{"routing" => %{"strategy" => "bridge_ring"}} =
+               Accounting.sanitize_metadata(%{
+                 "routing" => %{
+                   "model_serving_mode_configured" => "auto",
+                   "model_serving_mode" => "turbo",
+                   "model_serving_mode_source" => "client",
+                   "strategy" => "bridge_ring"
+                 }
+               })
+    end
+
     test "preserves API key prefixes while redacting raw key material" do
       sanitized =
         Accounting.sanitize_metadata(%{

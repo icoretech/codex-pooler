@@ -38,6 +38,11 @@ defmodule CodexPooler.Accounting.Metadata do
     terminal_kind
     terminal_status
   )
+  @model_serving_mode_keys ~w(
+    model_serving_mode_configured
+    model_serving_mode
+    model_serving_mode_source
+  )
   @sensitive_exact_keys MapSet.new([
                           "analytics",
                           "arc",
@@ -324,6 +329,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "public_openai_responses_stream" ->
         sanitize_public_openai_responses_stream_map(value)
 
+      normalized == "routing" ->
+        sanitize_routing_map(value)
+
       sensitive_key?(normalized) ->
         @redacted
 
@@ -360,6 +368,44 @@ defmodule CodexPooler.Accounting.Metadata do
 
   defp sanitize_payload_compression_map(value) when is_map(value),
     do: RequestCompressionMetadata.sanitize_map(value)
+
+  defp sanitize_routing_map(value) do
+    value
+    |> Map.drop(@model_serving_mode_keys)
+    |> Map.new(fn {child_key, child_value} ->
+      {child_key, sanitize_value(child_value, child_key)}
+    end)
+    |> Map.merge(sanitize_model_serving_mode_metadata(value))
+  end
+
+  defp sanitize_model_serving_mode_metadata(value) do
+    snapshot =
+      {
+        Map.get(value, "model_serving_mode_configured"),
+        Map.get(value, "model_serving_mode"),
+        Map.get(value, "model_serving_mode_source")
+      }
+
+    case snapshot do
+      {"auto" = configured_mode, effective_mode, "catalog" = source}
+      when effective_mode in ~w(lite full) ->
+        model_serving_mode_metadata(configured_mode, effective_mode, source)
+
+      {mode, mode, "override" = source} when mode in ~w(lite full) ->
+        model_serving_mode_metadata(mode, mode, source)
+
+      _invalid ->
+        %{}
+    end
+  end
+
+  defp model_serving_mode_metadata(configured_mode, effective_mode, source) do
+    %{
+      "model_serving_mode_configured" => configured_mode,
+      "model_serving_mode" => effective_mode,
+      "model_serving_mode_source" => source
+    }
+  end
 
   defp sanitize_public_openai_responses_stream_map(value) when is_map(value) do
     Enum.reduce(value, %{}, fn {child_key, child_value}, summary ->

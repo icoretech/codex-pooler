@@ -137,6 +137,18 @@ defmodule CodexPooler.Events do
     broadcast_pool_event(pool_or_id, [@pools], reason, payload)
   end
 
+  @spec broadcast_model_serving_modes_updated_after_commit(pool_ref(), non_neg_integer()) ::
+          broadcast_result() | :noop
+  def broadcast_model_serving_modes_updated_after_commit(_pool_or_id, 0), do: :noop
+
+  def broadcast_model_serving_modes_updated_after_commit(pool_or_id, changed_count)
+      when is_integer(changed_count) and changed_count > 0 do
+    broadcast_pool_event_after_commit(pool_or_id, [@pools], "pool_updated", %{
+      changed: ["model_serving_modes"],
+      changed_count: changed_count
+    })
+  end
+
   @spec broadcast_upstreams(pool_ref(), reason(), payload()) :: broadcast_result()
   def broadcast_upstreams(pool_or_id, reason, payload \\ %{}) do
     broadcast_pool_event(pool_or_id, [@upstreams], reason, payload)

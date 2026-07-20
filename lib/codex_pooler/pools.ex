@@ -14,6 +14,7 @@ defmodule CodexPooler.Pools do
   alias CodexPooler.Pools.{
     Authorization,
     Membership,
+    ModelServingModes,
     OperatorPoolAssignment,
     Pool,
     Routing,
@@ -112,6 +113,21 @@ defmodule CodexPooler.Pools do
 
   def list_pools_for_management(_scope),
     do: {:error, access_error(:invalid_request, "user scope is required")}
+
+  @spec model_serving_modes_snapshot(Scope.t(), pool_ref()) ::
+          {:ok, ModelServingModes.snapshot()} | {:error, access_error()}
+  defdelegate model_serving_modes_snapshot(scope, pool_or_id),
+    to: ModelServingModes,
+    as: :snapshot
+
+  @spec model_serving_modes_by_pool_ids([Ecto.UUID.t() | nil]) :: map()
+  defdelegate model_serving_modes_by_pool_ids(pool_ids), to: ModelServingModes, as: :by_pool_ids
+
+  @spec update_model_serving_modes(Scope.t(), pool_ref(), [map()], String.t()) ::
+          {:ok, ModelServingModes.update_result()} | {:error, access_error()}
+  defdelegate update_model_serving_modes(scope, pool_or_id, submitted_rows, expected_revision),
+    to: ModelServingModes,
+    as: :update
 
   @spec can_manage_pools?(Scope.t()) :: boolean()
   def can_manage_pools?(%Scope{} = scope) do

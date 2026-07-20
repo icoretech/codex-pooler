@@ -2,6 +2,7 @@ defmodule CodexPooler.AuditTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Audit
+  alias CodexPooler.Events
   alias CodexPooler.Repo
 
   import CodexPooler.AccountsFixtures
@@ -20,6 +21,7 @@ defmodule CodexPooler.AuditTest do
     assert "pool.update" in actions
     assert "pool.status_update" in actions
     assert "pool.routing_update" in actions
+    assert "pool.model_serving_modes_update" in actions
     assert "pool.delete" in actions
     assert "invite.create" in actions
     assert "invite.revoke" in actions
@@ -51,6 +53,169 @@ defmodule CodexPooler.AuditTest do
     assert "alert_channel.delete" in actions
     assert "alert_incident.acknowledge" in actions
     assert "alert_incident.resolve" in actions
+
+    assert {"Pool model serving modes updated", "pool.model_serving_modes_update"} in Audit.action_options()
+
+    assert Audit.action_label("pool.model_serving_modes_update") ==
+             "Pool model serving modes updated"
+  end
+
+  test "records sorted bounded model serving mode transition summaries" do
+    pool = pool_fixture()
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "mode.audit@example.com"})
+
+    transitions =
+      [
+        %{
+          exposed_model_id: "gpt-zeta",
+          from_mode: "auto",
+          to_mode: "full",
+          credential: %{"access_token" => "must-not-survive"}
+        },
+        %{
+          exposed_model_id: "gpt-alpha",
+          from_mode: "lite",
+          to_mode: "auto",
+          provider_metadata: %{"prompt" => "must-not-survive"}
+        }
+      ] ++
+        Enum.map(1..60, fn index ->
+          %{
+            exposed_model_id: "overflow-#{String.pad_leading(to_string(index), 2, "0")}",
+            from_mode: "auto",
+            to_mode: "lite"
+          }
+        end)
+
+    assert {:ok, event} =
+             Audit.record_model_serving_modes_update(user, pool, transitions)
+
+    stored = Repo.get!(CodexPooler.Audit.AuditEvent, event.id)
+
+    assert stored.action == "pool.model_serving_modes_update"
+    assert stored.target_type == "pool"
+    assert stored.target_id == pool.id
+    assert stored.details["changed_count"] == 62
+    assert length(stored.details["transitions"]) == 50
+
+    assert Enum.take(stored.details["transitions"], 2) == [
+             %{
+               "exposed_model_id" => "gpt-alpha",
+               "from_mode" => "lite",
+               "to_mode" => "auto"
+             },
+             %{
+               "exposed_model_id" => "gpt-zeta",
+               "from_mode" => "auto",
+               "to_mode" => "full"
+             }
+           ]
+
+    refute inspect(stored.details) =~ "must-not-survive"
+    refute inspect(stored.details) =~ "credential"
+    refute inspect(stored.details) =~ "provider_metadata"
+  end
+
+  test "model serving mode no-op writes no audit and emits no pool event" do
+    pool = pool_fixture()
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "mode.noop@example.com"})
+    assert :ok = Events.subscribe_pool(pool.id)
+
+    audit_count = Repo.aggregate(CodexPooler.Audit.AuditEvent, :count)
+
+    assert :noop = Audit.record_model_serving_modes_update(user, pool, [])
+    assert :noop = Events.broadcast_model_serving_modes_updated_after_commit(pool, 0)
+    assert Repo.aggregate(CodexPooler.Audit.AuditEvent, :count) == audit_count
+    refute_received {Events, _event}
+  end
+
+  test "model serving mode audit retains bounded canonical space and Unicode identifiers" do
+    # Given
+    pool = pool_fixture()
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "mode.canonical@example.com"})
+
+    transitions = [
+      %{exposed_model_id: "gpt alpha", from_mode: "auto", to_mode: "lite"},
+      %{exposed_model_id: "gpt β", from_mode: "lite", to_mode: "full"},
+      %{exposed_model_id: "provider@example.com", from_mode: "auto", to_mode: "full"},
+      %{
+        exposed_model_id: String.duplicate("a", 256),
+        from_mode: "auto",
+        to_mode: "full"
+      }
+    ]
+
+    # When
+    assert {:ok, event} = Audit.record_model_serving_modes_update(user, pool, transitions)
+
+    # Then
+    assert %{
+             "changed_count" => 3,
+             "transitions" => [
+               %{
+                 "exposed_model_id" => "gpt alpha",
+                 "from_mode" => "auto",
+                 "to_mode" => "lite"
+               },
+               %{
+                 "exposed_model_id" => "gpt β",
+                 "from_mode" => "lite",
+                 "to_mode" => "full"
+               },
+               %{
+                 "exposed_model_id" => "provider@example.com",
+                 "from_mode" => "auto",
+                 "to_mode" => "full"
+               }
+             ]
+           } = Repo.get!(CodexPooler.Audit.AuditEvent, event.id).details
+  end
+
+  test "model serving mode audit helper drops same-mode, oversized, and noncanonical transitions" do
+    pool = pool_fixture()
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "mode.invalid@example.com"})
+    audit_count = Repo.aggregate(CodexPooler.Audit.AuditEvent, :count)
+
+    for exposed_model_id <- [
+          "",
+          String.duplicate("a", 256),
+          "GPT-5",
+          " gpt-5",
+          "gpt-5 "
+        ] do
+      assert :noop =
+               Audit.record_model_serving_modes_update(user, pool, [
+                 %{
+                   exposed_model_id: exposed_model_id,
+                   from_mode: "auto",
+                   to_mode: "lite"
+                 }
+               ])
+    end
+
+    assert :noop =
+             Audit.record_model_serving_modes_update(user, pool, [
+               %{exposed_model_id: "gpt-5", from_mode: "lite", to_mode: "lite"},
+               %{exposed_model_id: "gpt-5", from_mode: "auto", to_mode: "auto"}
+             ])
+
+    assert Repo.aggregate(CodexPooler.Audit.AuditEvent, :count) == audit_count
+  end
+
+  test "model serving mode event helper uses the ordinary pool_updated shape" do
+    pool = pool_fixture()
+    assert :ok = Events.subscribe_pool(pool.id)
+
+    task =
+      Task.async(fn ->
+        Events.broadcast_model_serving_modes_updated_after_commit(pool, 2)
+      end)
+
+    assert {:ok, event} = Task.await(task)
+    assert_receive {Events, ^event}
+    assert event.reason == "pool_updated"
+    assert event.topics == ["pools"]
+    assert event.payload == %{"changed" => ["model_serving_modes"], "changed_count" => 2}
   end
 
   test "audit event details redact credentials and prompt content" do
@@ -69,6 +234,9 @@ defmodule CodexPooler.AuditTest do
                  "upstream_token" => "upstream-token",
                  "cookie" => "a=b",
                  "prompt" => "raw prompt",
+                 "nested" => %{
+                   "credentials" => %{"refresh_token" => "nested-refresh-token"}
+                 },
                  "safe" => "visible"
                }
              })
@@ -79,12 +247,14 @@ defmodule CodexPooler.AuditTest do
     assert stored.details["upstream_token"] == "[REDACTED]"
     assert stored.details["cookie"] == "[REDACTED]"
     assert stored.details["prompt"] == "[REDACTED]"
+    assert stored.details["nested"]["credentials"]["refresh_token"] == "[REDACTED]"
     assert stored.details["safe"] == "visible"
 
     assert %{items: [listed]} = Audit.list_events(pool)
     assert listed.details["authorization"] == "[REDACTED]"
     refute inspect(listed) =~ "raw prompt"
     refute inspect(listed) =~ "token-value"
+    refute inspect(listed) =~ "nested-refresh-token"
   end
 
   test "lists global and pool audit events with structured filters" do

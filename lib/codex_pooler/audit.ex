@@ -9,6 +9,7 @@ defmodule CodexPooler.Audit do
   alias CodexPooler.Accounts.User
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
 
@@ -32,6 +33,7 @@ defmodule CodexPooler.Audit do
     {"Pool updated", "pool.update"},
     {"Pool status changed", "pool.status_update"},
     {"Pool routing updated", "pool.routing_update"},
+    {"Pool model serving modes updated", "pool.model_serving_modes_update"},
     {"Pool deleted", "pool.delete"},
     {"Pool invite created", "invite.create"},
     {"Pool invite revoked", "invite.revoke"},
@@ -75,6 +77,12 @@ defmodule CodexPooler.Audit do
 
   @type action :: String.t()
   @type action_option :: {String.t(), action()}
+  @type model_serving_mode_transition :: %{
+          required(:exposed_model_id) => String.t(),
+          required(:from_mode) => String.t(),
+          required(:to_mode) => String.t(),
+          optional(atom() | String.t()) => term()
+        }
   @type audit_attrs :: %{optional(atom()) => term()}
   @type audit_filters :: Enumerable.t()
   @type list_opts :: [
@@ -132,6 +140,28 @@ defmodule CodexPooler.Audit do
     record_event(Map.merge(attrs, %{actor_type: "user", actor_user_id: user.id}))
   end
 
+  @spec record_model_serving_modes_update(
+          User.t(),
+          Pool.t(),
+          [model_serving_mode_transition()]
+        ) :: audit_result() | :noop
+  def record_model_serving_modes_update(%User{} = user, %Pool{} = pool, transitions)
+      when is_list(transitions) do
+    case model_serving_mode_transition_details(transitions) do
+      %{changed_count: 0} ->
+        :noop
+
+      details ->
+        record_user_event(user, %{
+          pool_id: pool.id,
+          action: "pool.model_serving_modes_update",
+          target_type: "pool",
+          target_id: pool.id,
+          details: details
+        })
+    end
+  end
+
   @spec record_event(audit_attrs()) :: audit_result()
   def record_event(%{action: "request." <> _suffix}), do: {:error, :runtime_events_not_recorded}
   def record_event(%{action: "file." <> _suffix}), do: {:error, :runtime_events_not_recorded}
@@ -155,6 +185,42 @@ defmodule CodexPooler.Audit do
     }
     |> Repo.insert()
   end
+
+  defp model_serving_mode_transition_details(transitions) do
+    safe_transitions =
+      transitions
+      |> Enum.flat_map(&safe_model_serving_mode_transition/1)
+      |> Enum.sort_by(& &1.exposed_model_id)
+
+    %{
+      changed_count: length(safe_transitions),
+      transitions: Enum.take(safe_transitions, 50)
+    }
+  end
+
+  defp safe_model_serving_mode_transition(transition) when is_map(transition) do
+    exposed_model_id = transition_attr(transition, :exposed_model_id)
+    from_mode = transition_attr(transition, :from_mode)
+    to_mode = transition_attr(transition, :to_mode)
+
+    if safe_canonical_model_id?(exposed_model_id) and from_mode in ~w(auto lite full) and
+         to_mode in ~w(auto lite full) and from_mode != to_mode do
+      [%{exposed_model_id: exposed_model_id, from_mode: from_mode, to_mode: to_mode}]
+    else
+      []
+    end
+  end
+
+  defp safe_model_serving_mode_transition(_transition), do: []
+
+  defp safe_canonical_model_id?(value) when is_binary(value) do
+    ModelServingOverride.canonical_exposed_model_id(value) == value
+  end
+
+  defp safe_canonical_model_id?(_value), do: false
+
+  defp transition_attr(transition, key),
+    do: Map.get(transition, key, Map.get(transition, Atom.to_string(key)))
 
   @spec list_events(Pool.t() | Ecto.UUID.t() | nil, list_opts()) :: audit_page()
   def list_events(pool_or_id, opts \\ []) do
