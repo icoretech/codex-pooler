@@ -186,20 +186,26 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def node_client_opts(nodes, opts \\ []) when is_list(nodes) do
     previous = Process.get(__MODULE__)
 
-    Process.put(__MODULE__, %{
-      nodes: nodes,
-      calls: Keyword.get(opts, :calls, %{}),
-      roles: Keyword.get(opts, :roles, %{})
-    })
+    Process.put(__MODULE__, node_client_state(nodes, opts))
 
     ExUnit.Callbacks.on_exit(fn ->
-      case previous do
-        nil -> Process.delete(__MODULE__)
-        value -> Process.put(__MODULE__, value)
-      end
+      restore_node_client_state(previous)
     end)
 
     [node_client: __MODULE__]
+  end
+
+  @spec with_node_client([node()], keyword(), (keyword() -> term())) :: term()
+  def with_node_client(nodes, opts \\ [], fun)
+      when is_list(nodes) and is_list(opts) and is_function(fun, 1) do
+    previous = Process.get(__MODULE__)
+    Process.put(__MODULE__, node_client_state(nodes, opts))
+
+    try do
+      fun.(node_client: __MODULE__)
+    after
+      restore_node_client_state(previous)
+    end
   end
 
   @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
@@ -254,6 +260,30 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
 
   defp dispatch_call_mode(:crash, _node, _module, _function, _args),
     do: raise("simulated remote owner crash")
+
+  defp dispatch_call_mode(
+         {:barrier_success, notify, release_ref},
+         _node,
+         module,
+         function,
+         args
+       )
+       when is_pid(notify) and is_reference(release_ref) do
+    await_call_barrier(notify, release_ref, function)
+    apply(module, function, args)
+  end
+
+  defp dispatch_call_mode(
+         {:barrier_return, notify, release_ref, result},
+         _node,
+         _module,
+         function,
+         _args
+       )
+       when is_pid(notify) and is_reference(release_ref) do
+    await_call_barrier(notify, release_ref, function)
+    result
+  end
 
   # Emulates an owner node still running the previous release: it exports
   # remote_attach_downstream/2 but not /3, so the option-carrying bridge
@@ -325,7 +355,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   end
 
   defp send_call_observation(node, module, function, args, timeout, mode) do
-    send(self(), {
+    notify = __MODULE__ |> Process.get(%{}) |> Map.get(:notify, self())
+
+    send(notify, {
       :websocket_owner_harness_node_call,
       %{
         node: node,
@@ -337,6 +369,31 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
       }
     })
   end
+
+  defp await_call_barrier(notify, release_ref, function) do
+    send(
+      notify,
+      {:websocket_owner_harness_call_barrier, self(), release_ref, function}
+    )
+
+    receive do
+      {:websocket_owner_harness_release_call, ^release_ref} -> :ok
+    after
+      5_000 -> raise "timed out waiting for websocket owner RPC harness release"
+    end
+  end
+
+  defp node_client_state(nodes, opts) do
+    %{
+      nodes: nodes,
+      calls: Keyword.get(opts, :calls, %{}),
+      roles: Keyword.get(opts, :roles, %{}),
+      notify: Keyword.get(opts, :notify, self())
+    }
+  end
+
+  defp restore_node_client_state(nil), do: Process.delete(__MODULE__)
+  defp restore_node_client_state(previous), do: Process.put(__MODULE__, previous)
 end
 
 defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller do

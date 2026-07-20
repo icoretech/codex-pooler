@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
   @reasoning_denial_message "reasoning effort is not available for this API key"
@@ -183,6 +184,51 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  @tag :model_serving_modes
+  test "public Chat keeps one model id while switching only the outgoing Pool mode", %{
+    conn: conn
+  } do
+    for stream? <- [false, true] do
+      upstream = start_upstream(public_chat_mode_matrix_upstream())
+      setup = gateway_setup(upstream)
+
+      payload =
+        chat_payload(setup)
+        |> Map.put("stream", stream?)
+
+      put_chat_model_serving_mode!(setup, "full")
+
+      full_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post("/v1/chat/completions", payload)
+
+      assert_public_chat_mode_matrix_response!(full_response, stream?)
+
+      put_chat_model_serving_mode!(setup, "lite")
+
+      lite_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post("/v1/chat/completions", payload)
+
+      assert_public_chat_mode_matrix_response!(lite_response, stream?)
+
+      assert [full_capture, lite_capture] = FakeUpstream.requests(upstream)
+      assert full_capture.path == "/backend-api/codex/responses"
+      assert lite_capture.path == "/backend-api/codex/responses"
+      assert full_capture.json["model"] == setup.model.upstream_model_id
+      assert lite_capture.json["model"] == setup.model.upstream_model_id
+      assert_public_chat_mode_matrix_bodies!(full_capture, lite_capture)
+      assert_public_chat_mode_matrix_headers!(full_capture, lite_capture)
+      assert_public_chat_mode_matrix_metadata!(setup, ["full", "lite"])
+    end
   end
 
   @tag :prompt_cache_controls
@@ -1667,6 +1713,149 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         %{"role" => "user", "content" => "Synthetic user"}
       ]
     }
+  end
+
+  defp put_chat_model_serving_mode!(setup, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    case Repo.get_by(ModelServingOverride,
+           pool_id: setup.pool.id,
+           exposed_model_id: setup.model.exposed_model_id
+         ) do
+      nil ->
+        Repo.insert!(%ModelServingOverride{
+          pool_id: setup.pool.id,
+          exposed_model_id: setup.model.exposed_model_id,
+          mode: mode,
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+
+      override ->
+        override
+        |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
+        |> Repo.update!()
+    end
+  end
+
+  defp public_chat_mode_matrix_upstream do
+    FakeUpstream.sse_stream([
+      {"response.created",
+       %{
+         "type" => "response.created",
+         "response" => %{"id" => "resp_public_chat_mode_matrix", "status" => "in_progress"}
+       }},
+      {"response.output_text.delta",
+       %{
+         "type" => "response.output_text.delta",
+         "delta" => "synthetic public chat mode answer"
+       }},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_public_chat_mode_matrix",
+           "status" => "completed",
+           "model" => "provider-gpt-test-model",
+           "output" => [],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+         }
+       }}
+    ])
+  end
+
+  defp assert_public_chat_mode_matrix_response!(response, false) do
+    assert %{"id" => "resp_public_chat_mode_matrix", "object" => "chat.completion"} =
+             json_response(response, 200)
+  end
+
+  defp assert_public_chat_mode_matrix_response!(response, true) do
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert response.resp_body =~ "chat.completion.chunk"
+    assert response.resp_body =~ "synthetic public chat mode answer"
+  end
+
+  defp assert_public_chat_mode_matrix_headers!(full_capture, lite_capture) do
+    mode_header = "x-openai-internal-codex-responses-lite"
+    full_headers = Map.new(full_capture.headers)
+    lite_headers = Map.new(lite_capture.headers)
+
+    refute Map.has_key?(full_headers, mode_header)
+    assert lite_headers[mode_header] == "true"
+
+    assert comparable_public_chat_headers(full_headers) ==
+             comparable_public_chat_headers(lite_headers)
+  end
+
+  defp comparable_public_chat_headers(headers) do
+    Map.drop(headers, [
+      "x-openai-internal-codex-responses-lite",
+      "content-length",
+      "host",
+      "authorization",
+      "chatgpt-account-id"
+    ])
+  end
+
+  defp assert_public_chat_mode_matrix_bodies!(full_capture, lite_capture) do
+    mode_specific_keys = ["input", "instructions", "reasoning", "parallel_tool_calls"]
+
+    assert Map.drop(full_capture.json, mode_specific_keys) ==
+             Map.drop(lite_capture.json, mode_specific_keys)
+
+    assert is_list(full_capture.json["input"])
+    assert is_list(lite_capture.json["input"])
+
+    assert [
+             %{
+               "type" => "message",
+               "role" => "developer",
+               "content" => [%{"type" => "input_text", "text" => instructions}]
+             }
+             | lite_input
+           ] = Enum.drop(lite_capture.json["input"], 1)
+
+    assert instructions == full_capture.json["instructions"]
+    assert lite_input == full_capture.json["input"]
+    assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
+    assert lite_capture.json["parallel_tool_calls"] == false
+  end
+
+  defp assert_public_chat_mode_matrix_metadata!(setup, modes) do
+    expected_keys = [
+      "model_serving_mode_configured",
+      "model_serving_mode",
+      "model_serving_mode_source"
+    ]
+
+    requests =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+        )
+      )
+
+    assert length(requests) == length(modes)
+
+    for {request, mode} <- Enum.zip(requests, modes) do
+      expected = %{
+        "model_serving_mode_configured" => mode,
+        "model_serving_mode" => mode,
+        "model_serving_mode_source" => "override"
+      }
+
+      assert request.endpoint == "/backend-api/codex/responses"
+      assert request.transport == "http_sse"
+      assert request.status == "succeeded"
+      assert Map.take(request.request_metadata["routing"], expected_keys) == expected
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert Map.take(attempt.response_metadata["routing"], expected_keys) == expected
+    end
   end
 
   defp expected_multimodal_summary(mime, source) do

@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
   @reasoning_denial_message "reasoning effort is not available for this API key"
@@ -148,6 +149,53 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == expected_mode
       assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == expected_effort
+    end
+  end
+
+  @tag :model_serving_modes
+  test "public Responses keeps one model id while switching only the outgoing Pool mode", %{
+    conn: conn
+  } do
+    for stream? <- [false, true] do
+      upstream = start_upstream(public_mode_matrix_upstream())
+      setup = gateway_setup(upstream)
+
+      payload = %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic public mode input",
+        "stream" => stream?
+      }
+
+      put_public_model_serving_mode!(setup, "full")
+
+      full_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post("/v1/responses", payload)
+
+      assert_public_mode_matrix_response!(full_response, stream?)
+
+      put_public_model_serving_mode!(setup, "lite")
+
+      lite_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post("/v1/responses", payload)
+
+      assert_public_mode_matrix_response!(lite_response, stream?)
+
+      assert [full_capture, lite_capture] = FakeUpstream.requests(upstream)
+      assert full_capture.path == "/backend-api/codex/responses"
+      assert lite_capture.path == "/backend-api/codex/responses"
+      assert full_capture.json["model"] == setup.model.upstream_model_id
+      assert lite_capture.json["model"] == setup.model.upstream_model_id
+      assert_public_mode_matrix_bodies!(full_capture, lite_capture)
+      assert_public_mode_matrix_headers!(full_capture, lite_capture)
+      assert_public_mode_matrix_metadata!(setup, ["full", "lite"])
     end
   end
 
@@ -6054,21 +6102,162 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream, compact?: true)
 
-    conn =
-      conn
-      |> auth(setup)
-      |> with_public_metadata_headers()
-      |> post("/v1/responses/compact", %{
-        "model" => setup.model.exposed_model_id,
-        "input" => "synthetic compact request"
-      })
+    responses =
+      for mode <- ["full", "lite"] do
+        put_public_model_serving_mode!(setup, mode)
 
-    assert %{"error" => error} = json_response(conn, 404)
-    assert error["code"] == "unsupported_endpoint"
-    assert error["message"] == "Unsupported OpenAI /v1 endpoint"
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> with_public_metadata_headers()
+          |> post("/v1/responses/compact", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic compact request"
+          })
+
+        assert %{
+                 "error" => %{
+                   "code" => "unsupported_endpoint",
+                   "message" => "Unsupported OpenAI /v1 endpoint",
+                   "param" => nil
+                 }
+               } = json_response(response, 404)
+
+        response
+      end
+
+    assert [full_response, lite_response] = responses
+    assert json_response(full_response, 404) == json_response(lite_response, 404)
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp put_public_model_serving_mode!(setup, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    case Repo.get_by(ModelServingOverride,
+           pool_id: setup.pool.id,
+           exposed_model_id: setup.model.exposed_model_id
+         ) do
+      nil ->
+        Repo.insert!(%ModelServingOverride{
+          pool_id: setup.pool.id,
+          exposed_model_id: setup.model.exposed_model_id,
+          mode: mode,
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+
+      override ->
+        override
+        |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
+        |> Repo.update!()
+    end
+  end
+
+  defp public_mode_matrix_upstream do
+    FakeUpstream.sse_stream([
+      {"response.created",
+       %{
+         "type" => "response.created",
+         "response" => %{"id" => "resp_public_mode_matrix", "status" => "in_progress"}
+       }},
+      {"response.output_text.delta",
+       %{"type" => "response.output_text.delta", "delta" => "synthetic public mode answer"}},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_public_mode_matrix",
+           "status" => "completed",
+           "model" => "provider-gpt-test-model",
+           "output" => [],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+         }
+       }}
+    ])
+  end
+
+  defp assert_public_mode_matrix_response!(response, false) do
+    assert %{"id" => "resp_public_mode_matrix", "object" => "response"} =
+             json_response(response, 200)
+  end
+
+  defp assert_public_mode_matrix_response!(response, true) do
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert response.resp_body =~ "response.completed"
+  end
+
+  defp assert_public_mode_matrix_headers!(full_capture, lite_capture) do
+    mode_header = "x-openai-internal-codex-responses-lite"
+    full_headers = Map.new(full_capture.headers)
+    lite_headers = Map.new(lite_capture.headers)
+
+    refute Map.has_key?(full_headers, mode_header)
+    assert lite_headers[mode_header] == "true"
+    assert comparable_public_headers(full_headers) == comparable_public_headers(lite_headers)
+  end
+
+  defp comparable_public_headers(headers) do
+    Map.drop(headers, [
+      "x-openai-internal-codex-responses-lite",
+      "content-length",
+      "host",
+      "authorization",
+      "chatgpt-account-id"
+    ])
+  end
+
+  defp assert_public_mode_matrix_bodies!(full_capture, lite_capture) do
+    mode_specific_keys = ["input", "instructions", "reasoning", "parallel_tool_calls"]
+
+    assert Map.drop(full_capture.json, mode_specific_keys) ==
+             Map.drop(lite_capture.json, mode_specific_keys)
+
+    assert is_list(full_capture.json["input"])
+    assert is_list(lite_capture.json["input"])
+    assert Enum.drop(lite_capture.json["input"], 1) == full_capture.json["input"]
+    assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
+    assert lite_capture.json["parallel_tool_calls"] == false
+  end
+
+  defp assert_public_mode_matrix_metadata!(setup, modes) do
+    expected_keys = [
+      "model_serving_mode_configured",
+      "model_serving_mode",
+      "model_serving_mode_source"
+    ]
+
+    requests =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+        )
+      )
+
+    assert length(requests) == length(modes)
+
+    for {request, mode} <- Enum.zip(requests, modes) do
+      expected = %{
+        "model_serving_mode_configured" => mode,
+        "model_serving_mode" => mode,
+        "model_serving_mode_source" => "override"
+      }
+
+      assert request.endpoint == "/backend-api/codex/responses"
+      assert request.status == "succeeded"
+      assert request.transport == "http_sse"
+      assert Map.take(request.request_metadata["routing"], expected_keys) == expected
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert Map.take(attempt.response_metadata["routing"], expected_keys) == expected
+    end
   end
 
   defp enable_request_compression!(pool) do

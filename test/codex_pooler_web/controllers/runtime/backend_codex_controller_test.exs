@@ -59,6 +59,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CodexClientIdentity
@@ -66,6 +67,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   @supported_compression_model "gpt-4o"
   @reasoning_denial_message "reasoning effort is not available for this API key"
+  @canonical_full_failure_body %{
+    "error" => %{
+      "code" => "server_error",
+      "message" => "upstream request failed",
+      "type" => "server_error"
+    }
+  }
 
   test "backend Responses HTTP and SSE enforce native reasoning aliases before dispatch", %{
     conn: conn
@@ -334,6 +342,714 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 3
     assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "backend model aliases expose fresh effective Pool modes without leaking hidden modes", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "source_assignment_models" => %{
+            "placeholder" => %{"use_responses_lite" => false}
+          },
+          "use_responses_lite" => true
+        }
+      )
+
+    setup.model
+    |> Ecto.Changeset.change(
+      metadata: %{
+        "source_assignment_ids" => [setup.assignment.id],
+        "source_assignment_models" => %{
+          setup.assignment.id => %{"use_responses_lite" => true}
+        },
+        "use_responses_lite" => false
+      }
+    )
+    |> Repo.update!()
+
+    %{assignment: hidden_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Policy hidden serving-mode upstream"
+      })
+
+    hidden_model =
+      model_fixture(setup.pool, %{
+        exposed_model_id: "gpt-hidden-serving-mode",
+        upstream_model_id: "provider-gpt-hidden-serving-mode",
+        display_name: "Hidden Serving Mode",
+        metadata: %{
+          "source_assignment_ids" => [hidden_assignment.id],
+          "source_assignment_models" => %{
+            hidden_assignment.id => %{"use_responses_lite" => false}
+          }
+        }
+      })
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: [setup.model.exposed_model_id])
+    |> Repo.update!()
+
+    insert_model_serving_override!(setup.pool.id, hidden_model.exposed_model_id, "lite")
+    insert_model_serving_override!(setup.pool.id, "gpt-stale-serving-mode", "lite")
+
+    auto_response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
+    assert %{"models" => [%{"use_responses_lite" => true}]} = json_response(auto_response, 200)
+
+    visible_override =
+      insert_model_serving_override!(setup.pool.id, setup.model.exposed_model_id, "full")
+
+    full_aliases =
+      for endpoint <- ["/backend-api/codex/models", "/backend-api/codex/v1/models"] do
+        response = conn |> recycle() |> auth(setup) |> get(endpoint)
+        assert %{"models" => [model]} = json_response(response, 200)
+        assert model["slug"] == setup.model.exposed_model_id
+        assert model["use_responses_lite"] == false
+        {response.resp_body, get_resp_header(response, "etag")}
+      end
+
+    assert [{full_body, [full_etag]}, {full_body, [full_etag]}] = full_aliases
+    refute full_etag in get_resp_header(auto_response, "etag")
+
+    visible_override
+    |> Ecto.Changeset.change(mode: "lite", updated_at: DateTime.utc_now())
+    |> Repo.update!()
+
+    lite_response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
+    assert %{"models" => [lite_model]} = json_response(lite_response, 200)
+    assert lite_model["use_responses_lite"] == true
+    refute lite_response.resp_body == full_body
+    refute get_resp_header(lite_response, "etag") == [full_etag]
+
+    public_response = conn |> recycle() |> auth(setup) |> get("/v1/models")
+    assert %{"object" => "list", "data" => [public_model]} = json_response(public_response, 200)
+    assert public_model["id"] == setup.model.exposed_model_id
+    refute Map.has_key?(public_model, "use_responses_lite")
+
+    unauthorized = conn |> recycle() |> get("/backend-api/codex/models")
+    assert %{"error" => %{"code" => "api_key_missing"}} = json_response(unauthorized, 401)
+    refute unauthorized.resp_body =~ "use_responses_lite"
+    refute unauthorized.resp_body =~ hidden_model.exposed_model_id
+    refute unauthorized.resp_body =~ "gpt-stale-serving-mode"
+
+    requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+    assert length(requests) == 5
+    assert Enum.all?(requests, &(&1.upstream_account_label == setup.identity.account_label))
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  @tag :model_serving_modes
+  test "backend response aliases keep the selected Pool model mode across JSON and SSE", %{
+    conn: conn
+  } do
+    routes = [
+      {"/backend-api/codex/responses", :responses},
+      {"/backend-api/codex/v1/responses", :responses},
+      {"/backend-api/codex/v1/chat/completions", :chat}
+    ]
+
+    for {path, kind} <- routes, stream? <- [false, true] do
+      upstream = start_upstream(backend_mode_matrix_upstream(kind, stream?))
+      setup = gateway_setup(upstream)
+      payload = backend_mode_matrix_payload(setup, kind, stream?)
+
+      put_model_serving_mode!(setup, "full")
+
+      full_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post(path, payload)
+
+      assert_backend_mode_matrix_response!(full_response, kind, stream?)
+
+      put_model_serving_mode!(setup, "lite")
+
+      lite_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post(path, payload)
+
+      assert_backend_mode_matrix_response!(lite_response, kind, stream?)
+
+      assert [full_capture, lite_capture] = FakeUpstream.requests(upstream)
+      assert full_capture.path == "/backend-api/codex/responses"
+      assert lite_capture.path == "/backend-api/codex/responses"
+      assert full_capture.json["model"] == setup.model.upstream_model_id
+      assert lite_capture.json["model"] == setup.model.upstream_model_id
+      assert_backend_mode_matrix_bodies!(full_capture, lite_capture, kind)
+
+      assert_backend_mode_matrix_headers!(full_capture, lite_capture)
+
+      assert_backend_mode_matrix_metadata!(setup, ["full", "lite"])
+    end
+  end
+
+  @tag :model_serving_modes
+  test "backend pre-visible cross-assignment failover preserves the selected Pool mode", %{
+    conn: conn
+  } do
+    first_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "model_not_found",
+              "type" => "invalid_request_error",
+              "param" => "model"
+            }
+          },
+          500
+        )
+      )
+
+    second_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_mode_failover",
+          "object" => "response",
+          "status" => "completed",
+          "output" => []
+        })
+      )
+
+    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-mode-failover")
+
+    second =
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(second.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 2,
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id, second.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => %{"use_responses_lite" => false},
+            second.assignment.id => %{"use_responses_lite" => true}
+          }
+        }
+      })
+      |> Repo.update!()
+
+    setup = %{setup | model: model}
+    put_model_serving_mode!(setup, "lite")
+
+    request_id =
+      seed_preferring_assignment([setup.assignment.id, second.assignment.id], setup.assignment.id)
+
+    response =
+      conn
+      |> put_req_header("x-request-id", request_id)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic mode failover input"}]
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_backend_mode_failover"} = json_response(response, 200)
+
+    assert [%{json: first_payload}] = FakeUpstream.requests(first_upstream)
+    assert [%{json: second_payload}] = FakeUpstream.requests(second_upstream)
+    assert first_payload == second_payload
+
+    assert_backend_lite_mode_headers!(
+      hd(FakeUpstream.requests(first_upstream)),
+      hd(FakeUpstream.requests(second_upstream))
+    )
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.retry_count == 1
+
+    expected_mode_metadata = %{
+      "model_serving_mode_configured" => "lite",
+      "model_serving_mode" => "lite",
+      "model_serving_mode_source" => "override"
+    }
+
+    assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert first_attempt.status == "retryable_failed"
+    assert second_attempt.status == "succeeded"
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert second_attempt.pool_upstream_assignment_id == second.assignment.id
+
+    for attempt <- [first_attempt, second_attempt] do
+      assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+               expected_mode_metadata
+    end
+  end
+
+  @tag :task_15_sanitization
+  test "Full upstream 5xx failures expose one server-owned error and safe diagnostics", %{
+    conn: conn
+  } do
+    sentinels = full_failure_sentinels()
+
+    upstream =
+      start_upstream(FakeUpstream.http_500_json_error(full_failure_payload(sentinels)))
+
+    setup = gateway_setup(upstream)
+    put_model_serving_mode!(setup, "full")
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic Full failure request"
+        })
+      end)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+
+    refute Map.has_key?(
+             Map.new(captured.headers),
+             "x-openai-internal-codex-responses-lite"
+           )
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 500
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_status"
+
+    expected_mode_metadata = %{
+      "model_serving_mode_configured" => "full",
+      "model_serving_mode" => "full",
+      "model_serving_mode_source" => "override"
+    }
+
+    assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 500
+    assert attempt.network_error_code == "upstream_status"
+    assert attempt.error_message == "upstream returned 500"
+    assert attempt.response_metadata["error_kind"] == "upstream_status"
+
+    assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert [%{denial_reason: "upstream_status", response_status_code: 500} = request_log] =
+             RequestLogs.list(setup.pool.id, limit: 10).items
+
+    audit_events = Repo.all(from(e in AuditEvent))
+
+    sentinels_absent? =
+      full_failure_sentinels_absent?(
+        [response.resp_body, logs, request, attempt, request_log, audit_events],
+        sentinels
+      )
+
+    canonical_response? = canonical_full_failure_response?(response, 500)
+
+    assert sentinels_absent?
+    assert canonical_response?
+  end
+
+  @tag :task_15_sanitization
+  test "Full malformed upstream failures return a stable public server error", %{conn: conn} do
+    sentinels = full_failure_sentinels()
+    upstream = start_upstream(FakeUpstream.malformed_json(sentinels.body, 500))
+    setup = gateway_setup(upstream)
+    put_model_serving_mode!(setup, "full")
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic malformed Full failure request"
+        })
+      end)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert [request_log] = RequestLogs.list(setup.pool.id, limit: 10).items
+    audit_events = Repo.all(from(e in AuditEvent))
+
+    sentinels_absent? =
+      full_failure_sentinels_absent?(
+        [response.resp_body, logs, request, attempt, request_log, audit_events],
+        sentinels
+      )
+
+    canonical_response? = canonical_full_failure_response?(response, 500)
+
+    assert sentinels_absent?
+    assert canonical_response?
+  end
+
+  @tag :task_15_sanitization
+  test "Full upstream 4xx failures are final without fallback or mode downgrade", %{conn: conn} do
+    sentinels = full_failure_sentinels()
+
+    rejecting_upstream =
+      start_upstream(FakeUpstream.json_response(full_failure_payload(sentinels), 400))
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_full_rejection_fallback_should_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(rejecting_upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-full-rejection-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup = %{
+      setup
+      | model: put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    }
+
+    put_model_serving_mode!(setup, "full")
+    request_id = seed_with_assignment_order([setup.assignment.id, fallback.assignment.id])
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> put_req_header("x-request-id", request_id)
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic Full rejection request"
+        })
+      end)
+
+    assert response.status == 400
+    assert FakeUpstream.count(rejecting_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [captured] = FakeUpstream.requests(rejecting_upstream)
+
+    refute Map.has_key?(
+             Map.new(captured.headers),
+             "x-openai-internal-codex-responses-lite"
+           )
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 400
+    assert request.retry_count == 0
+    assert request.last_error_code == "full_upstream_rejection"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 400
+    assert attempt.network_error_code == "full_upstream_rejection"
+
+    expected_mode_metadata = %{
+      "model_serving_mode_configured" => "full",
+      "model_serving_mode" => "full",
+      "model_serving_mode_source" => "override"
+    }
+
+    assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert [%{denial_reason: "full_upstream_rejection", response_status_code: 400} = request_log] =
+             RequestLogs.list(setup.pool.id, limit: 10).items
+
+    audit_events = Repo.all(from(e in AuditEvent))
+
+    sentinels_absent? =
+      full_failure_sentinels_absent?(
+        [response.resp_body, logs, request, attempt, request_log, audit_events],
+        sentinels
+      )
+
+    canonical_response? = canonical_full_failure_response?(response, 400)
+
+    assert sentinels_absent?
+    assert canonical_response?
+  end
+
+  @tag :task_15_sanitization
+  test "Full upstream 429 failures retain the rate-limit classification", %{conn: conn} do
+    sentinels = full_failure_sentinels()
+    upstream = start_upstream(FakeUpstream.json_response(full_failure_payload(sentinels), 429))
+    setup = gateway_setup(upstream)
+    put_model_serving_mode!(setup, "full")
+
+    {response, logs} =
+      with_log(fn ->
+        conn
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic Full rate-limit request"
+        })
+      end)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert request.last_error_code == "upstream_rate_limited"
+    assert attempt.network_error_code == "upstream_rate_limited"
+
+    assert [%{denial_reason: "upstream_rate_limited", response_status_code: 429} = request_log] =
+             RequestLogs.list(setup.pool.id, limit: 10).items
+
+    assert full_failure_sentinels_absent?(
+             [response.resp_body, logs, request, attempt, request_log],
+             sentinels
+           )
+
+    assert canonical_full_failure_response?(response, 429)
+  end
+
+  @tag :task_15_sanitization
+  test "stream retry relays a fallback Full failure body instead of dropping it" do
+    sentinels = full_failure_sentinels()
+    first_mode = first_event_terminal_sse("response.failed", "upstream_request_timeout")
+
+    {setup, failing_upstream, rejecting_upstream} =
+      stream_retry_setup(
+        first_mode,
+        FakeUpstream.json_response(full_failure_payload(sentinels), 400)
+      )
+
+    put_model_serving_mode!(setup, "full")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic streaming Full rejection request",
+      "stream" => true
+    }
+
+    assert {:ok, %{stream: stream}} =
+             execute_gateway(auth, "/backend-api/codex/responses", payload, %{
+               request_id: deterministic_rotation_seed(2, 0),
+               upstream_endpoint: "/backend-api/codex/responses"
+             })
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+    assert Jason.decode!(stream_conn.resp_body) == @canonical_full_failure_body
+
+    assert full_failure_sentinels_absent?([stream_conn.resp_body], sentinels)
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(rejecting_upstream) == 1
+  end
+
+  @tag :task_15_sanitization
+  test "Auto preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+    upstream_body = legacy_compatibility_failure_body()
+    upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Auto compatibility request"
+      })
+
+    assert response.status == 422
+    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
+    assert unchanged_body?
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.last_error_code == "upstream_status"
+
+    assert %{
+             "model_serving_mode_configured" => "auto",
+             "model_serving_mode" => "full",
+             "model_serving_mode_source" => "catalog"
+           } =
+             Map.take(request.request_metadata["routing"], [
+               "model_serving_mode_configured",
+               "model_serving_mode",
+               "model_serving_mode_source"
+             ])
+  end
+
+  @tag :task_15_sanitization
+  test "Auto preserves the final canonical model-miss response body byte for byte", %{conn: conn} do
+    upstream_body = %{
+      "error" => %{
+        "code" => "model_not_found",
+        "message" => "sanitized model unavailable",
+        "param" => "model",
+        "type" => "invalid_request_error"
+      }
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(upstream_body, 404))
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Auto model-miss request"
+      })
+
+    assert response.status == 404
+    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
+    assert unchanged_body?
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_status"
+
+    assert %{
+             "model_serving_mode_configured" => "auto",
+             "model_serving_mode" => "full",
+             "model_serving_mode_source" => "catalog"
+           } =
+             Map.take(request.request_metadata["routing"], [
+               "model_serving_mode_configured",
+               "model_serving_mode",
+               "model_serving_mode_source"
+             ])
+  end
+
+  @tag :task_15_sanitization
+  test "explicit Full preserves the established final model-miss response body", %{conn: conn} do
+    upstream_body = %{
+      "error" => %{
+        "code" => "model_not_found",
+        "message" => "sanitized model unavailable",
+        "param" => "model",
+        "type" => "invalid_request_error"
+      }
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(upstream_body, 404))
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    put_model_serving_mode!(setup, "full")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Full model-miss compatibility request"
+      })
+
+    assert response.status == 404
+    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
+    assert unchanged_body?
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == "full_upstream_rejection"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.network_error_code == "full_upstream_rejection"
+  end
+
+  @tag :task_15_sanitization
+  test "Lite preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+    upstream_body = legacy_compatibility_failure_body()
+    upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
+    setup = gateway_setup(upstream)
+    put_model_serving_mode!(setup, "lite")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Lite compatibility request"
+      })
+
+    assert response.status == 422
+    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
+    assert unchanged_body?
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    assert %{
+             "model_serving_mode_configured" => "lite",
+             "model_serving_mode" => "lite",
+             "model_serving_mode_source" => "override"
+           } =
+             Map.take(request.request_metadata["routing"], [
+               "model_serving_mode_configured",
+               "model_serving_mode",
+               "model_serving_mode_source"
+             ])
+  end
+
+  @tag :task_15_sanitization
+  test "explicit Full leaves compact failure status and body byte for byte", %{conn: conn} do
+    upstream_body = legacy_compatibility_failure_body()
+    upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
+    setup = gateway_setup(upstream, compact?: true)
+    put_model_serving_mode!(setup, "full")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic compact compatibility request"
+      })
+
+    assert response.status == 422
+    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
+    assert unchanged_body?
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.last_error_code == "upstream_status"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.network_error_code == "upstream_status"
   end
 
   test "GET /backend-api/codex/models filters reasoning metadata through API key policy", %{
@@ -1143,7 +1859,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "tool_mode" => "code_mode_only",
             "use_responses_lite" => true,
             "source_assignment_ids" => ["upstream-source-id"],
-            "source_assignment_models" => %{"upstream-source-id" => %{"id" => "provider"}},
+            "source_assignment_models" => nil,
             "raw_model_listing" => %{"id" => "provider"}
           },
           "default_service_tier" => "priority"
@@ -2024,11 +2740,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
-    assert request.last_error_code == "upstream_status"
+    assert request.last_error_code == "upstream_rate_limited"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.upstream_status_code == 429
+    assert attempt.network_error_code == "upstream_rate_limited"
 
     assert_turn_state_not_persisted!(setup, request_turn_state)
     assert_turn_state_not_persisted!(setup, response_turn_state)
@@ -9031,11 +9748,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.transport == "http_compact_json"
     assert request.status == "failed"
     assert request.response_status_code == 429
-    assert request.last_error_code == "upstream_status"
+    assert request.last_error_code == "upstream_rate_limited"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.upstream_status_code == 429
+    assert attempt.network_error_code == "upstream_rate_limited"
 
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert turn.transport_kind == "http_json"
@@ -11224,6 +11942,254 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(error, "requires_new_upstream_session")
     refute Map.has_key?(error, "recovery_kind")
     refute Map.has_key?(error, "recovery")
+  end
+
+  defp full_failure_sentinels do
+    suffix = System.unique_integer([:positive]) |> Integer.to_string()
+
+    %{
+      message: Enum.join(["message", "projection", suffix], "-"),
+      body: Enum.join(["body", "projection", suffix], "-"),
+      code: Enum.join(["identity", suffix, "idempotency"], "."),
+      param: Enum.join(["identity_" <> suffix, "idempotency_key"], ".")
+    }
+  end
+
+  defp full_failure_payload(sentinels) do
+    %{
+      "error" => %{
+        "code" => sentinels.code,
+        "message" => sentinels.message,
+        "param" => sentinels.param,
+        "provider_body" => sentinels.body,
+        "type" => "invalid_request_error"
+      }
+    }
+  end
+
+  defp full_failure_sentinels_absent?(observables, sentinels) do
+    serialized = inspect(observables, limit: :infinity, printable_limit: :infinity)
+    Enum.all?(Map.values(sentinels), &(not String.contains?(serialized, &1)))
+  end
+
+  defp canonical_full_failure_response?(response, status) do
+    response.status == status and
+      Jason.decode(response.resp_body) == {:ok, @canonical_full_failure_body}
+  end
+
+  defp unchanged_upstream_body?(response, upstream_body) do
+    response.resp_body == Jason.encode!(upstream_body)
+  end
+
+  defp legacy_compatibility_failure_body do
+    %{
+      "error" => %{
+        "code" => "legacy_compatibility_error",
+        "detail" => %{"classification" => "legacy"},
+        "message" => "legacy compatibility response",
+        "param" => "legacy_field",
+        "type" => "invalid_request_error"
+      }
+    }
+  end
+
+  defp insert_model_serving_override!(pool_id, exposed_model_id, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.insert!(%ModelServingOverride{
+      pool_id: pool_id,
+      exposed_model_id: exposed_model_id,
+      mode: mode,
+      created_at: timestamp,
+      updated_at: timestamp
+    })
+  end
+
+  defp put_model_serving_mode!(setup, mode) do
+    case Repo.get_by(ModelServingOverride,
+           pool_id: setup.pool.id,
+           exposed_model_id: setup.model.exposed_model_id
+         ) do
+      nil ->
+        insert_model_serving_override!(setup.pool.id, setup.model.exposed_model_id, mode)
+
+      override ->
+        override
+        |> Ecto.Changeset.change(
+          mode: mode,
+          updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        )
+        |> Repo.update!()
+    end
+  end
+
+  defp backend_mode_matrix_payload(setup, :chat, stream?) do
+    %{
+      "model" => setup.model.exposed_model_id,
+      "messages" => [%{"role" => "user", "content" => "synthetic backend mode input"}],
+      "stream" => stream?
+    }
+  end
+
+  defp backend_mode_matrix_payload(setup, :responses, stream?) do
+    %{
+      "model" => setup.model.exposed_model_id,
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "synthetic backend mode input"}]
+        }
+      ],
+      "stream" => stream?
+    }
+  end
+
+  defp backend_mode_matrix_upstream(:chat, _stream?) do
+    FakeUpstream.sse_stream([
+      {"response.created",
+       %{
+         "type" => "response.created",
+         "response" => %{"id" => "resp_backend_mode_matrix", "status" => "in_progress"}
+       }},
+      {"response.output_text.delta",
+       %{"type" => "response.output_text.delta", "delta" => "synthetic backend mode answer"}},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_backend_mode_matrix",
+           "status" => "completed",
+           "model" => "provider-gpt-test-model",
+           "output" => [],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+         }
+       }}
+    ])
+  end
+
+  defp backend_mode_matrix_upstream(:responses, true) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_backend_mode_matrix",
+           "status" => "completed",
+           "output" => []
+         }
+       }}
+    ])
+  end
+
+  defp backend_mode_matrix_upstream(:responses, false) do
+    FakeUpstream.json_response(%{
+      "id" => "resp_backend_mode_matrix",
+      "object" => "response",
+      "status" => "completed",
+      "output" => []
+    })
+  end
+
+  defp assert_backend_mode_matrix_response!(response, :chat, false) do
+    assert %{"id" => "resp_backend_mode_matrix", "object" => "chat.completion"} =
+             json_response(response, 200)
+  end
+
+  defp assert_backend_mode_matrix_response!(response, :chat, true) do
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert response.resp_body =~ "chat.completion.chunk"
+    assert response.resp_body =~ "synthetic backend mode answer"
+  end
+
+  defp assert_backend_mode_matrix_response!(response, :responses, false) do
+    assert %{"id" => "resp_backend_mode_matrix", "object" => "response"} =
+             json_response(response, 200)
+  end
+
+  defp assert_backend_mode_matrix_response!(response, :responses, true) do
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert response.resp_body =~ "response.completed"
+  end
+
+  defp assert_backend_mode_matrix_headers!(full_capture, lite_capture) do
+    mode_header = "x-openai-internal-codex-responses-lite"
+    full_headers = Map.new(full_capture.headers)
+    lite_headers = Map.new(lite_capture.headers)
+
+    refute Map.has_key?(full_headers, mode_header)
+    assert lite_headers[mode_header] == "true"
+    assert comparable_backend_headers(full_headers) == comparable_backend_headers(lite_headers)
+  end
+
+  defp assert_backend_lite_mode_headers!(first_capture, second_capture) do
+    mode_header = "x-openai-internal-codex-responses-lite"
+    first_headers = Map.new(first_capture.headers)
+    second_headers = Map.new(second_capture.headers)
+
+    assert first_headers[mode_header] == "true"
+    assert second_headers[mode_header] == "true"
+    assert comparable_backend_headers(first_headers) == comparable_backend_headers(second_headers)
+  end
+
+  defp comparable_backend_headers(headers) do
+    Map.drop(headers, [
+      "x-openai-internal-codex-responses-lite",
+      "content-length",
+      "host",
+      "authorization",
+      "chatgpt-account-id"
+    ])
+  end
+
+  defp assert_backend_mode_matrix_bodies!(full_capture, lite_capture, _kind) do
+    mode_specific_keys = ["input", "instructions", "reasoning", "parallel_tool_calls"]
+
+    assert Map.drop(full_capture.json, mode_specific_keys) ==
+             Map.drop(lite_capture.json, mode_specific_keys)
+
+    assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
+    assert lite_capture.json["parallel_tool_calls"] == false
+    assert is_list(full_capture.json["input"])
+    assert is_list(lite_capture.json["input"])
+    assert Enum.drop(lite_capture.json["input"], 1) == full_capture.json["input"]
+  end
+
+  defp assert_backend_mode_matrix_metadata!(setup, modes) do
+    expected_keys = [
+      "model_serving_mode_configured",
+      "model_serving_mode",
+      "model_serving_mode_source"
+    ]
+
+    requests =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+        )
+      )
+
+    assert length(requests) == length(modes)
+
+    for {request, mode} <- Enum.zip(requests, modes) do
+      expected = %{
+        "model_serving_mode_configured" => mode,
+        "model_serving_mode" => mode,
+        "model_serving_mode_source" => "override"
+      }
+
+      assert request.status == "succeeded"
+      assert Map.take(request.request_metadata["routing"], expected_keys) == expected
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert Map.take(attempt.response_metadata["routing"], expected_keys) == expected
+    end
   end
 
   defp start_invalid_content_length_server! do

@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
+  alias CodexPooler.Accounts.Scope
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
@@ -32,6 +33,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -47,6 +49,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   @websocket_frame_timeout 1_000
   @large_websocket_frame_timeout 5_000
   @reasoning_denial_message "reasoning effort is not available for this API key"
+  @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
+  @model_serving_metadata_keys ~w(
+    model_serving_mode_configured
+    model_serving_mode
+    model_serving_mode_source
+  )
+  @model_serving_websocket_routes [
+    {:backend_responses, "/backend-api/codex/responses", "/backend-api/codex/responses", true},
+    {:backend_v1_responses, "/backend-api/codex/v1/responses", "/backend-api/codex/responses",
+     true},
+    {:public_v1_responses, "/v1/responses", "/v1/responses", false}
+  ]
 
   @websocket_lifecycle_metadata_keys ~w(
     codex_session_id
@@ -234,6 +248,361 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Mint.HTTP.close(conn)
       end
     end
+  end
+
+  test "backend websocket keeps its handshake catalog ETag while each turn resolves fresh mode" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_catalog_etag_lifetime",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    override =
+      Repo.insert!(%ModelServingOverride{
+        pool_id: setup.pool.id,
+        exposed_model_id: setup.model.exposed_model_id,
+        mode: "lite",
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+
+    initial_models = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [initial_etag] = get_resp_header(initial_models, "etag")
+
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref, response_headers} =
+      public_websocket_connect_with_headers!(port, setup, "")
+
+    updated_etag =
+      override
+      |> Ecto.Changeset.change(mode: "full", updated_at: DateTime.add(timestamp, 1, :second))
+      |> Repo.update!()
+      |> then(fn _updated_override ->
+        updated_models = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+        assert [updated_etag] = get_resp_header(updated_models, "etag")
+        refute updated_etag == initial_etag
+        updated_etag
+      end)
+
+    try do
+      assert List.keyfind(response_headers, "x-models-etag", 0) ==
+               {"x-models-etag", initial_etag}
+
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic websocket ETag lifetime request",
+          "stream" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(frame)["id"] == "resp_ws_catalog_etag_lifetime"
+      refute frame =~ "x-models-etag"
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    {fresh_conn, _websocket, _ref, fresh_headers} =
+      public_websocket_connect_with_headers!(port, setup, "")
+
+    try do
+      assert List.keyfind(fresh_headers, "x-models-etag", 0) ==
+               {"x-models-etag", updated_etag}
+    after
+      Mint.HTTP.close(fresh_conn)
+    end
+  end
+
+  for {route_label, path, accounting_endpoint, catalog_etag?} <-
+        @model_serving_websocket_routes do
+    test "#{path} keeps one serving mode per turn and observes a Pool edit on the next turn" do
+      route_label = unquote(route_label)
+      path = unquote(path)
+      accounting_endpoint = unquote(accounting_endpoint)
+      catalog_etag? = unquote(catalog_etag?)
+
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             FakeUpstream.json_response(%{
+               "id" => "resp_ws_mode_lite_#{route_label}",
+               "object" => "response",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }),
+             FakeUpstream.json_response(%{
+               "id" => "resp_ws_mode_full_#{route_label}",
+               "object" => "response",
+               "usage" => %{"input_tokens" => 5, "output_tokens" => 4, "total_tokens" => 9}
+             })
+           ]}
+        )
+
+      setup = gateway_setup(upstream)
+      scope = model_serving_scope()
+      revision = set_model_serving_mode!(scope, setup, "lite")
+      port = start_public_endpoint!()
+
+      {conn, websocket, ref, response_headers} =
+        public_websocket_connect_with_headers!(port, setup, "", path)
+
+      try do
+        assert_catalog_etag_header!(response_headers, catalog_etag?)
+
+        lite_payload =
+          model_serving_websocket_payload(setup, "#{route_label}-lite", "client-false")
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lite_payload)
+        {conn, websocket, lite_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+        assert websocket_response_id(lite_frame) == "resp_ws_mode_lite_#{route_label}"
+        assert [lite_upstream_request] = FakeUpstream.requests(upstream)
+        assert_canonical_lite_websocket_request!(lite_upstream_request)
+
+        _revision = set_model_serving_mode!(scope, setup, "full", revision)
+
+        full_payload =
+          model_serving_websocket_payload(setup, "#{route_label}-full", "client-true")
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, full_payload)
+        {_conn, _websocket, full_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+        assert websocket_response_id(full_frame) == "resp_ws_mode_full_#{route_label}"
+
+        assert [lite_upstream_request, full_upstream_request] =
+                 FakeUpstream.requests(upstream)
+
+        assert lite_upstream_request.path == "/backend-api/codex/responses"
+        assert full_upstream_request.path == "/backend-api/codex/responses"
+        assert_canonical_lite_websocket_request!(lite_upstream_request)
+        assert_canonical_full_websocket_request!(full_upstream_request)
+
+        assert [lite_request, full_request] = await_succeeded_pool_requests!(setup.pool.id, 2)
+
+        assert lite_request.endpoint == accounting_endpoint
+        assert full_request.endpoint == accounting_endpoint
+        assert lite_request.status == "succeeded"
+        assert full_request.status == "succeeded"
+
+        assert_model_serving_accounting!(lite_request, "lite")
+        assert_model_serving_accounting!(full_request, "full")
+      after
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
+
+  test "same-assignment websocket retry keeps the original Lite snapshot after a Pool edit" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.barrier_sse_stream(
+             [
+               {"error",
+                %{
+                  "type" => "error",
+                  "status" => 400,
+                  "code" => "websocket_connection_limit_reached",
+                  "param" => "reasoning.effort"
+                }}
+             ],
+             notify: self(),
+             barrier_after: 0,
+             release_ref: release_ref,
+             done: false
+           ),
+           FakeUpstream.json_response(%{
+             "id" => "resp_ws_mode_same_assignment_retry",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_mode_same_assignment_fallback_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-retry-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, fallback.assignment.id],
+        setup.assignment.id
+      )
+
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "lite")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        execute_websocket_response(
+          auth,
+          model_serving_websocket_payload(setup, "same-assignment", "client-false"),
+          %{request_id: request_id},
+          fn frame -> send(parent, {:websocket_frame, frame}) end
+        )
+      end)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+
+    try do
+      _revision = set_model_serving_mode!(scope, setup, "full", revision)
+      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+      assert :ok = Task.await(task, 3_000)
+    after
+      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+    end
+
+    assert_received {:websocket_frame, frame}
+    assert websocket_response_id(frame) == "resp_ws_mode_same_assignment_retry"
+
+    assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+    assert_canonical_lite_websocket_request!(first_upstream_request)
+    assert_canonical_lite_websocket_request!(second_upstream_request)
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.retry_count == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert first_attempt.status == "retryable_failed"
+    assert second_attempt.status == "succeeded"
+    assert_model_serving_accounting!(request, "lite", [first_attempt, second_attempt])
+  end
+
+  test "cross-assignment pre-visible failover keeps Full after the Pool changes to Lite" do
+    release_ref = make_ref()
+
+    timeout_upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref)
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_mode_cross_assignment_failover",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(timeout_upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-mode-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, fallback.assignment.id],
+        setup.assignment.id
+      )
+
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "full")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        execute_websocket_response(
+          auth,
+          model_serving_websocket_payload(setup, "cross-assignment", "client-true"),
+          %{request_id: request_id, connect_timeout_ms: 1_000},
+          fn frame -> send(parent, {:websocket_frame, frame}) end
+        )
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid,
+                    ^release_ref},
+                   1_000
+
+    try do
+      _revision = set_model_serving_mode!(scope, setup, "lite", revision)
+      assert Task.yield(task, 0) == nil
+      assert :ok = Task.await(task, 3_000)
+    after
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+    end
+
+    assert_received {:websocket_frame, frame}
+    assert websocket_response_id(frame) == "resp_ws_mode_cross_assignment_failover"
+    assert [fallback_request] = FakeUpstream.requests(fallback_upstream)
+    assert_canonical_full_websocket_request!(fallback_request)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.retry_count == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(
+               from(a in Attempt,
+                 where: a.request_id == ^request.id,
+                 order_by: [asc: a.attempt_number]
+               )
+             )
+
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert second_attempt.pool_upstream_assignment_id == fallback.assignment.id
+    assert first_attempt.status == "retryable_failed"
+    assert second_attempt.status == "succeeded"
+    assert_model_serving_accounting!(request, "full", [first_attempt, second_attempt])
   end
 
   test "catalog headers are absent from every excluded controller route" do
@@ -3470,7 +3839,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
-  test "websocket tool output continuations keep previous_response_id for upstream context" do
+  test "websocket Full-to-Lite tool continuations keep previous_response_id after the tools prefix" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -3481,6 +3850,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "full")
+    _revision = set_model_serving_mode!(scope, setup, "lite", revision)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, session} =
@@ -3503,6 +3875,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                      "output" => tool_output
                    }
                  ],
+                 "tools" => [
+                   %{
+                     "type" => "function",
+                     "name" => "sample_lookup",
+                     "parameters" => %{
+                       "type" => "object",
+                       "properties" => %{},
+                       "required" => []
+                     }
+                   }
+                 ],
                  "stream" => true,
                  "generate" => true,
                  "previous_response_id" => previous_response_id
@@ -3521,13 +3904,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert captured.json["type"] == "response.create"
     assert captured.json["generate"] == true
 
-    assert captured.json["input"] == [
-             %{
-               "type" => "function_call_output",
-               "call_id" => tool_call_id,
-               "output" => tool_output
-             }
-           ]
+    assert [tools_prefix, captured_tool_output] = captured.json["input"]
+    assert tools_prefix["type"] == "additional_tools"
+    assert tools_prefix["role"] == "developer"
+    assert [%{"name" => "sample_lookup"}] = tools_prefix["tools"]
+
+    assert captured_tool_output == %{
+             "type" => "function_call_output",
+             "call_id" => tool_call_id,
+             "output" => tool_output
+           }
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -3841,7 +4227,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute metadata_text =~ "call_debug_sample"
   end
 
-  test "HTTP backend continuity drops previous_response_id without tool outputs", %{conn: conn} do
+  test "HTTP Full-to-Lite ordinary continuation drops previous_response_id after the tools prefix",
+       %{conn: conn} do
     upstream =
       start_upstream(
         FakeUpstream.reject_json_field(
@@ -3856,6 +4243,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "full")
+    _revision = set_model_serving_mode!(scope, setup, "lite", revision)
 
     conn =
       conn
@@ -3863,12 +4253,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "hello",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "sample_lookup",
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{},
+              "required" => []
+            }
+          }
+        ],
         "previous_response_id" => "resp_http_previous"
       })
 
     assert %{"id" => "resp_http_bridge"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     refute Map.has_key?(captured.json, "previous_response_id")
+    assert [%{"type" => "additional_tools"} | _input] = captured.json["input"]
   end
 
   test "websocket generate false warmup completes locally without upstream dispatch" do
@@ -9080,6 +9482,134 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert usage_request.path == "/backend-api/wham/usage"
     usage_request
+  end
+
+  defp model_serving_scope do
+    %{user: owner} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    Scope.for_user(owner, ["instance_owner"])
+  end
+
+  defp set_model_serving_mode!(scope, setup, mode, expected_revision \\ nil) do
+    expected_revision =
+      expected_revision ||
+        case Pools.model_serving_modes_snapshot(scope, setup.pool) do
+          {:ok, snapshot} -> snapshot.revision
+          {:error, error} -> flunk("failed to read model serving modes: #{inspect(error)}")
+        end
+
+    assert {:ok, result} =
+             Pools.update_model_serving_modes(
+               scope,
+               setup.pool,
+               [%{exposed_model_id: setup.model.exposed_model_id, mode: mode}],
+               expected_revision
+             )
+
+    result.revision
+  end
+
+  defp model_serving_websocket_payload(setup, label, spoofed_lite_value) do
+    Jason.encode!(%{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic websocket mode #{label}",
+      "stream" => true,
+      "generate" => true,
+      "parallel_tool_calls" => true,
+      "reasoning" => %{"effort" => "medium", "context" => "current_turn"},
+      "client_metadata" => %{
+        @responses_lite_client_metadata_key => spoofed_lite_value,
+        "model_serving_mode" => "unknown"
+      }
+    })
+  end
+
+  defp websocket_response_id(frame) do
+    decoded = Jason.decode!(frame)
+    decoded["id"] || get_in(decoded, ["response", "id"])
+  end
+
+  defp assert_canonical_lite_websocket_request!(captured) do
+    assert captured.method == "WEBSOCKET"
+
+    assert get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key]) ==
+             "true"
+
+    assert captured.json["parallel_tool_calls"] == false
+    assert get_in(captured.json, ["reasoning", "context"]) == "all_turns"
+  end
+
+  defp assert_canonical_full_websocket_request!(captured) do
+    assert captured.method == "WEBSOCKET"
+
+    refute get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key])
+    assert captured.json["parallel_tool_calls"] == true
+    assert get_in(captured.json, ["reasoning", "context"]) == "current_turn"
+  end
+
+  defp assert_catalog_etag_header!(headers, true) do
+    assert {"x-models-etag", _etag} = List.keyfind(headers, "x-models-etag", 0)
+  end
+
+  defp assert_catalog_etag_header!(headers, false) do
+    refute List.keyfind(headers, "x-models-etag", 0)
+  end
+
+  defp await_succeeded_pool_requests!(pool_id, expected_count, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 1_000
+
+    requests =
+      Repo.all(
+        from(request in Request,
+          where: request.pool_id == ^pool_id,
+          order_by: [asc: request.admitted_at]
+        )
+      )
+
+    if length(requests) == expected_count and
+         Enum.all?(requests, &(&1.status == "succeeded")) do
+      requests
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        receive do
+        after
+          5 -> await_succeeded_pool_requests!(pool_id, expected_count, deadline)
+        end
+      else
+        flunk(
+          "expected #{expected_count} succeeded websocket requests, got #{inspect(Enum.map(requests, & &1.status))}"
+        )
+      end
+    end
+  end
+
+  defp assert_model_serving_accounting!(request, mode, attempts \\ nil) do
+    expected = %{
+      "model_serving_mode_configured" => mode,
+      "model_serving_mode" => mode,
+      "model_serving_mode_source" => "override"
+    }
+
+    assert request.transport == "websocket"
+    assert Map.take(request.request_metadata["routing"], @model_serving_metadata_keys) == expected
+
+    attempts =
+      attempts ||
+        Repo.all(
+          from(attempt in Attempt,
+            where: attempt.request_id == ^request.id,
+            order_by: [asc: attempt.attempt_number]
+          )
+        )
+
+    refute attempts == []
+
+    for attempt <- attempts do
+      assert attempt.transport == "websocket"
+
+      assert Map.take(attempt.response_metadata["routing"], @model_serving_metadata_keys) ==
+               expected
+    end
   end
 
   defp execute_websocket_response(auth, raw_payload, opts, push_frame) do

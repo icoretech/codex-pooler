@@ -88,6 +88,75 @@ defmodule CodexPooler.CompatibilityMatrix do
         "backend Responses HTTP SSE response headers and websocket upgrade headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the predispatch catalog snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes"
     },
     %{
+      slug: :pool_model_serving_modes,
+      status: :supported,
+      current: :pool_model_pair_request_or_turn_snapshot,
+      categories: [:route, :error, :streaming, :ownership, :degraded],
+      routes: [
+        %{family: :backend_models, method: :get, path: "/backend-api/codex/models"},
+        %{family: :backend_models, method: :get, path: "/backend-api/codex/v1/models"},
+        %{
+          family: :ordinary_responses,
+          method: :post,
+          path: "/backend-api/codex/responses",
+          transport: :http_sse
+        },
+        %{
+          family: :ordinary_responses,
+          method: :post,
+          path: "/backend-api/codex/v1/responses",
+          transport: :http_sse
+        },
+        %{
+          family: :ordinary_responses,
+          method: :get,
+          path: "/backend-api/codex/responses",
+          transport: :websocket
+        },
+        %{
+          family: :ordinary_responses,
+          method: :get,
+          path: "/backend-api/codex/v1/responses",
+          transport: :websocket
+        },
+        %{
+          family: :compact,
+          method: :post,
+          path: "/backend-api/codex/responses/compact"
+        },
+        %{
+          family: :compact,
+          method: :post,
+          path: "/backend-api/codex/v1/responses/compact"
+        },
+        %{
+          family: :ordinary_responses,
+          method: :post,
+          path: "/backend-api/codex/v1/chat/completions"
+        },
+        %{
+          family: :public_ordinary_responses,
+          method: :post,
+          path: "/v1/responses"
+        },
+        %{
+          family: :public_ordinary_responses,
+          method: :get,
+          path: "/v1/responses",
+          transport: :websocket
+        },
+        %{
+          family: :public_ordinary_responses,
+          method: :post,
+          path: "/v1/chat/completions"
+        }
+      ],
+      future_routes: [],
+      fixture: :pool_model_serving_modes,
+      contract:
+        "Auto, Lite, and Full belong to one Pool-model pair while clients keep one exposed model id and their existing Pool API key and configuration. Auto is the recommended literal-true catalog decision; a resolved mode is immutable for one HTTP request or websocket response.create turn across retry, failover, and owner forwarding. Backend catalog ETags, compact transformation, and bounded accounting metadata follow that snapshot. Public /v1/models, unsupported public compact, assignment eligibility, and Helm/environment configuration remain unchanged. Full is an advanced ordinary Responses override: a generic terminal HTTP failure returns one fixed server-owned error without provider fields, a non-rate-limit 4xx records the operator-visible full_upstream_rejection diagnostic without raw upstream text, a 429 records upstream_rate_limited, an ordinary 5xx remains upstream_status, and Pooler never silently downgrades. Auto, Lite, compact or unrelated routes, and established model-miss responses remain unchanged."
+    },
+    %{
       slug: :backend_responses_envelope,
       status: :supported,
       current: :final_noncompact_backend_envelope,
@@ -519,6 +588,96 @@ defmodule CodexPooler.CompatibilityMatrix do
         "unauthenticated",
         "unrelated_routes"
       ]
+    },
+    pool_model_serving_modes: %{
+      persistence: %{
+        scope: :pool_model_pair,
+        shared_store: :postgres,
+        persisted_modes: [:lite, :full],
+        auto_representation: :row_absence,
+        canonical_model_id: true,
+        survives_catalog_churn: true,
+        client_visible_model_ids: 1
+      },
+      auto_truth_table: %{
+        any_routable_source_literal_true: :lite,
+        all_routable_source_values_false_missing_or_malformed: :full,
+        source_map_present_ignores_legacy_aggregate: true,
+        absent_or_non_map_source_map_with_legacy_aggregate_literal_true: :lite,
+        absent_or_non_map_source_map_with_other_aggregate_value: :full,
+        zero_routable_sources: :no_runtime_model
+      },
+      snapshot_lifetime: %{
+        http: :request,
+        websocket: :response_create_turn,
+        retry: :preserve,
+        cross_assignment_failover: :preserve,
+        owner_forwarding: :preserve,
+        next_websocket_turn: :reresolve
+      },
+      catalog_etag: %{
+        backend_field: "use_responses_lite",
+        backend_value: :effective_boolean,
+        digest_scope: :final_policy_visible_body,
+        public_v1_models: :unchanged
+      },
+      accounting: %{
+        request_namespace: "request_metadata",
+        request_nested_namespace: "routing",
+        attempt_namespace: "response_metadata",
+        keys: [
+          "model_serving_mode_configured",
+          "model_serving_mode",
+          "model_serving_mode_source"
+        ],
+        retry_snapshot: :identical,
+        raw_payload_fields: false
+      },
+      compact: %{
+        backend_uses_snapshot: true,
+        backend_transforms_payload: true,
+        public_path: "/v1/responses/compact",
+        public_status: 404,
+        public_error_code: "unsupported_endpoint",
+        public_upstream_dispatch: false
+      },
+      public_v1_exclusions: %{
+        models_mode_fields: false,
+        models_body_changed: false,
+        compact_supported: false
+      },
+      assignment_eligibility: %{
+        use_responses_lite_candidate_filter: false,
+        membership_contract: :unchanged
+      },
+      configuration: %{
+        client_api_key: :unchanged,
+        client_model_id: :unchanged,
+        client_configuration: :unchanged,
+        global_env_switch: false,
+        helm_value: false
+      },
+      full_rejection_diagnostic: %{
+        error_code: "full_upstream_rejection",
+        applies_to: :explicit_full_ordinary_responses_http_non_rate_limit_4xx_rejection,
+        rate_limit_error_code: "upstream_rate_limited",
+        ordinary_5xx_error_code: "upstream_status",
+        upstream_status_retained: true,
+        client_error: %{
+          "code" => "server_error",
+          "message" => "upstream request failed",
+          "type" => "server_error"
+        },
+        provider_fields_forwarded: false,
+        unchanged_client_response_scopes: [
+          :auto,
+          :lite,
+          :compact_and_unrelated_routes,
+          :established_model_miss
+        ],
+        silent_downgrade: false,
+        raw_upstream_error_text: false
+      }
     },
     backend_responses_envelope: %{
       noncompact: %{

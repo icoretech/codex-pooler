@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
   test "compaction trigger aliases enforce reasoning before compact dispatch", %{conn: conn} do
@@ -85,6 +86,62 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == "always_use"
       assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "high"
+    end
+  end
+
+  @tag :model_serving_modes
+  test "both backend compact aliases keep the selected Pool mode for JSON and SSE", %{
+    conn: conn
+  } do
+    for path <- [
+          "/backend-api/codex/responses/compact",
+          "/backend-api/codex/v1/responses/compact"
+        ],
+        stream? <- [false, true] do
+      upstream = start_upstream(compact_mode_matrix_upstream(stream?))
+      setup = gateway_setup(upstream, compact?: true)
+
+      payload = %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic compact mode input",
+        "stream" => stream?
+      }
+
+      put_compact_model_serving_mode!(setup, "full")
+
+      full_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post(path, payload)
+
+      assert_compact_mode_matrix_response!(full_response, stream?)
+
+      put_compact_model_serving_mode!(setup, "lite")
+
+      lite_response =
+        conn
+        |> recycle()
+        |> put_req_header("x-openai-internal-codex-responses-lite", "client-spoofed-lite")
+        |> auth(setup)
+        |> post(path, payload)
+
+      assert_compact_mode_matrix_response!(lite_response, stream?)
+
+      assert [full_capture, lite_capture] = FakeUpstream.requests(upstream)
+      assert full_capture.path == "/backend-api/codex/responses/compact"
+      assert lite_capture.path == "/backend-api/codex/responses/compact"
+      assert full_capture.json["model"] == setup.model.upstream_model_id
+      assert lite_capture.json["model"] == setup.model.upstream_model_id
+
+      assert Map.drop(full_capture.json, ["reasoning", "parallel_tool_calls"]) ==
+               Map.drop(lite_capture.json, ["reasoning", "parallel_tool_calls"])
+
+      assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
+      assert lite_capture.json["parallel_tool_calls"] == false
+      assert_compact_mode_matrix_headers!(full_capture, lite_capture)
+      assert_compact_mode_matrix_metadata!(setup, ["full", "lite"])
     end
   end
 
@@ -391,6 +448,119 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   defp compaction_trigger, do: %{"type" => "compaction_trigger"}
+
+  defp put_compact_model_serving_mode!(setup, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    case Repo.get_by(ModelServingOverride,
+           pool_id: setup.pool.id,
+           exposed_model_id: setup.model.exposed_model_id
+         ) do
+      nil ->
+        Repo.insert!(%ModelServingOverride{
+          pool_id: setup.pool.id,
+          exposed_model_id: setup.model.exposed_model_id,
+          mode: mode,
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+
+      override ->
+        override
+        |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
+        |> Repo.update!()
+    end
+  end
+
+  defp compact_mode_matrix_upstream(true) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_compact_mode_matrix",
+           "status" => "completed",
+           "output" => []
+         }
+       }}
+    ])
+  end
+
+  defp compact_mode_matrix_upstream(false) do
+    FakeUpstream.json_response(%{
+      "id" => "resp_compact_mode_matrix",
+      "object" => "response.compaction",
+      "output" => [
+        %{"type" => "compaction", "encrypted_content" => "encrypted-compact-mode-fixture"}
+      ]
+    })
+  end
+
+  defp assert_compact_mode_matrix_response!(response, false) do
+    assert %{"id" => "resp_compact_mode_matrix", "object" => "response.compaction"} =
+             json_response(response, 200)
+  end
+
+  defp assert_compact_mode_matrix_response!(response, true) do
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert response.resp_body =~ "response.completed"
+  end
+
+  defp assert_compact_mode_matrix_headers!(full_capture, lite_capture) do
+    mode_header = "x-openai-internal-codex-responses-lite"
+    full_headers = Map.new(full_capture.headers)
+    lite_headers = Map.new(lite_capture.headers)
+
+    refute Map.has_key?(full_headers, mode_header)
+    assert lite_headers[mode_header] == "true"
+    assert comparable_compact_headers(full_headers) == comparable_compact_headers(lite_headers)
+  end
+
+  defp comparable_compact_headers(headers) do
+    Map.drop(headers, [
+      "x-openai-internal-codex-responses-lite",
+      "content-length",
+      "host",
+      "authorization",
+      "chatgpt-account-id"
+    ])
+  end
+
+  defp assert_compact_mode_matrix_metadata!(setup, modes) do
+    expected_keys = [
+      "model_serving_mode_configured",
+      "model_serving_mode",
+      "model_serving_mode_source"
+    ]
+
+    requests =
+      Repo.all(
+        from(r in Request,
+          where: r.pool_id == ^setup.pool.id,
+          order_by: [asc: r.admitted_at]
+        )
+      )
+
+    assert length(requests) == length(modes)
+
+    for {request, mode} <- Enum.zip(requests, modes) do
+      expected = %{
+        "model_serving_mode_configured" => mode,
+        "model_serving_mode" => mode,
+        "model_serving_mode_source" => "override"
+      }
+
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.status == "succeeded"
+      assert Map.take(request.request_metadata["routing"], expected_keys) == expected
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert Map.take(attempt.response_metadata["routing"], expected_keys) == expected
+    end
+  end
 
   defp enable_priority_service_tier!(setup) do
     setup.model

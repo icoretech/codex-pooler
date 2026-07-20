@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
   test "GET /v1/models returns an OpenAI-compatible list without upstream dispatch", %{conn: conn} do
@@ -67,6 +68,31 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert model["id"] == setup.model.exposed_model_id
     refute Map.has_key?(model, "supported_reasoning_levels")
     refute Map.has_key?(model, "default_reasoning_level")
+  end
+
+  @tag :model_serving_modes
+  test "GET /v1/models is unchanged while the Pool model mode switches", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+
+    baseline = conn |> auth(setup) |> get("/v1/models")
+
+    assert %{"object" => "list", "data" => [%{"id" => exposed_model_id} = baseline_model]} =
+             json_response(baseline, 200)
+
+    for mode <- ["full", "lite"] do
+      put_models_model_serving_mode!(setup, mode)
+      response = conn |> recycle() |> auth(setup) |> get("/v1/models")
+
+      assert %{"object" => "list", "data" => [model]} = json_response(response, 200)
+      assert model == baseline_model
+      assert model["id"] == exposed_model_id
+      refute Map.has_key?(model, "use_responses_lite")
+      refute model["id"] =~ "-lite"
+      refute model["id"] =~ "-full"
+    end
+
+    assert FakeUpstream.count(upstream) == 0
   end
 
   test "GET /v1/models only exposes policy-authorized visible models", %{conn: conn} do
@@ -230,5 +256,28 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert public_model["context_length"] == backend_model["context_window"]
     assert public_model["context_length"] == 258_400
     assert FakeUpstream.count(upstream) == 0
+  end
+
+  defp put_models_model_serving_mode!(setup, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    case Repo.get_by(ModelServingOverride,
+           pool_id: setup.pool.id,
+           exposed_model_id: setup.model.exposed_model_id
+         ) do
+      nil ->
+        Repo.insert!(%ModelServingOverride{
+          pool_id: setup.pool.id,
+          exposed_model_id: setup.model.exposed_model_id,
+          mode: mode,
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+
+      override ->
+        override
+        |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
+        |> Repo.update!()
+    end
   end
 end

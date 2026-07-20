@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -66,6 +67,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   @queued_owner_upstream_start_timeout_ms 1_000
   @response_task_stop_timeout_ms 1_000
   @reasoning_denial_message "reasoning effort is not available for this API key"
+  @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
+  @model_serving_metadata_keys ~w(
+    model_serving_mode_configured
+    model_serving_mode
+    model_serving_mode_source
+  )
 
   @websocket_lifecycle_metadata_keys ~w(
     codex_session_id
@@ -980,6 +987,532 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert settlement.attempt_id == attempt.id
       assert settlement.transport == "websocket"
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  test "remote owner executes the proxy turn snapshot and the next turn observes the Pool edit" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_mode_lite_snapshot",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_mode_full_next_turn",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "lite")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-mode-snapshot", "owner-mode-snapshot")
+    remote_node = :"codex_pooler@remote-mode-owner.example"
+
+    base_node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(state, remote_node, base_node_opts)
+    release_ref = make_ref()
+    parent = self()
+
+    try do
+      first_turn =
+        Task.async(fn ->
+          WebsocketOwnerNodeHarness.with_node_client(
+            [remote_node],
+            [
+              calls: %{remote_node => {:barrier_success, parent, release_ref}},
+              notify: parent
+            ],
+            fn node_opts ->
+              Gateway.run_websocket_response(
+                auth,
+                model_serving_owner_payload(setup, "remote-lite", "client-false"),
+                owner_response_options(remote_state, node_opts),
+                fn _data -> :ok end
+              )
+            end
+          )
+        end)
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
+                     1_000
+
+      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
+                      :remote_submit_request},
+                     1_000
+
+      try do
+        _revision = set_model_serving_mode!(scope, setup, "full", revision)
+        send(rpc_pid, {:websocket_owner_harness_release_call, release_ref})
+        assert :ok = Task.await(first_turn, 3_000)
+      after
+        send(rpc_pid, {:websocket_owner_harness_release_call, release_ref})
+      end
+
+      assert {:push, {:text, lite_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert owner_response_id(lite_frame) == "resp_owner_mode_lite_snapshot"
+      assert {:ok, remote_state} = receive_owner_socket_complete(remote_state)
+
+      assert :ok =
+               WebsocketOwnerNodeHarness.with_node_client(
+                 [remote_node],
+                 [calls: %{remote_node => :success}, notify: self()],
+                 fn node_opts ->
+                   Gateway.run_websocket_response(
+                     auth,
+                     model_serving_owner_payload(setup, "remote-full", "client-true"),
+                     owner_response_options(remote_state, node_opts),
+                     fn _data -> :ok end
+                   )
+                 end
+               )
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
+                     1_000
+
+      assert {:push, {:text, full_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert owner_response_id(full_frame) == "resp_owner_mode_full_next_turn"
+      assert {:ok, _remote_state} = receive_owner_socket_complete(remote_state)
+
+      assert [lite_upstream_request, full_upstream_request] = FakeUpstream.requests(upstream)
+      assert_canonical_lite_owner_request!(lite_upstream_request)
+      assert_canonical_full_owner_request!(full_upstream_request)
+
+      assert [lite_request, full_request] = request_logs(setup.pool.id)
+      assert_owner_mode_accounting!(lite_request, "lite", "succeeded", remote_node)
+      assert_owner_mode_accounting!(full_request, "full", "succeeded", remote_node)
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  test "remote owner loss before visible output recovers without re-resolving the turn mode" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_owner_mode_loss_recovered",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "full")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-mode-loss", "owner-mode-loss")
+    remote_node = :"codex_pooler@lost-mode-owner.example"
+
+    base_node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(state, remote_node, base_node_opts)
+    release_ref = make_ref()
+    parent = self()
+
+    try do
+      lost_turn =
+        Task.async(fn ->
+          WebsocketOwnerNodeHarness.with_node_client(
+            [remote_node],
+            [
+              calls: %{
+                remote_node =>
+                  {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
+              },
+              notify: parent
+            ],
+            fn node_opts ->
+              Gateway.run_websocket_response(
+                auth,
+                model_serving_owner_payload(setup, "remote-owner-loss", "client-true"),
+                owner_response_options(remote_state, node_opts),
+                fn _data -> :ok end
+              )
+            end
+          )
+        end)
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
+                     1_000
+
+      assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
+                      :remote_submit_request},
+                     1_000
+
+      try do
+        _revision = set_model_serving_mode!(scope, setup, "lite", revision)
+        send(rpc_pid, {:websocket_owner_harness_release_call, release_ref})
+
+        assert :ok = Task.await(lost_turn, 3_000)
+      after
+        send(rpc_pid, {:websocket_owner_harness_release_call, release_ref})
+      end
+
+      original_downstream = remote_state.websocket_owner_downstream
+
+      assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch,
+                      {:data, recovered_frame}},
+                     1_000
+
+      assert correlation_id == original_downstream.correlation_id
+      assert recovered_epoch > original_downstream.epoch
+
+      assert owner_response_id(recovered_frame) == "resp_owner_mode_loss_recovered"
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch, :complete},
+                     1_000
+
+      assert [recovered_upstream_request] = FakeUpstream.requests(upstream)
+      assert_canonical_full_owner_request!(recovered_upstream_request)
+
+      assert [request] = request_logs(setup.pool.id)
+      assert request.retry_count == 0
+      assert request.last_error_code == nil
+      assert_owner_mode_accounting!(request, "full", "succeeded", remote_node)
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  @tag :todo_16_owner_crash_recovery
+  test "replacement owner preserves the active proxy epoch after pre-visible owner death" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.barrier_sse_stream(
+             [%{"id" => "resp_owner_mode_killed", "object" => "response"}],
+             barrier_after: 0,
+             notify: self(),
+             release_ref: release_ref
+           ),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_mode_kill_recovered",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_mode_kill_next_turn",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    revision = set_model_serving_mode!(scope, setup, "lite")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-mode-kill", "owner-mode-kill")
+    remote_node = :"codex_pooler@killed-mode-owner.example"
+
+    base_node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    stale_downstream = state.websocket_owner_downstream
+    {:ok, old_owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+
+    assert {:ok, active_downstream} =
+             WebsocketOwnerSession.attach_downstream(old_owner_pid, %{
+               pid: self(),
+               correlation_id: stale_downstream.correlation_id
+             })
+
+    assert stale_downstream.epoch == 1
+    assert active_downstream.epoch == 2
+
+    active_state = %{state | websocket_owner_downstream: active_downstream}
+    remote_state = remote_owner_state(active_state, remote_node, base_node_opts)
+    old_lease = active_owner_lease(state.codex_session.id)
+    old_owner_ref = Process.monitor(old_owner_pid)
+    parent = self()
+
+    stale_frame = Jason.encode!(%{"id" => "resp_stale_owner_attachment"})
+
+    assert {:ok, ^remote_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, stale_downstream.correlation_id, stale_downstream.epoch,
+                {:data, stale_frame}},
+               remote_state
+             )
+
+    try do
+      interrupted_turn =
+        Task.async(fn ->
+          WebsocketOwnerNodeHarness.with_node_client(
+            [remote_node],
+            [calls: %{remote_node => :success}, notify: parent],
+            fn node_opts ->
+              Gateway.run_websocket_response(
+                auth,
+                model_serving_owner_payload(setup, "remote-owner-kill", "client-false"),
+                owner_response_options(remote_state, node_opts),
+                fn _data -> :ok end
+              )
+            end
+          )
+        end)
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
+                     1_000
+
+      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+
+      try do
+        assert [projected_lite_request] = await_upstream_requests(upstream, 1)
+        assert_canonical_lite_owner_request!(projected_lite_request)
+
+        assert [in_progress_request] = request_logs(setup.pool.id)
+        assert in_progress_request.status == "in_progress"
+        assert in_progress_request.retry_count == 0
+
+        assert [in_progress_attempt] =
+                 Repo.all(from(a in Attempt, where: a.request_id == ^in_progress_request.id))
+
+        assert in_progress_attempt.status == "in_progress"
+
+        assert in_progress_turn =
+                 Repo.one!(from(t in CodexTurn, where: t.request_id == ^in_progress_request.id))
+
+        assert in_progress_turn.status == "in_progress"
+        assert is_nil(in_progress_turn.first_visible_output_at)
+        assert active_owner_lease(state.codex_session.id).lease_token == old_lease.lease_token
+
+        _revision = set_model_serving_mode!(scope, setup, "full", revision)
+
+        Process.exit(old_owner_pid, :kill)
+        assert_receive {:DOWN, ^old_owner_ref, :process, ^old_owner_pid, :killed}, 1_000
+        send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+        assert :ok = Task.await(interrupted_turn, 3_000)
+
+        assert_receive {:websocket_owner_runtime_recovered, correlation_id, epoch, runtime},
+                       1_000
+
+        assert correlation_id == active_downstream.correlation_id
+        assert epoch == active_downstream.epoch
+
+        assert {:ok, recovered_remote_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:websocket_owner_runtime_recovered, correlation_id, epoch, runtime},
+                   remote_state
+                 )
+
+        refute recovered_remote_state.websocket_owner_lease_token ==
+                 remote_state.websocket_owner_lease_token
+
+        assert FakeUpstream.count(upstream) == 2
+        assert [recovered_request] = request_logs(setup.pool.id)
+        assert_owner_mode_accounting!(recovered_request, "lite", "succeeded", remote_node)
+
+        assert recovered_turn =
+                 Repo.one!(from(t in CodexTurn, where: t.request_id == ^recovered_request.id))
+
+        assert recovered_turn.status == "succeeded"
+        refute is_nil(recovered_turn.first_visible_output_at)
+
+        assert {:push, {:text, recovered_frame}, recovered_remote_state} =
+                 receive_owner_socket_push(recovered_remote_state)
+
+        assert owner_response_id(recovered_frame) == "resp_owner_mode_kill_recovered"
+
+        assert {:ok, recovered_remote_state} =
+                 receive_owner_socket_complete(recovered_remote_state)
+
+        active_correlation_id = active_downstream.correlation_id
+        active_epoch = active_downstream.epoch
+
+        refute_receive {:websocket_owner_frame, ^active_correlation_id, ^active_epoch, _payload},
+                       100
+
+        replacement_session = Repo.get!(CodexSession, state.codex_session.id)
+        replacement_lease = active_owner_lease(state.codex_session.id)
+        released_lease = Repo.get!(BridgeOwnerLease, old_lease.id)
+
+        assert released_lease.status == "released"
+        assert released_lease.metadata["release_reason"] == "owner_unavailable_takeover"
+        assert replacement_lease.lease_token != old_lease.lease_token
+        assert replacement_lease.lease_token == replacement_session.owner_lease_token
+
+        assert recovered_remote_state.websocket_owner_lease_token ==
+                 replacement_session.owner_lease_token
+
+        assert recovered_remote_state.codex_session.owner_lease_token ==
+                 replacement_session.owner_lease_token
+
+        assert replacement_lease.owner_instance_id == replacement_session.owner_instance_id
+
+        assert {:ok, replacement_owner_pid} =
+                 WebsocketOwnerSession.lookup(state.codex_session.id)
+
+        assert replacement_owner_pid != old_owner_pid
+
+        replacement_owner_state = :sys.get_state(replacement_owner_pid)
+        assert replacement_owner_state.owner_lease_token == replacement_lease.lease_token
+        assert replacement_owner_state.downstream == active_downstream
+
+        {:ok, next_state} =
+          owner_socket(auth, "ws-owner-mode-kill-next", "owner-mode-kill")
+
+        next_remote_state = remote_owner_state(next_state, remote_node, base_node_opts)
+
+        try do
+          assert :ok =
+                   WebsocketOwnerNodeHarness.with_node_client(
+                     [remote_node],
+                     [calls: %{remote_node => :success}, notify: self()],
+                     fn node_opts ->
+                       Gateway.run_websocket_response(
+                         auth,
+                         model_serving_owner_payload(
+                           setup,
+                           "remote-owner-kill-next",
+                           "client-true"
+                         ),
+                         owner_response_options(next_remote_state, node_opts),
+                         fn _data -> :ok end
+                       )
+                     end
+                   )
+
+          assert_receive {:websocket_owner_harness_node_call,
+                          %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
+                         1_000
+
+          assert {:push, {:text, next_frame}, next_remote_state} =
+                   receive_owner_socket_push(next_remote_state)
+
+          assert owner_response_id(next_frame) == "resp_owner_mode_kill_next_turn"
+          assert {:ok, _next_remote_state} = receive_owner_socket_complete(next_remote_state)
+        after
+          CodexResponsesSocket.terminate(:closed, next_remote_state)
+        end
+
+        assert [killed_lite_request, recovered_lite_request, full_request] =
+                 await_upstream_requests(upstream, 3)
+
+        assert_canonical_lite_owner_request!(killed_lite_request)
+        assert_canonical_lite_owner_request!(recovered_lite_request)
+        assert_canonical_full_owner_request!(full_request)
+
+        assert [lite_request, full_request] = request_logs(setup.pool.id)
+        assert lite_request.retry_count == 0
+        assert_owner_mode_accounting!(lite_request, "lite", "succeeded", remote_node)
+        assert_owner_mode_accounting!(full_request, "full", "succeeded", remote_node)
+
+        assert active_owner_lease(state.codex_session.id).lease_token ==
+                 replacement_lease.lease_token
+      after
+        send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+        if Process.alive?(interrupted_turn.pid) do
+          Task.shutdown(interrupted_turn, :brutal_kill)
+        end
+      end
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  @tag :todo_16_owner_crash_recovery
+  test "remote owner process death after visible output remains terminal" do
+    release_ref = make_ref()
+    upstream_boundary = visible_blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-visible-kill", "owner-visible-kill",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    remote_node = :"codex_pooler@visible-killed-owner.example"
+
+    node_opts =
+      [upstream: upstream_boundary] ++
+        WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+          calls: %{remote_node => :success}
+        )
+
+    remote_state = remote_owner_state(state, remote_node, node_opts)
+    old_lease = active_owner_lease(state.codex_session.id)
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+    owner_ref = Process.monitor(owner_pid)
+    parent = self()
+
+    try do
+      visible_turn =
+        Task.async(fn ->
+          WebsocketOwnerNodeHarness.with_node_client(
+            [remote_node],
+            [calls: %{remote_node => :success}, notify: parent],
+            fn harness_opts ->
+              Gateway.run_websocket_response(
+                auth,
+                websocket_payload(setup, "visible owner crash"),
+                owner_response_options(
+                  remote_state,
+                  [upstream: upstream_boundary] ++ harness_opts
+                ),
+                fn _data -> :ok end
+              )
+            end
+          )
+        end)
+
+      assert_receive {:visible_blocking_owner_upstream, worker_pid, ^release_ref}, 1_000
+
+      try do
+        assert {:push, {:text, visible_frame}, _remote_state} =
+                 receive_owner_socket_push(remote_state)
+
+        assert owner_response_id(visible_frame) == "resp_owner_visible_before_crash"
+
+        Process.exit(owner_pid, :kill)
+        assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :killed}, 1_000
+        send(worker_pid, {:visible_blocking_owner_release, release_ref})
+
+        assert {:error, %{code: "owner_crashed", status: 502}} =
+                 Task.await(visible_turn, 3_000)
+
+        assert {:error, :owner_unavailable} =
+                 WebsocketOwnerSession.lookup(state.codex_session.id)
+
+        assert active_owner_lease(state.codex_session.id).lease_token == old_lease.lease_token
+        assert Repo.get!(BridgeOwnerLease, old_lease.id).status == "active"
+        assert FakeUpstream.count(upstream) == 0
+      after
+        send(worker_pid, {:visible_blocking_owner_release, release_ref})
+
+        if Process.alive?(visible_turn.pid) do
+          Task.shutdown(visible_turn, :brutal_kill)
+        end
+      end
     after
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
@@ -4802,6 +5335,116 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     |> Jason.encode!()
   end
 
+  defp model_serving_scope do
+    %{user: owner} = CodexPooler.AccountsFixtures.bootstrap_owner_fixture()
+    Scope.for_user(owner, ["instance_owner"])
+  end
+
+  defp set_model_serving_mode!(scope, setup, mode, expected_revision \\ nil) do
+    expected_revision =
+      expected_revision ||
+        case Pools.model_serving_modes_snapshot(scope, setup.pool) do
+          {:ok, snapshot} -> snapshot.revision
+          {:error, error} -> flunk("failed to read model serving modes: #{inspect(error)}")
+        end
+
+    assert {:ok, result} =
+             Pools.update_model_serving_modes(
+               scope,
+               setup.pool,
+               [%{exposed_model_id: setup.model.exposed_model_id, mode: mode}],
+               expected_revision
+             )
+
+    result.revision
+  end
+
+  defp model_serving_owner_payload(setup, label, spoofed_lite_value) do
+    websocket_payload(setup, "synthetic owner mode #{label}", %{
+      "parallel_tool_calls" => true,
+      "reasoning" => %{"effort" => "medium", "context" => "current_turn"},
+      "client_metadata" => %{
+        @responses_lite_client_metadata_key => spoofed_lite_value,
+        "model_serving_mode" => "unknown"
+      }
+    })
+  end
+
+  defp remote_owner_state(state, remote_node, node_opts) do
+    %{
+      state
+      | codex_session: %{
+          state.codex_session
+          | owner_instance_id: Atom.to_string(remote_node)
+        },
+        opts: put_owner_node_opts(state.opts, node_opts)
+    }
+  end
+
+  defp owner_response_options(state, node_opts) do
+    Gateway.websocket_owner_response_options(
+      put_owner_node_opts(state.opts, node_opts),
+      state.codex_session,
+      state.websocket_owner_lease_token,
+      state.websocket_owner_downstream
+    )
+  end
+
+  defp put_owner_node_opts(%RequestOptions{} = opts, node_opts) do
+    RequestOptions.put_transport(opts, websocket_owner_forwarder_opts: node_opts)
+  end
+
+  defp put_owner_node_opts(opts, node_opts) when is_map(opts) do
+    Map.put(opts, :websocket_owner_forwarder_opts, node_opts)
+  end
+
+  defp owner_response_id(frame) do
+    decoded = Jason.decode!(frame)
+    decoded["id"] || get_in(decoded, ["response", "id"])
+  end
+
+  defp assert_canonical_lite_owner_request!(captured) do
+    assert captured.method == "WEBSOCKET"
+
+    assert get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key]) ==
+             "true"
+
+    assert captured.json["parallel_tool_calls"] == false
+    assert get_in(captured.json, ["reasoning", "context"]) == "all_turns"
+  end
+
+  defp assert_canonical_full_owner_request!(captured) do
+    assert captured.method == "WEBSOCKET"
+
+    refute get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key])
+    assert captured.json["parallel_tool_calls"] == true
+    assert get_in(captured.json, ["reasoning", "context"]) == "current_turn"
+  end
+
+  defp assert_owner_mode_accounting!(request, mode, status, remote_node) do
+    expected = %{
+      "model_serving_mode_configured" => mode,
+      "model_serving_mode" => mode,
+      "model_serving_mode_source" => "override"
+    }
+
+    assert request.status == status
+    assert request.transport == "websocket"
+    assert Map.take(request.request_metadata["routing"], @model_serving_metadata_keys) == expected
+
+    owner_metadata = request.request_metadata["websocket_owner_forwarding"]
+    assert owner_metadata["enabled"] == true
+    assert owner_metadata["owner_instance_id"] == Atom.to_string(remote_node)
+    assert owner_metadata["proxy_instance_id"] == Atom.to_string(node())
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == status
+    assert attempt.transport == "websocket"
+
+    assert Map.take(attempt.response_metadata["routing"], @model_serving_metadata_keys) ==
+             expected
+  end
+
   defp ensure_previous_response_alias!(
          %CodexSession{} = session,
          %APIKey{} = api_key,
@@ -5455,6 +6098,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         Agent.update(upstream_pid, fn state -> %{state | closed?: true} end)
         Agent.stop(upstream_pid)
       end
+    }
+  end
+
+  defp visible_blocking_owner_upstream_boundary(test_pid, release_ref) do
+    %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, request, writer ->
+        frame =
+          Jason.encode!(%{"id" => "resp_owner_visible_before_crash", "object" => "response"})
+
+        if is_function(request.frame_observer, 1), do: request.frame_observer.(frame)
+        writer.(frame)
+        send(test_pid, {:visible_blocking_owner_upstream, self(), release_ref})
+
+        receive do
+          {:visible_blocking_owner_release, ^release_ref} -> :ok
+        after
+          5_000 -> exit(:visible_blocking_owner_timeout)
+        end
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
     }
   end
 
