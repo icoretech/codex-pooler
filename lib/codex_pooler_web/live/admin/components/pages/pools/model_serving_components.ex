@@ -5,7 +5,6 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
 
   use CodexPoolerWeb, :html
 
-  alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   @mode_options [
@@ -28,20 +27,16 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
       assigns
       |> assign(:html_form, to_form(%{}, as: :pool_model_serving))
       |> assign(:mode_options, @mode_options)
+      |> assign(:summary, assigns.projection && serving_summary(assigns.projection.rows))
 
     ~H"""
     <section
       id="pool-model-serving-panel"
       data-state={@status}
       aria-busy={to_string(@status in [:idle, :loading])}
-      class="grid min-w-0 gap-5"
+      class="grid min-w-0 gap-4"
     >
-      <div class="flex min-w-0 flex-wrap items-center justify-end gap-2">
-        <h3 id="pool-model-serving-title" class="sr-only">Model serving modes</h3>
-        <span :if={@projection} class={AdminBadges.count_chip_class()}>
-          {length(@projection.rows)} models
-        </span>
-      </div>
+      <h3 id="pool-model-serving-title" class="sr-only">Model serving modes</h3>
 
       <AdminComponents.extended_notice
         :if={@status in [:idle, :loading]}
@@ -81,14 +76,11 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         description={stale_description(@sync_pending?)}
       />
 
-      <AdminComponents.extended_notice
+      <AdminComponents.guidance_notice
         :if={@status not in [:idle, :loading]}
         id="pool-model-serving-guidance"
-        icon="hero-information-circle"
-        tone={:info}
-        role="note"
         title="Choose Auto unless an upstream requires an override"
-        description="Auto is recommended. Full is an advanced provider-dependent override that uses ordinary Responses. Upstream compatibility can change or reject Full requests. Pooler never silently downgrades Full; switch the model back to Auto or Lite to change the configured mode."
+        description="Full is an advanced provider-dependent override using ordinary Responses; upstream compatibility can change or reject it. Pooler never silently downgrades Full — switch a model back to Auto or Lite to change its configured mode."
       />
 
       <div
@@ -111,6 +103,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         for={@html_form}
         phx-change="validate_pool_model_serving"
         phx-submit="save_pool_model_serving"
+        phx-hook="ModelServingTools"
         aria-labelledby="pool-model-serving-title"
         autocomplete="off"
         class="grid min-w-0 gap-3"
@@ -122,74 +115,135 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
           value={@projection.revision}
         />
 
-        <fieldset
-          :for={row <- @projection.rows}
-          id={row.dom_id}
-          data-role="pool-model-serving-row"
-          data-availability={availability(row)}
-          aria-describedby={row_described_by(row)}
-          class="grid min-w-0 gap-3 rounded-box border border-base-300 bg-base-100 p-4"
+        <div
+          id="pool-model-serving-summary"
+          class="flex min-w-0 flex-wrap items-center justify-between gap-x-5 gap-y-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2"
         >
-          <legend class="sr-only">{row.labels.fieldset} — {row.display_name}</legend>
-          <input type="hidden" name={row.identifier_name} value={row.exposed_model_id} />
+          <dl class="flex min-w-0 flex-wrap items-baseline gap-x-5 gap-y-1">
+            <div class="flex items-baseline gap-1.5">
+              <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                Configured
+              </dt>
+              <dd class="text-xs font-medium tabular-nums text-base-content/80">
+                {@summary.configured}
+              </dd>
+            </div>
+            <div class="flex items-baseline gap-1.5">
+              <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                Catalog
+              </dt>
+              <dd class="text-xs font-medium tabular-nums text-base-content/80">
+                {@summary.catalog}
+              </dd>
+            </div>
+            <div class="flex items-baseline gap-1.5">
+              <dt class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+                Effective (available)
+              </dt>
+              <dd class="text-xs font-medium tabular-nums text-base-content/80">
+                {@summary.effective}
+              </dd>
+            </div>
+          </dl>
+          <button
+            id="pool-model-serving-set-all-auto"
+            type="button"
+            data-role="model-serving-set-all-auto"
+            class="btn btn-outline btn-primary btn-xs"
+          >
+            Set all to Auto
+          </button>
+        </div>
 
-          <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-            <div class="grid min-w-0 gap-1">
-              <p class="text-sm font-semibold text-base-content">{row.display_name}</p>
-              <p class="break-all text-xs font-medium leading-5 text-base-content/55">
+        <div class="grid min-w-0 overflow-hidden rounded-box border border-base-300">
+          <div class="hidden items-center gap-x-4 border-b border-base-300 bg-base-200/40 px-3 py-1.5 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50 sm:grid sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem]">
+            <span>Model</span>
+            <span class="text-center">Configured mode</span>
+            <span class="text-right">Effective</span>
+          </div>
+
+          <fieldset
+            :for={row <- @projection.rows}
+            id={row.dom_id}
+            data-role="pool-model-serving-row"
+            data-availability={availability(row)}
+            aria-describedby={row_described_by(row)}
+            class={row_class(row)}
+          >
+            <legend class="sr-only">{row.labels.fieldset} — {row.display_name}</legend>
+            <input type="hidden" name={row.identifier_name} value={row.exposed_model_id} />
+
+            <div class="min-w-0">
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
+                <p class={[
+                  "text-sm font-semibold",
+                  (row.available? && "text-base-content") || "text-base-content/60"
+                ]}>
+                  {row.display_name}
+                </p>
+                <span
+                  :if={!row.available?}
+                  class="rounded border border-warning/40 bg-warning/10 px-1 py-px text-[0.56rem] font-bold uppercase tracking-wide text-warning"
+                >
+                  unavailable
+                </span>
+              </div>
+              <p class={[
+                "break-all text-[0.69rem] font-medium leading-4 tracking-wide text-base-content/50",
+                !row.available? && "line-through decoration-base-content/40"
+              ]}>
                 {row.exposed_model_id}
               </p>
             </div>
-            <span
-              id={"#{row.dom_id}-effective"}
-              data-role="pool-model-serving-effective"
-              data-effective-mode={row.effective_badge.mode}
-              class={effective_badge_class(row.effective_badge.mode)}
-            >
-              {effective_badge_label(row.effective_badge)}
-            </span>
-          </div>
 
-          <div
-            :if={row.warning}
-            id={"#{row.dom_id}-availability-warning"}
-            role="status"
-            class="flex min-w-0 items-start gap-2 rounded-box border border-warning/25 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning"
-          >
-            <.icon name="hero-exclamation-triangle" class="mt-0.5 size-4 shrink-0" />
-            <span>
-              <strong>{availability_warning_label(row)}</strong> {row.warning}.
-            </span>
-          </div>
-
-          <div class="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
-            <label
-              :for={{mode, label, description} <- @mode_options}
-              class={mode_card_class(row, mode)}
-            >
-              <span class="flex min-w-0 items-start gap-3">
+            <div class={[
+              "grid grid-cols-3 overflow-hidden rounded-field border border-base-300 bg-base-100",
+              !row.available? && "opacity-60"
+            ]}>
+              <label
+                :for={{mode, label, description} <- @mode_options}
+                title={description}
+                class="cursor-pointer border-l border-base-300 px-2 py-1.5 text-center text-xs font-semibold text-base-content/70 transition-colors first:border-l-0 hover:bg-base-200 has-[:checked]:bg-primary has-[:checked]:text-primary-content has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-primary"
+              >
                 <input
                   id={Map.fetch!(row.input_ids, mode)}
                   type="radio"
-                  class="radio radio-primary radio-sm mt-0.5 shrink-0"
+                  class="sr-only"
                   name={row.mode_name}
                   value={Atom.to_string(mode)}
                   checked={row.configured_mode == Atom.to_string(mode)}
-                  aria-describedby={"#{Map.fetch!(row.input_ids, mode)}-help"}
                 />
-                <span class="grid min-w-0 gap-1">
-                  <span class="text-sm font-semibold text-base-content">{label}</span>
-                  <span
-                    id={"#{Map.fetch!(row.input_ids, mode)}-help"}
-                    class="text-xs leading-5 text-base-content/60"
-                  >
-                    {description}
-                  </span>
+                {label}
+              </label>
+            </div>
+
+            <div class="flex min-w-0 justify-end">
+              <span
+                id={"#{row.dom_id}-effective"}
+                data-role="pool-model-serving-effective"
+                data-effective-mode={row.effective_badge.mode}
+                class={effective_pill_class(row)}
+              >
+                <span class="text-[0.56rem] font-semibold uppercase tracking-wide opacity-80">
+                  {effective_pill_prefix(row)}
                 </span>
+                {effective_pill_text(row)}
               </span>
-            </label>
-          </div>
-        </fieldset>
+            </div>
+
+            <div
+              :if={row.warning}
+              id={"#{row.dom_id}-availability-warning"}
+              role="status"
+              class="col-span-full flex min-w-0 items-start gap-1.5 text-xs leading-5 text-warning"
+            >
+              <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                <strong>{availability_warning_label(row)}</strong> {row.warning}.
+              </span>
+            </div>
+          </fieldset>
+        </div>
       </.form>
     </section>
     """
@@ -203,28 +257,61 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp row_described_by(%{dom_id: dom_id}),
     do: "#{dom_id}-effective #{dom_id}-availability-warning"
 
-  defp effective_badge_class("lite"), do: AdminBadges.metadata_chip_class(:info)
-  defp effective_badge_class(_mode), do: AdminBadges.metadata_chip_class(:neutral)
+  defp row_class(row) do
+    [
+      "grid min-w-0 grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-base-300/70 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem]",
+      !row.available? && "bg-base-content/3"
+    ]
+  end
+
+  defp serving_summary(rows) do
+    configured = Enum.frequencies_by(rows, & &1.configured_mode)
+    available = Enum.count(rows, & &1.available?)
+    unavailable = length(rows) - available
+
+    effective =
+      rows
+      |> Enum.filter(& &1.available?)
+      |> Enum.frequencies_by(& &1.effective_badge.mode)
+
+    %{
+      configured:
+        "#{Map.get(configured, "auto", 0)} Auto · #{Map.get(configured, "lite", 0)} Lite · #{Map.get(configured, "full", 0)} Full",
+      catalog: "#{available} available · #{unavailable} unavailable",
+      effective: "#{Map.get(effective, "full", 0)} Full · #{Map.get(effective, "lite", 0)} Lite"
+    }
+  end
+
+  defp effective_pill_prefix(%{available?: false, effective_badge: %{mode: "removed"}}),
+    do: "removed"
+
+  defp effective_pill_prefix(%{available?: false}), do: "retained"
+  defp effective_pill_prefix(%{source: "override"}), do: "forced"
+  defp effective_pill_prefix(_row), do: "resolves"
+
+  defp effective_pill_text(%{effective_badge: %{mode: "removed"}}), do: "—"
+  defp effective_pill_text(%{effective_badge: %{mode: mode}}), do: String.capitalize(mode)
+
+  defp effective_pill_class(row) do
+    [
+      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[0.68rem] font-bold",
+      effective_pill_tone(row)
+    ]
+  end
+
+  defp effective_pill_tone(%{available?: false}),
+    do: "border-dashed border-base-content/25 text-base-content/50"
+
+  defp effective_pill_tone(%{effective_badge: %{mode: "lite"}}),
+    do: "border-info/40 bg-info/15 text-info"
+
+  defp effective_pill_tone(_row),
+    do: "border-base-300 bg-base-content/5 text-base-content/70"
 
   defp availability_warning_label(%{configured_mode: "auto"}),
     do: "Will be removed on save."
 
   defp availability_warning_label(_row), do: "Saved setting retained."
-
-  defp effective_badge_label(%{mode: "removed", label: label}), do: label
-
-  defp effective_badge_label(%{mode: mode}),
-    do: "Effective #{String.capitalize(mode)}"
-
-  defp mode_card_class(row, mode) do
-    selected? = row.configured_mode == Atom.to_string(mode)
-
-    [
-      "grid min-w-0 cursor-pointer gap-2 rounded-box border p-3 transition-colors hover:bg-base-200",
-      selected? && "border-primary bg-primary/10",
-      !selected? && "border-base-300 bg-base-100"
-    ]
-  end
 
   defp stale_description(true) do
     "The catalog or saved modes changed while you were editing. Your unsaved choices are preserved; retry Save model modes to apply them to the latest saved revision. Reopen after saving to include newly synced models."

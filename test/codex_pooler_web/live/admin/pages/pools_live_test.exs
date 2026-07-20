@@ -1882,18 +1882,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-model-serving-revision[name='pool_model_serving[revision]']"
            )
 
-    assert has_element?(view, "#pool-model-serving-guidance[role='note']", "Auto is recommended")
-
     assert has_element?(
              view,
-             "#pool-model-serving-guidance",
-             "Full is an advanced provider-dependent override that uses ordinary Responses"
+             "#pool-model-serving-guidance[role='note']",
+             "Choose Auto unless an upstream requires an override"
            )
 
     assert has_element?(
              view,
              "#pool-model-serving-guidance",
-             "Upstream compatibility can change or reject Full requests"
+             "Full is an advanced provider-dependent override using ordinary Responses"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-model-serving-guidance",
+             "upstream compatibility can change or reject it"
            )
 
     assert has_element?(
@@ -1915,13 +1919,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "##{auto_row_id}-effective[data-role='pool-model-serving-effective'][data-effective-mode='lite']",
-             "Effective Lite"
+             "resolves Lite"
            )
 
     for mode <- ~w(auto lite full) do
       assert has_element?(
                view,
-               "##{auto_row_id}-#{mode}[type='radio'][name='pool_model_serving[rows][0][mode]'][aria-describedby='#{auto_row_id}-#{mode}-help']"
+               "##{auto_row_id}-#{mode}[type='radio'][name='pool_model_serving[rows][0][mode]']"
              )
     end
 
@@ -1956,7 +1960,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "##{unavailable_row_id}-effective[data-effective-mode='removed']",
-             "Will be removed on save"
+             "removed"
            )
 
     assert has_element?(
@@ -2116,7 +2120,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "##{row_id}-effective[data-role='pool-model-serving-effective'][data-effective-mode='full']",
-             "Effective Full"
+             "resolves Full"
            )
   end
 

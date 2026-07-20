@@ -235,6 +235,35 @@ const AssignmentTools = {
 		}
 	},
 };
+const ModelServingTools = {
+	mounted() {
+		this.onClick = (event) => {
+			const trigger = event.target.closest("[data-role='model-serving-set-all-auto']");
+
+			if (!trigger || !this.el.contains(trigger)) {
+				return;
+			}
+
+			let changed = null;
+
+			for (const radio of this.el.querySelectorAll("input[type='radio'][value='auto']")) {
+				if (!radio.disabled && !radio.checked) {
+					radio.checked = true;
+					changed = radio;
+				}
+			}
+
+			if (changed) {
+				changed.dispatchEvent(new Event("input", { bubbles: true }));
+			}
+		};
+
+		this.el.addEventListener("click", this.onClick);
+	},
+	destroyed() {
+		this.el.removeEventListener("click", this.onClick);
+	},
+};
 const ClipboardCopy = {
 	mounted() {
 		this.el.addEventListener("click", async () => {
@@ -1274,6 +1303,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		CallyDatePicker,
 		ClipboardCopy,
 		FlashAutoDismiss,
+		ModelServingTools,
 		OtpInput,
 		ObservatoryRefresh,
 		QuotaPressureChart,

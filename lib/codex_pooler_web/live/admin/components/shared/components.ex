@@ -560,6 +560,37 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :description, :string, required: true
+  attr :role, :string, default: "note"
+
+  @doc """
+  Quiet, permanent instructional callout.
+
+  Use for guidance copy that always accompanies a control. Transient state
+  communication (loading, errors, stale data) belongs to `extended_notice/1`.
+  """
+  def guidance_notice(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      role={@role}
+      class="flex min-w-0 items-start gap-2.5 rounded-box border border-base-300 border-l-[3px] border-l-primary bg-primary/5 px-3 py-2 text-xs leading-5"
+    >
+      <span
+        aria-hidden="true"
+        class="mt-0.5 grid size-4 flex-none place-items-center rounded-full border-[1.5px] border-primary text-[0.6rem] font-bold text-primary"
+      >
+        !
+      </span>
+      <p class="min-w-0 text-base-content/70">
+        <strong class="font-semibold text-base-content">{@title}.</strong> {@description}
+      </p>
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
   attr :icon, :string, default: nil
   attr :label, :string, required: true
   attr :type, :string, default: "button"
