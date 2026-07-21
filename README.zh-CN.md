@@ -1718,11 +1718,9 @@ OpenAI SDK base URL:    http://localhost:4000/v1
 接入具体工具时请使用客户端指南。概览上，客户端选择两种公开形态之一：
 
 - **Codex 后端客户端** 使用 `/backend-api/codex` 以获得 Codex-native 行为，
-  例如会话、压缩、文件、音频、图片和后端 websockets。原始 Responses 流保留
-  上游 `response.done` 和旧式无类型成功 payload
+  例如会话、压缩、文件、音频、图片和后端 websockets。
 - **OpenAI 兼容客户端** 使用 `/v1` 访问受支持的 SDK 风格 Responses、chat、文件、
-  音频、图片和模型列表调用。公开 Responses 流会把这些成功终止 payload
-  规范化为 `response.completed`
+  音频、图片和模型列表调用。
 
 两个路径都使用 Pool API 密钥认证，并通过同一套 Pool 策略、账号健康状态、模型
 支持、额度证据、会话连续性和仅元数据计费进行路由。Codex Pooler 有意不做通配的
