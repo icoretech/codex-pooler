@@ -449,7 +449,10 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
       from(audit in AuditEvent, where: audit.id == ^event.id)
       |> Repo.update_all(set: [occurred_at: ~U[2026-05-27 13:45:06Z]])
 
-    {:ok, view, _html} = live(conn, ~p"/admin/audit-logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/audit-logs?target=#{user.id}")
+
+    assert %{datetime_format: "short", timezone: "Europe/Rome"} =
+             :sys.get_state(view.pid).socket.assigns.datetime_preferences
 
     assert has_element?(view, "#audit-log-time-#{event.id}", "2026-05-27 15:45")
     assert has_element?(view, "#mobile-audit-log-time-#{event.id}", "2026-05-27 15:45")

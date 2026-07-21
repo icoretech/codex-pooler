@@ -1371,6 +1371,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     view |> element("#pool-create-cancel") |> render_click()
     view |> element("#edit-pool-#{pool.id}") |> render_click()
 
+    # Opening edit mode starts the model-serving database load. Complete it
+    # before sandbox teardown so its task cannot lose its checked-out connection.
+    _ = render_async(view)
+
     assert_pool_wizard_tab_order(view, "pool-edit-dialog", [
       {"details", "Details"},
       {"routing", "Routing"},
