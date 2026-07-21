@@ -4,6 +4,74 @@ defmodule CodexPooler.Accounting.MetadataTest do
   alias CodexPooler.Accounting
 
   describe "sanitize_metadata/1" do
+    test "bridge commitment accepts only its exact string key with a boolean value" do
+      assert Accounting.sanitize_metadata(%{"bridge_committed" => true}) == %{
+               "bridge_committed" => true
+             }
+
+      assert Accounting.sanitize_metadata(%{"bridge_committed" => false}) == %{
+               "bridge_committed" => false
+             }
+
+      invalid_values = [nil, 0, 1, "true", [], %{}, self()]
+
+      Enum.each(invalid_values, fn value ->
+        refute Map.has_key?(
+                 Accounting.sanitize_metadata(%{"bridge_committed" => value}),
+                 "bridge_committed"
+               )
+      end)
+
+      refute Map.has_key?(
+               Accounting.sanitize_metadata(%{bridge_committed: true}),
+               :bridge_committed
+             )
+    end
+
+    test "peer close diagnostics accept only bounded string-keyed values without changing bridge commitment" do
+      sanitized =
+        Accounting.sanitize_metadata(%{
+          "bridge_committed" => true,
+          "transport_failure" => %{
+            "peer_close_code" => 1000,
+            "peer_close_reason_present" => true,
+            "peer_close_reason_bytes" => 123
+          }
+        })
+
+      assert sanitized == %{
+               "bridge_committed" => true,
+               "transport_failure" => %{
+                 "peer_close_code" => 1000,
+                 "peer_close_reason_present" => true,
+                 "peer_close_reason_bytes" => 123
+               }
+             }
+
+      invalid_fields = [
+        {"peer_close_code", -1},
+        {"peer_close_code", 65_536},
+        {"peer_close_code", "1000"},
+        {"peer_close_reason_present", 1},
+        {"peer_close_reason_bytes", -1},
+        {"peer_close_reason_bytes", 124},
+        {:peer_close_code, 1000},
+        {:peer_close_reason_present, true},
+        {:peer_close_reason_bytes, 12}
+      ]
+
+      for {key, value} <- invalid_fields do
+        sanitized =
+          Accounting.sanitize_metadata(%{
+            "bridge_committed" => false,
+            "transport_failure" => %{key => value}
+          })
+
+        assert sanitized["bridge_committed"] == false
+        refute Map.has_key?(sanitized["transport_failure"], key)
+      end
+    end
+
     test "routing serving mode metadata keeps only a valid bounded snapshot" do
       assert %{
                "routing" => %{

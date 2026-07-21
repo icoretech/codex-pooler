@@ -1411,7 +1411,18 @@ defmodule CodexPooler.CompatibilityMatrix do
       },
       fallback: %{
         boundary: "first_downstream_visible_public_event",
-        internal_events: "buffered_never_committing",
+        precommit_buffer_event_types: [
+          "response.created",
+          "response.in_progress",
+          "response.queued",
+          "codex.rate_limits"
+        ],
+        unknown_typed_event: :commit,
+        legacy_typeless_success: :completed_preserve_raw,
+        backend_done_event: :preserve,
+        public_http_done_event: :response_completed,
+        public_websocket_done_event: :response_completed,
+        synthetic_missing_terminal_surfaces: ["public_post_http_sse"],
         target: "same_candidate_same_attempt_http",
         settlements: 1,
         post_visible_upstream_death: "failed_request",

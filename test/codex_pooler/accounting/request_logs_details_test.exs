@@ -775,6 +775,85 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     end
   end
 
+  test "request log detail projects bounded peer close diagnostics only through transport failure" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    raw_reason = "peer-close-private-sentinel-cafebabedeadbeef"
+    lifecycle_id = Ecto.UUID.generate()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-peer-close-debug",
+        status: "failed",
+        correlation_id: "peer-close-debug"
+      })
+
+    response_metadata =
+      Accounting.sanitize_metadata(%{
+        "transport_failure" => %{
+          "reason" => "upstream_websocket_closed_before_terminal",
+          "reason_class" => "upstream_websocket_closed_before_terminal",
+          "phase" => "upstream_close",
+          "pre_visible_output" => true,
+          "terminal_seen" => false,
+          "text_frame_count" => 0,
+          "peer_close_code" => 1000,
+          "peer_close_reason_present" => true,
+          "peer_close_reason_bytes" => byte_size(raw_reason),
+          "peer_close_reason" => raw_reason
+        },
+        "upstream_websocket_connection" => %{
+          "lifecycle_id" => lifecycle_id,
+          "generation" => 1,
+          "reused" => false,
+          "reconnected" => false
+        }
+      })
+
+    request
+    |> attempt_fixture(assignment, %{status: "failed", response_metadata: response_metadata})
+    |> Ecto.Changeset.change(%{
+      network_error_code: "upstream_websocket_closed_before_terminal",
+      error_message: "upstream_websocket_closed_before_terminal"
+    })
+    |> Repo.update!()
+
+    {log, captured_logs} =
+      with_log(fn ->
+        assert %{items: [log], total: 1} =
+                 Accounting.list_request_logs(pool, surface: :admin)
+
+        log
+      end)
+
+    assert [attempt] = log.debug.attempts
+
+    assert attempt.transport_failure == %{
+             reason: "upstream_websocket_closed_before_terminal",
+             reason_class: "upstream_websocket_closed_before_terminal",
+             phase: "upstream_close",
+             pre_visible_output: true,
+             terminal_seen: false,
+             text_frame_count: 0,
+             peer_close_code: 1000,
+             peer_close_reason_present: true,
+             peer_close_reason_bytes: byte_size(raw_reason)
+           }
+
+    assert attempt.upstream_websocket_connection == %{
+             lifecycle_id: lifecycle_id,
+             generation: 1,
+             reused: false,
+             reconnected: false
+           }
+
+    assert Enum.sort(Map.keys(attempt.upstream_websocket_connection)) ==
+             [:generation, :lifecycle_id, :reconnected, :reused]
+
+    refute inspect(log) =~ raw_reason
+    refute captured_logs =~ raw_reason
+  end
+
   defp debug_turn_fixture(pool, api_key, assignment, request, final_attempt_id) do
     now = ~U[2026-05-26 00:00:00.000000Z]
 

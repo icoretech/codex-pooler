@@ -14,6 +14,33 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
   end
 
   describe "initial_state/2 and normalize_data/4" do
+    test "marks only websocket bridge response sources as committed" do
+      opts = public_responses_stream_opts()
+
+      assert %{bridge_committed?: true, target: :relay} =
+               DownstreamStream.initial_state(:relay, opts, :websocket_bridge)
+
+      refute Map.has_key?(DownstreamStream.initial_state(:relay, opts, :http), :bridge_committed?)
+      refute Map.has_key?(DownstreamStream.initial_state(:relay, opts), :bridge_committed?)
+    end
+
+    test "synthesizes a terminal after a hidden bridge commit" do
+      opts = public_responses_stream_opts()
+      initial_state = DownstreamStream.initial_state(:relay, opts, :websocket_bridge)
+
+      reason = %Finch.TransportError{reason: :closed}
+
+      assert DownstreamStream.terminal_missing_interruption_reason(initial_state, reason) ==
+               {:upstream_stream_interrupted, reason}
+
+      assert {failure, state} =
+               DownstreamStream.synthetic_terminal_failure(initial_state, :upstream_interrupted)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(failure)
+      assert data["type"] == "response.failed"
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+    end
+
     test "keep public OpenAI chat stream parser state beside the relay target" do
       opts =
         RequestOptions.build(
@@ -345,7 +372,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert DownstreamStream.keepalive_allowed?(state)
     end
 
-    test "tracks oversized public OpenAI Responses terminal passthrough" do
+    test "buffers and normalizes oversized public OpenAI Responses terminal output" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -387,13 +414,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       first = binary_part(terminal, 0, split_at)
       second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
 
-      assert {^first, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(first, "/v1/responses", opts, state)
 
       assert is_nil(DownstreamStream.terminal_outcome(state))
 
-      assert {^second, state} =
+      assert {chunk, state} =
                DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
+
+      assert [
+               %{"event" => "response.created"},
+               %{"event" => "response.output_text.delta"},
+               %{"event" => "response.completed"}
+             ] = public_sse_events(chunk)
 
       assert DownstreamStream.terminal_outcome(state) == :completed
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
@@ -451,7 +484,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
     end
 
-    test "tracks failure-coded oversized public OpenAI Responses incomplete passthrough" do
+    test "buffers and normalizes failure-coded oversized public OpenAI Responses incomplete" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -493,21 +526,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       first = binary_part(terminal, 0, split_at)
       second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
 
-      assert {^first, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(first, "/v1/responses", opts, state)
 
       assert is_nil(DownstreamStream.terminal_outcome(state))
 
-      assert {^second, state} =
+      assert {chunk, state} =
                DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
 
+      assert [%{"event" => "response.failed"}] = public_sse_events(chunk)
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.code == "context_length_exceeded"
-      assert failure.event_type == "response.incomplete"
+      assert failure.event_type == "response.failed"
       assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, :interrupted)
     end
 
-    test "prefers specific error.code in oversized public OpenAI Responses failures" do
+    test "buffers oversized public OpenAI Responses failures and prefers specific error.code" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -556,14 +590,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       first = binary_part(terminal, 0, split_at)
       second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
 
-      assert {^first, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(first, "/v1/responses", opts, state)
 
       assert is_nil(DownstreamStream.terminal_outcome(state))
 
-      assert {^second, state} =
+      assert {chunk, state} =
                DownstreamStream.normalize_data(second, "/v1/responses", opts, state)
 
+      assert [%{"event" => "response.failed"}] = public_sse_events(chunk)
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.code == "context_length_exceeded"
       assert failure.upstream_code == "context_length_exceeded"

@@ -65,6 +65,7 @@ codex_pooler-*.tar
 # In case you use Node.js/npm, you want to ignore these.
 npm-debug.log
 /assets/node_modules/
+/test/contract_probes/ai_sdk_openai/node_modules/
 
 # Generated docs-site artifacts.
 docs-site/node_modules/

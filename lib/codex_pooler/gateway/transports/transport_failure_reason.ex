@@ -41,7 +41,27 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "phase" => safe_phase(Map.get(attrs, :phase) || Map.get(attrs, "phase")),
       "pre_visible_output" => safe_boolean(Map.get(attrs, :pre_visible_output)),
       "terminal_seen" => safe_boolean(Map.get(attrs, :terminal_seen)),
-      "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count))
+      "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count)),
+      "peer_close_code" =>
+        safe_peer_close_code(metadata_attr(attrs, "peer_close_code", :peer_close_code)),
+      "peer_close_reason_present" =>
+        safe_boolean(
+          metadata_attr(attrs, "peer_close_reason_present", :peer_close_reason_present)
+        ),
+      "peer_close_reason_bytes" =>
+        safe_peer_close_reason_bytes(
+          metadata_attr(attrs, "peer_close_reason_bytes", :peer_close_reason_bytes)
+        )
+    }
+    |> compact_metadata()
+  end
+
+  @spec peer_close_metadata(term(), term()) :: transport_failure_metadata()
+  def peer_close_metadata(code, reason) do
+    %{
+      "peer_close_code" => safe_peer_close_code(code),
+      "peer_close_reason_present" => is_binary(reason) and reason != "",
+      "peer_close_reason_bytes" => peer_close_reason_bytes(reason)
     }
     |> compact_metadata()
   end
@@ -168,6 +188,22 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
 
   defp safe_non_negative_integer(value) when is_integer(value) and value >= 0, do: value
   defp safe_non_negative_integer(_value), do: nil
+
+  defp safe_peer_close_code(value) when is_integer(value) and value in 0..65_535, do: value
+  defp safe_peer_close_code(_value), do: nil
+
+  defp safe_peer_close_reason_bytes(value) when is_integer(value) and value in 0..123, do: value
+  defp safe_peer_close_reason_bytes(_value), do: nil
+
+  defp peer_close_reason_bytes(reason) when is_binary(reason), do: min(byte_size(reason), 123)
+  defp peer_close_reason_bytes(_reason), do: 0
+
+  defp metadata_attr(attrs, string_key, atom_key) do
+    case Map.fetch(attrs, string_key) do
+      {:ok, value} -> value
+      :error -> Map.get(attrs, atom_key)
+    end
+  end
 
   defp truncate_reason(reason) when byte_size(reason) > @max_reason_length,
     do: binary_part(reason, 0, @max_reason_length)

@@ -1,0 +1,13 @@
+{
+  "opencode_version": "1.18.3",
+  "source_commit": "67caf894e0843ee370e72839e8265e483233479b",
+  "source_file": "packages/opencode/src/session/llm/ai-sdk.ts",
+  "source_file_sha256": "b6d7f65fa6c4506e59ce8426b4c7a3eb89298b3a530b6d040fdc7ad32e2a836b",
+  "byte_span": {
+    "start": 8773,
+    "end": 8824
+  },
+  "byte_span_sha256": "9ab7d8be57f7e177b1034df8dd018009bb1ebc469bab43f9bbe3021b50f24478",
+  "normalized_ast_sha256": "808ed4d8a4ac51d47d6088b60311964159b831e5650298d12fe2b9fa2ab9b465",
+  "generated_file_sha256": "f684904ef53a0f4df798d8aa0d1e6846d8fa97f6185bea121d7bf67b013714f4"
+}

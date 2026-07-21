@@ -329,6 +329,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "public_openai_responses_stream" ->
         sanitize_public_openai_responses_stream_map(value)
 
+      normalized == "transport_failure" ->
+        sanitize_transport_failure_map(value)
+
       normalized == "routing" ->
         sanitize_routing_map(value)
 
@@ -339,9 +342,7 @@ defmodule CodexPooler.Accounting.Metadata do
         @redacted
 
       true ->
-        Map.new(value, fn {child_key, child_value} ->
-          {child_key, sanitize_value(child_value, child_key)}
-        end)
+        sanitize_map(value)
     end
   end
 
@@ -366,8 +367,53 @@ defmodule CodexPooler.Accounting.Metadata do
     if public_openai_responses_stream_key?(key), do: %{}, else: value
   end
 
+  defp sanitize_map(value) do
+    Enum.reduce(value, %{}, fn
+      {"bridge_committed", child_value}, sanitized when is_boolean(child_value) ->
+        Map.put(sanitized, "bridge_committed", child_value)
+
+      {"bridge_committed", _child_value}, sanitized ->
+        sanitized
+
+      {child_key, _child_value}, sanitized when child_key == :bridge_committed ->
+        sanitized
+
+      {child_key, child_value}, sanitized ->
+        Map.put(sanitized, child_key, sanitize_value(child_value, child_key))
+    end)
+  end
+
   defp sanitize_payload_compression_map(value) when is_map(value),
     do: RequestCompressionMetadata.sanitize_map(value)
+
+  defp sanitize_transport_failure_map(value) do
+    Enum.reduce(value, %{}, fn
+      {"peer_close_code", child_value}, sanitized
+      when is_integer(child_value) and child_value in 0..65_535 ->
+        Map.put(sanitized, "peer_close_code", child_value)
+
+      {"peer_close_reason_present", child_value}, sanitized when is_boolean(child_value) ->
+        Map.put(sanitized, "peer_close_reason_present", child_value)
+
+      {"peer_close_reason_bytes", child_value}, sanitized
+      when is_integer(child_value) and child_value in 0..123 ->
+        Map.put(sanitized, "peer_close_reason_bytes", child_value)
+
+      {child_key, _child_value}, sanitized
+      when child_key in [
+             :peer_close_code,
+             :peer_close_reason_present,
+             :peer_close_reason_bytes
+           ] ->
+        sanitized
+
+      {"peer_close_" <> _suffix, _child_value}, sanitized ->
+        sanitized
+
+      {child_key, child_value}, sanitized ->
+        Map.put(sanitized, child_key, sanitize_value(child_value, child_key))
+    end)
+  end
 
   defp sanitize_routing_map(value) do
     value

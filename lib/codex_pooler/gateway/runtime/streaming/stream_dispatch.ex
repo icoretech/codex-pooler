@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
 
   @sse_keepalive_frame ": keepalive\n\n"
@@ -73,7 +74,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       response_context = %ResponseContext{context: context, response: response}
 
       StreamRelay.run(
-        stream_relay_state(conn, context.request_options),
+        stream_relay_state(conn, context.request_options, response),
         response,
         stream_relay_handlers(response_context, response, :http_conn, callbacks)
       )
@@ -86,7 +87,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       response_context = %ResponseContext{context: context, response: response}
 
       StreamRelay.run(
-        stream_relay_state(:websocket, context.request_options),
+        stream_relay_state(:websocket, context.request_options, response),
         response,
         stream_relay_handlers(response_context, response, {:websocket, writer}, callbacks)
       )
@@ -159,24 +160,28 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp visible_websocket_data?(data), do: is_binary(data) and data != ""
 
-  defp stream_relay_state(:websocket = target, %RequestOptions{} = opts) do
+  defp stream_relay_state(:websocket = target, %RequestOptions{} = opts, response) do
     target
-    |> base_stream_relay_state(opts)
+    |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> Map.put(:websocket_sse_buffer, "")
   end
 
-  defp stream_relay_state(target, %RequestOptions{} = opts) do
+  defp stream_relay_state(target, %RequestOptions{} = opts, response) do
     target
-    |> base_stream_relay_state(opts)
+    |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
   end
 
-  defp base_stream_relay_state(target, %RequestOptions{} = opts) do
-    DownstreamStream.initial_state(target, opts)
+  defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
+    DownstreamStream.initial_state(target, opts, stream_source(response))
   end
+
+  @spec stream_source(Req.Response.t()) :: DownstreamStream.source()
+  defp stream_source(%Req.Response{body: %WebsocketBridgeStream{}}), do: :websocket_bridge
+  defp stream_source(%Req.Response{}), do: :http
 
   defp relay_target(%{target: target}), do: target
 

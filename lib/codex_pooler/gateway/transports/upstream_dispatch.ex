@@ -370,6 +370,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
          openai_compatibility: openai_compatibility,
          continuity: %{codex_session: continuity_session},
          transport: %{
+           upstream_websocket_bridge?: upstream_websocket_bridge?,
            websocket_owner: %{
              session: owner_session,
              lease_token: owner_lease_token,
@@ -386,7 +387,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
            validate_owner_downstream(
              downstream,
              downstream_epoch,
-             openai_compatibility.public_openai_responses_stream
+             openai_compatibility.public_openai_responses_stream,
+             upstream_websocket_bridge?
            ),
          :ok <- validate_owner_instances(proxy_instance_id, owner_instance_id, owner_session),
          :ok <- validate_owner_forwarder_opts(forwarder_opts) do
@@ -416,7 +418,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  defp validate_owner_downstream(downstream, downstream_epoch, public_responses_stream?) do
+  defp validate_owner_downstream(
+         downstream,
+         downstream_epoch,
+         public_responses_stream?,
+         upstream_websocket_bridge?
+       ) do
     cond do
       not owner_downstream?(downstream) ->
         {:error, :stale_owner}
@@ -424,13 +431,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       not owner_downstream_epoch_matches?(downstream_epoch, downstream) ->
         {:error, :stale_owner}
 
-      public_responses_stream? and not valid_public_owner_turn_downstream?(downstream) ->
-        {:error, :stale_owner}
-
       true ->
-        :ok
+        validate_owner_downstream_contract(
+          downstream,
+          public_responses_stream?,
+          upstream_websocket_bridge?
+        )
     end
   end
+
+  defp validate_owner_downstream_contract(_downstream, false, _upstream_websocket_bridge?),
+    do: :ok
+
+  defp validate_owner_downstream_contract(downstream, true, true),
+    do: valid_owner_downstream_result(valid_bridge_owner_downstream?(downstream))
+
+  defp validate_owner_downstream_contract(downstream, true, false),
+    do: valid_owner_downstream_result(valid_public_owner_turn_downstream?(downstream))
+
+  defp valid_owner_downstream_result(true), do: :ok
+  defp valid_owner_downstream_result(false), do: {:error, :stale_owner}
 
   defp validate_owner_instances(proxy_instance_id, owner_instance_id, owner_session) do
     cond do
@@ -474,6 +494,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       Enum.all?(@public_per_call_downstream_keys, &Map.has_key?(downstream, &1)) and
       is_pid(Map.get(downstream, :owner_turn_id)) and
       Map.get(downstream, :owner_turn_id) == self() and
+      is_boolean(Map.get(downstream, :active_turn_reconnect?))
+  end
+
+  defp valid_bridge_owner_downstream?(downstream) do
+    map_size(downstream) == length(@stable_downstream_keys) and
+      Enum.all?(@stable_downstream_keys, &Map.has_key?(downstream, &1)) and
       is_boolean(Map.get(downstream, :active_turn_reconnect?))
   end
 

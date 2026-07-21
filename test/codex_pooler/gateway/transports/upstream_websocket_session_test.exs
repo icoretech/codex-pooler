@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
 
+  import ExUnit.CaptureLog
+
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
   @tag :task_1_pin
@@ -394,6 +396,47 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute inspect(failure.upstream_websocket_connection) =~ "pid"
     refute inspect(failure.upstream_websocket_connection) =~ "node"
     refute inspect(failure.upstream_websocket_connection) =~ "socket"
+  end
+
+  test "peer close exposes only bounded diagnostics and discards the raw reason immediately" do
+    raw_reason = "peer-close-private-sentinel-deadbeefcafefeed"
+
+    upstream =
+      start_upstream(FakeUpstream.websocket_sse_then_close([], code: 1000, reason: raw_reason))
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    {result, captured_log} =
+      with_log(fn ->
+        UpstreamWebsocketSession.request(
+          session,
+          websocket_request(FakeUpstream.url(upstream))
+        )
+      end)
+
+    assert {:error, failure} = result
+    assert failure.reason == :upstream_websocket_closed_before_terminal
+
+    assert Map.take(failure.transport_failure, [
+             "peer_close_code",
+             "peer_close_reason_present",
+             "peer_close_reason_bytes"
+           ]) == %{
+             "peer_close_code" => 1000,
+             "peer_close_reason_present" => true,
+             "peer_close_reason_bytes" => byte_size(raw_reason)
+           }
+
+    session_state = :sys.get_state(session)
+    exception_text = Exception.format(:error, RuntimeError.exception(inspect(failure)), [])
+
+    for surface <- [failure, session_state, exception_text, captured_log] do
+      refute inspect(surface) =~ raw_reason
+    end
+
+    assert Enum.sort(Map.keys(failure.upstream_websocket_connection)) ==
+             [:generation, :lifecycle_id, :reconnected, :reused]
   end
 
   test "reused request returns unavailable error when session process is gone" do

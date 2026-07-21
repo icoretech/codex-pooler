@@ -363,6 +363,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
            }
   end
 
+  test "stream state metadata preserves only a boolean bridge commitment marker" do
+    assert Metadata.merge_stream_state_metadata(%{}, %{bridge_committed?: true}) == %{
+             "bridge_committed" => true
+           }
+
+    assert Metadata.merge_stream_state_metadata(%{}, %{bridge_committed?: false}) == %{
+             "bridge_committed" => false
+           }
+
+    assert Metadata.merge_stream_state_metadata(%{}, %{bridge_committed?: "true"}) == %{}
+  end
+
   test "first-event metadata ignores missing and unknown rate limit reached types" do
     failure = %{
       code: "usage_limit_exceeded",

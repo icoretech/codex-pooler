@@ -159,6 +159,14 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
       :text_frame_count,
       transport_failure_value(transport_failure, "text_frame_count")
     )
+    |> put_peer_close_code(transport_failure_value(transport_failure, "peer_close_code"))
+    |> put_transport_failure_boolean(
+      :peer_close_reason_present,
+      transport_failure_value(transport_failure, "peer_close_reason_present")
+    )
+    |> put_peer_close_reason_bytes(
+      transport_failure_value(transport_failure, "peer_close_reason_bytes")
+    )
   end
 
   @spec transport_failure_value(map(), String.t()) :: term()
@@ -176,6 +184,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
   defp transport_failure_atom_key("pre_visible_output"), do: :pre_visible_output
   defp transport_failure_atom_key("terminal_seen"), do: :terminal_seen
   defp transport_failure_atom_key("text_frame_count"), do: :text_frame_count
+  defp transport_failure_atom_key("peer_close_code"), do: :peer_close_code
+  defp transport_failure_atom_key("peer_close_reason_present"), do: :peer_close_reason_present
+  defp transport_failure_atom_key("peer_close_reason_bytes"), do: :peer_close_reason_bytes
 
   defp put_transport_failure_text(metadata, key, value) when is_binary(value) do
     value = String.trim(value)
@@ -210,6 +221,17 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
     do: Map.put(metadata, key, value)
 
   defp put_transport_failure_integer(metadata, _key, _value), do: metadata
+
+  defp put_peer_close_code(metadata, value) when is_integer(value) and value in 0..65_535,
+    do: Map.put(metadata, :peer_close_code, value)
+
+  defp put_peer_close_code(metadata, _value), do: metadata
+
+  defp put_peer_close_reason_bytes(metadata, value)
+       when is_integer(value) and value in 0..123,
+       do: Map.put(metadata, :peer_close_reason_bytes, value)
+
+  defp put_peer_close_reason_bytes(metadata, _value), do: metadata
 
   defp safe_transport_failure_text?(value) do
     value != "" and byte_size(value) <= 96 and

@@ -188,6 +188,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     |> put_summary_terminal(:failed, "failed")
   end
 
+  @spec track_synthetic_terminal_failure(state()) :: {non_neg_integer(), state()}
+  def track_synthetic_terminal_failure(state) do
+    synthetic_terminal = %{
+      "type" => "response.failed",
+      "response" => %{"status" => "failed"}
+    }
+
+    {:emit, "response.failed", %{"sequence_number" => sequence_number}, sequence_state} =
+      PublicResponsesSequence.assign(
+        "response.failed",
+        synthetic_terminal,
+        state.sequence,
+        :sse
+      )
+
+    state =
+      state
+      |> Map.put(:sequence, sequence_state)
+      |> mark_synthetic_terminal_failure()
+
+    {sequence_number, state}
+  end
+
   defp enter_passthrough(_data, state) do
     state
     |> then(&%{&1 | buffer: "", passthrough?: true, passthrough_terminal: nil})

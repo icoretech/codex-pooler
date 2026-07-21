@@ -389,16 +389,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   defp maybe_put_websocket_frame_headers(metadata, _headers), do: metadata
 
   defp public_openai_responses_stream_metadata(state) do
-    case DownstreamStream.public_openai_responses_stream_metadata(state) do
-      %{"public_openai_responses_stream" => summary} when is_map(summary) ->
-        %{
-          "public_openai_responses_stream" =>
-            Map.take(summary, @public_openai_responses_stream_keys)
-        }
+    stream_metadata =
+      case DownstreamStream.public_openai_responses_stream_metadata(state) do
+        %{"public_openai_responses_stream" => summary} when is_map(summary) ->
+          %{
+            "public_openai_responses_stream" =>
+              Map.take(summary, @public_openai_responses_stream_keys)
+          }
 
-      _metadata ->
-        %{}
-    end
+        _metadata ->
+          %{}
+      end
+
+    Map.merge(stream_metadata, DownstreamStream.bridge_commitment_metadata(state))
   end
 
   @spec maybe_put_backend_turn_state_response_header(

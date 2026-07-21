@@ -621,7 +621,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:pong, payload}, {:continue, state, receive_state} ->
         {:cont, {:continue, clear_matching_pong(state, payload), receive_state}}
 
-      {:close, _code, _reason}, {:continue, state, receive_state} ->
+      {:close, code, reason}, {:continue, state, receive_state} ->
+        receive_state = %{
+          receive_state
+          | peer_close_metadata: TransportFailureReason.peer_close_metadata(code, reason)
+        }
+
         {:halt, {:failure, state, receive_state, :upstream_websocket_closed_before_terminal}}
 
       {:binary, _data}, {:continue, state, receive_state} ->
@@ -667,7 +672,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           terminal_seen: receive_state.terminal_seen?,
           text_frame_count: receive_state.text_frame_count
         },
-        Map.new(attrs)
+        receive_state.peer_close_metadata
+        |> Map.merge(Map.new(attrs))
       )
     )
   end

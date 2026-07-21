@@ -473,7 +473,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       {"response.created",
        %{"type" => "response.created", "response" => %{"id" => "resp_dead_t1"}}}
 
-    upstream = start_upstream(FakeUpstream.websocket_sse_then_close([created_event]))
+    visible_event =
+      {"response.output_text.delta",
+       %{
+         "type" => "response.output_text.delta",
+         "response_id" => "resp_dead_t1",
+         "output_index" => 0,
+         "content_index" => 0,
+         "delta" => "visible output"
+       }}
+
+    upstream =
+      start_upstream(FakeUpstream.websocket_sse_then_close([created_event, visible_event]))
+
     setup = gateway_setup(upstream)
     session = "dead-session-#{System.unique_integer([:positive])}"
 

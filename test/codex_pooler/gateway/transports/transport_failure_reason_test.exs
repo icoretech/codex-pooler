@@ -114,6 +114,60 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
            }
   end
 
+  test "sanitizes peer close diagnostics before transport failure metadata is built" do
+    cases = [
+      {1000, "short",
+       %{
+         "peer_close_code" => 1000,
+         "peer_close_reason_present" => true,
+         "peer_close_reason_bytes" => 5
+       }},
+      {1000, "",
+       %{
+         "peer_close_code" => 1000,
+         "peer_close_reason_present" => false,
+         "peer_close_reason_bytes" => 0
+       }},
+      {nil, nil,
+       %{
+         "peer_close_reason_present" => false,
+         "peer_close_reason_bytes" => 0
+       }},
+      {-1, :not_binary,
+       %{
+         "peer_close_reason_present" => false,
+         "peer_close_reason_bytes" => 0
+       }},
+      {65_536, String.duplicate("x", 124),
+       %{
+         "peer_close_reason_present" => true,
+         "peer_close_reason_bytes" => 123
+       }}
+    ]
+
+    for {code, reason, expected} <- cases do
+      sanitized = TransportFailureReason.peer_close_metadata(code, reason)
+      assert sanitized == expected
+
+      metadata =
+        TransportFailureReason.transport_failure_metadata(
+          :upstream_websocket_closed_before_terminal,
+          Map.merge(
+            %{
+              phase: :upstream_close,
+              pre_visible_output: true,
+              terminal_seen: false,
+              text_frame_count: 0
+            },
+            sanitized
+          )
+        )
+
+      assert Map.take(metadata, Map.keys(expected)) == expected
+      refute inspect(metadata) =~ inspect(reason)
+    end
+  end
+
   test "transport failure metadata does not persist arbitrary binary reasons" do
     metadata =
       TransportFailureReason.transport_failure_metadata(

@@ -617,11 +617,25 @@ its downstream contract while first attempting upstream dispatch through the
 continuity owner's websocket. This has no Pool-level enablement toggle.
 Qualification requires websocket owner forwarding, no attached websocket
 writer, and a continuity session that is unpinned or pinned to the selected
-assignment. Internal upstream events remain buffered and do not commit the
-bridge. The bridge commits only when the first event that public Responses
+assignment. The explicit pre-commit lifecycle events remain buffered and do not
+commit the bridge. The bridge commits when the first event that public Responses
 normalization would expose is forwarded downstream.
 
 Any bridge failure before that commit boundary falls back to plain HTTP on the same candidate and attempt, with one settlement. After a public event has committed the websocket transport, Codex Pooler does not replay the turn over HTTP; a later upstream websocket failure ends the request as failed. Reusing an owner websocket is a cache-locality heuristic, never a cache guarantee.
+
+The pre-commit buffer is limited to `response.created`,
+`response.in_progress`, `response.queued`, and `codex.rate_limits`. Unknown
+typed events commit conservatively. Legacy typeless success commits as a
+completed response while backend routes retain its original payload.
+
+Backend Responses SSE and websocket routes preserve upstream `response.done`
+and legacy typeless success payloads. Public `POST /v1/responses` SSE and
+`GET /v1/responses` websocket normalize those successful terminals to
+`response.completed`. A sequence-valid synthetic `response.failed` for a stream
+that ends without a terminal belongs only to public POST SSE. Public GET keeps
+its websocket error/close behavior, and backend GET or POST does not synthesize
+a terminal. Once hidden bridge traffic has committed the handoff, the request is
+not replayed over HTTP.
 
 During a mixed-release transition, native websocket attachment keeps its two-argument compatibility path against a previous-release owner. The bridge's option-carrying three-argument attachment is unavailable there and fails closed to HTTP before commit. Previous-release owners also retain the legacy five-minute post-detach window and omit connection lifecycle metadata; new or recovered owners use the current 30-minute default.
 

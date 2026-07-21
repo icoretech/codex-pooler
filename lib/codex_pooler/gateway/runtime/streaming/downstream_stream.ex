@@ -8,10 +8,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
   @type state :: map()
+  @type source :: :http | :websocket_bridge
 
   @spec initial_state(term(), RequestOptions.t()) :: state()
-  def initial_state(target, %RequestOptions{} = opts) do
+  def initial_state(target, %RequestOptions{} = opts), do: initial_state(target, opts, :http)
+
+  @spec initial_state(term(), RequestOptions.t(), source()) :: state()
+  def initial_state(target, %RequestOptions{} = opts, source)
+      when source in [:http, :websocket_bridge] do
     state = %{target: target}
+
+    state =
+      if source == :websocket_bridge, do: Map.put(state, :bridge_committed?, true), else: state
 
     cond do
       public_openai_chat_stream?(opts) ->
@@ -101,15 +109,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
         %{public_openai_responses: stream_state} = state,
         reason
       ) do
-    if PublicResponses.visible_seen?(stream_state) and
+    if (PublicResponses.visible_seen?(stream_state) or bridge_committed?(state)) and
          is_nil(PublicResponses.terminal_kind(stream_state)) do
+      {sequence_number, stream_state} =
+        PublicResponses.track_synthetic_terminal_failure(stream_state)
+
       data =
         StreamProtocol.synthetic_public_openai_responses_failure_sse(
           PublicResponses.response_id(stream_state),
-          reason
+          reason,
+          sequence_number
         )
-
-      stream_state = PublicResponses.mark_synthetic_terminal_failure(stream_state)
 
       {data, %{state | public_openai_responses: stream_state}}
     else
@@ -124,10 +134,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     do: reason
 
   def terminal_missing_interruption_reason(
-        %{public_openai_responses: stream_state},
+        %{public_openai_responses: stream_state} = state,
         original_reason
       ) do
-    if PublicResponses.visible_seen?(stream_state) and
+    if (PublicResponses.visible_seen?(stream_state) or bridge_committed?(state)) and
          is_nil(PublicResponses.terminal_kind(stream_state)) do
       {:upstream_stream_interrupted, original_reason}
     else
@@ -145,6 +155,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   def public_openai_responses_stream_metadata(_state), do: %{}
+
+  @spec bridge_commitment_metadata(state()) :: map()
+  def bridge_commitment_metadata(%{bridge_committed?: value}) when is_boolean(value),
+    do: %{"bridge_committed" => value}
+
+  def bridge_commitment_metadata(_state), do: %{}
+
+  defp bridge_committed?(%{bridge_committed?: true}), do: true
+  defp bridge_committed?(_state), do: false
 
   defp normalize_public_openai_chat_stream_data(
          data,

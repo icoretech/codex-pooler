@@ -43,7 +43,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   end
 
   @spec synthetic_public_openai_responses_failure_sse(String.t() | nil, term()) :: binary()
-  def synthetic_public_openai_responses_failure_sse(response_id, _reason) do
+  def synthetic_public_openai_responses_failure_sse(response_id, reason) do
+    synthetic_public_openai_responses_failure_sse(response_id, reason, nil)
+  end
+
+  @spec synthetic_public_openai_responses_failure_sse(
+          String.t() | nil,
+          term(),
+          non_neg_integer() | nil
+        ) :: binary()
+  def synthetic_public_openai_responses_failure_sse(response_id, _reason, sequence_number) do
     error = %{
       "code" => @synthetic_public_openai_responses_failure_code,
       "message" => @synthetic_public_openai_responses_failure_message
@@ -53,18 +62,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
       %{"status" => "failed", "error" => error}
       |> put_synthetic_response_id(response_id)
 
-    [
-      "event: response.failed\n",
-      "data: ",
-      Jason.encode!(%{
+    event =
+      %{
         "type" => "response.failed",
         "error" => error,
         "response" => response
-      }),
+      }
+      |> put_synthetic_sequence_number(sequence_number)
+
+    [
+      "event: response.failed\n",
+      "data: ",
+      Jason.encode!(event),
       "\n\n"
     ]
     |> IO.iodata_to_binary()
   end
+
+  defp put_synthetic_sequence_number(event, sequence_number)
+       when is_integer(sequence_number) and sequence_number >= 0,
+       do: Map.put(event, "sequence_number", sequence_number)
+
+  defp put_synthetic_sequence_number(event, _sequence_number), do: event
 
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   def canonicalize_codex_responses_json_message(data) when is_binary(data) do

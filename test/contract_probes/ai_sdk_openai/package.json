@@ -1,0 +1,15 @@
+{
+  "name": "codex-pooler-ai-sdk-openai-contract-probe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/openai": "3.0.84",
+    "ai": "6.0.168",
+    "effect": "4.0.0-beta.83",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "typescript": "5.8.2"
+  }
+}

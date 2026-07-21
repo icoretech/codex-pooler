@@ -1853,8 +1853,11 @@ of two public shapes:
 
 - **Codex backend clients** use `/backend-api/codex` for Codex-native behavior
   such as sessions, compacting, files, audio, images, and backend websockets.
+  Raw Responses streams preserve upstream `response.done` and legacy typeless
+  success payloads.
 - **OpenAI-compatible clients** use `/v1` for supported SDK-style Responses,
-  chat, files, audio, image, and model-list calls.
+  chat, files, audio, image, and model-list calls. Public Responses streams
+  normalize those successful terminal payloads to `response.completed`.
 
 Both paths authenticate with Pool API keys and route through the same Pool
 policy, account health, model support, quota evidence, session continuity, and

@@ -15,10 +15,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   `{ref, {:preflight, decision}}` message so the dispatcher can commit to the
   websocket path or fall back to HTTP without consuming (and thereby
   reordering) any real stream part. The dispatcher only ever commits on an
-  upstream event the public Responses normalization forwards downstream:
-  internal `codex.*` frames are buffered and flushed after the commit, and a
-  completion, failure event, owner error, or timeout before the first visible
-  event reports a fallback instead.
+  meaningful upstream event or structurally valid terminal commits the bridge.
+  The four lifecycle-only event types are buffered and flushed after commit;
+  a failure, owner error, or timeout before commitment reports a fallback.
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -44,6 +43,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
 
   @default_settle_timeout_ms 5_000
+  @max_precommit_frames 64
+  @max_precommit_bytes 1_048_576
+  @buffered_event_types [
+    "response.created",
+    "response.in_progress",
+    "response.queued",
+    "codex.rate_limits"
+  ]
 
   @spec start(String.t(), keyword()) :: t()
   def start(correlation_id, opts \\ []) when is_binary(correlation_id) do
@@ -62,6 +69,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           epoch: nil,
           task: nil,
           pending: [],
+          pending_count: 0,
+          pending_bytes: 0,
           upstream_websocket_connection: nil
         })
       end)
@@ -188,12 +197,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp submit_exit_reason(_reason), do: :bridge_submit_crash
 
   # The preflight phase resolves the first upstream signal WITHOUT emitting any
-  # real stream part until it has told the dispatcher to commit. Only an event
-  # the public Responses normalization forwards downstream commits the stream;
-  # internal `codex.*` frames are buffered so their rate-limit snapshots still
-  # reach the relay pipeline after the commit. A completion, failure event,
-  # owner error, or task settlement before the first visible event reports a
-  # fallback instead.
+  # real stream part until it has told the dispatcher to commit. Lifecycle-only
+  # frames stay buffered; meaningful, unknown, malformed, and successful
+  # terminal frames commit conservatively. Recognized failures still fall back.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp preflight_loop(state) do
     %{
@@ -208,8 +214,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     receive do
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:data, text}} when is_binary(text) ->
         case preflight_class(text) do
-          :visible -> commit_stream(state, text)
-          :internal -> preflight_loop(%{state | pending: [text | state.pending]})
+          :commit -> commit_stream(state, text)
+          :terminal -> commit_terminal(state, text)
+          :buffer -> buffer_preflight(state, text, &preflight_loop/1)
           :failure -> fall_back(state, :bridge_failed_before_visible)
         end
 
@@ -227,7 +234,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
       {^task_ref, result} ->
         state
-        |> put_submit_result_connection(result)
+        |> put_submit_result_and_clear_task(result)
         |> preflight_after_result()
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
@@ -257,12 +264,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     receive do
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:data, text}} when is_binary(text) ->
         case preflight_class(text) do
-          :visible ->
+          :commit ->
             report_stream(parent, ref, state.pending, text)
             relay_after_result(%{state | pending: []}, :ok)
 
-          :internal ->
-            preflight_after_result(%{state | pending: [text | state.pending]})
+          :terminal ->
+            report_terminal(parent, ref, state.pending, text)
+            metadata_loop(%{state | pending: []})
+
+          :buffer ->
+            buffer_preflight(state, text, &preflight_after_result/1)
 
           :failure ->
             report_fallback(parent, ref, :bridge_failed_before_visible)
@@ -288,9 +299,45 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     end
   end
 
+  defp commit_stream(%{task: nil} = state, text) do
+    report_stream(state.parent, state.ref, state.pending, text)
+    relay_after_result(%{state | pending: []}, :ok)
+  end
+
   defp commit_stream(state, text) do
     report_stream(state.parent, state.ref, state.pending, text)
     relay_loop(%{state | pending: []})
+  end
+
+  defp commit_terminal(state, text) do
+    report_terminal(state.parent, state.ref, state.pending, text)
+
+    state
+    |> Map.put(:pending, [])
+    |> settle_task()
+    |> metadata_loop()
+  end
+
+  defp buffer_preflight(state, text, continue) when is_function(continue, 1) do
+    pending_count = state.pending_count + 1
+    pending_bytes = state.pending_bytes + byte_size(text)
+
+    if pending_count > @max_precommit_frames or pending_bytes > @max_precommit_bytes do
+      :telemetry.execute(
+        [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
+        %{count: 1, frames: pending_count, bytes: pending_bytes},
+        %{max_frames: @max_precommit_frames, max_bytes: @max_precommit_bytes}
+      )
+
+      commit_stream(state, text)
+    else
+      continue.(%{
+        state
+        | pending: [text | state.pending],
+          pending_count: pending_count,
+          pending_bytes: pending_bytes
+      })
+    end
   end
 
   # Committing flushes the buffered internal frames ahead of the visible one:
@@ -304,6 +351,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     |> Enum.each(fn earlier -> send(parent, {ref, {:data, sse_block(earlier)}}) end)
 
     send(parent, {ref, {:data, sse_block(text)}})
+  end
+
+  defp report_terminal(parent, ref, pending, text) do
+    report_stream(parent, ref, pending, text)
+    send(parent, {ref, :done})
   end
 
   defp report_fallback(parent, ref, reason) do
@@ -331,8 +383,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
     receive do
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:data, text}} when is_binary(text) ->
-        send(parent, {ref, {:data, sse_block(text)}})
-        relay_loop(state)
+        relay_committed_frame(state, text, &relay_loop/1)
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
         send(parent, {ref, :done})
@@ -353,12 +404,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
       {^task_ref, {:error, reason} = result} ->
         state
-        |> put_submit_result_connection(result)
+        |> put_submit_result_and_clear_task(result)
         |> relay_after_result({:failed, error_reason(reason)})
 
       {^task_ref, result} ->
         state
-        |> put_submit_result_connection(result)
+        |> put_submit_result_and_clear_task(result)
         |> relay_after_result(:ok)
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
@@ -389,8 +440,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
     receive do
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:data, text}} when is_binary(text) ->
-        send(parent, {ref, {:data, sse_block(text)}})
-        relay_after_result(state, settle)
+        relay_committed_frame(state, text, &relay_after_result(&1, settle))
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
         send(parent, {ref, :done})
@@ -436,6 +486,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     %{state | task: nil}
   end
 
+  defp settle_task(%{task: nil} = state), do: state
+
+  defp relay_committed_frame(state, text, continue) when is_function(continue, 1) do
+    send(state.parent, {state.ref, {:data, sse_block(text)}})
+
+    case terminal_class(text) do
+      :terminal ->
+        send(state.parent, {state.ref, :done})
+
+        state
+        |> settle_task()
+        |> metadata_loop()
+
+      _nonterminal ->
+        continue.(state)
+    end
+  end
+
   defp metadata_loop(state) do
     receive do
       {:take_upstream_websocket_connection, caller, query_ref}
@@ -468,26 +536,44 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp put_submit_result_connection(state, _result), do: state
 
-  # Mirrors PublicResponses.normalize_public_block/3: `codex.*` events and
-  # typeless payloads produce no downstream output, so they must not commit
-  # the bridge — a later failure would otherwise strand the turn past its
-  # pre-visible HTTP fallback. Upstream failure terminals fall back outright.
+  defp put_submit_result_and_clear_task(%{task: %Task{ref: task_ref}} = state, result) do
+    Process.demonitor(task_ref, [:flush])
+
+    state
+    |> put_submit_result_connection(result)
+    |> Map.put(:task, nil)
+  end
+
   defp preflight_class(text) do
     case Jason.decode(text) do
-      {:ok, %{"type" => type} = decoded} when is_binary(type) and type != "" ->
-        cond do
-          failed_terminal?(type, decoded) -> :failure
-          String.starts_with?(type, "codex.") -> :internal
-          true -> :visible
+      {:ok, %{} = decoded} ->
+        case StreamProtocol.terminal_outcome(nil, decoded) do
+          {:ok, %{kind: :failed}} -> :failure
+          {:ok, %{kind: kind}} when kind in [:completed, :incomplete] -> :terminal
+          _outcome -> nonterminal_preflight_class(decoded)
         end
 
       _other ->
-        :internal
+        :commit
     end
   end
 
-  defp failed_terminal?(type, decoded) do
-    match?({:ok, %{kind: :failed}}, StreamProtocol.terminal_outcome(type, decoded))
+  defp nonterminal_preflight_class(%{"type" => type}) when type in @buffered_event_types,
+    do: :buffer
+
+  defp nonterminal_preflight_class(_decoded), do: :commit
+
+  defp terminal_class(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = decoded} ->
+        case StreamProtocol.terminal_outcome(nil, decoded) do
+          {:ok, %{kind: kind}} when kind in [:completed, :incomplete, :failed] -> :terminal
+          _outcome -> :nonterminal
+        end
+
+      _other ->
+        :nonterminal
+    end
   end
 
   defp owner_error_reason(error) when is_atom(error), do: error

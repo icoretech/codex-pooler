@@ -13,7 +13,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     terminal_seen?: false,
     text_frame_count: 0,
     body: "",
-    websocket_frame_headers: %{}
+    websocket_frame_headers: %{},
+    peer_close_metadata: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -30,6 +31,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           terminal_seen?: boolean(),
           text_frame_count: non_neg_integer(),
           websocket_frame_headers: %{optional(String.t()) => String.t()},
+          peer_close_metadata:
+            CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
           body: binary()
         }
 end
