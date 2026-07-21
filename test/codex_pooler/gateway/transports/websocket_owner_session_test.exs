@@ -345,6 +345,87 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == ["frame-a", "frame-b"]
   end
 
+  test "restore accepts only the exact stable boundary and computes reconnect state", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    restore_input = %{pid: self(), epoch: 9, correlation_id: "restore-exact"}
+
+    assert {:ok, stable_downstream} =
+             WebsocketOwnerSession.restore_downstream(owner, restore_input)
+
+    assert MapSet.new(Map.keys(stable_downstream)) ==
+             MapSet.new([:pid, :epoch, :correlation_id, :active_turn_reconnect?])
+
+    assert stable_downstream.active_turn_reconnect? == false
+    assert :sys.get_state(owner).downstream == stable_downstream
+
+    assert WebsocketOwnerSession.restore_downstream(
+             owner,
+             Map.put(restore_input, :owner_turn_id, self())
+           ) == {:error, :stale_downstream}
+
+    assert :sys.get_state(owner).downstream == stable_downstream
+  end
+
+  test "public active turn keeps identity only in per-call state and emits five-element frames",
+       context do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["public-delta-a", "public-delta-b"]
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("public-owner-turn"))
+
+    owner_turn_id = self()
+    per_call_downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_frame(owner, per_call_downstream, "public-request")
+      end)
+
+    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id,
+                    {:data, "public-delta-a"}}
+
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+
+    owner_state = :sys.get_state(owner)
+
+    assert MapSet.new(Map.keys(owner_state.downstream)) ==
+             MapSet.new([:pid, :epoch, :correlation_id, :active_turn_reconnect?])
+
+    refute Map.has_key?(owner_state.downstream, :owner_turn_id)
+
+    assert MapSet.new(Map.keys(owner_state.active_turn.downstream)) ==
+             MapSet.new([
+               :pid,
+               :epoch,
+               :correlation_id,
+               :active_turn_reconnect?,
+               :owner_turn_id
+             ])
+
+    assert owner_state.active_turn.downstream.owner_turn_id == owner_turn_id
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+    assert :ok = Task.await(submit_task, 1_000)
+
+    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id,
+                    {:data, "public-delta-b"}}
+
+    assert_receive {:websocket_owner_frame, "public-owner-turn", 1, ^owner_turn_id, :complete}
+    refute_received {:websocket_owner_frame, "public-owner-turn", 1, _legacy_payload}
+  end
+
   test "returns upstream request result while completing the active downstream", context do
     terminal_frame =
       Jason.encode!(%{
@@ -419,7 +500,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
              WebsocketOwnerSession.submit_request(owner, downstream, request)
 
     assert_receive {:websocket_owner_frame, "terminal-failure", 1, {:data, ^terminal_frame}}
-    refute_received {:websocket_owner_frame, "terminal-failure", 1, :complete}
+    assert_receive {:websocket_owner_frame, "terminal-failure", 1, :complete}
   end
 
   test "latest reconnect increments downstream epoch and fences old downstream sends", context do
@@ -621,6 +702,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                     {:error, :client_disconnected, safe_payload}}
 
     assert safe_payload.code == "client_disconnected"
+    assert_receive {:websocket_owner_frame, "submitter-exit", 1, :complete}
     assert %{active_turn: nil} = await_active_turn_cleared(owner)
     refute_received {:websocket_owner_submitter_result, _result}
 

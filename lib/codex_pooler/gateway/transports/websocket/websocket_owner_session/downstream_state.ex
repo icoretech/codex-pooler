@@ -49,6 +49,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
     if Map.has_key?(active_turn, :canceled_result) do
       state
     else
+      downstream = preserve_owner_turn_id(downstream, Map.get(active_turn, :downstream))
       %{state | active_turn: %{active_turn | downstream: downstream}}
     end
   end
@@ -134,4 +135,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
   end
 
   def cancel_idle_shutdown(state), do: state
+
+  defp preserve_owner_turn_id(downstream, %{owner_turn_id: owner_turn_id})
+       when is_pid(owner_turn_id) do
+    Map.put(downstream, :owner_turn_id, owner_turn_id)
+  end
+
+  defp preserve_owner_turn_id(downstream, _active_downstream), do: downstream
 end

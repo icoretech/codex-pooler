@@ -6,6 +6,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.PricingResolution
+  alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Repo
 
   @entry_reservation "reservation"
@@ -94,6 +95,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   def create_or_get_with_status!(attrs) do
     source_event_id = attrs.source_event_id
     attrs = Map.put_new(attrs, :id, Ecto.UUID.generate())
+
+    ReferenceLocks.lock_and_validate!(
+      Map.get(attrs, :upstream_identity_id),
+      Map.get(attrs, :pool_upstream_assignment_id)
+    )
 
     case Repo.insert_all(LedgerEntry, [attrs],
            on_conflict: :nothing,

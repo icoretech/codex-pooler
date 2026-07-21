@@ -32,6 +32,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     "x-openai-subagent"
   ]
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"
+  @stable_downstream_keys [:active_turn_reconnect?, :correlation_id, :epoch, :pid]
+  @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
 
   @type header :: {String.t(), String.t()}
   @type owner_transport ::
@@ -365,6 +367,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp owner_forwarded_transport(%RequestOptions{
+         openai_compatibility: openai_compatibility,
          continuity: %{codex_session: continuity_session},
          transport: %{
            websocket_owner: %{
@@ -379,7 +382,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
          }
        }) do
     with :ok <- validate_owner_sessions(continuity_session, owner_session, owner_lease_token),
-         :ok <- validate_owner_downstream(downstream, downstream_epoch),
+         :ok <-
+           validate_owner_downstream(
+             downstream,
+             downstream_epoch,
+             openai_compatibility.public_openai_responses_stream
+           ),
          :ok <- validate_owner_instances(proxy_instance_id, owner_instance_id, owner_session),
          :ok <- validate_owner_forwarder_opts(forwarder_opts) do
       {:ok, owner_session, owner_lease_token, downstream, forwarder_opts}
@@ -408,12 +416,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  defp validate_owner_downstream(downstream, downstream_epoch) do
+  defp validate_owner_downstream(downstream, downstream_epoch, public_responses_stream?) do
     cond do
       not owner_downstream?(downstream) ->
         {:error, :stale_owner}
 
       not owner_downstream_epoch_matches?(downstream_epoch, downstream) ->
+        {:error, :stale_owner}
+
+      public_responses_stream? and not valid_public_owner_turn_downstream?(downstream) ->
         {:error, :stale_owner}
 
       true ->
@@ -457,6 +468,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
        do: true
 
   defp owner_downstream_epoch_matches?(_epoch, _downstream), do: false
+
+  defp valid_public_owner_turn_downstream?(downstream) do
+    map_size(downstream) == length(@public_per_call_downstream_keys) and
+      Enum.all?(@public_per_call_downstream_keys, &Map.has_key?(downstream, &1)) and
+      is_pid(Map.get(downstream, :owner_turn_id)) and
+      Map.get(downstream, :owner_turn_id) == self() and
+      is_boolean(Map.get(downstream, :active_turn_reconnect?))
+  end
 
   defp owner_instance_matches?(owner_instance_id, %CodexSession{
          owner_instance_id: owner_instance_id

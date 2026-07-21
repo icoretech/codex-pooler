@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   @type owner_token :: Ecto.UUID.t()
   @type correlation_id :: binary()
   @type downstream_epoch :: pos_integer()
+  @type owner_turn_id :: pid()
   @type encoded_text_frame :: binary()
 
   @type owner_error ::
@@ -46,6 +47,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
 
   @type downstream_message ::
           {:websocket_owner_frame, correlation_id(), downstream_epoch(), downstream_payload()}
+          | {:websocket_owner_frame, correlation_id(), downstream_epoch(), owner_turn_id(),
+             downstream_payload()}
 
   @type forwarding_result ::
           :ok
@@ -164,6 +167,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0,
       do: downstream_payload?(payload)
 
+  def downstream_message?(
+        {:websocket_owner_frame, correlation_id, downstream_epoch, owner_turn_id, payload}
+      )
+      when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
+             is_pid(owner_turn_id),
+      do: downstream_payload?(payload)
+
   def downstream_message?(_message), do: false
 
   @spec accept_downstream_message(term(), downstream_epoch(), correlation_id()) ::
@@ -190,8 +200,64 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     if downstream_message?(message), do: :drop, else: {:error, :invalid_downstream_message}
   end
 
+  def accept_downstream_message(
+        {:websocket_owner_frame, _correlation_id, _downstream_epoch, _owner_turn_id, _payload} =
+          message,
+        _current_downstream_epoch,
+        _current_correlation_id
+      ) do
+    if downstream_message?(message), do: :drop, else: {:error, :invalid_downstream_message}
+  end
+
   def accept_downstream_message(_message, _current_downstream_epoch, _current_correlation_id),
     do: {:error, :invalid_downstream_message}
+
+  @spec accept_downstream_message(
+          term(),
+          downstream_epoch(),
+          correlation_id(),
+          owner_turn_id()
+        ) :: downstream_match_result()
+  def accept_downstream_message(
+        {:websocket_owner_frame, correlation_id, downstream_epoch, owner_turn_id, payload} =
+          message,
+        downstream_epoch,
+        correlation_id,
+        owner_turn_id
+      )
+      when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
+             is_pid(owner_turn_id) do
+    if downstream_message?(message),
+      do: {:ok, payload},
+      else: {:error, :invalid_downstream_message}
+  end
+
+  def accept_downstream_message(
+        {:websocket_owner_frame, _correlation_id, _downstream_epoch, _owner_turn_id, _payload} =
+          message,
+        _current_downstream_epoch,
+        _current_correlation_id,
+        _current_owner_turn_id
+      ) do
+    if downstream_message?(message), do: :drop, else: {:error, :invalid_downstream_message}
+  end
+
+  def accept_downstream_message(
+        {:websocket_owner_frame, _correlation_id, _downstream_epoch, _payload} = message,
+        _current_downstream_epoch,
+        _current_correlation_id,
+        _current_owner_turn_id
+      ) do
+    if downstream_message?(message), do: :drop, else: {:error, :invalid_downstream_message}
+  end
+
+  def accept_downstream_message(
+        _message,
+        _current_downstream_epoch,
+        _current_correlation_id,
+        _current_owner_turn_id
+      ),
+      do: {:error, :invalid_downstream_message}
 
   defp downstream_payload?({:data, encoded_text_frame}) when is_binary(encoded_text_frame),
     do: true

@@ -795,12 +795,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp terminal_type(text) do
     case Jason.decode(text) do
-      {:ok, %{"type" => type}}
-      when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
-        type
+      {:ok, %{} = decoded} ->
+        case StreamProtocol.terminal_outcome(nil, decoded) do
+          {:ok, %{kind: :completed}} ->
+            "response.completed"
 
-      {:ok, %{"id" => id} = decoded} when is_binary(id) ->
-        if Map.has_key?(decoded, "type"), do: nil, else: "response.completed"
+          {:ok, %{event_type: type}}
+          when type in ["response.failed", "response.incomplete", "error"] ->
+            type
+
+          _outcome ->
+            nil
+        end
 
       _decoded ->
         nil

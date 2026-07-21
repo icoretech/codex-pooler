@@ -55,6 +55,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  @tag :task_1_pin
+  test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON bytes across LF and CRLF" do
+    fixtures = [
+      {"response.done",
+       ~s({"type":"response.done","response":{"id":"resp_pin_backend_post_done"}})},
+      {nil, ~s({ "id" : "resp_pin_backend_post_legacy" })}
+    ]
+
+    for {event_type, json} <- fixtures, newline <- ["\n", "\r\n"] do
+      event_line = if event_type, do: "event: #{event_type}#{newline}", else: ""
+      source = event_line <> "data: " <> json <> newline <> newline
+
+      normalized = StreamProtocol.normalize_codex_responses_sse_data(source)
+      assert {[block], ""} = StreamProtocol.complete_sse_blocks(normalized, bounded?: false)
+      assert StreamProtocol.sse_field(block, "data") == json
+    end
+  end
+
   describe "normalize_public_openai_responses_sse_data/2" do
     test "preserves oversized split reasoning events until the SSE block is complete" do
       state = StreamProtocol.public_openai_responses_stream_state()
@@ -248,7 +266,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute Process.get({:openai_responses_stream_state, "resp_explicit_state"})
     end
 
-    test "coerces raw-looking terminal status text out of the stream summary" do
+    test "does not classify a conflicting raw-looking completion status as terminal" do
       raw_status = "raw completion content-like marker"
       state = StreamProtocol.public_openai_responses_stream_state()
 
@@ -267,12 +285,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert {_chunk, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
 
-      assert state.summary.terminal_kind == "completed"
-      assert state.summary.terminal_status == "completed"
+      assert state.summary.terminal_kind == nil
+      assert state.summary.terminal_status == nil
       refute Jason.encode!(state.summary) =~ raw_status
     end
 
-    test "tracks oversized terminal passthrough without trailing SSE separator" do
+    test "structurally normalizes oversized terminal without trailing SSE separator" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       terminal =
@@ -305,15 +323,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       first = binary_part(terminal, 0, split_at)
       second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
 
-      assert {^first, state} =
+      assert {first_output, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
 
+      assert first_output == ""
+      assert byte_size(state.buffer) == byte_size(first)
+      refute state.passthrough?
       assert StreamProtocol.public_openai_responses_passthrough_terminal_kind(state) == nil
 
-      assert {^second, state} =
+      assert {second_output, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
 
-      assert StreamProtocol.public_openai_responses_passthrough_terminal_kind(state) == :completed
+      events = public_sse_events(second_output)
+      assert List.last(events)["event"] == "response.completed"
+      assert List.last(events)["data"]["sequence_number"] == 2
+      assert state.terminal_kind == :completed
+      assert state.sequence.terminal_latched?
+      refute state.passthrough?
+      assert StreamProtocol.public_openai_responses_passthrough_terminal_kind(state) == nil
     end
 
     test "accepts SSE fields without a space after the colon" do

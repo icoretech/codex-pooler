@@ -78,6 +78,209 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
+  @tag :task_1_red
+  test "RED-R05 owner-unavailable response option recovery preserves per-call owner turn id", %{
+    auth: auth
+  } do
+    %{session: session, token: token} = owner_session_fixture(auth, Atom.to_string(node()))
+    owner_turn_id = self()
+
+    downstream =
+      downstream("corr-red-response-options")
+      |> Map.put(:active_turn_reconnect?, false)
+      |> Map.put(:owner_turn_id, owner_turn_id)
+
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+      |> Gateway.websocket_owner_response_options(session, token, downstream)
+
+    assert {:ok, recovered_opts} = Gateway.recover_websocket_owner_response_options(opts)
+
+    recovered_downstream = recovered_opts.transport.websocket_owner.downstream
+    assert Map.get(recovered_downstream, :owner_turn_id) == owner_turn_id
+
+    assert MapSet.new(Map.keys(recovered_downstream)) ==
+             MapSet.new([
+               :pid,
+               :epoch,
+               :correlation_id,
+               :active_turn_reconnect?,
+               :owner_turn_id
+             ])
+  end
+
+  test "public response option recovery fails closed for missing mutated or extra turn identity",
+       %{
+         auth: auth
+       } do
+    %{session: session, token: token} = owner_session_fixture(auth, Atom.to_string(node()))
+
+    stable_downstream =
+      downstream("corr-invalid-response-options")
+      |> Map.put(:active_turn_reconnect?, false)
+
+    mutated_owner_turn_id = spawn(fn -> :ok end)
+
+    invalid_downstreams = [
+      stable_downstream,
+      Map.put(stable_downstream, :owner_turn_id, mutated_owner_turn_id),
+      stable_downstream
+      |> Map.put(:owner_turn_id, self())
+      |> Map.put(:unexpected, true)
+    ]
+
+    for invalid_downstream <- invalid_downstreams do
+      opts =
+        %{}
+        |> RequestOptions.for_websocket()
+        |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+        |> Gateway.websocket_owner_response_options(session, token, invalid_downstream)
+
+      assert Gateway.recover_websocket_owner_response_options(opts) ==
+               {:error, :owner_unavailable}
+    end
+  end
+
+  @tag :task_1_red
+  test "RED-R06 direct recovery keeps per-call owner turn id out of stable restore state", %{
+    auth: auth
+  } do
+    local_node_string = Atom.to_string(node())
+    %{session: session} = owner_session_fixture(auth, local_node_string)
+    owner_turn_id = self()
+    frame = terminal_frame("resp_red_stable_restore")
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [frame],
+        return_request_result?: true
+      )
+
+    per_call_downstream =
+      downstream("corr-red-stable-restore")
+      |> Map.put(:active_turn_reconnect?, false)
+      |> Map.put(:owner_turn_id, owner_turn_id)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             WebsocketOwnerForwarder.remote_submit_request(
+               session.id,
+               per_call_downstream,
+               request("red-stable-restore"),
+               upstream: upstream,
+               local_node_string: local_node_string,
+               request_id: "red-stable-restore"
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert_receive {:websocket_owner_frame, "corr-red-stable-restore", 1, ^owner_turn_id,
+                    {:data, ^frame}}
+
+    assert_receive {:websocket_owner_frame, "corr-red-stable-restore", 1, ^owner_turn_id,
+                    :complete}
+
+    refute_received {:websocket_owner_frame, "corr-red-stable-restore", 1, _legacy_payload}
+    assert {:ok, owner} = WebsocketOwnerSession.lookup(session.id)
+    stable_downstream = :sys.get_state(owner).downstream
+
+    assert MapSet.new(Map.keys(stable_downstream)) ==
+             MapSet.new([:pid, :epoch, :correlation_id, :active_turn_reconnect?])
+
+    assert is_boolean(stable_downstream.active_turn_reconnect?)
+  end
+
+  test "exit-after-first-submit recovery retries with the original public owner turn id", %{
+    auth: auth
+  } do
+    local_node_string = Atom.to_string(node())
+    %{session: session} = owner_session_fixture(auth, local_node_string)
+    parent = self()
+    release_ref = make_ref()
+
+    first_upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        send(parent, {:first_public_owner_submit_started, self(), release_ref})
+
+        receive do
+          {:release_first_public_owner_submit, ^release_ref} -> :ok
+        end
+      end,
+      close: fn upstream_pid ->
+        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
+      end
+    }
+
+    {:ok, first_owner} = start_owner(session, first_upstream)
+
+    assert {:ok, stable_downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               first_owner,
+               downstream("corr-exit-after-submit")
+             )
+
+    terminal_frame = terminal_frame("resp_exit_after_submit")
+
+    recovery_upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    submitter =
+      spawn(fn ->
+        receive do
+          {:submit_public_owner_request, downstream} ->
+            result =
+              WebsocketOwnerForwarder.remote_submit_request(
+                session.id,
+                downstream,
+                request("exit-after-submit"),
+                upstream: recovery_upstream,
+                local_node_string: local_node_string,
+                request_id: "exit-after-submit"
+              )
+
+            send(parent, {:public_owner_retry_result, self(), result})
+        end
+      end)
+
+    per_call_downstream = Map.put(stable_downstream, :owner_turn_id, submitter)
+    send(submitter, {:submit_public_owner_request, per_call_downstream})
+
+    assert_receive {:first_public_owner_submit_started, first_worker, ^release_ref}
+
+    first_owner_ref = Process.monitor(first_owner)
+    Process.exit(first_owner, :kill)
+    assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
+    send(first_worker, {:release_first_public_owner_submit, release_ref})
+
+    assert_receive {:websocket_owner_runtime_recovered, "corr-exit-after-submit", 1,
+                    %{websocket_owner_downstream: recovered_stable}}
+
+    assert MapSet.new(Map.keys(recovered_stable)) ==
+             MapSet.new([:pid, :epoch, :correlation_id, :active_turn_reconnect?])
+
+    refute Map.has_key?(recovered_stable, :owner_turn_id)
+
+    assert_receive {:websocket_owner_harness_upstream_started, _recovery_upstream_pid}
+
+    assert_receive {:websocket_owner_frame, "corr-exit-after-submit", 1, ^submitter,
+                    {:data, ^terminal_frame}}
+
+    assert_receive {:websocket_owner_frame, "corr-exit-after-submit", 1, ^submitter, :complete}
+
+    assert_receive {:public_owner_retry_result, ^submitter,
+                    {:ok, %{terminal: "response.completed", status: 200}}}
+
+    assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(session.id)
+    recovered_owner_state = :sys.get_state(recovered_owner)
+    assert recovered_owner_state.downstream == recovered_stable
+    refute Map.has_key?(recovered_owner_state.downstream, :owner_turn_id)
+  end
+
   test "remote success reaches simulated owner and returns owner result", %{auth: auth} do
     remote_node = :"codex_pooler@owner-app.example"
     remote_node_string = Atom.to_string(remote_node)

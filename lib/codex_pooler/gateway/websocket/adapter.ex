@@ -51,8 +51,13 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
 
   @spec response_options(socket_state(), boolean()) :: RequestOptions.t()
   def response_options(state, reuse_upstream_session?) do
+    response_options(state, reuse_upstream_session?, nil)
+  end
+
+  @spec response_options(socket_state(), boolean(), pid() | nil) :: RequestOptions.t()
+  def response_options(state, reuse_upstream_session?, owner_turn_id) do
     if owner?(state) do
-      DownstreamSession.response_options(state)
+      DownstreamSession.response_options(state, owner_turn_id)
     else
       Websocket.websocket_response_options(
         Map.get(state, :opts, %{}),
@@ -70,6 +75,38 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   def downstream_response_chunk(data) when is_binary(data) do
     StreamProtocol.canonicalize_codex_responses_json_message(data)
   end
+
+  @spec downstream_response_chunk(
+          binary(),
+          StreamProtocol.public_openai_responses_websocket_state()
+        ) ::
+          {:push, binary(), StreamProtocol.public_openai_responses_websocket_state()}
+          | {:drop, StreamProtocol.public_openai_responses_websocket_state()}
+          | {:error, map(), StreamProtocol.public_openai_responses_websocket_state()}
+  def downstream_response_chunk(data, turn_state) when is_binary(data) and is_map(turn_state) do
+    StreamProtocol.normalize_public_openai_responses_websocket_data(data, turn_state)
+  end
+
+  @spec public_responses_turn_state() ::
+          StreamProtocol.public_openai_responses_websocket_state()
+  def public_responses_turn_state do
+    StreamProtocol.public_openai_responses_websocket_state()
+  end
+
+  @spec public_responses_stream?(socket_state()) :: boolean()
+  def public_responses_stream?(%RequestOptions{
+        openai_compatibility: %{public_openai_responses_stream: true}
+      }),
+      do: true
+
+  def public_responses_stream?(%{
+        opts: %RequestOptions{
+          openai_compatibility: %{public_openai_responses_stream: true}
+        }
+      }),
+      do: true
+
+  def public_responses_stream?(_state), do: false
 
   @spec request_row_producing_response_payload?(term()) :: boolean()
   def request_row_producing_response_payload?(payload) when is_binary(payload) do

@@ -158,6 +158,49 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       assert WebsocketOwnerContract.accept_downstream_message(frame, 4, "corr-2") == :drop
     end
 
+    test "public owner frames require the matching immutable owner turn pid" do
+      owner_turn_id = self()
+      old_owner_turn_id = spawn(fn -> :ok end)
+
+      frame =
+        {:websocket_owner_frame, "corr-public", 7, owner_turn_id, {:data, "encoded public text"}}
+
+      stale_frame =
+        {:websocket_owner_frame, "corr-public", 7, old_owner_turn_id,
+         {:data, "encoded stale text"}}
+
+      legacy_frame =
+        {:websocket_owner_frame, "corr-public", 7, {:data, "encoded legacy text"}}
+
+      assert WebsocketOwnerContract.downstream_message?(frame)
+
+      assert WebsocketOwnerContract.accept_downstream_message(
+               frame,
+               7,
+               "corr-public",
+               owner_turn_id
+             ) == {:ok, {:data, "encoded public text"}}
+
+      assert WebsocketOwnerContract.accept_downstream_message(
+               stale_frame,
+               7,
+               "corr-public",
+               owner_turn_id
+             ) == :drop
+
+      assert WebsocketOwnerContract.accept_downstream_message(
+               legacy_frame,
+               7,
+               "corr-public",
+               owner_turn_id
+             ) == :drop
+
+      assert WebsocketOwnerContract.accept_downstream_message(legacy_frame, 7, "corr-public") ==
+               {:ok, {:data, "encoded legacy text"}}
+
+      assert WebsocketOwnerContract.accept_downstream_message(frame, 7, "corr-public") == :drop
+    end
+
     test "drops stale valid owner errors without exposing payload details" do
       assert {:ok, safe_payload} =
                WebsocketOwnerContract.safe_error_payload(:owner_forward_timeout, @sentinel)

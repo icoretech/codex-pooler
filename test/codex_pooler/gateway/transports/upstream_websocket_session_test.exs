@@ -9,6 +9,71 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
+  @tag :task_1_pin
+  test "PIN-P02 exact legacy typeless binary id remains terminal without status or object" do
+    frame = ~s({"id":"resp_pin_legacy_typeless"})
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([frame]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(FakeUpstream.url(upstream))
+             )
+
+    assert body == "data: #{frame}\n\n"
+  end
+
+  @tag :task_1_red
+  test "RED-R01 response.done followed by clean close completes before close classification" do
+    frame =
+      Jason.encode!(%{
+        "type" => "response.done",
+        "response" => %{"id" => "resp_red_done", "status" => "completed"}
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([frame]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(FakeUpstream.url(upstream))
+             )
+
+    assert body == "data: #{frame}\n\n"
+  end
+
+  test "malformed response.done stays nonterminal until a valid terminal arrives" do
+    malformed =
+      Jason.encode!(%{
+        "type" => "response.done",
+        "response" => %{"id" => "resp_malformed_done", "status" => "failed"}
+      })
+
+    completed =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_after_malformed", "status" => "completed"}
+      })
+
+    upstream =
+      start_upstream(FakeUpstream.websocket_text_frames([malformed, completed]))
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(FakeUpstream.url(upstream))
+             )
+
+    assert body == "data: #{malformed}\n\ndata: #{completed}\n\n"
+  end
+
   test "characterization preserves websocket result body status headers and frame metadata" do
     frame = %{
       "type" => "response.failed",

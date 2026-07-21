@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     IdentitySnapshot,
     LedgerEntries,
     Recovery,
+    ReferenceLocks,
     Reservation
   }
 
@@ -94,7 +95,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     timestamp = now(attrs)
 
     Repo.transaction(fn ->
-      request = Repo.get!(Request, request.id, lock: "FOR UPDATE")
+      request =
+        Repo.one!(
+          from locked_request in Request,
+            where: locked_request.id == ^request.id,
+            lock: "FOR UPDATE"
+        )
+
       ensure_request_dispatchable!(request)
 
       model = attempt_model(request, attrs)
@@ -120,6 +127,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
           usage_status: Map.get(attrs, :usage_status, @usage_pending),
           response_metadata: Metadata.sanitize_metadata(Map.get(attrs, :response_metadata, %{}))
         }
+
+      ReferenceLocks.lock_and_validate!(assignment.upstream_identity_id, assignment.id)
 
       case Repo.insert(attempt_changes,
              on_conflict: {:replace, [:id]},
@@ -158,10 +167,22 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     timestamp = now(attrs)
 
     Repo.transaction(fn ->
-      request = Repo.get!(Request, attempt.request_id, lock: "FOR UPDATE")
+      request =
+        Repo.one!(
+          from locked_request in Request,
+            where: locked_request.id == ^attempt.request_id,
+            lock: "FOR UPDATE"
+        )
+
       ensure_request_dispatchable!(request)
 
-      attempt = Repo.get!(Attempt, attempt.id, lock: "FOR UPDATE")
+      attempt =
+        Repo.one!(
+          from locked_attempt in Attempt,
+            where: locked_attempt.id == ^attempt.id,
+            lock: "FOR UPDATE"
+        )
+
       ensure_attempt_retryable!(attempt)
 
       case attempt
@@ -222,7 +243,12 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     usage_status = Map.get(attrs, :usage_status, @usage_not_applicable)
 
     Repo.transaction(fn ->
-      request = Repo.get!(Request, request.id, lock: "FOR UPDATE")
+      request =
+        Repo.one!(
+          from locked_request in Request,
+            where: locked_request.id == ^request.id,
+            lock: "FOR UPDATE"
+        )
 
       request =
         request
@@ -335,8 +361,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   end
 
   defp lock_finalization_rows(%Request{} = request, %Attempt{} = attempt) do
-    request = Repo.get!(Request, request.id, lock: "FOR UPDATE")
-    attempt = Repo.get!(Attempt, attempt.id, lock: "FOR UPDATE")
+    request =
+      Repo.one!(
+        from locked_request in Request,
+          where: locked_request.id == ^request.id,
+          lock: "FOR UPDATE"
+      )
+
+    attempt =
+      Repo.one!(
+        from locked_attempt in Attempt,
+          where: locked_attempt.id == ^attempt.id,
+          lock: "FOR UPDATE"
+      )
 
     reservation_source_event_id = LedgerEntries.reservation_source_event_id(request.id)
 

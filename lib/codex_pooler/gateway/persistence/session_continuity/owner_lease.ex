@@ -170,7 +170,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
     Repo.transaction(fn ->
       with {:ok, session_id} <- session_id(session_ref),
-           %CodexSession{} = session <- Repo.get(CodexSession, session_id, lock: "FOR UPDATE"),
+           %CodexSession{} = session <- codex_session_for_update(session_id),
            :ok <- validate_expected_owner_snapshot(session, expected_owner) do
         replace_unavailable!(session, owner, opts, now)
       else
@@ -179,17 +179,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
       end
     end)
     |> unwrap_transaction()
-  end
-
-  @spec expire_active_for_sessions!(Ecto.Queryable.t(), DateTime.t()) ::
-          {non_neg_integer(), nil | [term()]}
-  def expire_active_for_sessions!(expired_sessions, now) do
-    BridgeOwnerLease
-    |> where(
-      [lease],
-      lease.codex_session_id in subquery(expired_sessions) and lease.status == ^@lease_active
-    )
-    |> Repo.update_all(set: [status: @lease_expired, released_at: now, updated_at: now])
   end
 
   defp active_for_update(session_id) do
@@ -314,13 +303,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
 
   defp active_snapshot_for_update(session_ref) do
     with {:ok, session_id} <- session_id(session_ref),
-         %CodexSession{} = session <- Repo.get(CodexSession, session_id, lock: "FOR UPDATE"),
+         %CodexSession{} = session <- codex_session_for_update(session_id),
          %BridgeOwnerLease{} = lease <- active_for_update(session.id) do
       {:ok, session, lease}
     else
       {:error, reason} -> {:error, reason}
       nil -> {:error, :owner_unavailable}
     end
+  end
+
+  @spec codex_session_for_update(Ecto.UUID.t()) :: CodexSession.t() | nil
+  defp codex_session_for_update(session_id) do
+    Repo.one(
+      from session in CodexSession,
+        where: session.id == ^session_id,
+        lock: "FOR UPDATE"
+    )
   end
 
   defp active(session_id) do

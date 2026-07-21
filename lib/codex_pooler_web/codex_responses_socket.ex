@@ -57,6 +57,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
   end
 
+  def handle_info({:codex_response_chunk, task_pid, data}, state)
+      when is_pid(task_pid) and is_binary(data) do
+    if active_public_turn?(state, task_pid) and not public_turn_aborted?(state) do
+      public_chunk_result(data, state)
+    else
+      {:ok, state}
+    end
+  end
+
   def handle_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
     case Adapter.accept_recovered_runtime(message, state) do
       {:ok, state} -> {:ok, state}
@@ -64,64 +73,33 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  def handle_info(
+        {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message,
+        state
+      ) do
+    handle_owner_frame(message, state)
+  end
+
   def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
-    case Adapter.accept_downstream_message(message, state) do
-      {:ok, {:data, data}} ->
-        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+    handle_owner_frame(message, state)
+  end
 
-      {:ok, {:error, :owner_drained, payload}} ->
-        state =
-          state
-          |> Map.put(:websocket_owner_drain_observed?, true)
-          |> cancel_tracked_response_tasks(:owner_drained)
+  def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
+    cond do
+      active_public_turn?(state, pid) ->
+        handle_public_response_done(pid, result, state)
 
-        {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
-
-      {:ok, {:error, _reason, payload}} ->
-        {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
-
-      {:ok, :complete} ->
-        {:ok, Map.put(state, :websocket_owner_active_turn_reconnect?, false)}
-
-      :drop ->
+      Adapter.public_responses_stream?(state) and not tracked_response_task?(state, pid) ->
         {:ok, state}
 
-      {:error, _reason} ->
-        {:ok, state}
+      true ->
+        handle_non_public_response_done(pid, result, state)
     end
   end
 
-  def handle_info({:codex_response_done, pid, :ok}, state) do
-    state =
-      state
-      |> remove_tracked_response_task(pid)
-      |> maybe_start_queued_response_task()
-
-    {:ok, state}
-  end
-
-  def handle_info(
-        {:codex_response_done, pid, {:error, _reason}},
-        %{websocket_owner_drain_observed?: true} = state
-      ) do
-    state =
-      state
-      |> remove_tracked_response_task(pid)
-      |> maybe_start_queued_response_task()
-
-    {:ok, state}
-  end
-
-  def handle_info({:codex_response_done, pid, {:error, reason}}, state) do
-    state =
-      state
-      |> remove_tracked_response_task(pid)
-      |> maybe_start_queued_response_task()
-
-    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
-  end
-
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
+    state = maybe_abort_public_owner_turn(state, :owner_monitor_down)
+
     case Adapter.handle_monitor_down(state, pid, reason) do
       {:ok, state} ->
         {:ok, state}
@@ -132,12 +110,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    state =
-      state
-      |> remove_tracked_response_task(pid, ref)
-      |> maybe_start_queued_response_task()
+    cond do
+      active_public_task_monitor?(state, pid, ref) and public_turn_aborted?(state) ->
+        {:ok, remove_tracked_response_task(state, pid, ref)}
 
-    {:ok, state}
+      active_public_task_monitor?(state, pid, ref) and
+          not Map.get(state, :public_turn_task_done?, false) ->
+        state =
+          state
+          |> remove_tracked_response_task(pid, ref)
+          |> abort_public_turn(:response_task_down)
+
+        {:stop, :normal, {1011, "websocket response task failed"}, state}
+
+      true ->
+        state =
+          state
+          |> remove_tracked_response_task(pid, ref)
+          |> maybe_start_queued_response_task()
+
+        {:ok, state}
+    end
   end
 
   def handle_info(_message, state), do: {:ok, state}
@@ -218,6 +211,228 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.put(:tasks, MapSet.new())
     |> Map.put(:task_monitors, %{})
+    |> Map.put(:queued_response_payloads, :queue.new())
+    |> Map.put(:public_response_task_pid, nil)
+    |> Map.put(:public_responses_websocket_state, nil)
+    |> Map.put(:public_turn_task_done?, false)
+    |> Map.put(:public_turn_owner_complete?, false)
+    |> Map.put(:public_turn_aborted?, false)
+  end
+
+  defp handle_owner_frame(message, state) do
+    case Adapter.accept_downstream_message(message, state) do
+      {:ok, payload} -> handle_accepted_owner_payload(payload, state)
+      :drop -> {:ok, state}
+      {:error, _reason} -> {:ok, state}
+    end
+  end
+
+  defp handle_accepted_owner_payload(payload, state) do
+    if public_owner_turn_open?(state) do
+      handle_public_owner_payload(payload, state)
+    else
+      handle_non_public_owner_payload(payload, state)
+    end
+  end
+
+  defp handle_public_owner_payload(_payload, %{public_turn_aborted?: true} = state),
+    do: {:ok, state}
+
+  defp handle_public_owner_payload({:data, _data}, %{public_turn_owner_complete?: true} = state),
+    do: {:ok, state}
+
+  defp handle_public_owner_payload({:data, data}, state), do: public_chunk_result(data, state)
+
+  defp handle_public_owner_payload(
+         {:error, _reason, _payload},
+         %{public_turn_owner_complete?: true} = state
+       ),
+       do: {:ok, state}
+
+  defp handle_public_owner_payload({:error, :owner_drained, payload}, state) do
+    state =
+      state
+      |> Map.put(:websocket_owner_drain_observed?, true)
+      |> abort_public_turn(:owner_drained)
+
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+  end
+
+  defp handle_public_owner_payload({:error, _reason, payload}, state) do
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+  end
+
+  defp handle_public_owner_payload(:complete, %{public_turn_owner_complete?: true} = state),
+    do: {:ok, state}
+
+  defp handle_public_owner_payload(:complete, state) do
+    state =
+      state
+      |> Map.put(:public_turn_owner_complete?, true)
+      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+      |> maybe_finish_public_owner_turn()
+
+    {:ok, state}
+  end
+
+  defp handle_non_public_owner_payload({:data, data}, state) do
+    {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+  end
+
+  defp handle_non_public_owner_payload({:error, :owner_drained, payload}, state) do
+    state =
+      state
+      |> Map.put(:websocket_owner_drain_observed?, true)
+      |> cancel_tracked_response_tasks(:owner_drained)
+
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+  end
+
+  defp handle_non_public_owner_payload({:error, _reason, payload}, state) do
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+  end
+
+  defp handle_non_public_owner_payload(:complete, state) do
+    {:ok, Map.put(state, :websocket_owner_active_turn_reconnect?, false)}
+  end
+
+  defp public_chunk_result(data, state) do
+    turn_state =
+      Map.get(state, :public_responses_websocket_state) ||
+        Adapter.public_responses_turn_state()
+
+    case Adapter.downstream_response_chunk(data, turn_state) do
+      {:push, normalized, turn_state} ->
+        {:push, {:text, normalized}, put_public_turn_state(state, turn_state)}
+
+      {:drop, turn_state} ->
+        {:ok, put_public_turn_state(state, turn_state)}
+
+      {:error, reason, turn_state} ->
+        state = put_public_turn_state(state, turn_state)
+        {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+    end
+  end
+
+  defp put_public_turn_state(state, turn_state) do
+    Map.put(state, :public_responses_websocket_state, turn_state)
+  end
+
+  defp handle_public_response_done(pid, result, state) do
+    state = remove_tracked_response_task(state, pid)
+
+    cond do
+      public_turn_aborted?(state) ->
+        {:ok, state}
+
+      owner_forwarded_socket?(state) ->
+        state =
+          state
+          |> Map.put(:public_turn_task_done?, true)
+          |> maybe_finish_public_owner_turn()
+
+        {:ok, state}
+
+      match?({:error, _reason}, result) ->
+        {:error, reason} = result
+        state = finish_public_turn(state)
+        {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+
+      true ->
+        {:ok, finish_public_turn(state)}
+    end
+  end
+
+  defp handle_non_public_response_done(pid, :ok, state) do
+    state =
+      state
+      |> remove_tracked_response_task(pid)
+      |> maybe_start_queued_response_task()
+
+    {:ok, state}
+  end
+
+  defp handle_non_public_response_done(
+         pid,
+         {:error, _reason},
+         %{websocket_owner_drain_observed?: true} = state
+       ) do
+    state =
+      state
+      |> remove_tracked_response_task(pid)
+      |> maybe_start_queued_response_task()
+
+    {:ok, state}
+  end
+
+  defp handle_non_public_response_done(pid, {:error, reason}, state) do
+    state =
+      state
+      |> remove_tracked_response_task(pid)
+      |> maybe_start_queued_response_task()
+
+    {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
+  end
+
+  defp handle_non_public_response_done(pid, _result, state) do
+    state =
+      state
+      |> remove_tracked_response_task(pid)
+      |> maybe_start_queued_response_task()
+
+    {:ok, state}
+  end
+
+  defp maybe_finish_public_owner_turn(state) do
+    if Map.get(state, :public_turn_task_done?, false) and
+         Map.get(state, :public_turn_owner_complete?, false) and
+         not public_turn_aborted?(state) do
+      finish_public_turn(state)
+    else
+      state
+    end
+  end
+
+  defp finish_public_turn(state) do
+    state
+    |> Map.put(:public_response_task_pid, nil)
+    |> Map.put(:public_responses_websocket_state, nil)
+    |> Map.put(:public_turn_task_done?, false)
+    |> Map.put(:public_turn_owner_complete?, false)
+    |> Map.put(:public_turn_aborted?, false)
+    |> maybe_start_queued_response_task()
+  end
+
+  defp active_public_turn?(state, pid) when is_pid(pid) do
+    Adapter.public_responses_stream?(state) and Map.get(state, :public_response_task_pid) == pid
+  end
+
+  defp active_public_task_monitor?(state, pid, ref)
+       when is_pid(pid) and is_reference(ref) do
+    active_public_turn?(state, pid) and
+      Map.get(Map.get(state, :task_monitors, %{}), pid) == ref
+  end
+
+  defp public_owner_turn_open?(state) do
+    Adapter.public_responses_stream?(state) and owner_forwarded_socket?(state) and
+      public_turn_open?(state)
+  end
+
+  defp public_turn_aborted?(state), do: Map.get(state, :public_turn_aborted?, false)
+
+  defp abort_public_turn(state, reason) do
+    state
+    |> Map.put(:public_turn_aborted?, true)
+    |> Map.put(:queued_response_payloads, :queue.new())
+    |> cancel_tracked_response_tasks(reason)
+  end
+
+  defp maybe_abort_public_owner_turn(state, reason) do
+    if public_owner_turn_open?(state) and not public_turn_aborted?(state) do
+      abort_public_turn(state, reason)
+    else
+      state
+    end
   end
 
   defp init_error(reason, state, started_at) do
@@ -245,6 +460,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp start_or_queue_response_task(payload, state) do
     cond do
+      public_response_payload?(payload, state) and public_turn_open?(state) ->
+        queue_response_payload(state, payload)
+
       owner_forwarded_socket?(state) and active_response_task?(state) ->
         queue_response_payload(state, payload)
 
@@ -260,7 +478,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp maybe_start_queued_response_task(state) do
-    if active_response_task?(state) do
+    if active_response_task?(state) or public_turn_open?(state) do
       state
     else
       case Map.get(state, :queued_response_payloads, :queue.new()) |> :queue.out() do
@@ -282,7 +500,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, pid} = start_response_task(parent, payload, state)
         monitor = Process.monitor(pid)
 
-        track_response_task(state, pid, monitor)
+        state
+        |> track_response_task(pid, monitor)
+        |> maybe_open_public_turn(payload, pid)
 
       {:error, reason} ->
         start_owner_retarget_error_task(reason, state)
@@ -319,6 +539,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp active_response_task?(state), do: MapSet.size(Map.get(state, :tasks, MapSet.new())) > 0
 
+  defp tracked_response_task?(state, pid) when is_pid(pid) do
+    MapSet.member?(Map.get(state, :tasks, MapSet.new()), pid)
+  end
+
+  defp public_response_payload?(payload, state) do
+    Adapter.public_responses_stream?(state) and
+      Adapter.request_row_producing_response_payload?(payload)
+  end
+
+  defp public_turn_open?(state), do: is_pid(Map.get(state, :public_response_task_pid))
+
   defp suppress_owner_reconnect_replay?(payload, state) do
     owner_forwarded_socket?(state) and
       Map.get(state, :websocket_owner_active_turn_reconnect?) == true and
@@ -329,6 +560,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.update(:tasks, MapSet.new([pid]), &MapSet.put(&1, pid))
     |> Map.update(:task_monitors, %{pid => monitor}, &Map.put(&1, pid, monitor))
+  end
+
+  defp maybe_open_public_turn(state, payload, pid) do
+    if public_response_payload?(payload, state) do
+      state
+      |> Map.put(:public_response_task_pid, pid)
+      |> Map.put(:public_responses_websocket_state, Adapter.public_responses_turn_state())
+      |> Map.put(:public_turn_task_done?, false)
+      |> Map.put(:public_turn_owner_complete?, false)
+      |> Map.put(:public_turn_aborted?, false)
+    else
+      state
+    end
   end
 
   defp remove_tracked_response_task(state, pid) when is_pid(pid) do
@@ -374,10 +618,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp safe_run_response(parent, payload, state) do
-    opts = response_task_opts(state)
+    task_pid = self()
+    opts = response_task_opts(state, task_pid)
 
     try do
-      run_response(parent, state.auth, payload, opts)
+      run_response(parent, task_pid, state.auth, payload, opts)
     rescue
       exception ->
         log_response_task_failure(:error, exception, __STACKTRACE__, payload, state, opts)
@@ -401,10 +646,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp owner_drained_response_task_exit?(_kind, _reason, _state), do: false
 
-  defp response_task_opts(state) do
+  defp response_task_opts(state, task_pid) when is_pid(task_pid) do
     Adapter.response_options(
       state,
-      MapSet.size(Map.get(state, :tasks, MapSet.new())) == 0
+      MapSet.size(Map.get(state, :tasks, MapSet.new())) == 0,
+      task_pid
     )
   end
 
@@ -420,9 +666,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> log_interrupt_failure(state)
   end
 
-  defp run_response(parent, auth, payload, opts) do
+  defp run_response(parent, task_pid, auth, payload, opts) do
     Websocket.run_websocket_response(auth, payload, opts, fn data ->
-      send(parent, {:codex_response_chunk, data})
+      if Adapter.public_responses_stream?(opts) do
+        send(parent, {:codex_response_chunk, task_pid, data})
+      else
+        send(parent, {:codex_response_chunk, data})
+      end
     end)
   end
 

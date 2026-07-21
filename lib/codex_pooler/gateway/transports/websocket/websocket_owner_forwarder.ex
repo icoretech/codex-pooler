@@ -18,6 +18,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
 
+  @restore_downstream_keys [:correlation_id, :epoch, :pid]
+  @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
+  @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
+
   @type owner_node :: node()
   @type owner_resolution :: {:local, binary()} | {:remote, owner_node(), binary()}
 
@@ -410,31 +414,87 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp attach_recovered_downstream(
          owner_pid,
-         %{pid: pid, epoch: epoch, correlation_id: correlation_id} = downstream
+         downstream
        )
-       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
-    WebsocketOwnerSession.restore_downstream(owner_pid, downstream)
+       when is_map(downstream) do
+    with {:ok, restore_input} <- restore_input(downstream),
+         {:ok, stable_downstream} <-
+           WebsocketOwnerSession.restore_downstream(owner_pid, restore_input),
+         :ok <- require_exact_keys(stable_downstream, @stable_downstream_keys),
+         {:ok, per_call_downstream} <-
+           recovered_per_call_downstream(stable_downstream, downstream) do
+      {:ok, per_call_downstream}
+    end
   end
 
   defp attach_recovered_downstream(_owner_pid, _downstream), do: {:error, :stale_downstream}
 
-  defp notify_recovered_runtime(
-         %CodexSession{} = session,
-         %{pid: pid, correlation_id: correlation_id, epoch: epoch} = downstream
-       )
-       when is_pid(pid) and is_binary(correlation_id) and is_integer(epoch) and epoch > 0 do
-    send(
-      pid,
-      {:websocket_owner_runtime_recovered, correlation_id, epoch,
-       %{
-         codex_session: session,
-         websocket_owner_lease_token: session.owner_lease_token,
-         websocket_owner_downstream: downstream
-       }}
-    )
+  defp restore_input(downstream) do
+    cond do
+      exact_keys?(downstream, @restore_downstream_keys) ->
+        {:ok, downstream}
 
-    :ok
+      exact_keys?(downstream, @stable_downstream_keys) ->
+        {:ok, Map.take(downstream, @restore_downstream_keys)}
+
+      exact_keys?(downstream, @public_per_call_downstream_keys) and
+          is_pid(Map.get(downstream, :owner_turn_id)) ->
+        {:ok, Map.take(downstream, @restore_downstream_keys)}
+
+      true ->
+        {:error, :stale_downstream}
+    end
   end
+
+  defp recovered_per_call_downstream(stable_downstream, original_downstream) do
+    if Map.has_key?(original_downstream, :owner_turn_id) do
+      owner_turn_id = Map.get(original_downstream, :owner_turn_id)
+
+      if exact_keys?(original_downstream, @public_per_call_downstream_keys) and
+           is_pid(owner_turn_id) do
+        {:ok, Map.put(stable_downstream, :owner_turn_id, owner_turn_id)}
+      else
+        {:error, :stale_downstream}
+      end
+    else
+      {:ok, stable_downstream}
+    end
+  end
+
+  defp require_exact_keys(map, keys) do
+    if exact_keys?(map, keys), do: :ok, else: {:error, :stale_downstream}
+  end
+
+  defp exact_keys?(map, keys) when is_map(map) do
+    map_size(map) == length(keys) and Enum.all?(keys, &Map.has_key?(map, &1))
+  end
+
+  defp exact_keys?(_map, _keys), do: false
+
+  defp notify_recovered_runtime(%CodexSession{} = session, downstream)
+       when is_map(downstream) do
+    stable_downstream = Map.drop(downstream, [:owner_turn_id])
+
+    with :ok <- require_exact_keys(stable_downstream, @stable_downstream_keys),
+         %{pid: pid, correlation_id: correlation_id, epoch: epoch} <- stable_downstream,
+         true <- is_pid(pid) and is_binary(correlation_id) and is_integer(epoch) and epoch > 0 do
+      send(
+        pid,
+        {:websocket_owner_runtime_recovered, correlation_id, epoch,
+         %{
+           codex_session: session,
+           websocket_owner_lease_token: session.owner_lease_token,
+           websocket_owner_downstream: stable_downstream
+         }}
+      )
+
+      :ok
+    else
+      _other -> {:error, :stale_downstream}
+    end
+  end
+
+  defp notify_recovered_runtime(_session, _downstream), do: {:error, :stale_downstream}
 
   defp best_effort_cancel_downstream(node, codex_session_id, downstream, opts) do
     _result =

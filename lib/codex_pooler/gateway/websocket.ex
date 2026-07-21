@@ -21,6 +21,9 @@ defmodule CodexPooler.Gateway.Websocket do
 
   alias CodexPooler.RouteClass
 
+  @stable_downstream_keys [:active_turn_reconnect?, :correlation_id, :epoch, :pid]
+  @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
+
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: map() | keyword() | RequestOptions.t()
   @type session_ref :: CodexSession.t() | Ecto.UUID.t()
@@ -522,17 +525,68 @@ defmodule CodexPooler.Gateway.Websocket do
   def release_websocket_owner_lease(_session, _owner_lease_token, _reason),
     do: {:error, :owner_unavailable}
 
-  defp recovered_websocket_owner_response_options({:ok, runtime}, opts) do
-    {:ok,
-     websocket_owner_response_options(
-       opts,
-       runtime.codex_session,
-       runtime.websocket_owner_lease_token,
-       runtime.websocket_owner_downstream
-     )}
+  defp recovered_websocket_owner_response_options({:ok, runtime}, %RequestOptions{} = opts) do
+    with {:ok, downstream} <-
+           recovered_owner_response_downstream(
+             opts,
+             runtime.websocket_owner_downstream
+           ) do
+      {:ok,
+       websocket_owner_response_options(
+         opts,
+         runtime.codex_session,
+         runtime.websocket_owner_lease_token,
+         downstream
+       )}
+    end
   end
 
   defp recovered_websocket_owner_response_options({:error, reason}, _opts), do: {:error, reason}
+
+  defp recovered_owner_response_downstream(opts, stable_downstream) do
+    with :ok <- require_exact_downstream_keys(stable_downstream, @stable_downstream_keys) do
+      if public_responses_stream?(opts) do
+        with {:ok, owner_turn_id} <- original_owner_turn_id(opts),
+             true <- owner_turn_id == self() do
+          {:ok, Map.put(stable_downstream, :owner_turn_id, owner_turn_id)}
+        else
+          _invalid -> {:error, :owner_unavailable}
+        end
+      else
+        {:ok, stable_downstream}
+      end
+    end
+  end
+
+  defp original_owner_turn_id(%RequestOptions{
+         transport: %{websocket_owner: %{downstream: downstream}}
+       }) do
+    with :ok <- require_exact_downstream_keys(downstream, @public_per_call_downstream_keys),
+         owner_turn_id when is_pid(owner_turn_id) <- Map.get(downstream, :owner_turn_id) do
+      {:ok, owner_turn_id}
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  defp original_owner_turn_id(%RequestOptions{}), do: {:error, :owner_unavailable}
+
+  defp require_exact_downstream_keys(downstream, keys) when is_map(downstream) do
+    if map_size(downstream) == length(keys) and Enum.all?(keys, &Map.has_key?(downstream, &1)) do
+      :ok
+    else
+      {:error, :owner_unavailable}
+    end
+  end
+
+  defp require_exact_downstream_keys(_downstream, _keys), do: {:error, :owner_unavailable}
+
+  defp public_responses_stream?(%RequestOptions{
+         openai_compatibility: %{public_openai_responses_stream: true}
+       }),
+       do: true
+
+  defp public_responses_stream?(%RequestOptions{}), do: false
 
   @spec run_websocket_response(auth(), binary(), opts(), (binary() -> any())) ::
           :ok | {:error, Contracts.gateway_error()}

@@ -16,7 +16,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
 
   @session_reconnectable_statuses CodexSession.reconnectable_statuses()
   @alias_active BridgeSessionAlias.active_status()
-  @alias_expired BridgeSessionAlias.expired_status()
 
   @session_alias_conflict_target {:unsafe_fragment,
                                   "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}
@@ -64,18 +63,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     |> Enum.each(fn {alias_kind, alias_value} ->
       upsert_session_alias!(session, auth, alias_kind, alias_value, now)
     end)
-  end
-
-  @spec expire_active_for_sessions!(Ecto.Queryable.t(), DateTime.t()) ::
-          {non_neg_integer(), nil | [term()]}
-  def expire_active_for_sessions!(expired_sessions, now) do
-    BridgeSessionAlias
-    |> where(
-      [alias_record],
-      alias_record.codex_session_id in subquery(expired_sessions) and
-        alias_record.status == ^@alias_active
-    )
-    |> Repo.update_all(set: [status: @alias_expired, updated_at: now])
   end
 
   @spec continuity_opts(RequestOptions.t(), map(), map() | binary()) :: RequestOptions.t()

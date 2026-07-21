@@ -50,7 +50,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     opts = turn_opts(opts)
 
     Repo.transaction(fn ->
-      locked_session = Repo.get!(CodexSession, session.id, lock: "FOR UPDATE")
+      locked_session = codex_session_for_update!(session.id)
       ensure_codex_turn_is_unique!(locked_session, opts)
 
       sequence =
@@ -130,6 +130,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   end
 
   def mark_codex_turn_visible(_request_id), do: :ok
+
+  @spec codex_session_for_update!(Ecto.UUID.t()) :: CodexSession.t()
+  defp codex_session_for_update!(session_id) do
+    Repo.one!(
+      from session in CodexSession,
+        where: session.id == ^session_id,
+        lock: "FOR UPDATE"
+    )
+  end
 
   defp turn_opts(%RequestOptions{continuity: continuity, file_bridge: file_bridge}) do
     %{

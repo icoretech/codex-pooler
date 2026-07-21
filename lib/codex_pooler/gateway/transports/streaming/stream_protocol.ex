@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcome
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketErrorHeaders
@@ -25,11 +26,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           optional(:incomplete_reason) => String.t() | nil
         }
   @type public_openai_responses_stream_state :: PublicResponses.state()
+  @type public_openai_responses_websocket_state :: PublicResponsesWebsocket.state()
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
 
   @spec public_openai_responses_stream_state() :: public_openai_responses_stream_state()
   def public_openai_responses_stream_state do
     PublicResponses.new_state()
+  end
+
+  @spec public_openai_responses_websocket_state() :: public_openai_responses_websocket_state()
+  def public_openai_responses_websocket_state do
+    PublicResponsesWebsocket.new_state()
+  end
+
+  @spec normalize_public_openai_responses_websocket_data(
+          binary(),
+          public_openai_responses_websocket_state()
+        ) :: PublicResponsesWebsocket.result()
+  def normalize_public_openai_responses_websocket_data(data, state) do
+    PublicResponsesWebsocket.normalize(data, state)
   end
 
   @spec max_incomplete_sse_block_bytes() :: pos_integer()

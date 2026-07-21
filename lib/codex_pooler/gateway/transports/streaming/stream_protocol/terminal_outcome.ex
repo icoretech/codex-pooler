@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
   @terminal_event_types ["response.failed", "response.incomplete", "error"]
+  @success_event_types ["response.completed", "response.done"]
   @downstream_visible_event_types @terminal_event_types ++
                                     ["response.created", "response.in_progress"]
 
@@ -41,9 +42,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
     blocks
     |> Enum.find_value(fn block ->
-      block
-      |> ErrorCanonicalization.event_summary_from_block()
-      |> terminal_outcome_event()
+      {event_type, decoded} = SSEParser.stream_block_event(block)
+      terminal_outcome(event_type, decoded)
     end)
     |> Kernel.||(direct_terminal_outcome(data))
   end
@@ -107,9 +107,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   @spec terminal_outcome(String.t() | nil, map()) :: {:ok, terminal_outcome()} | nil
   def terminal_outcome(event_type, decoded) when is_map(decoded) do
-    event_type
-    |> ErrorCanonicalization.event_summary(decoded)
-    |> terminal_outcome_event()
+    case structural_success_outcome(event_type, decoded) do
+      {:ok, _outcome} = outcome ->
+        outcome
+
+      nil ->
+        if not success_candidate?(event_type, decoded) and
+             terminal_types_agree?(event_type, decoded) do
+          (event_type || ErrorCanonicalization.decoded_string(decoded, "type"))
+          |> ErrorCanonicalization.event_summary(decoded)
+          |> terminal_outcome_event()
+        end
+    end
   end
 
   @spec terminal_failure_event(map()) :: {:ok, terminal_failure()} | nil
@@ -204,11 +213,81 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   def stream_data_visible?(_data), do: false
 
   defp direct_terminal_outcome(data) do
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        terminal_outcome(nil, decoded) ||
+          if(success_candidate?(nil, decoded),
+            do: :error,
+            else: direct_event_summary_outcome(data)
+          )
+
+      _other ->
+        :error
+    end
+  end
+
+  defp direct_event_summary_outcome(data) do
     case ErrorCanonicalization.incomplete_sse_or_direct_stream_event_summary(data) do
       {:ok, event} -> terminal_outcome_event(event) || :error
       :incomplete -> :error
     end
   end
+
+  defp structural_success_outcome(event_type, %{} = decoded) do
+    data_type = Map.get(decoded, "type")
+
+    cond do
+      legacy_success?(event_type, decoded) ->
+        {:ok, %{kind: :completed, event_type: nil, data_type: nil}}
+
+      data_type in @success_event_types and success_types_agree?(event_type, data_type) and
+          valid_success_response?(decoded) ->
+        {:ok,
+         %{
+           kind: :completed,
+           event_type: event_type || data_type,
+           data_type: data_type
+         }}
+
+      true ->
+        nil
+    end
+  end
+
+  defp legacy_success?(nil, %{"id" => id} = decoded) when is_binary(id),
+    do: not Map.has_key?(decoded, "type")
+
+  defp legacy_success?(_event_type, _decoded), do: false
+
+  defp success_types_agree?(nil, data_type), do: data_type in @success_event_types
+  defp success_types_agree?(event_type, data_type), do: event_type == data_type
+
+  defp success_candidate?(event_type, decoded) do
+    event_type in @success_event_types or Map.get(decoded, "type") in @success_event_types
+  end
+
+  defp valid_success_response?(%{"response" => %{} = response}) do
+    case Map.fetch(response, "status") do
+      :error -> true
+      {:ok, "completed"} -> true
+      {:ok, _status} -> false
+    end
+  end
+
+  defp valid_success_response?(_decoded), do: false
+
+  defp terminal_types_agree?(event_type, decoded) do
+    data_type = Map.get(decoded, "type")
+
+    type_labels_agree?(event_type, data_type)
+  end
+
+  defp type_labels_agree?(event_type, data_type)
+       when is_binary(event_type) and event_type != "" and is_binary(data_type) and
+              data_type != "",
+       do: event_type == data_type
+
+  defp type_labels_agree?(_event_type, _data_type), do: true
 
   defp terminal_failure_from_event(event) do
     event_type = Map.get(event, :event_type)

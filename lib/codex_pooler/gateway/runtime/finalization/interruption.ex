@@ -73,7 +73,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
     Repo.transaction(fn ->
-      case Repo.get(CodexSession, session_id, lock: "FOR UPDATE") do
+      case codex_session_for_update(session_id) do
         %CodexSession{} = session ->
           in_progress_turns = in_progress_turns_for_session(session_id)
           Enum.each(in_progress_turns, &interrupt_turn!(&1, reason, now))
@@ -105,8 +105,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
     Repo.transaction(fn ->
-      CodexSession
-      |> Repo.get(session_id, lock: "FOR UPDATE")
+      session_id
+      |> codex_session_for_update()
       |> interrupt_session_turn_for_request(
         session_id,
         request_id,
@@ -167,7 +167,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp interrupt_turn!(%CodexTurn{} = turn, reason, now) do
-    request = Repo.get(Request, turn.request_id, lock: "FOR UPDATE")
+    request = request_for_update(turn.request_id)
     attempt = latest_attempt_for_update(turn.request_id)
 
     cond do
@@ -246,6 +246,24 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         where: attempt.request_id == ^request_id,
         order_by: [desc: attempt.attempt_number],
         limit: 1,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  @spec codex_session_for_update(Ecto.UUID.t()) :: CodexSession.t() | nil
+  defp codex_session_for_update(session_id) do
+    Repo.one(
+      from session in CodexSession,
+        where: session.id == ^session_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  @spec request_for_update(Ecto.UUID.t()) :: Request.t() | nil
+  defp request_for_update(request_id) do
+    Repo.one(
+      from request in Request,
+        where: request.id == ^request_id,
         lock: "FOR UPDATE"
     )
   end

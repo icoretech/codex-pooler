@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     CodexSession,
     CodexTurn,
     SessionContinuity.Aliases,
+    SessionContinuity.ExpiredSessions,
     SessionContinuity.OwnerLease,
     SessionContinuity.TurnLifecycle
   }
@@ -20,7 +21,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   alias CodexPooler.Repo
 
   @session_active CodexSession.active_status()
-  @session_closed CodexSession.closed_status()
   @session_reconnectable_statuses CodexSession.reconnectable_statuses()
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: RequestOptions.t()
@@ -141,7 +141,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     now = now()
 
     Repo.transaction(fn ->
-      session = Repo.get!(CodexSession, session.id, lock: "FOR UPDATE")
+      session = codex_session_for_update!(session.id)
       auth = %{pool: %{id: session.pool_id}, api_key: %{id: session.api_key_id}}
       session = maybe_bind_session_assignment!(session, opts, now)
 
@@ -184,6 +184,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     to: OwnerLease,
     as: :replace_unavailable
 
+  @spec codex_session_for_update!(Ecto.UUID.t()) :: CodexSession.t()
+  defp codex_session_for_update!(session_id) do
+    Repo.one!(
+      from session in CodexSession,
+        where: session.id == ^session_id,
+        lock: "FOR UPDATE"
+    )
+  end
+
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do
     existing_session = existing_session_for_start!(auth, opts, session_key, now)
 
@@ -201,7 +210,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     resolved_session = Aliases.resolved_session_for_update(auth, opts, session_key, now)
 
     if is_nil(resolved_session) do
-      close_expired_sessions!(auth.pool.id, session_key, now)
+      ExpiredSessions.close_for_key!(auth.pool.id, session_key, now)
     end
 
     reject_blocked_authenticated_owner_attach!(auth, opts, session_key, now, resolved_session)
@@ -418,25 +427,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   end
 
   defp authenticated_owner_attach_requires_existing?(_opts), do: false
-
-  defp close_expired_sessions!(pool_id, session_key, now) do
-    expired_sessions =
-      from session in CodexSession,
-        where:
-          session.pool_id == ^pool_id and
-            fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
-            session.status in ^@session_reconnectable_statuses and
-            not is_nil(session.owner_lease_expires_at) and
-            session.owner_lease_expires_at <= ^now,
-        select: session.id
-
-    OwnerLease.expire_active_for_sessions!(expired_sessions, now)
-    Aliases.expire_active_for_sessions!(expired_sessions, now)
-
-    CodexSession
-    |> where([session], session.id in subquery(expired_sessions))
-    |> Repo.update_all(set: [status: @session_closed, closed_at: now, updated_at: now])
-  end
 
   defp bridge_owner_lease_ttl_seconds(%RequestOptions{} = request_options) do
     case request_options.continuity.bridge_owner_lease_ttl_seconds do

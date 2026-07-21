@@ -117,6 +117,35 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   @spec accept_downstream_message(term(), socket_state()) ::
           WebsocketOwnerContract.downstream_match_result() | :drop
+  def accept_downstream_message(
+        message,
+        %{
+          opts: %RequestOptions{
+            openai_compatibility: %{public_openai_responses_stream: true}
+          },
+          public_response_task_pid: owner_turn_id,
+          websocket_owner_downstream: downstream
+        }
+      )
+      when is_pid(owner_turn_id) and is_map(downstream) do
+    WebsocketOwnerContract.accept_downstream_message(
+      message,
+      Map.get(downstream, :epoch),
+      Map.get(downstream, :correlation_id),
+      owner_turn_id
+    )
+  end
+
+  def accept_downstream_message(
+        _message,
+        %{
+          opts: %RequestOptions{
+            openai_compatibility: %{public_openai_responses_stream: true}
+          }
+        }
+      ),
+      do: :drop
+
   def accept_downstream_message(message, %{websocket_owner_downstream: downstream})
       when is_map(downstream) do
     WebsocketOwnerContract.accept_downstream_message(
@@ -161,13 +190,13 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     end
   end
 
-  @spec response_options(socket_state()) :: RequestOptions.t()
-  def response_options(state) do
+  @spec response_options(socket_state(), pid() | nil) :: RequestOptions.t()
+  def response_options(state, owner_turn_id \\ nil) do
     Websocket.websocket_owner_response_options(
       Map.get(state, :opts, %{}),
       Map.get(state, :codex_session),
       Map.get(state, :websocket_owner_lease_token),
-      Map.get(state, :websocket_owner_downstream)
+      per_call_downstream(state, owner_turn_id)
     )
   end
 
@@ -280,6 +309,25 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
       |> put_runtime(runtime)
     end
   end
+
+  defp per_call_downstream(state, owner_turn_id) do
+    downstream = Map.get(state, :websocket_owner_downstream)
+
+    if public_responses_stream?(state) and is_map(downstream) and is_pid(owner_turn_id) do
+      Map.put(downstream, :owner_turn_id, owner_turn_id)
+    else
+      downstream
+    end
+  end
+
+  defp public_responses_stream?(%{
+         opts: %RequestOptions{
+           openai_compatibility: %{public_openai_responses_stream: true}
+         }
+       }),
+       do: true
+
+  defp public_responses_stream?(_state), do: false
 
   defp after_detach(result, state) do
     recovery_result = recover_leftovers(result, state)

@@ -18,6 +18,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @registry __MODULE__.Registry
   @task_supervisor __MODULE__.TaskSupervisor
+  @restore_downstream_keys [:correlation_id, :epoch, :pid]
+  @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
+  @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
 
   defstruct [
     :codex_session_id,
@@ -144,8 +147,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         %{pid: pid, epoch: epoch, correlation_id: correlation_id} = downstream
       )
       when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) do
-    GenServer.call(owner, {:restore_downstream, downstream}, owner_call_timeout())
+    if exact_keys?(downstream, @restore_downstream_keys) do
+      GenServer.call(owner, {:restore_downstream, downstream}, owner_call_timeout())
+    else
+      {:error, :stale_downstream}
+    end
   end
+
+  def restore_downstream(_owner, _downstream), do: {:error, :stale_downstream}
 
   @spec detach_downstream(GenServer.server(), map()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
@@ -328,8 +337,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call({:submit_upstream, downstream, upstream_payload}, from, state) do
-    case DownstreamState.downstream_status(state.downstream, downstream) do
-      :active ->
+    case active_turn_downstream(state.downstream, downstream) do
+      {:ok, active_turn_downstream} ->
         ref = make_ref()
         task = start_upstream_task(state, ref, upstream_payload)
         {submitter_pid, _tag} = from
@@ -340,7 +349,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           task_ref: task.ref,
           submitter_monitor: Process.monitor(submitter_pid),
           reply_to: from,
-          downstream: state.downstream
+          downstream: active_turn_downstream
         }
 
         {:noreply, %{state | active_turn: active_turn}}
@@ -500,6 +509,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp send_downstream(nil, _payload), do: {:error, :owner_unavailable}
 
+  defp send_downstream(
+         %{
+           pid: pid,
+           epoch: epoch,
+           correlation_id: correlation_id,
+           owner_turn_id: owner_turn_id
+         },
+         payload
+       )
+       when is_pid(owner_turn_id) do
+    message = {:websocket_owner_frame, correlation_id, epoch, owner_turn_id, payload}
+
+    if WebsocketOwnerContract.downstream_message?(message) do
+      send(pid, message)
+      :ok
+    else
+      {:error, :invalid_downstream_message}
+    end
+  end
+
+  defp send_downstream(%{owner_turn_id: _invalid_owner_turn_id}, _payload),
+    do: {:error, :invalid_downstream_message}
+
   defp send_downstream(%{pid: pid, epoch: epoch, correlation_id: correlation_id}, payload) do
     message = {:websocket_owner_frame, correlation_id, epoch, payload}
 
@@ -543,8 +575,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       |> DownstreamState.demonitor_downstream()
       |> DownstreamState.cancel_idle_shutdown()
 
+    downstream = Map.take(downstream, @restore_downstream_keys)
     monitor = Process.monitor(downstream.pid)
-    downstream = Map.put(downstream, :active_turn_reconnect?, DownstreamState.active_turn?(state))
+
+    downstream =
+      Map.put(downstream, :active_turn_reconnect?, DownstreamState.active_turn?(state))
 
     state = DownstreamState.put_active_turn_downstream(state, downstream)
 
@@ -557,10 +592,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
     case result do
       :ok ->
-        _result = send_downstream(downstream, :complete)
+        :ok
 
       {:ok, _result} ->
-        _result = send_downstream(downstream, :complete)
+        :ok
 
       {:error, %{body: body, forward_error_body?: true, reason: _reason}}
       when is_binary(body) and body != "" ->
@@ -575,6 +610,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       _other ->
         _result = send_owner_error(downstream, :owner_crashed)
     end
+
+    _result = send_downstream(downstream, :complete)
 
     state
     |> Map.put(:active_turn, nil)
@@ -699,6 +736,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp owner_error({:error, error}), do: owner_error(error)
   defp owner_error(:normal), do: :owner_unavailable
   defp owner_error(_reason), do: :owner_crashed
+
+  defp active_turn_downstream(stable_downstream, downstream) do
+    case DownstreamState.downstream_status(stable_downstream, downstream) do
+      :active -> validate_active_turn_downstream(stable_downstream, downstream)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_active_turn_downstream(stable_downstream, downstream) do
+    cond do
+      exact_keys?(stable_downstream, @stable_downstream_keys) and
+        exact_keys?(downstream, @public_per_call_downstream_keys) and
+        is_pid(Map.get(downstream, :owner_turn_id)) and
+          Map.take(downstream, @stable_downstream_keys) == stable_downstream ->
+        {:ok, downstream}
+
+      exact_keys?(stable_downstream, @stable_downstream_keys) and
+          (exact_keys?(downstream, @stable_downstream_keys) or
+             exact_keys?(downstream, @restore_downstream_keys)) ->
+        {:ok, stable_downstream}
+
+      true ->
+        {:error, :stale_downstream}
+    end
+  end
+
+  defp exact_keys?(map, keys) when is_map(map) do
+    map_size(map) == length(keys) and Enum.all?(keys, &Map.has_key?(map, &1))
+  end
+
+  defp exact_keys?(_map, _keys), do: false
 
   defp owner_call_timeout, do: WebsocketOwnerContract.default_owner_call_timeout_ms()
 end

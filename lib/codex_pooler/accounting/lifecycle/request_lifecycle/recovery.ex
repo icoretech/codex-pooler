@@ -114,8 +114,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
 
   defp recover_terminal_attempt(request_id, attempt_id, now) do
     Repo.transaction(fn ->
-      request = Repo.get(Request, request_id, lock: "FOR UPDATE")
-      attempt = Repo.get(Attempt, attempt_id, lock: "FOR UPDATE")
+      request =
+        Repo.one(
+          from locked_request in Request,
+            where: locked_request.id == ^request_id,
+            lock: "FOR UPDATE"
+        )
+
+      attempt =
+        Repo.one(
+          from locked_attempt in Attempt,
+            where: locked_attempt.id == ^attempt_id,
+            lock: "FOR UPDATE"
+        )
 
       if terminal_request_with_open_attempt?(request, attempt) do
         attempt =
