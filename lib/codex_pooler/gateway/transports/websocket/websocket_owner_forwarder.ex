@@ -420,14 +420,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     with {:ok, restore_input} <- restore_input(downstream),
          {:ok, stable_downstream} <-
            WebsocketOwnerSession.restore_downstream(owner_pid, restore_input),
-         :ok <- require_exact_keys(stable_downstream, @stable_downstream_keys),
-         {:ok, per_call_downstream} <-
-           recovered_per_call_downstream(stable_downstream, downstream) do
-      {:ok, per_call_downstream}
+         :ok <- require_exact_keys(stable_downstream, @stable_downstream_keys) do
+      recovered_per_call_downstream(stable_downstream, downstream)
     end
   end
-
-  defp attach_recovered_downstream(_owner_pid, _downstream), do: {:error, :stale_downstream}
 
   defp restore_input(downstream) do
     cond do
@@ -468,8 +464,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp exact_keys?(map, keys) when is_map(map) do
     map_size(map) == length(keys) and Enum.all?(keys, &Map.has_key?(map, &1))
   end
-
-  defp exact_keys?(_map, _keys), do: false
 
   defp notify_recovered_runtime(%CodexSession{} = session, downstream)
        when is_map(downstream) do

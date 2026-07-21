@@ -610,6 +610,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              }
 
       assert attempt.response_metadata["transport_failure"] == %{
+               "peer_close_code" => 1001,
+               "peer_close_reason_bytes" => 36,
+               "peer_close_reason_present" => true,
                "phase" => "upstream_close",
                "pre_visible_output" => false,
                "reason" => "upstream_websocket_closed_before_terminal",

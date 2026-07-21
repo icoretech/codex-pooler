@@ -563,11 +563,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       send(owner_pid, :stop)
       assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal}
 
-      assert {:ok, down_state} =
-               CodexResponsesSocket.handle_info(
-                 {:DOWN, owner_monitor, :process, owner_pid, :normal},
-                 final_signal_state
-               )
+      {handle_result, warning_logs} =
+        ExUnit.CaptureLog.with_log([level: :warning], fn ->
+          CodexResponsesSocket.handle_info(
+            {:DOWN, owner_monitor, :process, owner_pid, :normal},
+            final_signal_state
+          )
+        end)
+
+      assert warning_logs =~ "websocket owner monitor lease release failed"
+      assert warning_logs =~ "failure_reason=owner_unavailable"
+
+      assert {:ok, down_state} = handle_result
 
       refute Map.has_key?(down_state, :websocket_owner_pid)
       refute Map.has_key?(down_state, :websocket_owner_monitor)

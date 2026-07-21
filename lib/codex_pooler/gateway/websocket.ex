@@ -545,18 +545,21 @@ defmodule CodexPooler.Gateway.Websocket do
 
   defp recovered_owner_response_downstream(opts, stable_downstream) do
     with :ok <- require_exact_downstream_keys(stable_downstream, @stable_downstream_keys) do
-      if public_responses_stream?(opts) do
-        with {:ok, owner_turn_id} <- original_owner_turn_id(opts),
-             true <- owner_turn_id == self() do
-          {:ok, Map.put(stable_downstream, :owner_turn_id, owner_turn_id)}
-        else
-          _invalid -> {:error, :owner_unavailable}
-        end
-      else
-        {:ok, stable_downstream}
-      end
+      recovered_owner_response_downstream(opts, stable_downstream, public_responses_stream?(opts))
     end
   end
+
+  defp recovered_owner_response_downstream(opts, stable_downstream, true) do
+    with {:ok, owner_turn_id} <- original_owner_turn_id(opts),
+         true <- owner_turn_id == self() do
+      {:ok, Map.put(stable_downstream, :owner_turn_id, owner_turn_id)}
+    else
+      _invalid -> {:error, :owner_unavailable}
+    end
+  end
+
+  defp recovered_owner_response_downstream(_opts, stable_downstream, false),
+    do: {:ok, stable_downstream}
 
   defp original_owner_turn_id(%RequestOptions{
          transport: %{websocket_owner: %{downstream: downstream}}

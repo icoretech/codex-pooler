@@ -14,8 +14,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     SessionContinuity
   }
 
-  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions
+  alias CodexPooler.Gateway.Websocket, as: Gateway
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -387,28 +387,36 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp handle_frozen_query(metadata) do
     case Process.get(@frozen_context) do
-      %{parent: parent, ref: ref} ->
-        if metadata[:repo] == Repo do
-          sequence = Process.get(@frozen_sequence, 0) + 1
-          Process.put(@frozen_sequence, sequence)
-          event = contention_event(metadata, sequence)
-          send(parent, {:task7_frozen_query, ref, event})
-
-          if event.source == "codex_sessions" and event.operation == "UPDATE" and
-               not Process.get(@frozen_paused, false) do
-            Process.put(@frozen_paused, true)
-            send(parent, {:task7_frozen_close_barrier, ref, event})
-
-            receive do
-              {:task7_release_frozen, ^ref} -> :ok
-            after
-              10_000 -> raise "Task 7 frozen close barrier was not released"
-            end
-          end
-        end
+      %{parent: parent, ref: ref} = context ->
+        handle_frozen_query_context(metadata, context, parent, ref)
 
       _context ->
         :ok
+    end
+  end
+
+  defp handle_frozen_query_context(metadata, context, parent, ref) do
+    if metadata[:repo] == Repo do
+      sequence = Process.get(@frozen_sequence, 0) + 1
+      Process.put(@frozen_sequence, sequence)
+      event = contention_event(metadata, sequence)
+      send(parent, {:task7_frozen_query, ref, event})
+
+      maybe_pause_frozen_close(event, context, parent, ref)
+    end
+  end
+
+  defp maybe_pause_frozen_close(event, _context, parent, ref) do
+    if event.source == "codex_sessions" and event.operation == "UPDATE" and
+         not Process.get(@frozen_paused, false) do
+      Process.put(@frozen_paused, true)
+      send(parent, {:task7_frozen_close_barrier, ref, event})
+
+      receive do
+        {:task7_release_frozen, ^ref} -> :ok
+      after
+        10_000 -> raise "Task 7 frozen close barrier was not released"
+      end
     end
   end
 
@@ -1077,23 +1085,26 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp boundary_events(events) do
     case Enum.split_while(events, &(not expired_session_lock_event?(&1))) do
-      {_before, []} ->
-        []
+      {_before, []} -> []
+      {_before, from_boundary} -> collect_boundary_events(from_boundary)
+    end
+  end
 
-      {_before, from_boundary} ->
-        Enum.reduce_while(from_boundary, [], fn event, acc ->
-          if boundary_relation_event?(event) do
-            next = acc ++ [event]
+  defp collect_boundary_events(events) do
+    Enum.reduce_while(events, [], &collect_boundary_event/2)
+  end
 
-            if event.source == "codex_sessions" and event.operation == "UPDATE" do
-              {:halt, next}
-            else
-              {:cont, next}
-            end
-          else
-            {:cont, acc}
-          end
-        end)
+  defp collect_boundary_event(event, acc) do
+    if boundary_relation_event?(event) do
+      next = acc ++ [event]
+
+      if event.source == "codex_sessions" and event.operation == "UPDATE" do
+        {:halt, next}
+      else
+        {:cont, next}
+      end
+    else
+      {:cont, acc}
     end
   end
 

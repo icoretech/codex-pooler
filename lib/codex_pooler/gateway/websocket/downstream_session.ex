@@ -422,6 +422,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   defp log_monitor_lease_release(:ok, _state, _reason), do: :ok
+
   defp log_monitor_lease_release({:error, :stale_owner}, _state, _reason), do: :ok
 
   defp log_monitor_lease_release({:error, release_reason}, state, owner_reason) do

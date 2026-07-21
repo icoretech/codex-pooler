@@ -15,17 +15,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize(binary(), state()) :: result()
   def normalize(data, state) when is_binary(data) do
-    with {:ok, %{} = decoded} <- Jason.decode(data) do
-      event_type = string_value(decoded, "type")
-      decoded = canonicalize_existing_public_error(data, decoded)
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        event_type = string_value(decoded, "type")
+        decoded = canonicalize_existing_public_error(data, decoded)
 
-      case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
-        {:emit, _type, normalized, state} -> {:push, Jason.encode!(normalized), state}
-        {:drop, state} -> {:drop, state}
-        {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}
-      end
-    else
-      _invalid -> {:push, data, state}
+        case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
+          {:emit, _type, normalized, state} -> {:push, Jason.encode!(normalized), state}
+          {:drop, state} -> {:drop, state}
+          {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}
+        end
+
+      _invalid ->
+        {:push, data, state}
     end
   end
 

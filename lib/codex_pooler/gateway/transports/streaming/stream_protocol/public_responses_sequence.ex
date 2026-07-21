@@ -81,34 +81,45 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp normalize_public_success(event_type, decoded) do
     case StreamProtocol.terminal_outcome(event_type, decoded) do
       {:ok, %{kind: :completed, data_type: nil}} ->
-        response = Map.put_new(decoded, "status", "completed")
-
-        {:ok, "response.completed", %{"type" => "response.completed", "response" => response}}
+        completed_response_without_wrapper(decoded)
 
       {:ok, %{kind: :completed, data_type: "response.done"}} ->
-        response = decoded |> Map.fetch!("response") |> Map.put("status", "completed")
-
-        {:ok, "response.completed",
-         decoded
-         |> Map.put("type", "response.completed")
-         |> Map.put("response", response)}
+        completed_response_from_done(decoded)
 
       {:ok, %{kind: :completed, data_type: "response.completed"}} ->
         {:ok, "response.completed", decoded}
 
-      _outcome when event_type in ["response.completed", "response.done"] ->
-        :drop
-
-      _outcome when is_map_key(decoded, "type") ->
-        if Map.get(decoded, "type") in ["response.completed", "response.done"] do
-          :drop
-        else
-          {:ok, event_type || string_value(decoded, "type"), decoded}
-        end
-
       _outcome ->
-        {:ok, event_type || string_value(decoded, "type"), decoded}
+        normalize_nonterminal_event(event_type, decoded)
     end
+  end
+
+  defp completed_response_without_wrapper(decoded) do
+    response = Map.put_new(decoded, "status", "completed")
+
+    {:ok, "response.completed", %{"type" => "response.completed", "response" => response}}
+  end
+
+  defp completed_response_from_done(decoded) do
+    response = decoded |> Map.fetch!("response") |> Map.put("status", "completed")
+
+    {:ok, "response.completed",
+     decoded
+     |> Map.put("type", "response.completed")
+     |> Map.put("response", response)}
+  end
+
+  defp normalize_nonterminal_event(event_type, decoded) do
+    if terminal_response_event?(event_type, decoded) do
+      :drop
+    else
+      {:ok, event_type || string_value(decoded, "type"), decoded}
+    end
+  end
+
+  defp terminal_response_event?(event_type, decoded) do
+    event_type in ["response.completed", "response.done"] or
+      Map.get(decoded, "type") in ["response.completed", "response.done"]
   end
 
   defp valid_terminal?(type, decoded) do

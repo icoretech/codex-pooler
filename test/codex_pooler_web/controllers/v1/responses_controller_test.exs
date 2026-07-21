@@ -4422,11 +4422,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert conn.status == 200
 
-    assert [%{"event" => "response.incomplete", "data" => data}] =
-             public_sse_events(conn.resp_body)
+    assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
 
-    assert data["type"] == "response.incomplete"
-    assert data["response"]["status"] == "incomplete"
+    assert data["type"] == "response.failed"
+    assert data["response"]["status"] == "failed"
+    assert data["error"]["code"] == "context_length_exceeded"
 
     assert get_in(data, ["response", "incomplete_details", "reason"]) ==
              "context_length_exceeded"

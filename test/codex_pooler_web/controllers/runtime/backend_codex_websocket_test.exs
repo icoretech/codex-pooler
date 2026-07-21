@@ -3569,6 +3569,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert second_attempt.status == "failed"
 
       assert second_attempt.response_metadata["transport_failure"] == %{
+               "peer_close_code" => 1001,
+               "peer_close_reason_bytes" => 40,
+               "peer_close_reason_present" => true,
                "phase" => "upstream_close",
                "pre_visible_output" => false,
                "reason" => "upstream_websocket_closed_before_terminal",
@@ -6751,6 +6754,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert first_attempt.network_error_code == "upstream_stream_error"
 
     assert first_attempt.response_metadata["transport_failure"] == %{
+             "peer_close_code" => 1001,
+             "peer_close_reason_bytes" => 30,
+             "peer_close_reason_present" => true,
              "phase" => "upstream_close",
              "pre_visible_output" => true,
              "reason" => "upstream_websocket_closed_before_terminal",

@@ -288,11 +288,14 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     capture_log(fn ->
       WebsocketOwnerSession.Registry
       |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(fn session_id ->
-        with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
-          GenServer.stop(owner_pid, :shutdown, 1_000)
-        end
-      end)
+      |> Enum.each(&stop_owner_session/1)
     end)
+  end
+
+  defp stop_owner_session(session_id) do
+    case WebsocketOwnerSession.lookup(session_id) do
+      {:ok, owner_pid} -> GenServer.stop(owner_pid, :shutdown, 1_000)
+      {:error, _reason} -> :ok
+    end
   end
 end
