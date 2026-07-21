@@ -148,6 +148,10 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     visible_text?(Map.get(part, "image_url")) or visible_text?(Map.get(part, "file_id"))
   end
 
+  defp visible_part?(%{"type" => "input_audio"} = part) do
+    visible_text?(Map.get(part, "audio_url"))
+  end
+
   defp visible_part?(%{"type" => "input_file"} = part) do
     visible_text?(Map.get(part, "file_id"))
   end

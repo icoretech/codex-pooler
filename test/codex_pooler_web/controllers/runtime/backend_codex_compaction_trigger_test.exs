@@ -2,6 +2,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+
+  import CodexPooler.Gateway.OpenAICompatibility.AudioTestSupport,
+    only: [assert_audio_accounting_metadata_only!: 2]
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
@@ -279,6 +283,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute persistence_text =~ response_turn_state
   end
 
+  test "POST /backend-api/codex/responses bridges audio-only input to compact SSE", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_audio_compaction_bridge",
+          "object" => "response.compaction",
+          "output" => [
+            %{
+              "type" => "compaction",
+              "encrypted_content" => "encrypted-audio-compact-fixture"
+            }
+          ]
+        })
+      )
+
+    audio_source = "synthetic compaction audio"
+    audio_data = Base.encode64(audio_source)
+    audio_url = "data:audio/wav;base64," <> audio_data
+    setup = gateway_setup(upstream, compact?: true)
+
+    input = [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_audio", "audio_url" => audio_url}]
+      }
+    ]
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => input ++ [compaction_trigger()],
+        "stream" => true
+      })
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+
+    response_body = response(conn, 200)
+    assert response_body =~ "encrypted-audio-compact-fixture"
+    refute response_body =~ "audio_url"
+    refute response_body =~ "audio_data"
+    refute response_body =~ audio_data
+    refute response_body =~ audio_url
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.json["input"] == input
+    refute inspect(captured.json) =~ "compaction_trigger"
+
+    assert_audio_accounting_metadata_only!(setup.pool, [audio_source, audio_data, audio_url])
+  end
+
   test "POST /backend-api/codex/v1/responses bridges compaction_summary result shape", %{
     conn: conn
   } do
@@ -367,6 +429,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       [compaction_trigger() | visible_input("non-terminal trigger fixture")],
       [
         %{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"},
+        compaction_trigger()
+      ],
+      [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_audio", "audio_url" => " \t\r\n"}]
+        },
         compaction_trigger()
       ],
       visible_input("duplicate trigger fixture") ++ [compaction_trigger(), compaction_trigger()]
