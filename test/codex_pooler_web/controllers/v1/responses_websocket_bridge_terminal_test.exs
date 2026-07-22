@@ -197,10 +197,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
       assert_receive {:DOWN, ^task_monitor, :process, _task_pid, :normal}, 1_000
       assert Process.info(owner, :status) == {:status, :suspended}
+      close_monitor = Process.monitor(close_barrier_pid)
+      send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+      assert_receive {:DOWN, ^close_monitor, :process, ^close_barrier_pid, _reason}, 1_000
+      assert Process.info(request_task.pid, :status) != nil
+      assert Process.info(owner, :status) == {:status, :suspended}
       assert :erlang.resume_process(owner)
 
       response = Task.await(request_task, 1_000)
-      send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
       assert response.status == 200
       assert Enum.count(stream_event_types(response.resp_body), &(&1 == @public_type)) == 1
