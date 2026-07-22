@@ -49,7 +49,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     } = context
 
     usage = stream_usage(body, stream_state)
-    upstream_websocket_connection = upstream_websocket_connection(response_context)
+    attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+    upstream_websocket_connection = attempt_metadata.upstream_websocket_connection
 
     case AttemptSettlement.finalize_success(
            reserved.request,
@@ -224,19 +225,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     |> Map.merge(Metadata.upstream_websocket_connection_attempt_metadata(connection))
   end
 
-  defp upstream_websocket_connection(%ResponseContext{
+  defp upstream_websocket_attempt_metadata(%ResponseContext{
          upstream_websocket_connection: connection
        })
        when not is_nil(connection),
-       do: connection
+       do: %{upstream_websocket_connection: connection, transport_failure: nil}
 
-  defp upstream_websocket_connection(%ResponseContext{
+  defp upstream_websocket_attempt_metadata(%ResponseContext{
          response: %Req.Response{body: %WebsocketBridgeStream{} = stream}
        }) do
-    WebsocketBridgeStream.take_upstream_websocket_connection(stream)
+    WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream)
   end
 
-  defp upstream_websocket_connection(%ResponseContext{}), do: nil
+  defp upstream_websocket_attempt_metadata(%ResponseContext{}),
+    do: %{upstream_websocket_connection: nil, transport_failure: nil}
+
+  defp upstream_websocket_connection(%ResponseContext{} = response_context),
+    do: upstream_websocket_attempt_metadata(response_context).upstream_websocket_connection
 
   @spec error_code(term()) :: String.t()
   def error_code({:chunk, :closed}), do: "client_disconnected"

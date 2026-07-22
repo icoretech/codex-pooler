@@ -114,6 +114,31 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
            }
   end
 
+  test "sanitizes retained terminal delivery metadata through the strict allowlist" do
+    metadata =
+      TransportFailureReason.sanitize_transport_failure_metadata(%{
+        "phase" => "terminal_delivery",
+        "reason_class" => "owner_terminal_delivery_timeout",
+        "reason" => "upstream_websocket_terminal_delivery_timeout",
+        "upstream_committed" => true,
+        "terminal_seen" => true,
+        "terminal_forwarded" => false,
+        "raw_frame" => "sentinel-frame",
+        "authorization" => "sentinel-token"
+      })
+
+    assert metadata == %{
+             "phase" => "terminal_delivery",
+             "reason_class" => "owner_terminal_delivery_timeout",
+             "reason" => "upstream_websocket_terminal_delivery_timeout",
+             "upstream_committed" => true,
+             "terminal_seen" => true,
+             "terminal_forwarded" => false
+           }
+
+    refute inspect(metadata) =~ "sentinel"
+  end
+
   test "sanitizes peer close diagnostics before transport failure metadata is built" do
     cases = [
       {1000, "short",

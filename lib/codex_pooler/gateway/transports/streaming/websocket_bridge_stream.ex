@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -41,6 +42,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         }
   @type decision :: :stream | {:fallback, term()}
   @type part :: {:data, binary()} | :done | {:bridge_error, term()}
+  @type attempt_metadata :: %{
+          upstream_websocket_connection: map() | nil,
+          transport_failure: map() | nil
+        }
 
   @default_settle_timeout_ms 5_000
   @max_precommit_frames 64
@@ -71,7 +76,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           pending: [],
           pending_count: 0,
           pending_bytes: 0,
-          upstream_websocket_connection: nil
+          upstream_websocket_connection: nil,
+          transport_failure: nil,
+          upstream_committed: false
         })
       end)
 
@@ -100,28 +107,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     flush(ref)
   end
 
-  @doc "Returns and releases connection metadata retained by a committed bridge stream."
-  @spec take_upstream_websocket_connection(t()) :: map() | nil
-  def take_upstream_websocket_connection(%__MODULE__{
+  @doc "Atomically returns and clears safe metadata retained for one bridge attempt."
+  @spec take_upstream_websocket_attempt_metadata(t()) :: attempt_metadata()
+  def take_upstream_websocket_attempt_metadata(%__MODULE__{
         relay: relay,
         settle_timeout_ms: settle_timeout_ms
       }) do
     query_ref = make_ref()
     monitor_ref = Process.monitor(relay)
-    send(relay, {:take_upstream_websocket_connection, self(), query_ref})
+    send(relay, {:take_upstream_websocket_attempt_metadata, self(), query_ref})
 
     receive do
-      {^query_ref, connection} ->
+      {^query_ref, metadata} ->
         Process.demonitor(monitor_ref, [:flush])
-        connection
+        metadata
 
       {:DOWN, ^monitor_ref, :process, ^relay, _reason} ->
-        nil
+        empty_attempt_metadata()
     after
       settle_timeout_ms + 1_000 ->
         Process.demonitor(monitor_ref, [:flush])
         send(relay, :cancel)
-        nil
+        empty_attempt_metadata()
     end
   end
 
@@ -229,8 +236,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         preflight_loop(state)
 
-      {^task_ref, {:error, reason}} ->
-        report_fallback(parent, ref, error_reason(reason))
+      {^task_ref, {:error, reason} = result} ->
+        state = put_submit_result_and_clear_task(state, result)
+
+        if committed_failure?(state.transport_failure) do
+          report_stream_error(parent, ref, error_reason(reason))
+          metadata_loop(state)
+        else
+          report_fallback(parent, ref, error_reason(reason))
+        end
 
       {^task_ref, result} ->
         state
@@ -266,11 +280,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         case preflight_class(text) do
           :commit ->
             report_stream(parent, ref, state.pending, text)
-            relay_after_result(%{state | pending: []}, :ok)
+            relay_after_result(%{state | pending: [], upstream_committed: true}, :ok)
 
           :terminal ->
             report_terminal(parent, ref, state.pending, text)
-            metadata_loop(%{state | pending: []})
+            metadata_loop(%{state | pending: [], upstream_committed: true})
 
           :buffer ->
             buffer_preflight(state, text, &preflight_after_result/1)
@@ -301,12 +315,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp commit_stream(%{task: nil} = state, text) do
     report_stream(state.parent, state.ref, state.pending, text)
-    relay_after_result(%{state | pending: []}, :ok)
+    relay_after_result(%{state | pending: [], upstream_committed: true}, :ok)
   end
 
   defp commit_stream(state, text) do
     report_stream(state.parent, state.ref, state.pending, text)
-    relay_loop(%{state | pending: []})
+    relay_loop(%{state | pending: [], upstream_committed: true})
   end
 
   defp commit_terminal(state, text) do
@@ -314,6 +328,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
     state
     |> Map.put(:pending, [])
+    |> Map.put(:upstream_committed, true)
     |> settle_task()
     |> metadata_loop()
   end
@@ -361,6 +376,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp report_fallback(parent, ref, reason) do
     send(parent, {ref, {:preflight, {:fallback, reason}}})
   end
+
+  defp report_stream_error(parent, ref, reason) do
+    send(parent, {ref, {:preflight, :stream}})
+    send(parent, {ref, {:bridge_error, reason}})
+  end
+
+  defp committed_failure?(%{"upstream_committed" => true}), do: true
+  defp committed_failure?(_transport_failure), do: false
 
   defp fall_back(state, reason) do
     report_fallback(state.parent, state.ref, reason)
@@ -506,9 +529,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp metadata_loop(state) do
     receive do
-      {:take_upstream_websocket_connection, caller, query_ref}
+      {:take_upstream_websocket_attempt_metadata, caller, query_ref}
       when is_pid(caller) and is_reference(query_ref) ->
-        send(caller, {query_ref, state.upstream_websocket_connection})
+        send(caller, {query_ref, attempt_metadata(state)})
 
       {:DOWN, parent_monitor, :process, _pid, _reason}
       when parent_monitor == state.parent_monitor ->
@@ -525,13 +548,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp put_submit_result_connection(state, {status, result})
        when status in [:ok, :error] and is_map(result) do
-    case Map.get(result, :upstream_websocket_connection) do
-      connection when is_map(connection) ->
-        %{state | upstream_websocket_connection: connection}
+    connection = safe_connection(Map.get(result, :upstream_websocket_connection))
 
-      _connection ->
-        state
-    end
+    transport_failure =
+      result
+      |> Map.get(:transport_failure)
+      |> TransportFailureReason.sanitize_transport_failure_metadata()
+      |> committed_transport_failure(state.upstream_committed)
+
+    %{
+      state
+      | upstream_websocket_connection: connection || state.upstream_websocket_connection,
+        transport_failure: nonempty_map(transport_failure) || state.transport_failure
+    }
   end
 
   defp put_submit_result_connection(state, _result), do: state
@@ -585,6 +614,53 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp error_reason(%{reason: reason}) when is_atom(reason), do: reason
   defp error_reason(reason) when is_atom(reason), do: reason
   defp error_reason(_reason), do: :upstream_websocket_error
+
+  defp attempt_metadata(state) do
+    %{
+      upstream_websocket_connection: state.upstream_websocket_connection,
+      transport_failure: state.transport_failure
+    }
+  end
+
+  defp empty_attempt_metadata do
+    %{upstream_websocket_connection: nil, transport_failure: nil}
+  end
+
+  defp safe_connection(connection) when is_map(connection) do
+    atom_keys = [:lifecycle_id, :generation, :reused, :reconnected]
+    string_keys = Enum.map(atom_keys, &Atom.to_string/1)
+    atom_fields = Map.take(connection, atom_keys)
+    string_fields = Map.take(connection, string_keys)
+
+    cond do
+      valid_connection?(atom_fields, atom_keys) and map_size(string_fields) == 0 ->
+        atom_fields
+
+      valid_connection?(string_fields, string_keys) and map_size(atom_fields) == 0 ->
+        string_fields
+
+      true ->
+        nil
+    end
+  end
+
+  defp safe_connection(_connection), do: nil
+
+  defp valid_connection?(connection, [lifecycle_key, generation_key, reused_key, reconnected_key]) do
+    map_size(connection) == 4 and
+      match?({:ok, _uuid}, Ecto.UUID.cast(Map.get(connection, lifecycle_key))) and
+      is_integer(Map.get(connection, generation_key)) and Map.get(connection, generation_key) > 0 and
+      is_boolean(Map.get(connection, reused_key)) and
+      is_boolean(Map.get(connection, reconnected_key))
+  end
+
+  defp committed_transport_failure(metadata, true) when map_size(metadata) > 0,
+    do: Map.put(metadata, "upstream_committed", true)
+
+  defp committed_transport_failure(metadata, _upstream_committed), do: metadata
+
+  defp nonempty_map(metadata) when map_size(metadata) > 0, do: metadata
+  defp nonempty_map(_metadata), do: nil
 
   defp safe_reason(reason) when is_atom(reason), do: reason
   defp safe_reason(_reason), do: :relay_task_down

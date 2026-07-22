@@ -46,6 +46,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     prefix <> String.duplicate("x", bytes - byte_size(prefix) - byte_size(suffix)) <> suffix
   end
 
+  defp connection_metadata do
+    %{
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 2,
+      reused: true,
+      reconnected: false
+    }
+  end
+
   defp attach_overflow_handler(test_pid) do
     handler_id = "websocket-bridge-overflow-#{System.unique_integer([:positive])}"
 
@@ -308,6 +317,191 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     ref = stream.ref
 
     assert_receive {^ref, {:preflight, {:fallback, :owner_not_running}}}, 2_000
+  end
+
+  test "completed bridge hands off connection metadata exactly once" do
+    connection = connection_metadata()
+
+    stream =
+      start_armed(fn ->
+        {:ok, %{upstream_websocket_connection: Map.put(connection, :ignored, "sentinel")}}
+      end)
+
+    ref = stream.ref
+
+    owner_frame(
+      stream,
+      {:data,
+       Jason.encode!(%{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_metadata", "status" => "completed"}
+       })}
+    )
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, _data}}, 2_000
+    assert_receive {^ref, :done}, 2_000
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: connection,
+             transport_failure: nil
+           }
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
+  end
+
+  test "committed terminal delivery timeout becomes a stream error without fallback" do
+    connection = connection_metadata()
+
+    stream =
+      start_armed(fn ->
+        {:error,
+         %{
+           reason: :upstream_websocket_terminal_delivery_timeout,
+           upstream_websocket_connection: connection,
+           transport_failure: %{
+             "phase" => "terminal_delivery",
+             "reason_class" => "owner_terminal_delivery_timeout",
+             "reason" => "upstream_websocket_terminal_delivery_timeout",
+             "pre_visible_output" => false,
+             "upstream_committed" => true,
+             "terminal_seen" => true,
+             "terminal_forwarded" => false
+           }
+         }}
+      end)
+
+    ref = stream.ref
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_terminal_delivery_timeout}},
+                   2_000
+
+    refute_received {^ref, {:preflight, {:fallback, _reason}}}
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: connection,
+             transport_failure: %{
+               "phase" => "terminal_delivery",
+               "reason_class" => "owner_terminal_delivery_timeout",
+               "reason" => "upstream_websocket_terminal_delivery_timeout",
+               "pre_visible_output" => false,
+               "upstream_committed" => true,
+               "terminal_seen" => true,
+               "terminal_forwarded" => false
+             }
+           }
+  end
+
+  test "post-commit receive failure retains only safe attempt diagnostics" do
+    connection = connection_metadata()
+    stream = start_armed(registered_submit(self()), settle_timeout_ms: 50)
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, 2_000
+    owner_frame(stream, {:data, ~s({"type":"response.output_text.delta","delta":"answer"})})
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, _data}}, 2_000
+
+    send(
+      task_pid,
+      {:return,
+       {:error,
+        %{
+          reason: :upstream_websocket_closed_before_terminal,
+          upstream_websocket_connection: Map.put(connection, :raw_identity, "sentinel-identity"),
+          transport_failure: %{
+            "exception" => "Mint.TransportError",
+            "reason_class" => "Mint.TransportError",
+            "reason" => "closed",
+            "phase" => "upstream_close",
+            "pre_visible_output" => true,
+            "upstream_committed" => false,
+            "terminal_seen" => false,
+            "text_frame_count" => 1,
+            "peer_close_code" => 1006,
+            "peer_close_reason_present" => true,
+            "peer_close_reason_bytes" => 8,
+            "raw_frame" => "sentinel-frame",
+            "raw_body" => "sentinel-body"
+          }
+        }}}
+    )
+
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_closed_before_terminal}}, 2_000
+
+    metadata = WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream)
+    assert metadata.upstream_websocket_connection == connection
+
+    assert metadata.transport_failure == %{
+             "exception" => "Mint.TransportError",
+             "reason_class" => "Mint.TransportError",
+             "reason" => "closed",
+             "phase" => "upstream_close",
+             "pre_visible_output" => true,
+             "upstream_committed" => true,
+             "terminal_seen" => false,
+             "text_frame_count" => 1,
+             "peer_close_code" => 1006,
+             "peer_close_reason_present" => true,
+             "peer_close_reason_bytes" => 8
+           }
+
+    metadata_text = inspect(metadata)
+    refute metadata_text =~ "sentinel"
+    refute metadata_text =~ "raw_frame"
+    refute metadata_text =~ "raw_body"
+  end
+
+  test "attempt metadata take returns nil fields after relay death" do
+    stream = WebsocketBridgeStream.start("relay-death", settle_timeout_ms: 1)
+    monitor_ref = Process.monitor(stream.relay)
+    Process.exit(stream.relay, :kill)
+    assert_receive {:DOWN, ^monitor_ref, :process, _pid, :killed}, 2_000
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
+  end
+
+  test "attempt metadata rejects malformed connection sentinel values" do
+    stream =
+      start_armed(fn ->
+        {:ok,
+         %{
+           upstream_websocket_connection: %{
+             lifecycle_id: "sentinel-identity",
+             generation: 0,
+             reused: "sentinel-reused",
+             reconnected: false
+           }
+         }}
+      end)
+
+    ref = stream.ref
+
+    owner_frame(
+      stream,
+      {:data,
+       Jason.encode!(%{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_invalid_metadata", "status" => "completed"}
+       })}
+    )
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, _data}}, 2_000
+    assert_receive {^ref, :done}, 2_000
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
   end
 
   test "a post-commit task failure fails the stream instead of synthesizing done" do

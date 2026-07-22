@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     request
     send_control
     send_payload
+    terminal_delivery
     unexpected_frame
     upstream_close
   )
@@ -40,7 +41,11 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "reason" => safe_metadata_reason(reason),
       "phase" => safe_phase(Map.get(attrs, :phase) || Map.get(attrs, "phase")),
       "pre_visible_output" => safe_boolean(Map.get(attrs, :pre_visible_output)),
+      "upstream_committed" =>
+        safe_boolean(metadata_attr(attrs, "upstream_committed", :upstream_committed)),
       "terminal_seen" => safe_boolean(Map.get(attrs, :terminal_seen)),
+      "terminal_forwarded" =>
+        safe_boolean(metadata_attr(attrs, "terminal_forwarded", :terminal_forwarded)),
       "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count)),
       "peer_close_code" =>
         safe_peer_close_code(metadata_attr(attrs, "peer_close_code", :peer_close_code)),
@@ -55,6 +60,39 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     }
     |> compact_metadata()
   end
+
+  @spec sanitize_transport_failure_metadata(term()) :: transport_failure_metadata()
+  def sanitize_transport_failure_metadata(metadata) when is_map(metadata) do
+    %{
+      "exception" => safe_exception_name(metadata_attr(metadata, "exception", :exception)),
+      "reason_class" =>
+        safe_reason_class_name(metadata_attr(metadata, "reason_class", :reason_class)),
+      "reason" => safe_metadata_identifier(metadata_attr(metadata, "reason", :reason)),
+      "phase" => safe_phase(metadata_attr(metadata, "phase", :phase)),
+      "pre_visible_output" =>
+        safe_boolean(metadata_attr(metadata, "pre_visible_output", :pre_visible_output)),
+      "upstream_committed" =>
+        safe_boolean(metadata_attr(metadata, "upstream_committed", :upstream_committed)),
+      "terminal_seen" => safe_boolean(metadata_attr(metadata, "terminal_seen", :terminal_seen)),
+      "terminal_forwarded" =>
+        safe_boolean(metadata_attr(metadata, "terminal_forwarded", :terminal_forwarded)),
+      "text_frame_count" =>
+        safe_non_negative_integer(metadata_attr(metadata, "text_frame_count", :text_frame_count)),
+      "peer_close_code" =>
+        safe_peer_close_code(metadata_attr(metadata, "peer_close_code", :peer_close_code)),
+      "peer_close_reason_present" =>
+        safe_boolean(
+          metadata_attr(metadata, "peer_close_reason_present", :peer_close_reason_present)
+        ),
+      "peer_close_reason_bytes" =>
+        safe_peer_close_reason_bytes(
+          metadata_attr(metadata, "peer_close_reason_bytes", :peer_close_reason_bytes)
+        )
+    }
+    |> compact_metadata()
+  end
+
+  def sanitize_transport_failure_metadata(_metadata), do: %{}
 
   @spec peer_close_metadata(term(), term()) :: transport_failure_metadata()
   def peer_close_metadata(code, reason) do
@@ -194,6 +232,24 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
 
   defp safe_peer_close_reason_bytes(value) when is_integer(value) and value in 0..123, do: value
   defp safe_peer_close_reason_bytes(_value), do: nil
+
+  defp safe_exception_name(value) when is_binary(value) do
+    if String.match?(value, ~r/\A[A-Z][A-Za-z0-9_.]{0,95}\z/), do: value
+  end
+
+  defp safe_exception_name(_value), do: nil
+
+  defp safe_reason_class_name(value) when is_binary(value) do
+    if String.match?(value, ~r/\A[A-Za-z0-9_.]{1,96}\z/), do: value
+  end
+
+  defp safe_reason_class_name(_value), do: nil
+
+  defp safe_metadata_identifier(value) when is_binary(value) do
+    if String.match?(value, ~r/\A[a-z0-9_]{1,96}\z/), do: value
+  end
+
+  defp safe_metadata_identifier(_value), do: nil
 
   defp peer_close_reason_bytes(reason) when is_binary(reason), do: min(byte_size(reason), 123)
   defp peer_close_reason_bytes(_reason), do: 0
