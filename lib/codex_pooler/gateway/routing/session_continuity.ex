@@ -282,7 +282,8 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       file_affinity?(request_options) ->
         {:hard, :file_affinity}
 
-      live_upstream_websocket_continuity?(request_options) ->
+      assigned_codex_session?(request_options) and
+          live_upstream_websocket_continuity?(request_options) ->
         {:hard, :live_upstream_websocket}
 
       local_session_header?(request_options) ->
@@ -320,6 +321,14 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @spec file_affinity?(RequestOptions.t()) :: boolean()
   defp file_affinity?(%RequestOptions{routing: %{file_affinity_assignment_id: assignment_id}}),
     do: is_binary(clean_string(assignment_id))
+
+  @spec assigned_codex_session?(RequestOptions.t()) :: boolean()
+  defp assigned_codex_session?(%RequestOptions{
+         continuity: %{codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}}
+       }),
+       do: is_binary(clean_string(assignment_id))
+
+  defp assigned_codex_session?(%RequestOptions{}), do: false
 
   @spec live_upstream_websocket_continuity?(RequestOptions.t()) :: boolean()
   defp live_upstream_websocket_continuity?(%RequestOptions{transport: transport}) do

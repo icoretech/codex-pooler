@@ -325,6 +325,41 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       )
     end
 
+    test "keeps a first-turn owner-forwarded websocket soft until its session is assigned" do
+      setup = active_pinned_assignment_setup()
+
+      session =
+        setup
+        |> codex_session_fixture(setup.pinned.assignment)
+        |> Ecto.Changeset.change(pool_upstream_assignment_id: nil)
+        |> Repo.update!()
+
+      opts =
+        session
+        |> streaming_request_options_with_session()
+        |> RequestOptions.put_continuity(accepted_turn_state: "turn_owner_first_turn")
+        |> RequestOptions.put_transport(
+          websocket_owner_forwarding_enabled?: true,
+          websocket_owner_session: session,
+          websocket_owner_lease_token: "lease-token",
+          websocket_owner_downstream: %{pid: self(), correlation_id: "safe-correlation"}
+        )
+
+      model =
+        model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
+
+      assert SessionContinuity.hard_pin_metadata(opts, model) == nil
+
+      assert {:ok, [other_candidate]} =
+               SessionContinuity.filter_codex_session_assignment(
+                 [setup.other_candidate],
+                 opts,
+                 model
+               )
+
+      assert other_candidate == setup.other_candidate
+    end
+
     test "keeps owner-forwarded websocket continuity soft without complete live owner state" do
       setup = active_pinned_assignment_setup()
       session = codex_session_fixture(setup, setup.pinned.assignment)
