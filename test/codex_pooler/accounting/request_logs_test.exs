@@ -2171,11 +2171,13 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
         response_metadata: %{
           "transport_failure" => %{
             "exception" => "Mint.TransportError",
-            "reason_class" => "Mint.TransportError",
-            "reason" => "closed",
-            "phase" => "request",
-            "pre_visible_output" => false,
-            "terminal_seen" => false,
+            "reason_class" => "owner_terminal_delivery_timeout",
+            "reason" => "upstream_websocket_terminal_delivery_timeout",
+            "phase" => "terminal_delivery",
+            "pre_visible_output" => true,
+            "upstream_committed" => true,
+            "terminal_seen" => true,
+            "terminal_forwarded" => false,
             "text_frame_count" => 0,
             "raw_detail" => "raw transport detail should stay hidden",
             "raw_message" => "raw prompt should stay hidden",
@@ -2246,11 +2248,13 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
              latency_ms: 321,
              transport_failure: %{
                exception: "Mint.TransportError",
-               reason_class: "Mint.TransportError",
-               reason: "closed",
-               phase: "request",
-               pre_visible_output: false,
-               terminal_seen: false,
+               reason_class: "owner_terminal_delivery_timeout",
+               reason: "upstream_websocket_terminal_delivery_timeout",
+               phase: "terminal_delivery",
+               pre_visible_output: true,
+               upstream_committed: true,
+               terminal_seen: true,
+               terminal_forwarded: false,
                text_frame_count: 0
              },
              final: true

@@ -12,6 +12,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
     request
     send_control
     send_payload
+    terminal_delivery
     unexpected_frame
     upstream_close
   )
@@ -152,8 +153,16 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
       transport_failure_value(transport_failure, "pre_visible_output")
     )
     |> put_transport_failure_boolean(
+      :upstream_committed,
+      transport_failure_value(transport_failure, "upstream_committed")
+    )
+    |> put_transport_failure_boolean(
       :terminal_seen,
       transport_failure_value(transport_failure, "terminal_seen")
+    )
+    |> put_transport_failure_boolean(
+      :terminal_forwarded,
+      transport_failure_value(transport_failure, "terminal_forwarded")
     )
     |> put_transport_failure_integer(
       :text_frame_count,
@@ -182,7 +191,9 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection.TransportFailure do
   defp transport_failure_atom_key("reason"), do: :reason
   defp transport_failure_atom_key("phase"), do: :phase
   defp transport_failure_atom_key("pre_visible_output"), do: :pre_visible_output
+  defp transport_failure_atom_key("upstream_committed"), do: :upstream_committed
   defp transport_failure_atom_key("terminal_seen"), do: :terminal_seen
+  defp transport_failure_atom_key("terminal_forwarded"), do: :terminal_forwarded
   defp transport_failure_atom_key("text_frame_count"), do: :text_frame_count
   defp transport_failure_atom_key("peer_close_code"), do: :peer_close_code
   defp transport_failure_atom_key("peer_close_reason_present"), do: :peer_close_reason_present
