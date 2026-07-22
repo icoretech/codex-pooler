@@ -146,6 +146,57 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     end
   end
 
+  test "exports bounded stream finalization and quota cycle decision metrics", %{conn: conn} do
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :finalization],
+      %{count: 1},
+      %{
+        usage_status: "usage_known",
+        usage_source: "upstream_usage",
+        downstream_transport: "http_sse",
+        upstream_transport: "websocket",
+        request_id: "must-not-be-a-label"
+      }
+    )
+
+    :telemetry.execute(
+      [:codex_pooler, :quota, :cycle, :decision],
+      %{count: 1},
+      %{
+        scope: "account",
+        decision: :same_cycle_refreshed,
+        source: "provider_usage",
+        upstream_identity_id: "must-not-be-a-label"
+      }
+    )
+
+    conn = get(conn, ~p"/metrics")
+
+    assert conn.status == 200
+
+    metric_lines =
+      conn.resp_body
+      |> String.split("\n", trim: true)
+      |> Enum.filter(
+        &(String.contains?(&1, "codex_pooler_gateway_stream_finalization_count") or
+            String.contains?(&1, "codex_pooler_quota_cycle_decision_count"))
+      )
+
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(usage_status="usage_known")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(usage_source="upstream_usage")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(downstream_transport="http_sse")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(upstream_transport="websocket")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(scope="account")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(decision="same_cycle_refreshed")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(source="provider_usage")))
+
+    for line <- metric_lines do
+      refute line =~ "request_id"
+      refute line =~ "upstream_identity_id"
+      refute line =~ "must-not-be-a-label"
+    end
+  end
+
   test "rotating the metrics bearer token invalidates the old bearer", %{conn: conn} do
     configure_metrics_token!("metrics-secret-v1")
     configure_metrics_token!("metrics-secret-v2")

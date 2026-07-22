@@ -10,6 +10,17 @@ defmodule CodexPoolerWeb.Telemetry do
   @type admin_stats_reload_tags :: %{stage: String.t(), window: String.t(), scope: String.t()}
   @type admin_stats_build_tags :: %{outcome: String.t(), window: String.t(), scope: String.t()}
   @type request_logs_reload_tags :: %{stage: String.t(), scope: String.t()}
+  @type stream_finalization_tags :: %{
+          usage_status: String.t(),
+          usage_source: String.t(),
+          downstream_transport: String.t(),
+          upstream_transport: String.t()
+        }
+  @type quota_cycle_decision_tags :: %{
+          scope: String.t(),
+          decision: String.t(),
+          source: String.t()
+        }
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
   @admission_queue_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -20,6 +31,20 @@ defmodule CodexPoolerWeb.Telemetry do
   @admin_stats_build_outcomes ~w(ok error)
   @request_logs_reload_stages ~w(initial_load filter_patch event_refresh)
   @request_logs_reload_scopes ~w(selected_pool all_pools)
+  @stream_usage_statuses ~w(usage_known usage_unknown)
+  @stream_usage_sources ~w(upstream_usage websocket_upstream_usage unknown)
+  @stream_downstream_transports ~w(http_sse websocket unknown)
+  @stream_upstream_transports ~w(http_sse websocket unknown)
+  @quota_cycle_scopes ~w(account model)
+  @quota_cycle_decisions ~w(
+    same_cycle_refreshed
+    anchored_confirmed
+    floating_confirmed
+    candidate
+    rejected
+    superseded_primary_rejected
+  )
+  @quota_cycle_sources ~w(provider_usage runtime unknown)
   @prometheus_reporter_disabled_oban_modes ~w(worker scheduler)
   @repo_source_pattern ~r/\A[a-zA-Z0-9_.-]+\z/
   @safe_route_pattern ~r/\A[a-zA-Z0-9_.*:\/{}-]+\z/
@@ -387,6 +412,20 @@ defmodule CodexPoolerWeb.Telemetry do
         unit: :byte,
         description: "Pre-truncation retained stream body sizes.",
         reporter_options: [buckets: [65_536, 131_072, 262_144, 524_288, 1_048_576, 2_097_152]]
+      ),
+      counter("codex_pooler.gateway.stream.finalization.count",
+        event_name: [:codex_pooler, :gateway, :stream, :finalization],
+        measurement: :count,
+        tags: [:usage_status, :usage_source, :downstream_transport, :upstream_transport],
+        tag_values: &stream_finalization_tag_values/1,
+        description: "Finalized gateway streams by bounded usage and transport metadata."
+      ),
+      counter("codex_pooler.quota.cycle.decision.count",
+        event_name: [:codex_pooler, :quota, :cycle, :decision],
+        measurement: :count,
+        tags: [:scope, :decision, :source],
+        tag_values: &quota_cycle_decision_tag_values/1,
+        description: "Quota cycle decisions by bounded scope, decision, and source class."
       )
     ]
   end
@@ -556,6 +595,27 @@ defmodule CodexPoolerWeb.Telemetry do
 
   defp request_logs_reload_scope(value),
     do: admin_stats_enum_value(value, @request_logs_reload_scopes)
+
+  @spec stream_finalization_tag_values(map()) :: stream_finalization_tags()
+  defp stream_finalization_tag_values(metadata) do
+    %{
+      usage_status: admin_stats_enum_value(metadata[:usage_status], @stream_usage_statuses),
+      usage_source: admin_stats_enum_value(metadata[:usage_source], @stream_usage_sources),
+      downstream_transport:
+        admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
+      upstream_transport:
+        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
+    }
+  end
+
+  @spec quota_cycle_decision_tag_values(map()) :: quota_cycle_decision_tags()
+  defp quota_cycle_decision_tag_values(metadata) do
+    %{
+      scope: admin_stats_enum_value(metadata[:scope], @quota_cycle_scopes),
+      decision: admin_stats_enum_value(metadata[:decision], @quota_cycle_decisions),
+      source: admin_stats_enum_value(metadata[:source], @quota_cycle_sources)
+    }
+  end
 
   @spec admin_stats_enum_value(term(), [String.t()]) :: String.t()
   defp admin_stats_enum_value(value, allowed_values) when is_atom(value) do

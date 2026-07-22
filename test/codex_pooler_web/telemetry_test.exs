@@ -193,6 +193,72 @@ defmodule CodexPoolerWeb.TelemetryTest do
              metric.tag_values.(%{route_class: "unsafe class", transport: nil})
   end
 
+  test "exports stream finalization and quota cycle counters with exact bounded tags" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :stream, :finalization],
+             measurement: :count,
+             tags: [:usage_status, :usage_source, :downstream_transport, :upstream_transport]
+           } =
+             stream_metric =
+             metric_by_name(metrics, "codex_pooler.gateway.stream.finalization.count")
+
+    assert %{
+             usage_status: "usage_known",
+             usage_source: "upstream_usage",
+             downstream_transport: "http_sse",
+             upstream_transport: "websocket"
+           } =
+             stream_metric.tag_values.(%{
+               usage_status: :usage_known,
+               usage_source: "upstream_usage",
+               downstream_transport: :http_sse,
+               upstream_transport: "websocket",
+               request_id: "request-identifier",
+               model: "model-identifier",
+               error: "raw error"
+             })
+
+    assert %{
+             usage_status: "unknown",
+             usage_source: "unknown",
+             downstream_transport: "unknown",
+             upstream_transport: "unknown"
+           } =
+             stream_metric.tag_values.(%{
+               usage_status: "failed",
+               usage_source: "sse_usage_missing",
+               downstream_transport: "/backend-api/codex/responses",
+               upstream_transport: nil
+             })
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :quota, :cycle, :decision],
+             measurement: :count,
+             tags: [:scope, :decision, :source]
+           } =
+             quota_metric =
+             metric_by_name(metrics, "codex_pooler.quota.cycle.decision.count")
+
+    assert %{scope: "model", decision: "superseded_primary_rejected", source: "runtime"} =
+             quota_metric.tag_values.(%{
+               scope: :model,
+               decision: :superseded_primary_rejected,
+               source: :runtime,
+               upstream_identity_id: "identity-identifier",
+               assignment_id: "assignment-identifier",
+               reset_at: "2026-07-28T17:09:00Z"
+             })
+
+    assert %{scope: "unknown", decision: "unknown", source: "unknown"} =
+             quota_metric.tag_values.(%{
+               scope: "account-id",
+               decision: "candidate-123",
+               source: "provider-url"
+             })
+  end
+
   test "exports admin request-log reload metrics with bounded tags" do
     metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
 
