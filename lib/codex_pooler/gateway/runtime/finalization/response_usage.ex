@@ -332,7 +332,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
            required_int_value(usage["output_tokens"] || usage["completion_tokens"]),
          {:ok, reasoning_tokens} <- optional_int_value(usage["reasoning_tokens"]),
          {:ok, total_tokens} <-
-           total_tokens_value(usage["total_tokens"], input_tokens, output_tokens) do
+           total_tokens_value(usage["total_tokens"], input_tokens, output_tokens),
+         true <- total_tokens == input_tokens + output_tokens do
       %{
         status: "usage_known",
         source: "upstream_usage",
@@ -345,7 +346,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
       }
       |> maybe_put_cache_write_tokens(cache_write_tokens)
     else
-      :error -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
+      _invalid -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
     end
   end
 

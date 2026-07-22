@@ -7626,6 +7626,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_4_first_event_stream_retry
+  test "SSE first-event retry clears failed-candidate usage before usage-free success" do
+    success_without_usage =
+      FakeUpstream.sse_stream([
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{
+             "id" => "resp_stream_retry_without_usage",
+             "status" => "completed"
+           }
+         }}
+      ])
+
+    {setup, failing_upstream, success_upstream} =
+      stream_retry_setup(
+        first_event_terminal_sse("response.failed", "server_error"),
+        success_without_usage
+      )
+
+    execute_backend_stream!(setup, "first-event-usage-reset")
+
+    assert FakeUpstream.count(failing_upstream) == 1
+    assert FakeUpstream.count(success_upstream) == 1
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.usage_status == "usage_known"
+    assert second_attempt.status == "succeeded"
+    assert second_attempt.usage_status == "usage_unknown"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.retry_count == 1
+    assert request.usage_status == "usage_unknown"
+
+    refute inspect(
+             {request.request_metadata, first_attempt.response_metadata,
+              second_attempt.response_metadata}
+           ) =~
+             "usage_observer"
+
+    settlement =
+      Repo.get_by!(LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.attempt_id == second_attempt.id
+    assert settlement.usage_status == "usage_unknown"
+
+    refute {settlement.input_tokens, settlement.output_tokens, settlement.total_tokens} ==
+             {4, 0, 4}
+  end
+
+  @tag :task_4_first_event_stream_retry
   test "SSE first-event overloaded_error retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(first_event_terminal_sse("response.failed", "overloaded_error"))

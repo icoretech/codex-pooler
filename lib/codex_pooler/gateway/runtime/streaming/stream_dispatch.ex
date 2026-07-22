@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
+  alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
@@ -165,6 +166,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
+    |> put_usage_state(StreamUsageObserver.new())
     |> Map.put(:websocket_sse_buffer, "")
   end
 
@@ -173,6 +175,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> base_stream_relay_state(opts, response)
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
+    |> put_usage_state(StreamUsageObserver.new())
   end
 
   defp base_stream_relay_state(target, %RequestOptions{} = opts, response) do
@@ -195,6 +198,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp put_rate_limit_state(%{} = state, %{buffer: buffer}) when is_binary(buffer),
     do: Map.put(state, :rate_limit, %{buffer: buffer})
+
+  defp usage_state(%{usage_observer: %{} = usage_state}), do: usage_state
+  defp usage_state(_state), do: StreamUsageObserver.new()
+
+  defp put_usage_state(%{} = state, %{} = usage_state),
+    do: Map.put(state, :usage_observer, usage_state)
 
   defp websocket_sse_buffer(%{websocket_sse_buffer: buffer}) when is_binary(buffer), do: buffer
 
@@ -403,6 +412,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     conn
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
+    |> put_usage_state(StreamUsageObserver.new())
   end
 
   defp http_first_event_retry(%ResponseContext{} = response_context, callbacks) do
@@ -464,6 +474,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       RateLimitObserver.record_events(identity, data, rate_limit_state(state))
 
     state = put_rate_limit_state(state, rate_limit_state)
+
+    state = put_usage_state(state, StreamUsageObserver.observe(usage_state(state), data))
 
     state = maybe_mark_visible_output(state, reserved.request, visible_data?.(data))
 

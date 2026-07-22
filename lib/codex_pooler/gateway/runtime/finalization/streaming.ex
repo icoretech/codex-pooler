@@ -1,9 +1,9 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
-  alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
@@ -13,8 +13,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     SideEffects
   }
 
-  alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
+  alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
+  alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
@@ -47,21 +48,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       request_options: request_options
     } = context
 
+    usage = stream_usage(body, stream_state)
+    upstream_websocket_connection = upstream_websocket_connection(response_context)
+
     case AttemptSettlement.finalize_success(
            reserved.request,
            attempt,
-           ResponseUsage.from_sse(body),
+           usage,
            SettlementAttrs.success(
              context,
              response.status,
              response
              |> Metadata.response_metadata(nil, request_options)
              |> Metadata.merge_stream_state_metadata(stream_state)
-             |> merge_upstream_websocket_connection(response_context),
+             |> merge_upstream_websocket_connection(upstream_websocket_connection),
              started: started
            )
          ) do
       {:ok, _finalized} = result ->
+        record_stream_finalization(usage, request_options, upstream_websocket_connection)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
         result
@@ -142,7 +147,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
-        ResponseUsage.from_sse(body),
+        stream_usage(body, nil),
         SettlementAttrs.partial_stream_failure(
           context,
           response.status,
@@ -197,7 +202,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
         context.attempt,
-        ResponseUsage.from_sse(body),
+        stream_usage(body, stream_state),
         SettlementAttrs.partial_stream_failure(
           context,
           response.status,
@@ -210,13 +215,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   end
 
   defp merge_upstream_websocket_connection(metadata, %ResponseContext{} = response_context) do
+    merge_upstream_websocket_connection(metadata, upstream_websocket_connection(response_context))
+  end
+
+  defp merge_upstream_websocket_connection(metadata, connection) do
     metadata
     |> Map.drop(["upstream_websocket_connection", :upstream_websocket_connection])
-    |> Map.merge(
-      Metadata.upstream_websocket_connection_attempt_metadata(
-        upstream_websocket_connection(response_context)
-      )
-    )
+    |> Map.merge(Metadata.upstream_websocket_connection_attempt_metadata(connection))
   end
 
   defp upstream_websocket_connection(%ResponseContext{
@@ -384,4 +389,36 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     do: endpoint == "/backend-api/codex/responses/compact"
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
+
+  defp stream_usage(body, stream_state) do
+    StreamUsageObserver.resolve(stream_state_usage(stream_state), ResponseUsage.from_sse(body))
+  end
+
+  defp record_stream_finalization(usage, request_options, upstream_websocket_connection) do
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :finalization],
+      %{count: 1},
+      %{
+        usage_status: usage[:status],
+        usage_source: usage_source_class(usage),
+        downstream_transport: downstream_transport(request_options),
+        upstream_transport: upstream_transport(upstream_websocket_connection)
+      }
+    )
+  end
+
+  defp usage_source_class(%{status: "usage_known", source: "websocket_upstream_usage"}),
+    do: "websocket_upstream_usage"
+
+  defp usage_source_class(%{status: "usage_known"}), do: "upstream_usage"
+  defp usage_source_class(_usage), do: "unknown"
+
+  defp downstream_transport(%{transport: %{transport: transport}}), do: transport
+  defp downstream_transport(_request_options), do: "unknown"
+
+  defp upstream_transport(nil), do: "http_sse"
+  defp upstream_transport(_connection), do: "websocket"
+
+  defp stream_state_usage(%{usage_observer: %{} = usage_state}), do: usage_state
+  defp stream_state_usage(_stream_state), do: StreamUsageObserver.new()
 end

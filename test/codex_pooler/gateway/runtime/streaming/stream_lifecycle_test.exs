@@ -28,6 +28,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamDispatch
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
+  alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
+  alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
@@ -256,6 +258,69 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert summary["terminal_kind"] == "failed"
     assert summary["finish_class"] == "failed"
     assert summary["synthetic_terminal_sent"] == true
+  end
+
+  test "stream partial failure prefers known observer usage over a truncated retained body" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_options = request_options(auth, payload(setup), setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload(setup), %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id: "partial-observer-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    observed_event = observer_usage_event(String.duplicate("x", 70_000))
+
+    state =
+      DownstreamStream.initial_state(:relay, request_options)
+      |> Map.put(
+        :usage_observer,
+        StreamUsageObserver.observe(StreamUsageObserver.new(), observed_event)
+      )
+
+    retained_body = RetainedBody.append("", observed_event)
+
+    assert byte_size(retained_body) == 65_536
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               retained_body,
+               {:upstream_stream_interrupted, %Finch.TransportError{reason: :closed}},
+               %ResponseContext{context: context, response: sse_response()},
+               state
+             )
+
+    assert [final_attempt] =
+             Repo.all(from(a in Attempt, where: a.request_id == ^reserved.request.id))
+
+    assert final_attempt.status == "failed"
+    assert final_attempt.usage_status == "usage_known"
+
+    settlement =
+      Repo.get_by!(CodexPooler.Accounting.LedgerEntry,
+        request_id: reserved.request.id,
+        entry_kind: "settlement",
+        amount_status: "recorded"
+      )
+
+    assert settlement.usage_status == "usage_known"
+    assert settlement.input_tokens == 16
+    assert settlement.output_tokens == 5
+    assert settlement.total_tokens == 21
   end
 
   test "stream success omits public Responses summary metadata for unrelated streams" do
@@ -1111,6 +1176,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     public_response_visible_sse() <>
       ~s(event: response.output_text.done\ndata: {"type":"response.output_text.done","text":"visible"}\n\n) <>
       ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_public_summary","status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}\n\n)
+  end
+
+  defp observer_usage_event(tail) do
+    usage = %{
+      "input_tokens" => 16,
+      "cached_input_tokens" => 0,
+      "output_tokens" => 5,
+      "reasoning_tokens" => 0,
+      "total_tokens" => 21
+    }
+
+    "event: response.in_progress\ndata: " <>
+      ~s({"type":"response.in_progress","response":{"usage":) <>
+      Jason.encode!(usage) <>
+      ~s(,"output":#{Jason.encode!(tail)}}}) <>
+      "\n\n"
   end
 
   defp public_responses_stream_state(request_options, body) do
