@@ -87,13 +87,25 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       assert Lifecycle.blocks_new_redemption?(consumed("expired"), @base)
     end
 
+    test "blocks a reblocked lifecycle after the provider consumed the credit" do
+      redemption = put_in(consumed("reblocked"), ["result"], %{"applied" => true})
+
+      assert Lifecycle.blocks_new_redemption?(redemption, @base)
+    end
+
     test "blocks an unrecognized phase" do
       assert Lifecycle.blocks_new_redemption?(%{"phase" => "teleported"}, @base)
     end
 
-    test "does not block settled confirmations or legacy records" do
+    test "does not block settled confirmations, non-consuming reblocks, or legacy records" do
       refute Lifecycle.blocks_new_redemption?(consumed("confirmed_by_quota"), @base)
       refute Lifecycle.blocks_new_redemption?(consumed("reblocked"), @base)
+
+      refute Lifecycle.blocks_new_redemption?(
+               put_in(consumed("reblocked"), ["result"], %{"applied" => false}),
+               @base
+             )
+
       refute Lifecycle.blocks_new_redemption?(%{"status" => "succeeded"}, @base)
       refute Lifecycle.blocks_new_redemption?(%{}, @base)
     end

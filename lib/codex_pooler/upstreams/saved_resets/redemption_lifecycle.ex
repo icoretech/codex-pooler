@@ -159,8 +159,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   probe because a prior redemption is unconfirmed or fail-closed.
 
   Fail-closed by construction: a consumed-but-unconfirmed credit blocks even
-  past its window, the `expired` phase blocks (recovery is only via fresh
-  evidence through convergence), and an unrecognized phase blocks. The
+  past its window, a consumed credit that fresh evidence reblocked remains
+  one-shot, the `expired` phase blocks (recovery is only via fresh evidence
+  through convergence), and an unrecognized phase blocks. The
   `consuming` phase is deliberately NOT blocked here: it keeps the legacy
   `redeeming` status, so the pre-existing freshness gates govern the in-flight
   window and the stale-recovery path can resume the attempt after a crash.
@@ -170,11 +171,15 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   def blocks_new_redemption?(redemption, %DateTime{} = _now) do
     case phase(redemption) do
       @consumed_pending_probe -> true
+      @reblocked -> consumed_credit?(redemption)
       @expired -> true
       :unknown -> true
       _absent_in_flight_or_settled -> false
     end
   end
+
+  defp consumed_credit?(%{"result" => %{"applied" => true}}), do: true
+  defp consumed_credit?(_redemption), do: false
 
   @doc """
   Whether the identity is currently routeable on the strength of the lifecycle
