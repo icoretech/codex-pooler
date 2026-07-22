@@ -19,15 +19,24 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t()) :: observer_result()
   def record_headers(%UpstreamIdentity{} = identity, response) do
-    case QuotaWindows.upsert_quota_windows_from_codex_headers(
-           identity,
-           response.headers
-         ) do
+    record_header_evidence(identity, response.headers, "rate_limit_headers")
+  end
+
+  @spec record_websocket_upgrade_headers(UpstreamIdentity.t() | term(), term()) ::
+          observer_result()
+  def record_websocket_upgrade_headers(%UpstreamIdentity{} = identity, headers) do
+    record_header_evidence(identity, headers, "rate_limit_websocket_upgrade_headers")
+  end
+
+  def record_websocket_upgrade_headers(_identity, _headers), do: :ok
+
+  defp record_header_evidence(%UpstreamIdentity{} = identity, headers, operation) do
+    case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
       {:ok, windows} ->
         maybe_converge_saved_reset(identity, windows)
 
       {:error, reason} ->
-        log_failure("rate_limit_headers", identity_metadata(identity), reason)
+        log_failure(operation, identity_metadata(identity), reason)
     end
   end
 

@@ -262,6 +262,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       writer: writer,
       message_mapper: message_mapper,
       frame_observer: websocket_frame_observer(identity),
+      reset_probe: request_options.routing.reset_probe,
       assignment_advertised?: assignment_advertised?,
       forward_error_body?: false
     }
@@ -534,6 +535,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp record_upstream_websocket_body(result, identity, request)
+
+  defp record_upstream_websocket_body(
+         {:error,
+          %{
+            body: body,
+            reason: {:websocket_upgrade_failed, _status, headers}
+          }} = result,
+         identity,
+         request
+       ) do
+    RateLimitObserver.record_websocket_upgrade_headers(identity, headers)
+    mark_visible_output(request, body)
+    result
+  end
 
   defp record_upstream_websocket_body(
          {:ok, %{body: body, websocket_frame_headers: frame_headers}} = result,

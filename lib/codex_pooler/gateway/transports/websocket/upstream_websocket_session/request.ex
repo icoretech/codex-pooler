@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+
   defstruct [
     :url,
     :headers,
@@ -9,6 +11,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :writer,
     :message_mapper,
     :frame_observer,
+    :reset_probe,
     assignment_advertised?: false,
     forward_error_body?: true
   ]
@@ -25,6 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           message_mapper:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer: frame_observer(),
+          reset_probe: ResetProbe.t() | nil,
           assignment_advertised?: boolean(),
           forward_error_body?: boolean()
         }

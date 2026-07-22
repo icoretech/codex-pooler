@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   use GenServer
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
@@ -213,14 +214,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     case request_once_on_connection(state, key, request, connection_usage) do
       {:ok, result, state} ->
-        if reused_connection? and pre_response_reconnectable?(result) do
+        if reused_connection? and not reset_probe?(request) and
+             pre_response_reconnectable?(result) do
           {:retry, state, result_connection_metadata(result)}
         else
           {:ok, result, state}
         end
 
       {:error, reason, state} ->
-        if reused_connection? and pre_response_reconnectable?(reason) do
+        if reused_connection? and not reset_probe?(request) and
+             pre_response_reconnectable?(reason) do
           {:retry, state, nil}
         else
           result = request_error(reason, state)
@@ -229,6 +232,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         end
     end
   end
+
+  defp reset_probe?(%Request{reset_probe: %ResetProbe{} = probe}), do: ResetProbe.bound?(probe)
+  defp reset_probe?(%Request{}), do: false
 
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
