@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
   Runtime lifecycle callbacks for streaming dispatch.
   """
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch
@@ -131,7 +132,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
            write_final_event: write_final_event
          }
        ) do
-    if Dispatch.candidate_available?(context, next_index) do
+    if Dispatch.candidate_available?(context, next_index) and not bound_reset_probe?(context) do
       body
       |> Finalization.record_retryable_first_event_stream_failure(failure, response_context)
       |> continue_after_retryable_first_event_record(
@@ -209,5 +210,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle do
         failure,
         ModelMetadata.assignment_source?(context.model, context.assignment.id)
       )
+  end
+
+  defp bound_reset_probe?(%SelectedCandidateContext{request_options: request_options}) do
+    case request_options.routing.reset_probe do
+      %ResetProbe{} = probe -> ResetProbe.bound?(probe)
+      nil -> false
+    end
   end
 end
