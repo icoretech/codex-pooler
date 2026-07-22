@@ -522,7 +522,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   end
 
   @tag :quota_spark_projection
-  test "floating Spark weekly evidence keeps the existing reset countdown presentation" do
+  test "floating Spark weekly evidence projects starts-on-use semantics without an absolute reset" do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     rows =
@@ -534,10 +534,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
       |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
 
     assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    assert weekly.reset_semantics == :floating
+    assert weekly.reset_label == "starts on use"
+    assert weekly.reset_title == "provider reports a rolling seven-day window until use starts"
+  end
+
+  @tag :quota_spark_projection
+  test "anchored Spark weekly evidence keeps the countdown and absolute reset title" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    rows =
+      [spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "anchored"})]
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+
+    assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    assert weekly.reset_semantics == :anchored
     assert String.starts_with?(weekly.reset_label, "in ")
     assert String.starts_with?(weekly.reset_title, "resets ")
-    refute weekly.reset_label =~ "floating"
-    refute weekly.reset_title =~ "floating"
+  end
+
+  @tag :quota_spark_projection
+  test "unknown Spark weekly reset state remains unreported" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    rows =
+      [spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "unknown"})]
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+
+    assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    assert weekly.reset_semantics == :unknown
+    assert weekly.reset_label == nil
+    assert weekly.reset_title == nil
   end
 
   @tag :quota_spark_projection

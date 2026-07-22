@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:percent_value) => number(),
           required(:percent_label) => String.t(),
           required(:count_label) => String.t() | nil,
+          required(:reset_semantics) => :anchored | :floating | :unknown,
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
@@ -360,6 +361,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_limit_row(key, label, %Quota.AccountQuotaWindow{} = window, datetime_preferences) do
     remaining_percent = quota_remaining_percent(window)
 
+    {reset_semantics, reset_label, reset_title} =
+      quota_reset_presentation(window, datetime_preferences)
+
     %{
       key: key,
       label: label,
@@ -368,8 +372,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       percent_label: quota_percent_label(remaining_percent),
       count_label: quota_count_label(window),
       credit_backed: credit_backed_window?(window),
-      reset_label: quota_reset_label(window.reset_at),
-      reset_title: quota_reset_title(window.reset_at, datetime_preferences)
+      reset_semantics: reset_semantics,
+      reset_label: reset_label,
+      reset_title: reset_title
     }
   end
 
@@ -382,6 +387,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       percent_label: "not reported",
       count_label: nil,
       credit_backed: false,
+      reset_semantics: :unknown,
       reset_label: nil,
       reset_title: nil
     }
@@ -475,6 +481,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   defp quota_count_label(%Quota.AccountQuotaWindow{}), do: nil
 
+  defp quota_reset_presentation(
+         %Quota.AccountQuotaWindow{metadata: metadata, reset_at: reset_at},
+         datetime_preferences
+       )
+       when is_map(metadata) do
+    case Map.fetch(metadata, "reset_state") do
+      {:ok, "floating"} ->
+        {:floating, "starts on use",
+         "provider reports a rolling seven-day window until use starts"}
+
+      {:ok, "anchored"} ->
+        anchored_reset_presentation(reset_at, datetime_preferences)
+
+      {:ok, _reset_state} ->
+        {:unknown, nil, nil}
+
+      :error ->
+        anchored_reset_presentation(reset_at, datetime_preferences)
+    end
+  end
+
+  defp quota_reset_presentation(
+         %Quota.AccountQuotaWindow{reset_at: reset_at},
+         datetime_preferences
+       ) do
+    anchored_reset_presentation(reset_at, datetime_preferences)
+  end
+
+  defp anchored_reset_presentation(%DateTime{} = reset_at, datetime_preferences) do
+    {:anchored, quota_reset_label(reset_at), quota_reset_title(reset_at, datetime_preferences)}
+  end
+
+  defp anchored_reset_presentation(_reset_at, _datetime_preferences), do: {:unknown, nil, nil}
+
   defp quota_reset_label(%DateTime{} = reset_at) do
     seconds_until_reset = DateTime.diff(reset_at, DateTime.utc_now(), :second)
 
@@ -485,13 +525,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     end
   end
 
-  defp quota_reset_label(_reset_at), do: nil
-
   defp quota_reset_title(%DateTime{} = reset_at, datetime_preferences) do
     "resets #{DateTimeDisplay.format_datetime(reset_at, datetime_preferences)}"
   end
-
-  defp quota_reset_title(_reset_at, _datetime_preferences), do: nil
 
   defp remaining_percent_from_used(%Decimal{} = used_percent) do
     Decimal.sub(Decimal.new(100), used_percent)
