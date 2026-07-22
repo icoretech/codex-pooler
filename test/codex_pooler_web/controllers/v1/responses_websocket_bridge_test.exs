@@ -12,15 +12,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     only: [
       auth: 2,
       gateway_setup: 1,
+      pricing_config: 1,
+      pricing_snapshot!: 2,
       start_upstream: 1
     ]
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
+  alias CodexPooler.Gateway.Transports.Streaming.{RetainedBody, WebsocketBridgeStream}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
@@ -188,6 +192,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         where: l.request_id == ^request.id and l.entry_kind == "settlement"
       ),
       :count
+    )
+  end
+
+  defp settlements_for(request) do
+    Repo.all(
+      from l in LedgerEntry,
+        where: l.request_id == ^request.id and l.entry_kind == "settlement"
     )
   end
 
@@ -403,6 +414,193 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     refute inspect(metadata) =~ omitted_sentinel
     refute inspect(metadata) =~ "call_bridge_tool"
+  end
+
+  @tag :v1_websocket_bridge_usage
+  test "HTTP SSE over an upstream websocket settles usage before a retained large tail", %{
+    conn: conn
+  } do
+    sentinel = "task-6-known-tail-#{System.unique_integer([:positive])}"
+    completed_frame = oversized_completed_frame("resp_bridge_usage_known", sentinel, true)
+    completed_event = WebsocketBridgeStream.sse_block(IO.iodata_to_binary(completed_frame))
+
+    assert byte_size(completed_event) > RetainedBody.max_bytes()
+
+    retained_suffix = RetainedBody.append(RetainedBody.empty(), completed_event)
+    assert byte_size(retained_suffix) == RetainedBody.max_bytes()
+    refute retained_suffix =~ ~s("usage")
+
+    assert ResponseUsage.from_sse(retained_suffix) == %{
+             status: "usage_unknown",
+             source: "sse_usage_missing"
+           }
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([completed_frame]))
+    setup = gateway_setup(upstream)
+
+    flex_pricing =
+      pricing_snapshot!(setup.model, %{
+        config: pricing_config(%{"service_tier" => "flex"}),
+        input_token_micros: Decimal.new(25),
+        output_token_micros: Decimal.new(50)
+      })
+
+    session = "usage-known-session-#{System.unique_integer([:positive])}"
+
+    {{response, telemetry_events}, log} =
+      with_log(fn ->
+        capture_truncation_telemetry(fn ->
+          post_stream(conn, setup, session, stream_payload(setup, "known usage turn"))
+        end)
+      end)
+
+    assert response.status == 200
+    assert response.resp_body =~ sentinel
+    assert completed_id(response.resp_body) == "resp_bridge_usage_known"
+    assert [upstream_request] = FakeUpstream.requests(upstream)
+    assert upstream_request.method == "WEBSOCKET"
+    assert upstream_request.path == "/backend-api/codex/responses"
+
+    request = latest_request(setup.pool)
+
+    assert %{
+             endpoint: "/backend-api/codex/responses",
+             transport: "http_sse",
+             status: "succeeded",
+             response_status_code: 200,
+             usage_status: "usage_known"
+           } = request
+
+    assert [attempt] = attempts_for(request)
+
+    assert %{
+             transport: "websocket",
+             status: "succeeded",
+             upstream_status_code: 200,
+             usage_status: "usage_known"
+           } = attempt
+
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+    assert attempt.response_metadata["bridge_committed"] == true
+
+    assert %{
+             "terminal_seen" => true,
+             "terminal_kind" => "completed",
+             "terminal_status" => "completed",
+             "synthetic_terminal_sent" => false
+           } = attempt.response_metadata["public_openai_responses_stream"]
+
+    assert [settlement] = settlements_for(request)
+    assert settlement.usage_status == "usage_known"
+    assert settlement.input_tokens == 16
+    assert settlement.cached_input_tokens == nil
+    assert settlement.output_tokens == 5
+    assert settlement.reasoning_tokens == nil
+    assert settlement.total_tokens == 21
+    assert settlement.pricing_snapshot_id == flex_pricing.id
+    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(650))
+    assert settlement.details["usage_source"] == "upstream_usage"
+
+    assert_stream_finalization_event!(telemetry_events, %{
+      usage_status: "usage_known",
+      usage_source: "upstream_usage",
+      downstream_transport: "http_sse",
+      upstream_transport: "websocket"
+    })
+
+    assert_bridge_tail_private!(
+      setup,
+      request,
+      attempt,
+      settlement,
+      telemetry_events,
+      log,
+      sentinel
+    )
+  end
+
+  @tag :v1_websocket_bridge_usage
+  test "HTTP SSE over an upstream websocket keeps omitted large-tail usage unknown", %{
+    conn: conn
+  } do
+    sentinel = "task-6-omitted-tail-#{System.unique_integer([:positive])}"
+    completed_frame = oversized_completed_frame("resp_bridge_usage_missing", sentinel, false)
+    completed_event = WebsocketBridgeStream.sse_block(IO.iodata_to_binary(completed_frame))
+
+    assert byte_size(completed_event) > RetainedBody.max_bytes()
+    assert ResponseUsage.from_sse(completed_event).source == "sse_usage_missing"
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([completed_frame]))
+    setup = gateway_setup(upstream)
+    session = "usage-missing-session-#{System.unique_integer([:positive])}"
+
+    {{response, telemetry_events}, log} =
+      with_log(fn ->
+        capture_truncation_telemetry(fn ->
+          post_stream(conn, setup, session, stream_payload(setup, "missing usage turn"))
+        end)
+      end)
+
+    assert response.status == 200
+    assert response.resp_body =~ sentinel
+    assert completed_id(response.resp_body) == "resp_bridge_usage_missing"
+    assert [upstream_request] = FakeUpstream.requests(upstream)
+    assert upstream_request.method == "WEBSOCKET"
+    assert upstream_request.path == "/backend-api/codex/responses"
+
+    request = latest_request(setup.pool)
+
+    assert %{
+             endpoint: "/backend-api/codex/responses",
+             transport: "http_sse",
+             status: "succeeded",
+             response_status_code: 200,
+             usage_status: "usage_unknown"
+           } = request
+
+    assert [attempt] = attempts_for(request)
+
+    assert %{
+             transport: "websocket",
+             status: "succeeded",
+             upstream_status_code: 200,
+             usage_status: "usage_unknown"
+           } = attempt
+
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+    assert attempt.response_metadata["bridge_committed"] == true
+
+    assert %{
+             "terminal_seen" => true,
+             "terminal_kind" => "completed",
+             "terminal_status" => "completed",
+             "synthetic_terminal_sent" => false
+           } = attempt.response_metadata["public_openai_responses_stream"]
+
+    assert [settlement] = settlements_for(request)
+    assert settlement.usage_status == "usage_unknown"
+    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(0))
+    assert settlement.details["usage_source"] == "sse_usage_missing"
+    assert settlement.details["estimated_from_reserve"] == true
+
+    assert_stream_finalization_event!(telemetry_events, %{
+      usage_status: "usage_unknown",
+      usage_source: "unknown",
+      downstream_transport: "http_sse",
+      upstream_transport: "websocket"
+    })
+
+    assert_bridge_tail_private!(
+      setup,
+      request,
+      attempt,
+      settlement,
+      telemetry_events,
+      log,
+      sentinel
+    )
   end
 
   test "a bridged multi-event stream delivers every event, not just the terminal", %{conn: conn} do
@@ -1025,5 +1223,93 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       "context after final"
     ])
     |> Enum.join("\n")
+  end
+
+  defp oversized_completed_frame(response_id, sentinel, include_usage?) do
+    usage =
+      if include_usage? do
+        ~s(,"service_tier":"flex","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"reasoning_tokens":0,"total_tokens":21})
+      else
+        ""
+      end
+
+    [
+      ~s({"type":"response.completed","response":{"id":"#{response_id}","status":"completed"),
+      usage,
+      ~s(,"output":[{"type":"message","content":[{"type":"output_text","text":"),
+      sentinel,
+      String.duplicate("x", RetainedBody.max_bytes() + 1_024),
+      ~s("}]}]}})
+    ]
+  end
+
+  defp capture_truncation_telemetry(fun) do
+    parent = self()
+    handler_id = "v1-websocket-bridge-usage-#{System.unique_integer([:positive])}"
+
+    events = [
+      [:codex_pooler, :gateway, :stream_buffer, :truncated],
+      [:codex_pooler, :gateway, :stream, :finalization]
+    ]
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        fn event, measurements, metadata, _config ->
+          send(parent, {handler_id, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_telemetry_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_telemetry_events(handler_id, events) do
+    receive do
+      {^handler_id, event, measurements, metadata} ->
+        drain_telemetry_events(handler_id, [{event, measurements, metadata} | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp assert_stream_finalization_event!(telemetry_events, expected_metadata) do
+    assert [
+             {[:codex_pooler, :gateway, :stream, :finalization], %{count: 1}, ^expected_metadata}
+           ] =
+             Enum.filter(
+               telemetry_events,
+               &match?({[:codex_pooler, :gateway, :stream, :finalization], _, _}, &1)
+             )
+  end
+
+  defp assert_bridge_tail_private!(
+         setup,
+         request,
+         attempt,
+         settlement,
+         telemetry_events,
+         log,
+         sentinel
+       ) do
+    assert telemetry_events != []
+
+    persisted =
+      inspect({
+        request.request_metadata,
+        attempt.response_metadata,
+        settlement.details,
+        RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+      })
+
+    refute persisted =~ sentinel
+    refute log =~ sentinel
+    refute inspect(telemetry_events) =~ sentinel
   end
 end

@@ -179,7 +179,10 @@ defmodule CodexPooler.FakeUpstream do
     end
   end
 
-  def websocket_text_frames(messages) when is_list(messages), do: {:websocket_text, messages}
+  @spec websocket_text_frames([iodata()]) :: mode()
+  def websocket_text_frames(messages) when is_list(messages) do
+    {:websocket_text, Enum.map(messages, &IO.iodata_to_binary/1)}
+  end
 
   def quota_exhausted_429(opts \\ []) when is_list(opts) do
     quota_type = Keyword.get(opts, :quota_type, "workspace_owner_usage_limit_reached")
