@@ -10,6 +10,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
 
   @scope_indexes [
     "requests_api_key_pool_admitted_idx",
+    "requests_api_key_pool_admitted_id_idx",
     "request_log_facts_pkey"
   ]
 
@@ -23,6 +24,11 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
     Repo.query!("SET LOCAL enable_seqscan = off")
     Repo.query!("SET LOCAL enable_hashjoin = off")
     Repo.query!("SET LOCAL enable_mergejoin = off")
+
+    # Incremental sort can prefer an unrelated admitted-at prefix index and
+    # filter API-key scope rows after the scan. The contract exercises the
+    # dedicated fully ordered scope index instead.
+    Repo.query!("SET LOCAL enable_incremental_sort = off")
 
     # Keep the scoped-request bitmap exact. With a lossy (page-level) bitmap the
     # heap recheck rereads whole pages of the 7k-row fixture and removes the
@@ -114,15 +120,10 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanFixture do
           timestamp = DateTime.add(upper_bound, -(rem(index * 17, 3_500) + 1), :second)
           build_pair.(20_000 + index, pool.id, other_api_key.id, model.id, timestamp)
         end ++
-        [
-          build_pair.(
-            30_001,
-            wrong_pool.id,
-            api_key.id,
-            wrong_model.id,
-            DateTime.add(upper_bound, -100)
-          )
-        ]
+        for index <- 1..5_000 do
+          timestamp = DateTime.add(upper_bound, -(rem(index * 19, 3_500) + 1), :second)
+          build_pair.(30_000 + index, wrong_pool.id, api_key.id, wrong_model.id, timestamp)
+        end
 
     rows
     |> Enum.map(&elem(&1, 0))

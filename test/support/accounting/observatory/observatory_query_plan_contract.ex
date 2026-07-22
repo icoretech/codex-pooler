@@ -4,6 +4,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
   alias CodexPooler.Accounting.ObservatoryQueryPlanSupport, as: Support
 
   @request_index "requests_api_key_pool_admitted_idx"
+  @outcomes_request_index "requests_api_key_pool_admitted_id_idx"
   # Tokens and cost read from the 1:1 request_log_facts projection. The request is
   # already scoped, so binding the fact by its request_id primary key keeps it a
   # bounded per-request lookup instead of a full scan the planner would then
@@ -61,6 +62,8 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
         outcome_plan && Support.indexed_access?(outcome_plan.root, "request_log_facts"),
       "outcome_request_bounded_indexed_access" =>
         outcome_plan && Support.indexed_access?(outcome_plan.root, "requests"),
+      "outcome_request_ordered_scope_index" =>
+        outcome_plan && Support.uses_index?(outcome_plan.root, @outcomes_request_index),
       "projection_set" => Enum.map(plans, & &1.projection) == Support.projections(),
       "query_count" => query_count <= 8,
       "request_scope_predicates_present" =>

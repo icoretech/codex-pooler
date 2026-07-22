@@ -67,7 +67,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanTest do
 
   defp without_required_scope_index(plans) do
     Support.map_plan_nodes(plans, fn
-      %{"Index Name" => "requests_api_key_pool_admitted_idx"} = node ->
+      %{"Index Name" => "requests_api_key_pool_admitted_id_idx"} = node ->
         %{node | "Index Name" => "unscoped_test_index"}
 
       node ->

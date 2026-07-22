@@ -251,9 +251,9 @@ defmodule CodexPooler.Accounting.Usage.Observatory.QueryScope do
 
   This is a dedicated query rather than a slice of `scoped_facts/2` so the
   endpoint/error-code regex classification runs over only the twelve rows the
-  limit keeps, not the whole window. `requests_api_key_pool_admitted_idx` yields
-  the scoped rows already in `admitted_at DESC` order, so the limit stops early
-  and the fact/model joins are twelve primary-key lookups.
+  limit keeps, not the whole window. `requests_api_key_pool_admitted_id_idx`
+  yields the scoped rows in the requested deterministic order, so the limit
+  stops early and the fact/model joins are twelve primary-key lookups.
   """
   def recent_outcomes(identity, window) do
     from request in Request,
