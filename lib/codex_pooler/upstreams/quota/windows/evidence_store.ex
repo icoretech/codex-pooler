@@ -9,6 +9,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.RelativeLiveness
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -22,6 +23,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @usage_reset_reanchor_min_shift_seconds 60 * 60
   @restart_corroboration_reset_tolerance_seconds 5 * 60
   @relative_reset_refresh_tolerance_seconds 5
+  @equivalent_anchor_max_shift_seconds 5 * 60
   @account_snapshot_reset_tolerance_seconds 5
   @candidate_metadata_key "__quota_confirmed_candidate_v1"
   @candidate_version 1
@@ -316,6 +318,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         non_candidate_weekly_zero_observation?(evidence, existing) ->
           rejected_snapshot_attrs(existing, evidence, timestamp)
 
+        equivalent_account_anchor_maintenance?(evidence, existing, timestamp) ->
+          equivalent_account_anchor_attrs(existing, attrs, evidence, timestamp)
+
         unconfirmed_weekly_zero_observation?(evidence, existing, timestamp) ->
           sliding_restart_attrs(existing, attrs, evidence, timestamp)
 
@@ -431,15 +436,20 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
     case floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
       :accept ->
+        log_cycle_decision(:floating_confirmed, "confirmation", existing, evidence, metadata)
+
         existing
         |> accepted_snapshot_attrs(attrs, timestamp)
         |> RelativeLiveness.put_metadata(evidence, timestamp)
         |> mark_floating_reset()
 
       :keep ->
+        log_cycle_decision(:rejected, "candidate_not_ready", existing, evidence, metadata)
         candidate_snapshot_attrs(existing, metadata, timestamp)
 
       :restart ->
+        log_cycle_decision(:candidate, "candidate_restarted", existing, evidence, metadata)
+
         candidate_snapshot_attrs(
           existing,
           put_relative_candidate(clear_candidate(metadata), evidence, timestamp),
@@ -454,10 +464,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         :keep
 
       floating_reset?(metadata) ->
-        if sliding_live_reset?(existing, evidence), do: :accept, else: :keep
+        floating_rebase_candidate_decision(metadata, existing, evidence, timestamp)
 
       true ->
         floating_model_candidate_decision(metadata, existing, evidence, timestamp)
+    end
+  end
+
+  defp floating_rebase_candidate_decision(metadata, existing, evidence, timestamp) do
+    if sliding_live_reset?(existing, evidence) do
+      :accept
+    else
+      floating_model_candidate_decision(metadata, existing, evidence, timestamp)
     end
   end
 
@@ -503,13 +521,20 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp sliding_restart_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
     decision = restart_candidate_decision(metadata, existing, evidence, timestamp)
-    log_restart_decision(decision, existing, evidence, metadata, timestamp)
+    log_restart_decision(decision, existing, evidence, metadata)
 
     case decision do
       :accept ->
-        existing
-        |> accepted_snapshot_attrs(attrs, timestamp)
-        |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+        accepted_attrs =
+          existing
+          |> accepted_snapshot_attrs(attrs, timestamp)
+          |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+
+        if fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+          CycleConfirmation.confirm(accepted_attrs, evidence, timestamp)
+        else
+          accepted_attrs
+        end
 
       :keep ->
         candidate_snapshot_attrs(existing, metadata, timestamp)
@@ -578,7 +603,26 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     RelativeLiveness.candidate_pair_valid?(metadata, evidence, timestamp) and
       (consistent_sliding_candidate?(candidate, evidence, metadata, timestamp) or
          expired_cycle_zero_candidate?(candidate, existing, timestamp) or
-         forward_anchor_zero_candidate?(candidate, evidence, existing, timestamp))
+         forward_anchor_zero_candidate?(candidate, evidence, existing, timestamp) or
+         fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp))
+  end
+
+  defp fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) and
+          confirmation_span_reached?(candidate, evidence)
+
+      :none ->
+        false
+    end
+  end
+
+  defp fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) do
+    candidate_valid?(candidate, timestamp) and zero_candidate?(candidate) and
+      candidate_equivalent?(candidate, evidence) and
+      RelativeLiveness.candidate_advances?(metadata, evidence, timestamp) and
+      forward_of_existing_cycle?(evidence, existing)
   end
 
   defp put_relative_candidate(metadata, evidence, timestamp) do
@@ -587,10 +631,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     |> RelativeLiveness.put_candidate_metadata(evidence, timestamp)
   end
 
-  # Sanitized decision telemetry: identifiers, window identity, and second
-  # deltas only — no tokens, payloads, or account identities. One line per
-  # quarantined-zero merge, so a stuck account is diagnosable from logs alone.
-  defp log_restart_decision(decision, existing, evidence, metadata, timestamp) do
+  defp log_restart_decision(decision, existing, evidence, metadata) do
+    {cycle_decision, reason} =
+      case decision do
+        :accept -> {:anchored_confirmed, "confirmation"}
+        :keep -> {:rejected, "candidate_not_ready"}
+        :restart -> {:candidate, "candidate_restarted"}
+      end
+
+    log_cycle_decision(cycle_decision, reason, existing, evidence, metadata)
+  end
+
+  defp log_cycle_decision(decision, reason, _existing, evidence, metadata) do
     candidate_age =
       case parse_candidate(metadata) do
         {:ok, %{observed_at: observed_at}} ->
@@ -600,16 +652,30 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           nil
       end
 
+    :telemetry.execute(
+      [:codex_pooler, :quota, :cycle, :decision],
+      %{count: 1},
+      %{scope: quota_scope(evidence), decision: decision, source: source_class(evidence)}
+    )
+
     Logger.info(
-      "quota_restart_decision decision=#{decision} " <>
-        "upstream_identity_id=#{existing.upstream_identity_id} " <>
-        "quota_key=#{evidence.quota_key} window_kind=#{evidence.window_kind} " <>
-        "candidate_age_s=#{inspect(candidate_age)} " <>
-        "existing_reset_at=#{inspect(existing.reset_at)} " <>
-        "incoming_reset_at=#{inspect(evidence.reset_at)} " <>
-        "observed_at=#{inspect(evidence.observed_at)} merged_at=#{inspect(timestamp)}"
+      "quota_cycle_decision decision=#{decision} reason=#{reason} " <>
+        "scope=#{quota_scope(evidence)} source=#{source_class(evidence)} " <>
+        "candidate_age_s=#{inspect(candidate_age)}"
     )
   end
+
+  defp quota_scope(%Evidence{quota_scope: scope}) when scope in ["model", "upstream_model"],
+    do: "model"
+
+  defp quota_scope(%Evidence{}), do: "account"
+
+  defp source_class(%Evidence{source: "codex_usage_api"}), do: "provider_usage"
+
+  defp source_class(%Evidence{source: source}) when source in @runtime_quota_sources,
+    do: "runtime"
+
+  defp source_class(%Evidence{}), do: "unknown"
 
   # A floating window anchors as soon as the new cycle sees its first request —
   # often from another deployment sharing the same provider account — and an
@@ -1380,6 +1446,60 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     account_weekly_evidence?(evidence) and zero_percent?(used_percent)
   end
 
+  defp equivalent_account_anchor_maintenance?(
+         %Evidence{used_percent: %Decimal{} = incoming_percent} = evidence,
+         %Quota.AccountQuotaWindow{used_percent: %Decimal{} = existing_percent} = existing,
+         timestamp
+       ) do
+    reset_shift = reset_shift_seconds(evidence, existing)
+
+    account_weekly_evidence?(evidence) and zero_percent?(incoming_percent) and
+      zero_percent?(existing_percent) and
+      Evidence.identity_key(evidence) == Evidence.identity_key(existing) and
+      reset_shift > @account_snapshot_reset_tolerance_seconds and
+      reset_shift <= @equivalent_anchor_max_shift_seconds and
+      newer_observation?(evidence.observed_at, existing.observed_at) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      RelativeLiveness.advances?(evidence, existing, timestamp)
+  end
+
+  defp equivalent_account_anchor_maintenance?(_evidence, _existing, _timestamp), do: false
+
+  defp equivalent_account_anchor_attrs(existing, attrs, evidence, timestamp) do
+    log_cycle_decision(
+      :same_cycle_refreshed,
+      "equivalent_live_anchor",
+      existing,
+      evidence,
+      existing.metadata || %{}
+    )
+
+    metadata =
+      existing.metadata
+      |> Kernel.||(%{})
+      |> Map.merge(Map.get(attrs, :metadata, %{}))
+      |> clear_candidate()
+
+    existing
+    |> window_attrs()
+    |> Map.put(:reset_at, evidence.reset_at)
+    |> Map.put(:observed_at, evidence.observed_at)
+    |> Map.put(:last_sync_at, evidence.observed_at)
+    |> Map.put(:freshness_state, "fresh")
+    |> Map.put(:metadata, metadata)
+    |> Map.put(:updated_at, timestamp)
+    |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+    |> CycleConfirmation.maintain(existing, evidence, timestamp)
+  end
+
+  defp reset_shift_seconds(
+         %Evidence{reset_at: %DateTime{} = incoming_reset},
+         %Quota.AccountQuotaWindow{reset_at: %DateTime{} = existing_reset}
+       ),
+       do: DateTime.diff(incoming_reset, existing_reset, :second)
+
+  defp reset_shift_seconds(_evidence, _existing), do: 0
+
   defp clear_provider_candidates_after_runtime(
          {:ok, window},
          %Evidence{source: source} = evidence,
@@ -1420,11 +1540,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       )
 
     Enum.each(provider_rows, fn provider ->
-      metadata = clear_candidate(provider.metadata || %{})
+      metadata = provider.metadata || %{}
+      cleared_metadata = maybe_clear_runtime_compatible_candidate(metadata, evidence)
 
-      if metadata != provider.metadata do
+      if cleared_metadata != provider.metadata do
         provider
-        |> Ecto.Changeset.change(metadata: metadata, updated_at: now())
+        |> Ecto.Changeset.change(metadata: cleared_metadata, updated_at: now())
         |> Repo.update!()
       end
     end)
@@ -1434,6 +1555,37 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp provider_candidate_quota_keys("codex_spark"), do: @spark_quota_keys
   defp provider_candidate_quota_keys(quota_key), do: [quota_key]
+
+  defp maybe_clear_runtime_compatible_candidate(metadata, evidence) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        if runtime_compatible_with_candidate?(evidence, candidate) and
+             runtime_not_older_than_candidate?(evidence, candidate) do
+          clear_candidate(metadata)
+        else
+          metadata
+        end
+
+      :none ->
+        clear_candidate(metadata)
+    end
+  end
+
+  defp runtime_compatible_with_candidate?(
+         %Evidence{reset_at: %DateTime{} = runtime_reset},
+         %{reset_at: %DateTime{} = candidate_reset}
+       ) do
+    DateTime.diff(runtime_reset, candidate_reset, :second) >=
+      -@restart_corroboration_reset_tolerance_seconds
+  end
+
+  defp runtime_compatible_with_candidate?(_evidence, _candidate), do: false
+
+  defp runtime_not_older_than_candidate?(
+         %Evidence{observed_at: %DateTime{} = runtime_observed_at},
+         %{observed_at: %DateTime{} = candidate_observed_at}
+       ),
+       do: DateTime.compare(runtime_observed_at, candidate_observed_at) != :lt
 
   defp runtime_pressure_accepted?(window, %Quota.AccountQuotaWindow{id: nil}),
     do: not is_nil(window.id)
@@ -1528,10 +1680,31 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     rollback_guarded_quota_identity?(evidence) and same_evidence_identity?(evidence, existing) and
       weak_capacity?(evidence) and stronger_current_quota_information?(existing, timestamp) and
       Decimal.compare(incoming_percent, existing_percent) != :gt and
-      not exhausted_by_used_percent?(evidence)
+      not exhausted_by_used_percent?(evidence) and
+      not confirmed_provider_cycle_matches?(evidence, existing, timestamp)
   end
 
   defp runtime_percent_rollback?(_evidence, _existing, _timestamp), do: false
+
+  defp confirmed_provider_cycle_matches?(
+         %Evidence{reset_at: %DateTime{}} = evidence,
+         %Quota.AccountQuotaWindow{upstream_identity_id: identity_id},
+         timestamp
+       )
+       when is_binary(identity_id) do
+    Repo.all(
+      from provider in Quota.AccountQuotaWindow,
+        where: provider.upstream_identity_id == ^identity_id,
+        where: provider.source == "codex_usage_api"
+    )
+    |> Enum.any?(fn provider ->
+      same_evidence_identity?(evidence, provider) and
+        reset_times_equivalent?(evidence.reset_at, provider.reset_at) and
+        CycleConfirmation.selector_valid?(provider, timestamp)
+    end)
+  end
+
+  defp confirmed_provider_cycle_matches?(_evidence, _existing, _timestamp), do: false
 
   defp incoming_usage_advances_runtime_reset?(
          %Evidence{source: "codex_usage_api"} = evidence,

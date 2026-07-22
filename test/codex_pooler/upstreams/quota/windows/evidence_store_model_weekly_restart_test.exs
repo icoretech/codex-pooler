@@ -112,21 +112,232 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   end
 
   defp accepted_floating_model!(identity, t0) do
-    assert {:ok, _row} = Windows.record_evidence(identity, model_weekly(t0, "0"), t0)
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(identity, model_weekly(t0, "0"), t0, t0)
 
     candidate_at = DateTime.add(t0, 60, :second)
 
     assert {:ok, _row} =
-             Windows.record_evidence(identity, model_weekly(candidate_at, "0"), candidate_at)
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(candidate_at, "0"),
+               candidate_at,
+               candidate_at
+             )
 
     accepted_at = DateTime.add(candidate_at, 4, :minute)
 
     assert {:ok, _row} =
-             Windows.record_evidence(identity, model_weekly(accepted_at, "0"), accepted_at)
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(accepted_at, "0"),
+               accepted_at,
+               accepted_at
+             )
 
     row = model_weekly_row(identity)
     assert row.metadata["reset_state"] == "floating"
     row
+  end
+
+  defp runtime_model_weekly(observed_at, used_percent, reset_at) do
+    observed_at
+    |> model_weekly(used_percent, reset_at: reset_at, metadata: %{})
+    |> Map.merge(%{
+      source: "codex_response_headers",
+      raw_limit_id: nil,
+      raw_limit_name: nil,
+      raw_metered_feature: nil
+    })
+  end
+
+  test "an accepted floating Spark row rebases only after a persisted moving candidate confirms" do
+    t0 = ~U[2026-07-19 12:01:16Z]
+    identity = identity!()
+    accepted = accepted_floating_model!(identity, t0)
+    old_provider_watermark = accepted.metadata["__quota_relative_liveness_v1"]
+
+    candidate_at = ~U[2026-07-21 12:10:00Z]
+    candidate_provider_at = DateTime.add(candidate_at, -10, :minute)
+    candidate_reset = DateTime.add(candidate_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(candidate_at, "0", reset_at: candidate_reset),
+               candidate_at,
+               candidate_at
+             )
+
+    pending = model_weekly_row(identity)
+
+    assert {:ok, candidate} = EvidenceStore.parse_candidate(pending.metadata)
+
+    assert DateTime.compare(candidate.observed_at, candidate_at) == :eq
+    assert DateTime.compare(candidate.reset_at, candidate_reset) == :eq
+    assert DateTime.compare(pending.reset_at, accepted.reset_at) == :eq
+    assert DateTime.compare(pending.observed_at, accepted.observed_at) == :eq
+    assert pending.metadata["__quota_relative_liveness_v1"] == old_provider_watermark
+    refute Map.has_key?(pending.metadata, "__quota_cycle_confirmation_v1")
+
+    confirmed_at = DateTime.add(candidate_at, 4, :minute)
+    confirmed_provider_at = DateTime.add(candidate_provider_at, 4, :minute)
+    confirmed_reset = DateTime.add(confirmed_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(confirmed_at, "0", reset_at: confirmed_reset),
+               confirmed_at,
+               confirmed_at
+             )
+
+    rebased = model_weekly_row(identity)
+    assert rebased.metadata["reset_state"] == "floating"
+    assert :none = EvidenceStore.parse_candidate(rebased.metadata)
+    assert DateTime.compare(rebased.reset_at, confirmed_reset) == :eq
+    assert DateTime.compare(rebased.observed_at, confirmed_at) == :eq
+    assert DateTime.compare(rebased.last_sync_at, confirmed_at) == :eq
+    assert rebased.freshness_state == "fresh"
+    refute Map.has_key?(rebased.metadata, "__quota_cycle_confirmation_v1")
+
+    assert rebased.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(confirmed_provider_at)
+  end
+
+  test "an old-anchor runtime observation does not erase a floating rebase candidate" do
+    t0 = ~U[2026-07-19 12:01:16Z]
+    identity = identity!()
+    accepted = accepted_floating_model!(identity, t0)
+    candidate_at = ~U[2026-07-21 12:10:00Z]
+    candidate_provider_at = DateTime.add(candidate_at, -10, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(candidate_at, "0",
+                 reset_at: DateTime.add(candidate_provider_at, @window_seconds, :second)
+               ),
+               candidate_at,
+               candidate_at
+             )
+
+    runtime_at = DateTime.add(candidate_at, 60, :second)
+
+    assert {:ok, runtime_row} =
+             EvidenceStore.record_evidence(
+               identity,
+               runtime_model_weekly(runtime_at, "12", accepted.reset_at),
+               runtime_at,
+               runtime_at
+             )
+
+    assert runtime_row.source == "codex_response_headers"
+    assert {:ok, candidate} = EvidenceStore.parse_candidate(model_weekly_row(identity).metadata)
+    assert DateTime.compare(candidate.observed_at, candidate_at) == :eq
+
+    confirmed_at = DateTime.add(candidate_at, 4, :minute)
+    confirmed_provider_at = DateTime.add(candidate_provider_at, 4, :minute)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(confirmed_at, "0",
+                 reset_at: DateTime.add(confirmed_provider_at, @window_seconds, :second)
+               ),
+               confirmed_at,
+               confirmed_at
+             )
+
+    rebased = model_weekly_row(identity)
+    assert rebased.metadata["reset_state"] == "floating"
+    assert :none = EvidenceStore.parse_candidate(rebased.metadata)
+
+    assert DateTime.compare(
+             rebased.reset_at,
+             DateTime.add(confirmed_provider_at, @window_seconds)
+           ) ==
+             :eq
+  end
+
+  test "positive Spark evidence anchors a floating row and clears its rebase candidate" do
+    t0 = ~U[2026-07-19 12:01:16Z]
+    identity = identity!()
+    accepted_floating_model!(identity, t0)
+    candidate_at = ~U[2026-07-21 12:10:00Z]
+    candidate_provider_at = DateTime.add(candidate_at, -10, :minute)
+    candidate_reset = DateTime.add(candidate_provider_at, @window_seconds, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(candidate_at, "0", reset_at: candidate_reset),
+               candidate_at,
+               candidate_at
+             )
+
+    assert {:ok, _candidate} = EvidenceStore.parse_candidate(model_weekly_row(identity).metadata)
+
+    positive_at = DateTime.add(candidate_at, 60, :second)
+
+    assert {:ok, _row} =
+             EvidenceStore.record_evidence(
+               identity,
+               model_weekly(positive_at, "2", reset_at: candidate_reset, metadata: %{}),
+               positive_at,
+               positive_at
+             )
+
+    anchored = model_weekly_row(identity)
+    assert Decimal.equal?(anchored.used_percent, Decimal.new("2"))
+    assert DateTime.compare(anchored.reset_at, candidate_reset) == :eq
+    assert DateTime.compare(anchored.observed_at, positive_at) == :eq
+    refute Map.has_key?(anchored.metadata, "reset_state")
+    assert :none = EvidenceStore.parse_candidate(anchored.metadata)
+    refute Map.has_key?(anchored.metadata, "__quota_cycle_confirmation_v1")
+  end
+
+  test "cached, older, future, and malformed timing cannot rebase a floating Spark row" do
+    t0 = ~U[2026-07-19 12:01:16Z]
+
+    for invalid_case <- [:cached, :older, :future, :malformed] do
+      identity = identity!()
+      accepted = accepted_floating_model!(identity, t0)
+      observed_at = ~U[2026-07-21 12:10:00Z]
+
+      invalid_evidence =
+        case invalid_case do
+          :cached ->
+            model_weekly(observed_at, "0", reset_at: accepted.reset_at)
+
+          :older ->
+            model_weekly(observed_at, "0",
+              reset_at: DateTime.add(accepted.reset_at, -60, :second)
+            )
+
+          :future ->
+            model_weekly(observed_at, "0",
+              reset_at: DateTime.add(observed_at, @window_seconds + 10 * 60, :second)
+            )
+
+          :malformed ->
+            model_weekly(observed_at, "0", metadata: %{"reset_after_seconds" => "bad"})
+        end
+
+      assert {:ok, _row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 invalid_evidence,
+                 observed_at,
+                 observed_at
+               )
+
+      unchanged = model_weekly_row(identity)
+      assert DateTime.compare(unchanged.reset_at, accepted.reset_at) == :eq
+      assert DateTime.compare(unchanged.observed_at, accepted.observed_at) == :eq
+      assert unchanged.metadata["reset_state"] == "floating"
+      assert :none = EvidenceStore.parse_candidate(unchanged.metadata)
+    end
   end
 
   test "sliding model weekly zeros become explicitly floating after confirmation" do

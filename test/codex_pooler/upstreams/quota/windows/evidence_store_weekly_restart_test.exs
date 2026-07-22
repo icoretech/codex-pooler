@@ -2,6 +2,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
 
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -19,8 +20,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
 
   @window_seconds 10_080 * 60
 
-  defp identity! do
-    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), %{})
+  defp identity!(attrs \\ %{}) do
+    %{identity: identity} = active_upstream_assignment_fixture(pool_fixture(), attrs)
     identity
   end
 
@@ -120,6 +121,50 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     row = account_row(identity)
     assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
     assert DateTime.compare(row.observed_at, t2) == :eq
+  end
+
+  test "quota cycle decision logs keep candidate and confirmation diagnostics identifier-free" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    account_label = "Example account label #{System.unique_integer([:positive])}"
+    assignment_label = "Example assignment label #{System.unique_integer([:positive])}"
+
+    identity =
+      identity!(%{account_label: account_label, assignment_label: assignment_label})
+
+    assert {:ok, _row} = exhausted_row!(identity, t0)
+
+    {log, events} =
+      capture_quota_cycle_events(fn ->
+        capture_info_log(fn ->
+          t1 = DateTime.add(t0, 300, :second)
+          assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t1), t1)
+
+          t2 = DateTime.add(t1, 180, :second)
+          assert {:ok, _row} = Windows.record_evidence(identity, floating_zero(t2), t2)
+        end)
+      end)
+
+    assert events == [
+             {%{count: 1}, %{scope: "account", decision: :candidate, source: "provider_usage"}},
+             {%{count: 1},
+              %{scope: "account", decision: :anchored_confirmed, source: "provider_usage"}}
+           ]
+
+    assert log =~ "quota_cycle_decision decision=candidate reason=candidate_restarted"
+    assert log =~ "quota_cycle_decision decision=anchored_confirmed reason=confirmation"
+    assert log =~ "scope=account source=provider_usage"
+    assert log =~ "candidate_age_s=180"
+    refute log =~ "upstream_identity_id"
+    refute log =~ account_label
+    refute log =~ assignment_label
+    refute log =~ identity.id
+    refute log =~ ~r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
+
+    event_output = inspect(events)
+    refute event_output =~ account_label
+    refute event_output =~ assignment_label
+    refute event_output =~ identity.id
+    refute event_output =~ "upstream_identity_id"
   end
 
   test "a cached same-cycle body never clears the exhausted row" do
@@ -1454,14 +1499,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
              DateTime.to_iso8601(legacy_provider_at)
   end
 
-  test "provider-time freshness and future-skew boundaries are inclusive" do
+  test "provider proof is non-future while generic evidence freshness keeps its skew allowance" do
     timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     cases = [
       {-Evidence.freshness_ttl_seconds(), true},
-      {Evidence.future_observed_skew_seconds(), true},
+      {0, true},
       {-Evidence.freshness_ttl_seconds() - 1, false},
-      {Evidence.future_observed_skew_seconds() + 1, false}
+      {1, false}
     ]
 
     for {provider_delta, candidate?} <- cases do
@@ -1486,6 +1531,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
         refute Map.has_key?(account_row(identity).metadata, "__quota_confirmed_candidate_v1")
       end
     end
+
+    future_within_skew = %{
+      freshness_state: "fresh",
+      observed_at: DateTime.add(timestamp, Evidence.future_observed_skew_seconds(), :second),
+      reset_at: DateTime.add(timestamp, 1, :day)
+    }
+
+    assert Evidence.current_freshness_state(future_within_skew, timestamp) == "fresh"
+
+    future_beyond_skew = %{
+      future_within_skew
+      | observed_at: DateTime.add(timestamp, Evidence.future_observed_skew_seconds() + 1, :second)
+    }
+
+    assert Evidence.current_freshness_state(future_beyond_skew, timestamp) == "stale"
   end
 
   test "a resetless weekly zero cannot crash or clear a partially-used observation" do
@@ -1514,5 +1574,47 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     row = account_row(identity)
     assert Decimal.compare(row.used_percent, Decimal.new("31")) == :eq
     assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
+  defp capture_info_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      capture_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
+  defp capture_quota_cycle_events(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = "weekly-restart-quota-cycle-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :quota, :cycle, :decision],
+        fn _event, measurements, metadata, _config ->
+          send(parent, {handler_id, measurements, metadata})
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_quota_cycle_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_quota_cycle_events(handler_id, events) do
+    receive do
+      {^handler_id, measurements, metadata} ->
+        drain_quota_cycle_events(handler_id, [{measurements, metadata} | events])
+    after
+      0 -> Enum.reverse(events)
+    end
   end
 end

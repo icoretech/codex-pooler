@@ -10,7 +10,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   @spec valid?(Evidence.t(), DateTime.t()) :: boolean()
   def valid?(%Evidence{} = evidence, timestamp) do
     case provider_observed_at(evidence) do
-      {:ok, provider_at} -> valid_at?(provider_at, timestamp)
+      {:ok, provider_at} -> skew_valid_at?(provider_at, timestamp)
+      :none -> false
+    end
+  end
+
+  @spec provider_proof_valid?(Evidence.t(), DateTime.t()) :: boolean()
+  def provider_proof_valid?(%Evidence{} = evidence, timestamp) do
+    case provider_observed_at(evidence) do
+      {:ok, provider_at} -> proof_valid_at?(provider_at, timestamp)
       :none -> false
     end
   end
@@ -18,7 +26,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   @spec advances?(Evidence.t(), AccountQuotaWindow.t(), DateTime.t()) :: boolean()
   def advances?(%Evidence{} = evidence, %AccountQuotaWindow{} = existing, timestamp) do
     with {:ok, incoming_provider_at} <- provider_observed_at(evidence),
-         true <- valid_at?(incoming_provider_at, timestamp) do
+         true <- provider_proof_valid?(evidence, timestamp) do
       advances_stored_observation?(incoming_provider_at, existing, timestamp)
     else
       _invalid_or_missing -> false
@@ -41,10 +49,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
         false
 
       {:ok, incoming_provider_at} ->
-        with true <- valid_at?(incoming_provider_at, timestamp),
+        with true <- proof_valid_at?(incoming_provider_at, timestamp),
              {:ok, candidate_provider_at} <-
                parse_datetime(Map.get(metadata || %{}, @candidate_metadata_key)),
-             true <- valid_at?(candidate_provider_at, timestamp) do
+             true <- proof_valid_at?(candidate_provider_at, timestamp) do
           compare.(DateTime.compare(incoming_provider_at, candidate_provider_at))
         else
           _invalid_or_missing -> false
@@ -89,7 +97,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
       ) do
     case provider_observed_at(evidence) do
       {:ok, provider_at} when is_map(attrs) ->
-        if valid_at?(provider_at, timestamp) do
+        if skew_valid_at?(provider_at, timestamp) do
           put_monotonic_metadata(attrs, provider_at, existing, timestamp)
         else
           put_observation_barrier(attrs, evidence, existing, timestamp)
@@ -103,7 +111,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   defp advances_stored_observation?(incoming_provider_at, existing, timestamp) do
     case stored_provider_observed_at(existing) do
       {:ok, existing_provider_at} ->
-        not valid_at?(existing_provider_at, timestamp) or
+        not skew_valid_at?(existing_provider_at, timestamp) or
           DateTime.compare(incoming_provider_at, existing_provider_at) == :gt
 
       :none ->
@@ -112,7 +120,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   end
 
   defp put_valid_metadata(attrs, provider_at, timestamp) do
-    if valid_at?(provider_at, timestamp) do
+    if skew_valid_at?(provider_at, timestamp) do
       Map.update!(attrs, :metadata, fn metadata ->
         Map.put(metadata, @metadata_key, DateTime.to_iso8601(provider_at))
       end)
@@ -129,12 +137,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
        ),
        do: put_monotonic_metadata(attrs, observed_at, existing, timestamp)
 
-  defp put_observation_barrier(attrs, _evidence, _existing, _timestamp), do: attrs
-
   defp put_monotonic_metadata(attrs, provider_at, existing, timestamp) do
     case stored_provider_observed_at(existing) do
       {:ok, existing_provider_at} ->
-        if valid_at?(existing_provider_at, timestamp) and
+        if skew_valid_at?(existing_provider_at, timestamp) and
              DateTime.compare(provider_at, existing_provider_at) == :lt do
           put_valid_metadata(attrs, existing_provider_at, timestamp)
         else
@@ -147,7 +153,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   end
 
   defp put_valid_candidate_metadata(metadata, provider_at, timestamp) do
-    if valid_at?(provider_at, timestamp) do
+    if proof_valid_at?(provider_at, timestamp) do
       Map.put(metadata, @candidate_metadata_key, DateTime.to_iso8601(provider_at))
     else
       clear_candidate_metadata(metadata)
@@ -182,10 +188,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   defp stored_observation_barrier(%DateTime{} = observed_at), do: {:ok, observed_at}
   defp stored_observation_barrier(_observed_at), do: :none
 
-  defp provider_observed_at(%Evidence{reset_at: %DateTime{} = reset_at, metadata: metadata}),
+  @spec provider_observed_at(Evidence.t()) :: {:ok, DateTime.t()} | :none
+  def provider_observed_at(%Evidence{reset_at: %DateTime{} = reset_at, metadata: metadata}),
     do: provider_observed_at(reset_at, metadata)
 
-  defp provider_observed_at(_evidence), do: :none
+  def provider_observed_at(_evidence), do: :none
 
   defp provider_observed_at(reset_at, metadata) do
     case reset_after_seconds(metadata) do
@@ -203,10 +210,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
 
   defp reset_after_seconds(_metadata), do: :absent_or_invalid
 
-  defp valid_at?(provider_at, timestamp) do
+  defp skew_valid_at?(provider_at, timestamp) do
     DateTime.diff(timestamp, provider_at, :second) <= Evidence.freshness_ttl_seconds() and
       DateTime.diff(provider_at, timestamp, :second) <=
         Evidence.future_observed_skew_seconds()
+  end
+
+  defp proof_valid_at?(provider_at, timestamp) do
+    DateTime.diff(timestamp, provider_at, :second) <= Evidence.freshness_ttl_seconds() and
+      DateTime.compare(provider_at, timestamp) != :gt
   end
 
   defp parse_datetime(value) when is_binary(value) do
