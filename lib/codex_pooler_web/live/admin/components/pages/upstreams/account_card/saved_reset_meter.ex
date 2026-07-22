@@ -46,6 +46,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   end
 
   attr :id, :string, required: true
+  attr :identity_id, :string, default: nil
   attr :saved_resets, :map, required: true
   attr :saved_reset_policy, :map, required: true
   attr :class, :any, default: nil
@@ -68,7 +69,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
       |> assign(:redemption_status, redemption_status)
 
     ~H"""
-    <div id={@id} data-role="upstream-saved-reset-meter" class={["grid gap-1.5", @class]}>
+    <div id={@id} data-role="upstream-saved-reset-meter" class={["relative grid gap-1.5", @class]}>
+      <button
+        :if={@identity_id}
+        id={"#{@id}-open"}
+        type="button"
+        data-role="upstream-saved-reset-meter-open"
+        class="saved-reset-open-gloss absolute -inset-x-2 -inset-y-1.5 z-10 cursor-pointer rounded border border-transparent transition-colors hover:border-(--color-reset-bank)/25 hover:bg-(--color-reset-bank)/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        aria-label={saved_reset_count_badge_aria_label(@saved_resets)}
+        aria-controls="saved-reset-policy-dialog"
+        aria-haspopup="dialog"
+        phx-click="open_saved_reset_policy"
+        phx-value-id={@identity_id}
+      >
+        <span class="sr-only">Open saved reset bank</span>
+      </button>
       <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span
           data-role="upstream-saved-reset-meter-title"

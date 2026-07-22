@@ -796,6 +796,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             id="saved-reset-expirations-disclosure"
             class="group border-t border-base-300/60"
             data-preserve-open
+            open
           >
             <summary class="flex cursor-pointer items-center justify-between gap-3 px-5 py-3 text-sm font-semibold text-base-content transition-colors hover:bg-base-200/50 [&::-webkit-details-marker]:hidden">
               <span>All expirations</span>

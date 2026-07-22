@@ -178,6 +178,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               <SavedResetMeter.saved_reset_meter
                 :if={saved_reset_panel_available?(@saved_resets)}
                 id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
+                identity_id={@account.identity.id}
                 saved_resets={@saved_resets}
                 saved_reset_policy={@saved_reset_policy}
                 class={saved_reset_meter_grid_class(@reported_quota_limits)}

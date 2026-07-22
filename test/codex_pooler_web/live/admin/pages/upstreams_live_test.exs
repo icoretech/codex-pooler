@@ -1505,6 +1505,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#{active_badge_selector} .hero-battery-100.size-3.text-current")
 
     refute has_element?(view, "#upstream-saved-reset-count-popover-#{active_identity.id}")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-saved-reset-meter-open[data-role='upstream-saved-reset-meter-open'][aria-controls='saved-reset-policy-dialog'][aria-haspopup='dialog'][phx-click='open_saved_reset_policy'][phx-value-id='#{active_identity.id}']"
+           )
+
     refute has_element?(view, "#upstream-account-#{active_identity.id}-saved-reset-panel")
     refute has_element?(view, "#saved-reset-policy-dialog")
 
@@ -1826,7 +1832,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#saved-reset-expirations-disclosure summary",
+             "#saved-reset-expirations-disclosure[open] summary",
              "All expirations"
            )
 

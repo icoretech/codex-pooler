@@ -699,6 +699,44 @@ body {
   }
 }
 
+/* Banked-resets opener gloss: hovering the block fires one CD-cover style
+   sheen — a narrow streak with a white core and reset-bank fringes so it
+   reads on both themes — sweeping diagonally across once and then resting.
+   Re-entering the block replays it. */
+.saved-reset-open-gloss::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgb(255 255 255 / 0.25) 47%,
+    rgb(255 255 255 / 0.7) 50%,
+    rgb(255 255 255 / 0.25) 53%,
+    transparent 60%
+  );
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
+  background-position: 100% 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.saved-reset-open-gloss:hover::before,
+.saved-reset-open-gloss:focus-visible::before {
+  opacity: 1;
+  animation: admin-progress-shine 1.6s ease-out 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .saved-reset-open-gloss:hover::before,
+  .saved-reset-open-gloss:focus-visible::before {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* Credit-backed quota meters keep their tone color but render striped so
    operators can tell at a glance that the remaining value burns credits
    rather than a percent-based window. */
