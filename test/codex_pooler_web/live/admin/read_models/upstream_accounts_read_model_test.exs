@@ -5,10 +5,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
   import CodexPooler.PoolerFixtures
   import Phoenix.LiveViewTest
 
+  alias CodexPooler.Accounting.Reporting
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection
 
   setup :register_and_log_in_user
 
@@ -137,6 +139,290 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
              %{label: "gpt-example-busy", tokens: 42_000, cost_micros: 252_000},
              %{label: "gpt-example-quiet", tokens: 1_500, cost_micros: 9_000}
            ]
+  end
+
+  test "token burn preserves complete, partial, unknown, and idle usage completeness" do
+    now = ~U[2026-07-22 12:00:00.000000Z]
+
+    {_idle_pool, idle_identity, _idle_assignment, _idle_api_key} = token_burn_fixture()
+    {zero_pool, zero_identity, zero_assignment, zero_api_key} = token_burn_fixture()
+
+    {positive_pool, positive_identity, positive_assignment, positive_api_key} =
+      token_burn_fixture()
+
+    {partial_pool, partial_identity, partial_assignment, partial_api_key} = token_burn_fixture()
+    {unknown_pool, unknown_identity, unknown_assignment, unknown_api_key} = token_burn_fixture()
+
+    seed_token_burn_settlement!(
+      zero_pool,
+      zero_api_key,
+      zero_assignment,
+      zero_identity,
+      now,
+      -60,
+      %{total_tokens: 0, settled_cost_micros: 0}
+    )
+
+    seed_token_burn_settlement!(
+      positive_pool,
+      positive_api_key,
+      positive_assignment,
+      positive_identity,
+      now,
+      -60,
+      %{total_tokens: 40, settled_cost_micros: 400}
+    )
+
+    seed_token_burn_settlement!(
+      partial_pool,
+      partial_api_key,
+      partial_assignment,
+      partial_identity,
+      now,
+      -60,
+      %{total_tokens: 20, settled_cost_micros: 200}
+    )
+
+    seed_token_burn_settlement!(
+      partial_pool,
+      partial_api_key,
+      partial_assignment,
+      partial_identity,
+      now,
+      -120,
+      %{
+        usage_status: "usage_unknown",
+        total_tokens: 999_999,
+        settled_cost_micros: 999_999
+      }
+    )
+
+    seed_token_burn_settlement!(
+      unknown_pool,
+      unknown_api_key,
+      unknown_assignment,
+      unknown_identity,
+      now,
+      -60,
+      %{
+        usage_status: "usage_unknown",
+        total_tokens: 999_999,
+        settled_cost_micros: 999_999
+      }
+    )
+
+    seed_token_burn_settlement!(
+      unknown_pool,
+      unknown_api_key,
+      unknown_assignment,
+      unknown_identity,
+      now,
+      -301,
+      %{total_tokens: 123, settled_cost_micros: 1_230}
+    )
+
+    {summaries, queries} =
+      count_repo_sources(fn ->
+        TokenBurnProjection.summaries(
+          [idle_identity, zero_identity, positive_identity, partial_identity, unknown_identity],
+          now: now
+        )
+      end)
+
+    assert Map.get(queries, "ledger_entries", 0) == 2
+
+    assert summaries[idle_identity.id]
+           |> Map.take([
+             :label,
+             :title,
+             :usage_state,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count,
+             :recent_tokens
+           ]) ==
+             %{
+               label: "x0",
+               title: "No requests in the last 5 minutes.",
+               usage_state: :idle,
+               recent_requests: 0,
+               known_request_count: 0,
+               unknown_request_count: 0,
+               recent_tokens: 0
+             }
+
+    assert summaries[zero_identity.id]
+           |> Map.take([
+             :label,
+             :title,
+             :usage_state,
+             :level,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count,
+             :recent_tokens
+           ]) ==
+             %{
+               label: "x0",
+               title: "last 5m: 0 tokens; previous 1h: 0 tokens; complete usage for 1 request",
+               usage_state: :complete,
+               level: 0,
+               recent_requests: 1,
+               known_request_count: 1,
+               unknown_request_count: 0,
+               recent_tokens: 0
+             }
+
+    assert summaries[positive_identity.id]
+           |> Map.take([
+             :label,
+             :title,
+             :usage_state,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count,
+             :recent_tokens
+           ]) ==
+             %{
+               label: "x1",
+               title: "last 5m: 40 tokens; previous 1h: 0 tokens; complete usage for 1 request",
+               usage_state: :complete,
+               recent_requests: 1,
+               known_request_count: 1,
+               unknown_request_count: 0,
+               recent_tokens: 40
+             }
+
+    assert summaries[partial_identity.id]
+           |> Map.take([
+             :label,
+             :title,
+             :usage_state,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count,
+             :recent_tokens
+           ]) ==
+             %{
+               label: "x1",
+               title:
+                 "last 5m: 20 tokens; previous 1h: 0 tokens; confirmed usage for 1 of 2 requests; 1 usage record missing",
+               usage_state: :partial,
+               recent_requests: 2,
+               known_request_count: 1,
+               unknown_request_count: 1,
+               recent_tokens: 20
+             }
+
+    assert summaries[unknown_identity.id]
+           |> Map.take([
+             :label,
+             :title,
+             :usage_state,
+             :level,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count,
+             :recent_tokens
+           ]) ==
+             %{
+               label: "usage unavailable",
+               title: "last 5m: 1 request; 1 usage record missing",
+               usage_state: :unknown,
+               level: nil,
+               recent_requests: 1,
+               known_request_count: 0,
+               unknown_request_count: 1,
+               recent_tokens: 0
+             }
+  end
+
+  test "token burn includes the exact five-minute bounds and excludes adjacent settlements" do
+    now = ~U[2026-07-22 12:00:00.000000Z]
+    {pool, identity, assignment, api_key} = token_burn_fixture()
+    model = model_fixture(pool, %{exposed_model_id: "gpt-example-token-burn-boundary"})
+
+    seed_token_burn_settlement!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      now,
+      -300,
+      %{model_id: model.id, total_tokens: 20, settled_cost_micros: 200}
+    )
+
+    seed_token_burn_settlement!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      now,
+      0,
+      %{
+        model_id: model.id,
+        usage_status: "usage_unknown",
+        total_tokens: 999_999,
+        settled_cost_micros: 999_999
+      }
+    )
+
+    seed_token_burn_settlement!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      now,
+      -301,
+      %{model_id: model.id, total_tokens: 123, settled_cost_micros: 1_230}
+    )
+
+    seed_token_burn_settlement!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      now,
+      1,
+      %{
+        model_id: model.id,
+        usage_status: "usage_unknown",
+        total_tokens: 456_789,
+        settled_cost_micros: 4_567_890
+      }
+    )
+
+    started_at = DateTime.add(now, -5 * 60, :second)
+
+    assert Reporting.token_totals_by_upstream_identity_and_model_ids(
+             [identity.id],
+             started_at,
+             now
+           )[identity.id] == [
+             %{
+               model_id: model.id,
+               total_tokens: 20,
+               request_count: 2,
+               known_request_count: 1,
+               unknown_request_count: 1,
+               settled_cost_micros: 200
+             }
+           ]
+
+    assert TokenBurnProjection.summaries([identity], now: now)[identity.id]
+           |> Map.take([
+             :usage_state,
+             :recent_tokens,
+             :recent_requests,
+             :known_request_count,
+             :unknown_request_count
+           ]) == %{
+             usage_state: :partial,
+             recent_tokens: 20,
+             recent_requests: 2,
+             known_request_count: 1,
+             unknown_request_count: 1
+           }
   end
 
   test "assignments without active provenance receive the explicit empty state", %{scope: scope} do
@@ -368,6 +654,56 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     after
       :telemetry.detach(handler_id)
     end
+  end
+
+  defp token_burn_fixture do
+    pool = pool_fixture()
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    %{api_key: api_key} = api_key_fixture(pool)
+    {pool, identity, assignment, api_key}
+  end
+
+  defp seed_token_burn_settlement!(
+         pool,
+         api_key,
+         assignment,
+         identity,
+         now,
+         offset_seconds,
+         attrs
+       ) do
+    occurred_at = DateTime.add(now, offset_seconds, :second)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        correlation_id: "token-burn-#{System.unique_integer([:positive])}"
+      })
+      |> Ecto.Changeset.change(%{admitted_at: occurred_at, completed_at: occurred_at})
+      |> Repo.update!()
+
+    attempt =
+      request
+      |> attempt_fixture(assignment)
+      |> Ecto.Changeset.change(%{
+        started_at: occurred_at,
+        completed_at: occurred_at,
+        latency_ms: 1_000
+      })
+      |> Repo.update!()
+
+    request
+    |> ledger_entry_fixture(
+      Map.merge(
+        %{
+          attempt_id: attempt.id,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id
+        },
+        attrs
+      )
+    )
+    |> Ecto.Changeset.change(%{occurred_at: occurred_at, created_at: occurred_at})
+    |> Repo.update!()
   end
 
   defp drain_repo_sources(handler_id, counts) do
