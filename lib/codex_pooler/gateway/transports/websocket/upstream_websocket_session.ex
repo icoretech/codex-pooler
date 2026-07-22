@@ -692,6 +692,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       Map.merge(
         %{
           pre_visible_output: not receive_state.downstream_output_started?,
+          upstream_committed: true,
           terminal_seen: receive_state.terminal_seen?,
           text_frame_count: receive_state.text_frame_count
         },

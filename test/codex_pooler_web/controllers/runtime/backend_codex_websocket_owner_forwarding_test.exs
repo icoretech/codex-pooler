@@ -619,7 +619,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                "reason" => "upstream_websocket_closed_before_terminal",
                "reason_class" => "upstream_websocket_closed_before_terminal",
                "terminal_seen" => false,
-               "text_frame_count" => 1
+               "text_frame_count" => 1,
+               "upstream_committed" => true
              }
 
       metadata_text = inspect(attempt.response_metadata)

@@ -3577,7 +3577,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                "reason" => "upstream_websocket_closed_before_terminal",
                "reason_class" => "upstream_websocket_closed_before_terminal",
                "terminal_seen" => false,
-               "text_frame_count" => 1
+               "text_frame_count" => 1,
+               "upstream_committed" => true
              }
 
       metadata_text = inspect(second_attempt.response_metadata)
@@ -6762,7 +6763,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "reason" => "upstream_websocket_closed_before_terminal",
              "reason_class" => "upstream_websocket_closed_before_terminal",
              "terminal_seen" => false,
-             "text_frame_count" => 0
+             "text_frame_count" => 0,
+             "upstream_committed" => true
            }
 
     assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
