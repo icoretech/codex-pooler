@@ -1024,6 +1024,225 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
   end
 
+  describe "gateway auto post-consume latch" do
+    test "an applied auto consume awaiting quota convergence blocks another auto consume" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_awaiting_post_consume_quota"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+
+      persisted = Repo.reload!(identity)
+
+      assert get_in(persisted.metadata, ["saved_reset_redemption", "phase"]) ==
+               "confirmed_by_upstream"
+    end
+
+    test "a converged auto consume still cools down inside the probe window" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_consume_cooldown"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "a converged auto consume past the cooldown re-arms a genuine new episode" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 40)
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [consume_request, _usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+    end
+
+    test "manual redemption overrides the latch" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
+        )
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment)
+
+      assert [consume_request, _usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+    end
+
+    test "a legacy applied record inside the window cools down without latching forever" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: legacy_applied_gateway_auto_redemption(5)
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_consume_cooldown"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "the threshold trigger cannot bypass the latch" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_upstream", 5)
+        )
+
+      identity =
+        enable_saved_reset_auto_redeem!(identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 60
+        })
+
+      upsert_weekly_pressure_quota!(identity, Decimal.new("95"))
+      context = gateway_auto_context(assignment, identity, :threshold_pressure)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_awaiting_post_consume_quota"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "a manual applied consume latches the following automatic attempt" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption:
+            applied_gateway_auto_redemption("confirmed_by_upstream", 5)
+            |> Map.put("trigger_kind", "admin_manual")
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_awaiting_post_consume_quota"
+              }} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "a legacy applied record past the window does not latch" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: legacy_applied_gateway_auto_redemption(40)
+        )
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [consume_request, _usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+    end
+  end
+
+  defp applied_gateway_auto_redemption(phase, consumed_minutes_ago) do
+    consumed_at =
+      DateTime.utc_now()
+      |> DateTime.add(-consumed_minutes_ago, :minute)
+      |> DateTime.truncate(:microsecond)
+
+    %{
+      "status" => "succeeded",
+      "phase" => phase,
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 3,
+      "trigger_kind" => "gateway_auto",
+      "started_at" => DateTime.to_iso8601(consumed_at),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
+  end
+
+  # Pre-lifecycle writers persisted status/trigger/started_at/result only.
+  defp legacy_applied_gateway_auto_redemption(consumed_minutes_ago) do
+    applied_gateway_auto_redemption("confirmed_by_quota", consumed_minutes_ago)
+    |> Map.drop(["phase", "consumed_at", "deadline_at"])
+  end
+
   defp codex_reset_fake(available_count) do
     FakeUpstream.start_link(
       {:path_json,

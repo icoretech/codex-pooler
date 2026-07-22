@@ -56,6 +56,13 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   # convergence, strictly fail-closed afterwards.
   @probe_grace_ms 15 * 60 * 1000
 
+  # Minimum spacing between an applied consume and the next automatic consume.
+  # Deliberately larger than the probe window: the provider has been observed
+  # re-serving pre-reset quota values with fresh observation timestamps for
+  # ~18 minutes after a reset, and post-consume classification can settle a
+  # threshold-mode record to `confirmed_by_quota` on exactly that stale data.
+  @gateway_auto_consume_cooldown_ms 30 * 60 * 1000
+
   @legacy_status_by_phase %{
     @consuming => "redeeming",
     @consumed_pending_probe => "redeeming",
@@ -108,6 +115,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
 
   @spec probe_grace_ms() :: pos_integer()
   def probe_grace_ms, do: @probe_grace_ms
+
+  @spec gateway_auto_consume_cooldown_ms() :: pos_integer()
+  def gateway_auto_consume_cooldown_ms, do: @gateway_auto_consume_cooldown_ms
 
   @doc """
   Returns the recognized lifecycle phase carried by a redemption metadata map,
@@ -180,6 +190,83 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
 
   defp consumed_credit?(%{"result" => %{"applied" => true}}), do: true
   defp consumed_credit?(_redemption), do: false
+
+  @doc """
+  True when the record represents a consume that actually spent a credit —
+  regardless of who triggered it. Any applied consume arms the automatic
+  latch below: a manual redemption is the operator's own spend, and a
+  follow-on automatic spend against the same not-yet-converged evidence is
+  still an automatic spend the operator did not ask for.
+  """
+  @spec applied_consume?(redemption() | term()) :: boolean()
+  def applied_consume?(redemption), do: consumed_credit?(redemption)
+
+  @doc """
+  At most one automatic consume per exhaustion episode. After any applied
+  consume, another automatic consume is not allowed to trust quota evidence
+  the provider may still be serving from the pre-reset cycle (observation
+  timestamps refresh even while the values stay stale, so recency alone
+  proves nothing — and in threshold mode that same stale data can settle the
+  record to `confirmed_by_quota` within seconds of the consume):
+
+    * `:blocked_awaiting_quota` — the credit was spent but fresh post-consume
+      provider evidence has not superseded the stale state (`confirmed_by_quota`
+      not reached). This closes the `confirmed_by_upstream` gap; the other
+      spent phases already block through `blocks_new_redemption?/2`.
+    * `:cooldown` — evidence converged (or the record predates the lifecycle),
+      but the consume is younger than the automatic-consume cooldown. This is
+      the load-bearing floor for threshold mode, where stale sub-exhausted
+      values self-confirm; it is sized above the observed provider staleness.
+    * `:clear` — no applied consume is latching automatic redemption.
+
+  Legacy records without a phase can never reach `confirmed_by_quota`, so they
+  get only the temporal floor — a latch that never lifts would disable saved
+  resets on the identity forever. Manual redemption never consults this latch:
+  it is the operator override.
+  """
+  @spec gateway_auto_latch(redemption() | term(), DateTime.t()) ::
+          :blocked_awaiting_quota | :cooldown | :clear
+  def gateway_auto_latch(redemption, %DateTime{} = now) do
+    cond do
+      not applied_consume?(redemption) ->
+        :clear
+
+      phase(redemption) in [nil, @confirmed_by_quota] ->
+        if within_consume_cooldown?(redemption, now), do: :cooldown, else: :clear
+
+      true ->
+        :blocked_awaiting_quota
+    end
+  end
+
+  defp within_consume_cooldown?(redemption, now) do
+    case consumed_or_started_at(redemption) do
+      %DateTime{} = consumed_at ->
+        DateTime.diff(now, consumed_at, :millisecond) < @gateway_auto_consume_cooldown_ms
+
+      nil ->
+        false
+    end
+  end
+
+  defp consumed_or_started_at(%{"consumed_at" => consumed_at} = redemption)
+       when is_binary(consumed_at) do
+    parse_datetime(consumed_at) || started_at(redemption)
+  end
+
+  defp consumed_or_started_at(redemption), do: started_at(redemption)
+
+  defp started_at(%{"started_at" => started_at}) when is_binary(started_at),
+    do: parse_datetime(started_at)
+
+  defp started_at(_redemption), do: nil
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _invalid -> nil
+    end
+  end
 
   @doc """
   Whether the identity is currently routeable on the strength of the lifecycle

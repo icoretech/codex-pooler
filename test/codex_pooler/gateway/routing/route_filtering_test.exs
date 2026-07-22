@@ -413,6 +413,103 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert is_binary(redemption["probe"]["token"])
     end
 
+    test "a latched candidate is skipped pre-lock so a sibling can redeem" do
+      {:ok, latched_upstream} = auto_redeem_fake()
+      {:ok, sibling_upstream} = auto_redeem_fake()
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      latched_metadata =
+        latched_upstream
+        |> saved_reset_metadata(1)
+        |> Map.put("saved_reset_redemption", applied_auto_redemption("reblocked", 5))
+
+      %{identity: latched_identity, assignment: latched_assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: latched_metadata})
+
+      %{identity: sibling_identity, assignment: sibling_assignment} =
+        active_upstream_assignment_fixture(pool, %{
+          metadata: saved_reset_metadata(sibling_upstream, 1)
+        })
+
+      latched_identity = enable_saved_reset_auto_redeem!(latched_identity)
+      sibling_identity = enable_saved_reset_auto_redeem!(sibling_identity)
+      upsert_weekly_exhausted_quota!(latched_identity)
+      upsert_weekly_exhausted_quota!(sibling_identity)
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [{latched_assignment, latched_identity}, {sibling_assignment, sibling_identity}],
+          "latched-skip"
+        )
+
+      assert {:ok, [{%{id: routed_assignment_id}, routed_identity}], _filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      # The latched candidate burns no slot and no credit; the sibling redeems.
+      assert routed_assignment_id == sibling_assignment.id
+      assert routed_identity.id == sibling_identity.id
+      assert [] = FakeUpstream.requests(latched_upstream)
+
+      assert Enum.any?(
+               FakeUpstream.requests(sibling_upstream),
+               &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+             )
+
+      persisted = Repo.reload!(latched_identity)
+      assert get_in(persisted.metadata, ["saved_reset_redemption", "phase"]) == "reblocked"
+    end
+
+    test "a latched candidate's stale pressure cannot arm a threshold consume on a sibling" do
+      {:ok, latched_upstream} = auto_redeem_fake()
+      {:ok, sibling_upstream} = auto_redeem_fake()
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      latched_metadata =
+        latched_upstream
+        |> saved_reset_metadata(1)
+        |> Map.put(
+          "saved_reset_redemption",
+          applied_auto_redemption("confirmed_by_quota", 5)
+        )
+
+      %{identity: latched_identity, assignment: latched_assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: latched_metadata})
+
+      %{identity: sibling_identity, assignment: sibling_assignment} =
+        active_upstream_assignment_fixture(pool, %{
+          metadata: saved_reset_metadata(sibling_upstream, 1)
+        })
+
+      threshold_policy = %{
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 60
+      }
+
+      latched_identity = enable_saved_reset_auto_redeem!(latched_identity, threshold_policy)
+      sibling_identity = enable_saved_reset_auto_redeem!(sibling_identity, threshold_policy)
+      upsert_weekly_pressure_quota!(latched_identity, Decimal.new("95"))
+      upsert_weekly_pressure_quota!(sibling_identity, Decimal.new("95"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [{latched_assignment, latched_identity}, {sibling_assignment, sibling_identity}],
+          "latched-threshold"
+        )
+
+      assert {:ok, [_ | _], _filtered_options} = RouteFiltering.filter_candidates(filter_input)
+
+      # No credit is spent anywhere: the latched identity's stale pressure no
+      # longer counts toward the all-candidates-at-threshold trigger.
+      assert [] = FakeUpstream.requests(latched_upstream)
+      assert [] = FakeUpstream.requests(sibling_upstream)
+    end
+
     test "second stale auto attempt does not consume after current count was refreshed" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1101,6 +1198,37 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       },
       attrs
     )
+  end
+
+  defp auto_redeem_fake do
+    FakeUpstream.start_link(
+      {:path_json,
+       %{
+         "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+         "/api/codex/usage" =>
+           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+       }}
+    )
+  end
+
+  defp applied_auto_redemption(phase, consumed_minutes_ago) do
+    consumed_at =
+      DateTime.utc_now()
+      |> DateTime.add(-consumed_minutes_ago, :minute)
+      |> DateTime.truncate(:microsecond)
+
+    %{
+      "status" => if(phase == "reblocked", do: "failed", else: "succeeded"),
+      "phase" => phase,
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 3,
+      "trigger_kind" => "gateway_auto",
+      "started_at" => DateTime.to_iso8601(consumed_at),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
   end
 
   defp saved_reset_metadata(upstream, available_count, saved_reset_attrs \\ %{}) do

@@ -382,7 +382,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   defp expiring_redeemable_candidate?(_candidate), do: false
 
   defp saved_reset_available?(%UpstreamIdentity{} = identity, policy) do
-    AutoEligibility.saved_reset_available?(identity, policy)
+    AutoEligibility.gateway_auto_ready?(identity, policy, now())
   end
 
   defp redeemable_weekly_window?(
@@ -410,10 +410,20 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   defp all_candidates_at_threshold?([], _policy), do: false
 
   defp all_candidates_at_threshold?(candidates, policy) when is_list(candidates) do
+    timestamp = now()
+
     candidate_identity_ids =
       candidates
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
       |> Enum.reject(&is_nil/1)
+
+    latched_identity_ids =
+      candidates
+      |> Enum.filter(fn {_assignment, identity} ->
+        match?(%UpstreamIdentity{}, identity) and
+          AutoEligibility.identity_consume_latch(identity, timestamp) != :clear
+      end)
+      |> MapSet.new(fn {_assignment, identity} -> identity.id end)
 
     windows_by_identity_id = Windows.list_quota_windows_by_identity_ids(candidate_identity_ids)
 
@@ -421,7 +431,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       candidate_identity_ids,
       policy,
       windows_by_identity_id,
-      now()
+      latched_identity_ids,
+      timestamp
     )
   end
 

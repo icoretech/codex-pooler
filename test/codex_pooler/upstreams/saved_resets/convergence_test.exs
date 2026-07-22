@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.SavedResets.Convergence
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
 
   defp identity_with_pending(consumed_at, opts \\ []) do
     deadline = Keyword.get(opts, :deadline_at, DateTime.add(consumed_at, 15, :minute))
@@ -75,6 +76,14 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert redemption(identity)["phase"] == "confirmed_by_quota"
     assert redemption(identity)["status"] == "succeeded"
     assert redemption(identity)["terminal_reason"] == "converged_confirmed_by_quota"
+
+    # The transition merges over the record: the fields the automatic-consume
+    # latch reads must survive, and the fresh consume keeps the latch armed.
+    converged = redemption(identity)
+    assert converged["consumed_at"] == DateTime.to_iso8601(consumed_at)
+    assert converged["result"]["applied"] == true
+
+    assert RedemptionLifecycle.gateway_auto_latch(converged, DateTime.utc_now()) == :cooldown
   end
 
   test "fresh exhausted evidence reblocks a pending reset" do

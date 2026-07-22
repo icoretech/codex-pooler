@@ -1,12 +1,16 @@
 defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Quotas.WindowClassifier
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility.Context
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
@@ -37,6 +41,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
          :ok <- validate_context_match(identity, assignment, context) do
       policy = SavedResets.auto_policy(identity)
       snapshot = SavedResets.snapshot(identity, timestamp)
+      latch = identity_consume_latch(identity, timestamp)
+
+      latched_identity_ids =
+        latched_candidate_identity_ids(context.candidate_identity_ids, identity, latch, timestamp)
 
       windows_by_identity_id =
         context.candidate_identity_ids
@@ -49,6 +57,12 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
         not policy.enabled? ->
           {:noop, "gateway_auto_policy_disabled"}
 
+        latch == :blocked_awaiting_quota ->
+          {:noop, "gateway_auto_awaiting_post_consume_quota"}
+
+        latch == :cooldown ->
+          {:noop, "gateway_auto_consume_cooldown"}
+
         not saved_reset_available?(snapshot, policy) ->
           unavailable_snapshot_result(snapshot)
 
@@ -58,6 +72,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           policy,
           windows_by_identity_id,
           identity_windows,
+          latched_identity_ids,
           context,
           timestamp
         ) ->
@@ -141,6 +156,66 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       not snapshot.redemption_stale?
   end
 
+  @doc """
+  Cheap pre-lock gate for automatic redemption candidates: bank availability
+  plus the post-consume latch. Keeps latched identities from opening a claim
+  transaction (identity and assignment `FOR UPDATE`) on every routed request
+  while quota evidence converges; the authoritative check runs again under the
+  lock in `validate_locked_gateway_auto/4`.
+  """
+  @spec gateway_auto_ready?(
+          UpstreamIdentity.t(),
+          SavedResets.auto_policy_projection(),
+          DateTime.t()
+        ) :: boolean()
+  def gateway_auto_ready?(%UpstreamIdentity{} = identity, policy, %DateTime{} = timestamp) do
+    saved_reset_available?(identity, policy) and
+      identity_consume_latch(identity, timestamp) == :clear
+  end
+
+  @doc """
+  The automatic-consume latch state for one identity, from its persisted
+  redemption record.
+  """
+  @spec identity_consume_latch(UpstreamIdentity.t(), DateTime.t()) ::
+          :blocked_awaiting_quota | :cooldown | :clear
+  def identity_consume_latch(%UpstreamIdentity{} = identity, %DateTime{} = timestamp) do
+    (identity.metadata || %{})
+    |> Map.get("saved_reset_redemption")
+    |> RedemptionLifecycle.gateway_auto_latch(timestamp)
+  end
+
+  # One bounded metadata read for the other candidates so the under-lock
+  # threshold evaluation and the cheap pre-lock evaluation exclude the same
+  # latched identities. Runs only on redemption claims, never per request.
+  defp latched_candidate_identity_ids(candidate_identity_ids, identity, latch, timestamp) do
+    own = if latch == :clear, do: [], else: [identity.id]
+
+    others =
+      candidate_identity_ids
+      |> Enum.reject(&(&1 == identity.id))
+      |> latched_ids_from_metadata(timestamp)
+
+    MapSet.new(own ++ others)
+  end
+
+  defp latched_ids_from_metadata([], _timestamp), do: []
+
+  defp latched_ids_from_metadata(identity_ids, timestamp) do
+    from(candidate in UpstreamIdentity,
+      where: candidate.id in ^identity_ids,
+      select: {candidate.id, candidate.metadata}
+    )
+    |> Repo.all()
+    |> Enum.filter(fn {_id, metadata} -> metadata_latched?(metadata, timestamp) end)
+    |> Enum.map(fn {id, _metadata} -> id end)
+  end
+
+  defp metadata_latched?(metadata, timestamp) do
+    record = (metadata || %{})["saved_reset_redemption"]
+    RedemptionLifecycle.gateway_auto_latch(record, timestamp) != :clear
+  end
+
   @spec blocked_weekly_exhaustion?(
           [AccountQuotaWindow.t()],
           SavedResets.auto_policy_projection(),
@@ -158,20 +233,27 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           [Ecto.UUID.t()],
           SavedResets.auto_policy_projection(),
           %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]},
+          MapSet.t(Ecto.UUID.t()),
           DateTime.t()
         ) :: boolean()
   def threshold_pressure?(
         candidate_identity_ids,
         policy,
         windows_by_identity_id,
+        latched_identity_ids,
         %DateTime{} = timestamp
       )
-      when is_list(candidate_identity_ids) and is_map(windows_by_identity_id) do
+      when is_list(candidate_identity_ids) and is_map(windows_by_identity_id) and
+             is_struct(latched_identity_ids, MapSet) do
+    # A latched identity just spent a credit, so its pre-reset windows are
+    # exactly the evidence the latch distrusts: treat it as not-at-threshold
+    # instead of letting that stale pressure arm a consume on a sibling.
     candidate_identity_ids != [] and policy.trigger_mode == "threshold" and
       Enum.all?(candidate_identity_ids, fn identity_id ->
-        windows_by_identity_id
-        |> Map.get(identity_id, [])
-        |> Enum.any?(&weekly_pressure_window?(&1, policy, timestamp))
+        identity_id not in latched_identity_ids and
+          windows_by_identity_id
+          |> Map.get(identity_id, [])
+          |> Enum.any?(&weekly_pressure_window?(&1, policy, timestamp))
       end)
   end
 
@@ -196,6 +278,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
          policy,
          windows_by_identity_id,
          identity_windows,
+         latched_identity_ids,
          context,
          timestamp
        ) do
@@ -208,6 +291,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           context.candidate_identity_ids,
           policy,
           windows_by_identity_id,
+          latched_identity_ids,
           timestamp
         )
 
