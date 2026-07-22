@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   @moduledoc false
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.RouteLifecycle, as: RoutingRouteLifecycle
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
@@ -42,31 +43,45 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
     :ok
   end
 
-  # A successful request that was force-routed as a guarded reset probe confirms
-  # the redeemed identity as temporarily routeable. Best-effort and scoped: only
-  # the exact redeemed identity is confirmed, and only while its probe token
-  # still holds the claim.
-  defp maybe_confirm_reset_probe(%SelectedCandidateContext{identity: identity}, request_options)
-       when not is_nil(identity) do
-    case reset_probe_context(request_options) do
-      %{"token" => token, "upstream_identity_id" => identity_id}
-      when is_binary(token) and identity_id == identity.id ->
-        safe_confirm_reset_probe(identity_id, token)
-
-      _no_probe_context ->
-        :ok
+  defp maybe_confirm_reset_probe(
+         %SelectedCandidateContext{} = context,
+         %RequestOptions{} = options
+       ) do
+    case options.routing.reset_probe do
+      %ResetProbe{} = probe -> maybe_confirm_bound_reset_probe(context, probe)
+      nil -> :ok
     end
   end
 
   defp maybe_confirm_reset_probe(_context, _request_options), do: :ok
 
-  defp reset_probe_context(%RequestOptions{routing: %{quota_decision: %{} = decision}}),
-    do: Map.get(decision, "reset_probe")
+  defp maybe_confirm_bound_reset_probe(%SelectedCandidateContext{} = context, probe) do
+    if ResetProbe.bound?(probe) and
+         ResetProbe.matches?(
+           probe,
+           context.assignment.id,
+           context.identity.id,
+           effective_model(context),
+           context.route_class
+         ) do
+      redemption = (context.identity.metadata || %{})["saved_reset_redemption"] || %{}
 
-  defp reset_probe_context(_request_options), do: nil
+      safe_confirm_reset_probe(
+        context.identity.id,
+        redemption["generation"],
+        redemption["attempt_id"],
+        probe
+      )
+    else
+      :ok
+    end
+  end
 
-  defp safe_confirm_reset_probe(identity_id, token) do
-    ProbeLease.confirm_upstream(identity_id, token)
+  defp effective_model(%SelectedCandidateContext{} = context),
+    do: context.request_options.routing.effective_model || context.model.exposed_model_id
+
+  defp safe_confirm_reset_probe(identity_id, generation, attempt_id, %ResetProbe{} = probe) do
+    ProbeLease.confirm_upstream(identity_id, generation, attempt_id, probe)
     :ok
   rescue
     exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
