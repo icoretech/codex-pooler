@@ -5,6 +5,24 @@ defmodule CodexPooler.FakeUpstreamTest do
   alias CodexPooler.PoolerFixtures
 
   describe "local fake upstream" do
+    test "keeps the existing low-level failure modes deterministic" do
+      release_ref = make_ref()
+
+      assert FakeUpstream.http_500_json_error() ==
+               {:json_error, 500, %{"error" => %{"code" => "server_error"}}}
+
+      assert FakeUpstream.non_json_502() == {:non_json_error, 502, "bad gateway"}
+
+      assert FakeUpstream.timeout_before_headers(release_ref: release_ref) ==
+               {:timeout_before_headers, nil, release_ref}
+
+      assert FakeUpstream.timeout_mid_stream("data: partial\n\n", release_ref: release_ref) ==
+               {:timeout_mid_stream, "data: partial\n\n", nil, release_ref}
+
+      assert FakeUpstream.websocket_sse_then_close([], code: 1011, reason: "synthetic close") ==
+               {:websocket_sse_then_close, [], 1011, "synthetic close"}
+    end
+
     test "serves deterministic JSON responses and captures request details" do
       upstream =
         start_upstream(
@@ -69,6 +87,90 @@ defmodule CodexPooler.FakeUpstreamTest do
 
       assert non_json_response.status == 502
       assert non_json_response.body == "bad gateway"
+    end
+
+    test "serves quota-shaped, generic 429, and generic 5xx failures" do
+      quota = start_upstream(FakeUpstream.quota_exhausted_429())
+      quota_response = Req.get!(FakeUpstream.url(quota) <> "/quota", retry: false)
+
+      assert quota_response.status == 429
+      assert quota_response.body["error"]["code"] == "rate_limit_exceeded"
+
+      assert Req.Response.get_header(quota_response, "x-codex-rate-limit-reached-type") == [
+               "workspace_owner_usage_limit_reached"
+             ]
+
+      generic = start_upstream(FakeUpstream.generic_429())
+      generic_response = Req.get!(FakeUpstream.url(generic) <> "/generic", retry: false)
+
+      assert generic_response.status == 429
+      assert Req.Response.get_header(generic_response, "x-codex-rate-limit-reached-type") == []
+
+      server = start_upstream(FakeUpstream.generic_5xx())
+      server_response = Req.get!(FakeUpstream.url(server) <> "/server", retry: false)
+
+      assert server_response.status == 503
+      assert server_response.body["error"]["code"] == "server_error"
+    end
+
+    test "closes the HTTP connection before headers" do
+      upstream = start_upstream(FakeUpstream.close_before_headers())
+
+      assert {:error, error} =
+               Req.get(FakeUpstream.url(upstream) <> "/close", retry: false)
+
+      assert transport_closed?(error)
+    end
+
+    test "holds only the terminal SSE event behind an explicit barrier" do
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          FakeUpstream.delayed_terminal_sse_stream(
+            [{"response.created", %{"type" => "response.created"}}],
+            {"response.completed", %{"type" => "response.completed"}},
+            notify: self(),
+            release_ref: release_ref
+          )
+        )
+
+      response = Req.get!(FakeUpstream.url(upstream) <> "/late-terminal", into: :self)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
+                      ^release_ref},
+                     1_000
+
+      assert {:ok, [data: created]} = receive_stream_message(response)
+      assert created =~ "response.created"
+
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:ok, [data: completed]} = receive_stream_message(response)
+      assert completed =~ "response.completed"
+      assert {:ok, [data: "data: [DONE]\n\n"]} = receive_stream_message(response)
+    end
+
+    test "builds deterministic WebSocket terminal and close failures" do
+      assert {:websocket_text, [terminal]} = FakeUpstream.websocket_terminal_failure()
+
+      assert %{
+               "type" => "response.failed",
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{"code" => "server_error"}
+               }
+             } = Jason.decode!(terminal)
+
+      assert FakeUpstream.websocket_close() ==
+               {:websocket_sse_then_close, [], 1011, "synthetic websocket close"}
+
+      assert {:websocket_upgrade_error, 503, %{"error" => %{"code" => "upgrade_failed"}}, [], nil,
+              nil} =
+               FakeUpstream.websocket_upgrade_error(
+                 %{"error" => %{"code" => "upgrade_failed"}},
+                 status: 503
+               )
     end
 
     test "supports timeout before headers" do
@@ -203,4 +305,15 @@ defmodule CodexPooler.FakeUpstreamTest do
   defp transport_timeout?(%Req.TransportError{reason: :timeout}), do: true
   defp transport_timeout?(%Mint.TransportError{reason: :timeout}), do: true
   defp transport_timeout?(_error), do: false
+
+  defp transport_closed?(%Finch.TransportError{reason: reason}),
+    do: reason in [:closed, :connection_closed]
+
+  defp transport_closed?(%Req.TransportError{reason: reason}),
+    do: reason in [:closed, :connection_closed]
+
+  defp transport_closed?(%Mint.TransportError{reason: reason}),
+    do: reason in [:closed, :connection_closed]
+
+  defp transport_closed?(_error), do: false
 end

@@ -24,7 +24,9 @@ defmodule CodexPooler.FakeUpstream do
           | {:sse, [String.t()]}
           | {:sse_headers, [String.t()], [{String.t(), String.t()}]}
           | {:delayed_sse, [String.t()], pos_integer(), pid() | nil}
+          | {:delayed_terminal_sse, [String.t()], [String.t()], pid(), reference()}
           | {:abrupt_close_mid_stream, [String.t()]}
+          | :close_before_headers
           | {:websocket_text, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
           | {:sequence, [mode()]}
@@ -179,6 +181,33 @@ defmodule CodexPooler.FakeUpstream do
 
   def websocket_text_frames(messages) when is_list(messages), do: {:websocket_text, messages}
 
+  def quota_exhausted_429(opts \\ []) when is_list(opts) do
+    quota_type = Keyword.get(opts, :quota_type, "workspace_owner_usage_limit_reached")
+
+    {:json_headers, 429,
+     %{
+       "error" => %{
+         "code" => "rate_limit_exceeded",
+         "message" => "synthetic account quota exhausted"
+       }
+     }, [{"x-codex-rate-limit-reached-type", quota_type}]}
+  end
+
+  def generic_429 do
+    {:json_error, 429,
+     %{
+       "error" => %{
+         "code" => "rate_limit_exceeded",
+         "message" => "synthetic rate limit"
+       }
+     }}
+  end
+
+  def generic_5xx(status \\ 503) when status in 500..599 do
+    {:json_error, status,
+     %{"error" => %{"code" => "server_error", "message" => "synthetic server failure"}}}
+  end
+
   def delayed_sse_stream(events, opts) do
     include_done? = Keyword.get(opts, :done, true)
     interval_ms = Keyword.fetch!(opts, :interval_ms)
@@ -190,9 +219,21 @@ defmodule CodexPooler.FakeUpstream do
     {:delayed_sse, chunks, interval_ms, notify}
   end
 
+  def delayed_terminal_sse_stream(events, terminal_event, opts)
+      when is_list(events) and is_list(opts) do
+    notify = Keyword.fetch!(opts, :notify)
+    release_ref = Keyword.fetch!(opts, :release_ref)
+    before_terminal = Enum.map(events, &sse_chunk/1)
+    terminal = [sse_chunk(terminal_event), "data: [DONE]\n\n"]
+
+    {:delayed_terminal_sse, before_terminal, terminal, notify, release_ref}
+  end
+
   def abrupt_close_mid_stream(events) when is_list(events) do
     {:abrupt_close_mid_stream, Enum.map(events, &sse_chunk/1)}
   end
+
+  def close_before_headers, do: :close_before_headers
 
   def barrier_sse_stream(events, opts) do
     include_done? = Keyword.get(opts, :done, true)
@@ -212,6 +253,25 @@ defmodule CodexPooler.FakeUpstream do
     chunks = Enum.map(events, &sse_chunk/1)
 
     {:websocket_sse_then_close, chunks, code, reason}
+  end
+
+  def websocket_terminal_failure(code \\ "server_error") when is_binary(code) do
+    websocket_text_frames([
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "status" => "failed",
+          "error" => %{"code" => code, "message" => "synthetic terminal failure"}
+        }
+      })
+    ])
+  end
+
+  def websocket_close(opts \\ []) when is_list(opts) do
+    websocket_sse_then_close([],
+      code: Keyword.get(opts, :code, 1011),
+      reason: Keyword.get(opts, :reason, "synthetic websocket close")
+    )
   end
 
   def malformed_json(body \\ "{not-json", status \\ 200), do: {:malformed_json, status, body}
@@ -515,6 +575,28 @@ defmodule CodexPooler.FakeUpstream do
     end)
   end
 
+  defp respond(
+         _pid,
+         conn,
+         {:delayed_terminal_sse, before_terminal, terminal, notify, release_ref},
+         _request
+       ) do
+    conn = start_sse_response(conn)
+
+    conn =
+      Enum.reduce(before_terminal, conn, fn chunk, conn ->
+        {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+        conn
+      end)
+
+    wait_for_timeout_release(:before_terminal, notify, release_ref)
+
+    Enum.reduce(terminal, conn, fn chunk, conn ->
+      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+      conn
+    end)
+  end
+
   defp respond(_pid, conn, {:abrupt_close_mid_stream, chunks}, _request) do
     conn =
       conn
@@ -526,6 +608,10 @@ defmodule CodexPooler.FakeUpstream do
       {:ok, _conn} = Plug.Conn.chunk(conn, chunk)
     end)
 
+    Process.exit(self(), :kill)
+  end
+
+  defp respond(_pid, _conn, :close_before_headers, _request) do
     Process.exit(self(), :kill)
   end
 
@@ -608,6 +694,13 @@ defmodule CodexPooler.FakeUpstream do
 
   defp sse_chunk(payload) when is_map(payload) do
     "data: #{Jason.encode!(payload)}\n\n"
+  end
+
+  defp start_sse_response(conn) do
+    conn
+    |> Plug.Conn.put_resp_header("cache-control", "no-cache")
+    |> Plug.Conn.put_resp_content_type("text/event-stream")
+    |> Plug.Conn.send_chunked(200)
   end
 
   defp decode_json(""), do: nil
@@ -814,6 +907,13 @@ defmodule CodexPooler.FakeUpstream do
       {:push, {:text, message}, state}
     end
 
+    def handle_info(
+          {:fake_upstream_release_timeout, release_ref},
+          %{delayed_terminal: %{release_ref: release_ref, messages: messages}} = state
+        ) do
+      {:push, Enum.map(messages, &{:text, &1}), Map.delete(state, :delayed_terminal)}
+    end
+
     def handle_info(_message, state), do: {:ok, state}
 
     @impl WebSock
@@ -888,6 +988,16 @@ defmodule CodexPooler.FakeUpstream do
           schedule_delayed_websocket_message(messages, interval_ms)
           {:ok, state}
 
+        {:delayed_terminal, messages, terminal, notify, release_ref} ->
+          if is_pid(notify) do
+            send(notify, {:fake_upstream_timeout_barrier, :before_terminal, self(), release_ref})
+          end
+
+          next_state =
+            Map.put(state, :delayed_terminal, %{release_ref: release_ref, messages: terminal})
+
+          {:push, Enum.map(messages, &{:text, &1}), next_state}
+
         messages ->
           {:push, Enum.map(messages, &{:text, &1}), state}
       end
@@ -944,6 +1054,14 @@ defmodule CodexPooler.FakeUpstream do
 
     defp websocket_messages({:delayed_sse, chunks, interval_ms, _notify}, _request),
       do: {:delayed_push, Enum.flat_map(chunks, &messages_from_sse_chunk/1), interval_ms}
+
+    defp websocket_messages(
+           {:delayed_terminal_sse, before_terminal, terminal, notify, release_ref},
+           _request
+         ) do
+      {:delayed_terminal, Enum.flat_map(before_terminal, &messages_from_sse_chunk/1),
+       Enum.flat_map(terminal, &messages_from_sse_chunk/1), notify, release_ref}
+    end
 
     defp websocket_messages({:timeout_mid_stream, first_chunk, notify, release_ref}, _request) do
       if is_pid(notify) do
