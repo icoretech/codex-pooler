@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -76,6 +77,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     assert body =~ "resp_local_recovery_options"
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+  end
+
+  test "bound reset probe does not recover a missing local owner", %{auth: auth} do
+    local_node_string = Atom.to_string(node())
+    %{session: session} = owner_session_fixture(auth, local_node_string)
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame("resp_bound_missing_owner")],
+        return_request_result?: true
+      )
+
+    bound_request = %{request("bound-missing-owner") | reset_probe: bound_reset_probe()}
+
+    assert {:error, :owner_unavailable} =
+             WebsocketOwnerForwarder.remote_submit_request(
+               session.id,
+               downstream("corr-bound-missing-owner"),
+               bound_request,
+               upstream: upstream,
+               local_node_string: local_node_string,
+               request_id: "bound-missing-owner"
+             )
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+    refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
   @tag :task_1_red
@@ -281,6 +308,67 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     refute Map.has_key?(recovered_owner_state.downstream, :owner_turn_id)
   end
 
+  test "bound reset probe does not replace a crashed pre-visible owner", %{auth: auth} do
+    local_node_string = Atom.to_string(node())
+    %{session: session} = owner_session_fixture(auth, local_node_string)
+    parent = self()
+    release_ref = make_ref()
+
+    first_upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        send(parent, {:bound_owner_submit_started, self(), release_ref})
+
+        receive do
+          {:release_bound_owner_submit, ^release_ref} -> :ok
+        end
+      end,
+      close: fn upstream_pid ->
+        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
+      end
+    }
+
+    {:ok, first_owner} = start_owner(session, first_upstream)
+
+    assert {:ok, stable_downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               first_owner,
+               downstream("corr-bound-owner-crash")
+             )
+
+    recovery_upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame("resp_bound_owner_crash")],
+        return_request_result?: true
+      )
+
+    bound_request = %{request("bound-owner-crash") | reset_probe: bound_reset_probe()}
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerForwarder.remote_submit_request(
+          session.id,
+          stable_downstream,
+          bound_request,
+          upstream: recovery_upstream,
+          local_node_string: local_node_string,
+          request_id: "bound-owner-crash"
+        )
+      end)
+
+    assert_receive {:bound_owner_submit_started, first_worker, ^release_ref}
+
+    first_owner_ref = Process.monitor(first_owner)
+    Process.exit(first_owner, :kill)
+    assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
+    send(first_worker, {:release_bound_owner_submit, release_ref})
+
+    assert Task.await(submitter, 2_000) == {:error, :owner_crashed}
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+    refute_received {:websocket_owner_runtime_recovered, _, _, _}
+    refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
+  end
+
   test "remote success reaches simulated owner and returns owner result", %{auth: auth} do
     remote_node = :"codex_pooler@owner-app.example"
     remote_node_string = Atom.to_string(remote_node)
@@ -452,11 +540,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     assert is_integer(epoch)
 
+    reset_probe = bound_reset_probe()
+
     request = %UpstreamWebsocketSession.Request{
       url: "https://example.com/backend-api/codex/responses",
       headers: [],
       payload: "bridge-request-frame",
-      timeouts: %{}
+      timeouts: %{},
+      reset_probe: reset_probe
     }
 
     assert {:ok, %{terminal: "response.completed", status: 200}} =
@@ -468,7 +559,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:websocket_owner_harness_node_call,
                     %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
 
-    assert [%UpstreamWebsocketSession.Request{payload: "bridge-request-frame"}] =
+    assert [
+             %UpstreamWebsocketSession.Request{
+               payload: "bridge-request-frame",
+               reset_probe: ^reset_probe
+             }
+           ] =
              WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid)
 
     assert_receive {:websocket_owner_frame, "corr-remote-bridge", ^epoch,
@@ -1525,6 +1621,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       payload: payload,
       timeouts: %{}
     }
+  end
+
+  defp bound_reset_probe do
+    probe = ResetProbe.new()
+
+    assert {:ok, bound_probe} =
+             ResetProbe.bind(
+               probe,
+               Ecto.UUID.generate(),
+               Ecto.UUID.generate(),
+               "gpt-reset-probe-owner",
+               "proxy_websocket"
+             )
+
+    bound_probe
   end
 
   defp terminal_frame(response_id) do

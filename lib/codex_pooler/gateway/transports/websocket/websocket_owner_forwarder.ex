@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -170,7 +171,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def remote_submit_request(codex_session_id, downstream, request, opts \\ [])
       when is_binary(codex_session_id) and is_map(downstream) and
              is_struct(request, UpstreamWebsocketSession.Request) do
-    with {:ok, {owner_pid, downstream}} <- ensure_remote_owner(codex_session_id, downstream, opts) do
+    with {:ok, {owner_pid, downstream}} <-
+           ensure_remote_owner(codex_session_id, downstream, request, opts) do
       submit_remote_owner_request(owner_pid, codex_session_id, downstream, request, opts)
     end
   end
@@ -286,6 +288,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
+  defp ensure_remote_owner(codex_session_id, downstream, request, opts) do
+    case WebsocketOwnerSession.lookup(codex_session_id) do
+      {:ok, owner_pid} ->
+        {:ok, {owner_pid, downstream}}
+
+      {:error, :owner_unavailable} ->
+        recover_remote_owner_for_request(codex_session_id, downstream, request, opts)
+    end
+  end
+
+  defp recover_remote_owner_for_request(codex_session_id, downstream, request, opts) do
+    if bound_reset_probe?(request) do
+      {:error, :owner_unavailable}
+    else
+      with {:ok, {owner_pid, recovered_downstream, _recovery_session}} <-
+             recover_remote_owner(codex_session_id, downstream, opts) do
+        {:ok, {owner_pid, recovered_downstream}}
+      end
+    end
+  end
+
   defp recover_remote_owner(codex_session_id, downstream, opts),
     do: recover_remote_owner(codex_session_id, downstream, opts, :reuse_lease)
 
@@ -326,7 +349,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     WebsocketOwnerSession.submit_request(owner_pid, downstream, request)
   catch
     :exit, reason ->
-      if Process.alive?(owner_pid) or :atomics.get(visibility, 1) == 1 or
+      if bound_reset_probe?(request) or Process.alive?(owner_pid) or
+           :atomics.get(visibility, 1) == 1 or
            not recoverable_owner_exit?(reason) do
         {:error, :owner_crashed}
       else
@@ -361,6 +385,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
     {%{request | frame_observer: tracked_observer}, visibility}
   end
+
+  defp bound_reset_probe?(%UpstreamWebsocketSession.Request{
+         reset_probe: %ResetProbe{} = probe
+       }),
+       do: ResetProbe.bound?(probe)
+
+  defp bound_reset_probe?(%UpstreamWebsocketSession.Request{}), do: false
 
   defp recover_remote_owner_lease(session, _opts, :reuse_lease), do: {:ok, session}
 

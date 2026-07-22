@@ -58,6 +58,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
@@ -993,6 +994,216 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     after
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
+  end
+
+  test "owner-forwarded reset probe success confirms on the owner" do
+    dispatch_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{"id" => "resp_owner_reset_probe_success"}
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_owner_reset_probe_success",
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+             }
+           }}
+        ])
+      )
+
+    usage_upstream = reset_probe_usage_upstream()
+    setup = gateway_setup(dispatch_upstream, quota?: false)
+    identity = enable_reset_probe!(setup.identity, usage_upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-reset-probe-success", "owner-reset-probe-success")
+    remote_node = :"codex_pooler@remote-reset-probe-success.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = unpinned_remote_owner_state(state, remote_node, node_opts)
+
+    try do
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "owner forwarded reset probe success"),
+                 owner_response_options(remote_state, node_opts),
+                 fn _data -> :ok end
+               )
+
+      assert {:push, {:text, created_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+
+      assert {:push, {:text, completed_frame}, remote_state} =
+               receive_owner_socket_push(remote_state)
+
+      assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
+      assert {:ok, _state} = receive_owner_socket_complete(remote_state)
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{
+                        node: ^remote_node,
+                        function: :remote_submit_request,
+                        arity: 4,
+                        mode: :success
+                      }}
+
+      refute_received {:websocket_owner_harness_node_call, _duplicate}
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+
+    assert_reset_probe_usage_calls!(usage_upstream)
+    assert FakeUpstream.count(dispatch_upstream) == 1
+
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "succeeded"
+    assert request.transport == "websocket"
+    assert request.retry_count == 0
+    assert get_in(request.request_metadata, ["quota_decision", "routing_state"]) == "reset_probe"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+
+    assert [settlement] =
+             Repo.all(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               )
+             )
+
+    assert settlement.attempt_id == attempt.id
+    assert settlement.transport == "websocket"
+
+    redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+    assert redemption["phase"] == "confirmed_by_upstream"
+    assert get_in(redemption, ["result", "code"]) == "reset"
+
+    assert_reset_probe_public_metadata_safe!(request, attempt, redemption, [
+      setup.authorization,
+      "owner forwarded reset probe success",
+      "resp_owner_reset_probe_success"
+    ])
+  end
+
+  test "owner-forwarded reset probe terminal failure remains unconfirmed" do
+    terminal_message = "owner-reset-terminal-message-sentinel"
+
+    dispatch_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "response" => %{
+                 "id" => "resp_owner_reset_probe_failure",
+                 "error" => %{
+                   "code" => "upstream_terminal_failure",
+                   "param" => "reasoning.effort",
+                   "message" => terminal_message
+                 }
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    usage_upstream = reset_probe_usage_upstream()
+    setup = gateway_setup(dispatch_upstream, quota?: false)
+    identity = enable_reset_probe!(setup.identity, usage_upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-reset-probe-failure", "owner-reset-probe-failure")
+    remote_node = :"codex_pooler@remote-reset-probe-failure.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = unpinned_remote_owner_state(state, remote_node, node_opts)
+
+    logs =
+      capture_log(fn ->
+        try do
+          assert :ok =
+                   Gateway.run_websocket_response(
+                     auth,
+                     websocket_payload(setup, "owner forwarded reset probe failure"),
+                     owner_response_options(remote_state, node_opts),
+                     fn _data -> :ok end
+                   )
+
+          assert {:push, {:text, terminal_frame}, remote_state} =
+                   receive_owner_socket_push(remote_state)
+
+          assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
+          assert {:ok, _state} = receive_owner_socket_complete(remote_state)
+
+          assert_receive {:websocket_owner_harness_node_call,
+                          %{
+                            node: ^remote_node,
+                            function: :remote_submit_request,
+                            arity: 4,
+                            mode: :success
+                          }}
+
+          refute_received {:websocket_owner_harness_node_call, _duplicate}
+        after
+          CodexResponsesSocket.terminate(:closed, remote_state)
+        end
+      end)
+
+    assert_reset_probe_usage_calls!(usage_upstream)
+    assert FakeUpstream.count(dispatch_upstream) == 1
+
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_terminal_failure"
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+
+    assert [settlement] =
+             Repo.all(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               )
+             )
+
+    assert settlement.attempt_id == attempt.id
+    assert settlement.transport == "websocket"
+
+    redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+    assert redemption["phase"] == "consumed_pending_probe"
+    assert is_binary(get_in(redemption, ["probe", "token"]))
+
+    assert_reset_probe_public_metadata_safe!(request, attempt, redemption, [
+      setup.authorization,
+      "owner forwarded reset probe failure",
+      "resp_owner_reset_probe_failure",
+      terminal_message
+    ])
+
+    refute logs =~ get_in(redemption, ["probe", "token"])
+
+    persisted = inspect({request.request_metadata, attempt.response_metadata})
+    refute persisted =~ terminal_message
+    refute logs =~ terminal_message
   end
 
   test "remote owner executes the proxy turn snapshot and the next turn observes the Pool edit" do
@@ -5384,6 +5595,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     }
   end
 
+  defp unpinned_remote_owner_state(state, remote_node, node_opts) do
+    state = remote_owner_state(state, remote_node, node_opts)
+
+    codex_session =
+      state.codex_session
+      |> Ecto.Changeset.change(pool_upstream_assignment_id: nil)
+      |> Repo.update!()
+
+    %{
+      state
+      | codex_session: %{codex_session | owner_instance_id: Atom.to_string(remote_node)}
+    }
+  end
+
   defp owner_response_options(state, node_opts) do
     Gateway.websocket_owner_response_options(
       put_owner_node_opts(state.opts, node_opts),
@@ -5391,6 +5616,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       state.websocket_owner_lease_token,
       state.websocket_owner_downstream
     )
+  end
+
+  defp reset_probe_usage_upstream do
+    start_upstream(
+      {:path_json,
+       %{
+         "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+         "/api/codex/usage" =>
+           {200, %{"plan_type" => "pro", "rate_limit_reset_credits" => %{"available_count" => 0}}}
+       }}
+    )
+  end
+
+  defp enable_reset_probe!(identity, usage_upstream) do
+    identity =
+      identity
+      |> UpstreamIdentity.changeset(%{
+        metadata: saved_reset_metadata(usage_upstream, 1),
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_min_blocked_minutes: 60,
+        saved_reset_auto_redeem_keep_credits: 0,
+        updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+      |> Repo.update!()
+
+    prime_weekly_exhausted_quota!(identity)
+    identity
+  end
+
+  defp assert_reset_probe_usage_calls!(usage_upstream) do
+    requests = FakeUpstream.requests(usage_upstream)
+
+    assert [%{method: "POST", json: %{"redeem_request_id" => _}}] =
+             Enum.filter(requests, &(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
+
+    assert Enum.any?(requests, &(&1.method == "GET" and &1.path == "/api/codex/usage"))
+  end
+
+  defp assert_reset_probe_public_metadata_safe!(request, attempt, redemption, forbidden_values) do
+    probe = redemption["probe"]
+    persisted = inspect({request.request_metadata, attempt.response_metadata})
+
+    refute persisted =~ probe["token"]
+    refute persisted =~ inspect(probe["scope"])
+    refute persisted =~ "upstream-token"
+    refute Map.has_key?(request.request_metadata, "probe")
+    refute Map.has_key?(attempt.response_metadata, "probe")
+
+    Enum.each(forbidden_values, fn forbidden_value ->
+      refute persisted =~ forbidden_value
+    end)
   end
 
   defp put_owner_node_opts(%RequestOptions{} = opts, node_opts) do

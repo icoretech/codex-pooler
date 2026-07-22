@@ -12,6 +12,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   @type downstream_epoch :: pos_integer()
   @type owner_turn_id :: pid()
   @type encoded_text_frame :: binary()
+  @type upstream_request ::
+          CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.t()
 
   @type owner_error ::
           :owner_unavailable
