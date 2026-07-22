@@ -29,6 +29,10 @@ defmodule CodexPooler.FakeUpstream do
           | :close_before_headers
           | {:websocket_text, [String.t()]}
           | {:websocket_sse_then_close, [String.t()], non_neg_integer(), String.t()}
+          | {:websocket_terminal_then_close_barrier, String.t(), non_neg_integer(), String.t(),
+             pid(), reference()}
+          | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(),
+             reference()}
           | {:sequence, [mode()]}
           | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
           | {:malformed_json, non_neg_integer(), String.t()}
@@ -87,6 +91,14 @@ defmodule CodexPooler.FakeUpstream do
 
   @doc "Returns the captured request count."
   def count(fake), do: fake |> requests() |> length()
+
+  @doc "Returns the captured non-websocket request count."
+  @spec http_request_count(t()) :: non_neg_integer()
+  def http_request_count(fake) do
+    fake
+    |> requests()
+    |> Enum.count(&(&1.method != "WEBSOCKET"))
+  end
 
   def notify_websocket_controls(%__MODULE__{pid: pid}, notify) when is_pid(notify) do
     Agent.update(pid, &%{&1 | websocket_control_notify: notify})
@@ -256,6 +268,23 @@ defmodule CodexPooler.FakeUpstream do
     chunks = Enum.map(events, &sse_chunk/1)
 
     {:websocket_sse_then_close, chunks, code, reason}
+  end
+
+  @spec websocket_terminal_then_close_barrier(map() | binary(), keyword()) :: mode()
+  def websocket_terminal_then_close_barrier(terminal, opts)
+      when (is_map(terminal) or is_binary(terminal)) and is_list(opts) do
+    terminal = if is_map(terminal), do: Jason.encode!(terminal), else: terminal
+
+    {:websocket_terminal_then_close_barrier, terminal, Keyword.get(opts, :code, 1000),
+     Keyword.get(opts, :reason, "synthetic terminal close"), Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
+  end
+
+  @spec websocket_close_without_terminal_barrier(keyword()) :: mode()
+  def websocket_close_without_terminal_barrier(opts) when is_list(opts) do
+    {:websocket_close_without_terminal_barrier, Keyword.get(opts, :code, 1000),
+     Keyword.get(opts, :reason, "synthetic close without terminal"),
+     Keyword.fetch!(opts, :notify), Keyword.fetch!(opts, :release_ref)}
   end
 
   def websocket_terminal_failure(code \\ "server_error") when is_binary(code) do
@@ -917,6 +946,14 @@ defmodule CodexPooler.FakeUpstream do
       {:push, Enum.map(messages, &{:text, &1}), Map.delete(state, :delayed_terminal)}
     end
 
+    def handle_info(
+          {:fake_upstream_terminal_close_barrier, code, reason, notify, release_ref},
+          state
+        ) do
+      await_websocket_barrier(:before_close, notify, release_ref)
+      {:stop, :normal, {code, reason}, state}
+    end
+
     def handle_info(_message, state), do: {:ok, state}
 
     @impl WebSock
@@ -986,6 +1023,20 @@ defmodule CodexPooler.FakeUpstream do
         {:push_then_close, messages, code, reason} ->
           send(self(), {:fake_upstream_close_websocket, code, reason})
           {:push, Enum.map(messages, &{:text, &1}), state}
+
+        {:barrier_push_then_close, terminal, code, reason, notify, release_ref} ->
+          await_websocket_barrier(:before_terminal, notify, release_ref)
+
+          send(
+            self(),
+            {:fake_upstream_terminal_close_barrier, code, reason, notify, release_ref}
+          )
+
+          {:push, {:text, terminal}, state}
+
+        {:barrier_close, code, reason, notify, release_ref} ->
+          await_websocket_barrier(:before_close, notify, release_ref)
+          {:stop, :normal, {code, reason}, state}
 
         {:delayed_push, messages, interval_ms} ->
           schedule_delayed_websocket_message(messages, interval_ms)
@@ -1080,6 +1131,20 @@ defmodule CodexPooler.FakeUpstream do
       {:push_then_close, messages_from_sse_chunk(Enum.join(chunks)), code, reason}
     end
 
+    defp websocket_messages(
+           {:websocket_terminal_then_close_barrier, terminal, code, reason, notify, release_ref},
+           _request
+         ) do
+      {:barrier_push_then_close, terminal, code, reason, notify, release_ref}
+    end
+
+    defp websocket_messages(
+           {:websocket_close_without_terminal_barrier, code, reason, notify, release_ref},
+           _request
+         ) do
+      {:barrier_close, code, reason, notify, release_ref}
+    end
+
     defp websocket_messages({:barrier_sse, chunks, barrier_after, notify, release_ref}, _request) do
       maybe_wait_for_sse_barrier(0, barrier_after, notify, release_ref)
 
@@ -1147,6 +1212,16 @@ defmodule CodexPooler.FakeUpstream do
     end
 
     defp maybe_wait_for_sse_barrier(_index, _barrier_after, _notify, _release_ref), do: :ok
+
+    defp await_websocket_barrier(stage, notify, release_ref) do
+      send(notify, {:fake_upstream_websocket_barrier, stage, self(), release_ref})
+
+      receive do
+        {:fake_upstream_release_websocket, ^release_ref} -> :ok
+      after
+        30_000 -> raise "timed out waiting for fake upstream websocket barrier release"
+      end
+    end
 
     defp decode_json(""), do: nil
 

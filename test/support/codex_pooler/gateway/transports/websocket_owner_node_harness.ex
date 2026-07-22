@@ -4,6 +4,69 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
+  @controlled_stages [
+    :nonterminal_frames,
+    :terminal_frames,
+    :task_result,
+    :downstream_send_result,
+    :invalidation_result,
+    :timer_message
+  ]
+
+  @spec two_sender_controls() :: %{required(atom()) => reference()}
+  def two_sender_controls do
+    Map.new(@controlled_stages, &{&1, make_ref()})
+  end
+
+  @spec two_sender_upstream_boundary(pid(), map(), keyword()) :: map()
+  def two_sender_upstream_boundary(test_pid, controls, opts \\ [])
+      when is_pid(test_pid) and is_map(controls) and is_list(opts) do
+    nonterminal_frames = Keyword.get(opts, :nonterminal_frames, [])
+    terminal_frames = Keyword.get(opts, :terminal_frames, [])
+    task_result = Keyword.get(opts, :task_result, :ok)
+
+    %{
+      start: fn -> start_fake_upstream(test_pid) end,
+      send: fn upstream_pid, payload, writer ->
+        record_frame(upstream_pid, payload, test_pid)
+
+        start_controlled_frame_sender(
+          test_pid,
+          controls,
+          writer,
+          nonterminal_frames,
+          terminal_frames
+        )
+
+        await_controlled_release(test_pid, controls, :task_result)
+        task_result
+      end,
+      close: fn upstream_pid -> stop_fake_upstream(upstream_pid, test_pid) end
+    }
+  end
+
+  @spec controlled_result(pid(), map(), atom(), term()) :: term()
+  def controlled_result(test_pid, controls, stage, result)
+      when is_pid(test_pid) and is_map(controls) and stage in @controlled_stages do
+    await_controlled_release(test_pid, controls, stage)
+    result
+  end
+
+  @spec controlled_timer_message(pid(), pid(), map(), term()) :: :ok
+  def controlled_timer_message(test_pid, target, controls, message)
+      when is_pid(test_pid) and is_pid(target) and is_map(controls) do
+    await_controlled_release(test_pid, controls, :timer_message)
+    send(target, message)
+    :ok
+  end
+
+  @spec release_controlled(pid(), map(), atom()) :: :ok
+  def release_controlled(barrier_pid, controls, stage)
+      when is_pid(barrier_pid) and is_map(controls) and stage in @controlled_stages do
+    send(barrier_pid, {:websocket_owner_harness_release_controlled, Map.fetch!(controls, stage)})
+    :ok
+  end
+
   def fake_upstream_boundary(test_pid, opts \\ []) when is_pid(test_pid) do
     block_ref = Keyword.get(opts, :block_ref)
     messages = Keyword.get(opts, :messages, [])
@@ -155,6 +218,32 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   defp record_frame(upstream_pid, payload, test_pid) do
     Agent.update(upstream_pid, fn state -> %{state | frames: [payload | state.frames]} end)
     send(test_pid, {:websocket_owner_harness_upstream_sent, upstream_pid})
+  end
+
+  defp start_controlled_frame_sender(
+         test_pid,
+         controls,
+         writer,
+         nonterminal_frames,
+         terminal_frames
+       ) do
+    spawn_link(fn ->
+      await_controlled_release(test_pid, controls, :nonterminal_frames)
+      Enum.each(nonterminal_frames, writer)
+      await_controlled_release(test_pid, controls, :terminal_frames)
+      Enum.each(terminal_frames, writer)
+    end)
+  end
+
+  defp await_controlled_release(test_pid, controls, stage) do
+    release_ref = Map.fetch!(controls, stage)
+    send(test_pid, {:websocket_owner_harness_controlled_barrier, stage, self(), release_ref})
+
+    receive do
+      {:websocket_owner_harness_release_controlled, ^release_ref} -> :ok
+    after
+      5_000 -> raise "timed out waiting for websocket owner controlled release"
+    end
   end
 
   defp emit_messages(messages, writer, nil, _test_pid) do

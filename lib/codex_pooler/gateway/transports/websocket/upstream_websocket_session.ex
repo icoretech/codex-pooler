@@ -51,6 +51,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         }
   @type request_result :: {:ok, request_success()} | {:error, request_failure()}
   @type send_result :: {:ok, :sent} | {:error, term()}
+  @type invalidation_result :: :ok | {:error, :upstream_websocket_not_connected}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts \\ []) do
@@ -70,6 +71,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     GenServer.call(pid, {:send_text, payload}, 1_000)
   catch
     :exit, _reason -> {:error, :upstream_websocket_session_unavailable}
+  end
+
+  @spec invalidate_connection(pid()) :: invalidation_result()
+  def invalidate_connection(pid) when is_pid(pid) do
+    GenServer.call(pid, :invalidate_connection, 1_000)
+  catch
+    :exit, _reason -> {:error, :upstream_websocket_not_connected}
   end
 
   @spec request_once(Request.t()) :: request_result()
@@ -137,6 +145,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   def handle_call({:send_text, _payload}, _from, state),
+    do: {:reply, {:error, :upstream_websocket_not_connected}, state}
+
+  def handle_call(:invalidate_connection, _from, %{conn: _conn} = state) do
+    state = state |> close_state() |> Map.put(:reconnect_pending?, true)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:invalidate_connection, _from, state),
     do: {:reply, {:error, :upstream_websocket_not_connected}, state}
 
   @impl GenServer
@@ -210,7 +226,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp request_on_connection(state, key, %Request{} = request) do
     reused_connection? = reusable_connection?(state, key)
-    connection_usage = %{reused: reused_connection?, reconnected: false}
+    reconnect_pending? = Map.get(state, :reconnect_pending?, false)
+    connection_usage = %{reused: reused_connection?, reconnected: reconnect_pending?}
 
     case request_once_on_connection(state, key, request, connection_usage) do
       {:ok, result, state} ->
@@ -921,18 +938,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp close_state(%{conn: conn} = state) do
-    Mint.HTTP.close(conn)
+    {:ok, _conn} = Mint.HTTP.close(conn)
 
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> connection_lifecycle_state()
+    |> disconnected_state()
   end
 
   defp close_state(state) do
     state
     |> cancel_keepalive()
     |> cancel_pong_deadline()
-    |> connection_lifecycle_state()
+    |> disconnected_state()
+  end
+
+  defp disconnected_state(state) do
+    lifecycle = connection_lifecycle_state(state)
+
+    if Map.get(state, :reconnect_pending?, false) do
+      Map.put(lifecycle, :reconnect_pending?, true)
+    else
+      lifecycle
+    end
   end
 end

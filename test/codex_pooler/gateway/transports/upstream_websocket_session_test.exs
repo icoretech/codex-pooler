@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
+  alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
 
   import ExUnit.CaptureLog
 
@@ -176,6 +177,261 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert first_request.websocket_connection_id == second_request.websocket_connection_id
     assert replacement_request.websocket_connection_id != first_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  test "characterization reconnects the same session lifecycle after a preterminal peer close" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_characterized_initial"),
+           FakeUpstream.websocket_sse_then_close([]),
+           websocket_success("resp_ws_characterized_reconnect")
+         ]}
+      )
+
+    request = websocket_request(FakeUpstream.url(upstream))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, first_result} = UpstreamWebsocketSession.request(session, request)
+    generation_one = %{initial_lifecycle | generation: 1}
+    assert_connection_metadata(first_result, generation_one, false, false)
+
+    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request)
+    generation_two = %{initial_lifecycle | generation: 2}
+    assert_connection_metadata(second_result, generation_two, false, true)
+    assert lifecycle_state(session) == generation_two
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  test "controlled terminal-plus-close releases the terminal before the peer close" do
+    release_ref = make_ref()
+
+    terminal = %{
+      "type" => "response.completed",
+      "response" => %{"id" => "resp_ws_controlled_terminal", "status" => "completed"}
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_terminal_then_close_barrier(terminal,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    parent = self()
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    request = %{
+      request
+      | writer: fn frame -> send(parent, {:controlled_terminal_frame, frame}) end
+    }
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, request)
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert_receive {:controlled_terminal_frame, frame}, 1_000
+    assert %{"type" => "response.completed"} = Jason.decode!(frame)
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             Task.await(request_task, 1_000)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert Process.alive?(session)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
+  test "controlled close-without-terminal returns a bounded failure without stopping the session" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_close_without_terminal_barrier(
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, websocket_request(FakeUpstream.url(upstream)))
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert {:error,
+            %{
+              body: "",
+              reason: :upstream_websocket_closed_before_terminal,
+              transport_failure: %{"phase" => "upstream_close"}
+            }} = Task.await(request_task, 1_000)
+
+    assert Process.alive?(session)
+    assert lifecycle_state(session).generation == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
+  test "invalidation closes only the current connection and reconnects on the next explicit request" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_before_invalidation"),
+           websocket_success("resp_ws_after_invalidation")
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    monitor = Process.monitor(session)
+    request = websocket_request(FakeUpstream.url(upstream))
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:ok, first_result} = UpstreamWebsocketSession.request(session, request)
+    generation_one = %{initial_lifecycle | generation: 1}
+    assert_connection_metadata(first_result, generation_one, false, false)
+
+    assert :ok = UpstreamWebsocketSession.invalidate_connection(session)
+    assert Process.alive?(session)
+    refute_received {:DOWN, ^monitor, :process, ^session, _reason}
+    assert lifecycle_state(session) == generation_one
+
+    assert {:ok, second_result} = UpstreamWebsocketSession.request(session, request)
+    generation_two = %{initial_lifecycle | generation: 2}
+    assert_connection_metadata(second_result, generation_two, false, true)
+    assert lifecycle_state(session) == generation_two
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  test "invalidation without a current connection returns a bounded error and preserves lifecycle" do
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:error, :upstream_websocket_not_connected} =
+             UpstreamWebsocketSession.invalidate_connection(session)
+
+    assert Process.alive?(session)
+    assert lifecycle_state(session) == initial_lifecycle
+  end
+
+  test "two-sender owner harness releases every race input independently" do
+    parent = self()
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        nonterminal_frames: ["nonterminal"],
+        terminal_frames: ["terminal"],
+        task_result: {:ok, :task_result}
+      )
+
+    assert {:ok, upstream_pid} = upstream.start.()
+    writer = fn frame -> send(parent, {:controlled_owner_frame, frame}) end
+    send_task = Task.async(fn -> upstream.send.(upstream_pid, "request", writer) end)
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, :task_result, task_barrier,
+                    task_ref},
+                   1_000
+
+    assert task_ref == controls.task_result
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, :nonterminal_frames,
+                    nonterminal_barrier, nonterminal_ref},
+                   1_000
+
+    assert nonterminal_ref == controls.nonterminal_frames
+
+    :ok =
+      WebsocketOwnerNodeHarness.release_controlled(
+        nonterminal_barrier,
+        controls,
+        :nonterminal_frames
+      )
+
+    assert_receive {:controlled_owner_frame, "nonterminal"}, 1_000
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, :terminal_frames,
+                    terminal_barrier, terminal_ref},
+                   1_000
+
+    assert terminal_ref == controls.terminal_frames
+
+    :ok =
+      WebsocketOwnerNodeHarness.release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    assert_receive {:controlled_owner_frame, "terminal"}, 1_000
+
+    :ok = WebsocketOwnerNodeHarness.release_controlled(task_barrier, controls, :task_result)
+    assert Task.await(send_task, 1_000) == {:ok, :task_result}
+
+    for {stage, expected} <- [
+          downstream_send_result: :downstream_sent,
+          invalidation_result: :invalidated
+        ] do
+      result_task =
+        Task.async(fn ->
+          WebsocketOwnerNodeHarness.controlled_result(parent, controls, stage, expected)
+        end)
+
+      assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
+                      release_ref},
+                     1_000
+
+      assert release_ref == Map.fetch!(controls, stage)
+      :ok = WebsocketOwnerNodeHarness.release_controlled(barrier_pid, controls, stage)
+      assert Task.await(result_task, 1_000) == expected
+    end
+
+    timer_target = self()
+
+    timer_task =
+      Task.async(fn ->
+        WebsocketOwnerNodeHarness.controlled_timer_message(
+          parent,
+          timer_target,
+          controls,
+          {:controlled_timer, controls.timer_message}
+        )
+      end)
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, :timer_message, timer_barrier,
+                    timer_ref},
+                   1_000
+
+    assert timer_ref == controls.timer_message
+    :ok = WebsocketOwnerNodeHarness.release_controlled(timer_barrier, controls, :timer_message)
+    assert_receive {:controlled_timer, ^timer_ref}, 1_000
+    assert Task.await(timer_task, 1_000) == :ok
+
+    upstream.close.(upstream_pid)
   end
 
   test "advances generations 1,1,2 through reuse and transparent reconnect" do

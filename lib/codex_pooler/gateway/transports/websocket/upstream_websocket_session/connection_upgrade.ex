@@ -63,6 +63,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
           state
           |> Map.merge(connection_state)
           |> Map.update!(:generation, &(&1 + 1))
+          |> Map.delete(:reconnect_pending?)
 
         {:ok, state}
 
