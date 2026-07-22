@@ -225,7 +225,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              %{}
   end
 
-  test "bridges sessioned turns through reuse and transparent reconnect metadata", %{
+  test "three healthy sessioned turns reuse one websocket lifecycle and generation", %{
     conn: conn
   } do
     upstream =
@@ -234,7 +234,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
          [
            FakeUpstream.sse_stream([completed_event("resp_bridge_t1")]),
            FakeUpstream.sse_stream([completed_event("resp_bridge_t2")]),
-           FakeUpstream.websocket_sse_then_close([]),
            FakeUpstream.sse_stream([completed_event("resp_bridge_t3")])
          ]}
       )
@@ -291,11 +290,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert third.status == 200
     assert completed_id(third.resp_body) == "resp_bridge_t3"
 
-    assert [^first_connection_id, second_connection_id] =
-             FakeUpstream.websocket_connection_ids(upstream)
-
-    assert is_reference(second_connection_id)
-    refute second_connection_id == first_connection_id
+    assert [^first_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
 
     third_request = latest_request(setup.pool)
     assert third_request.id not in [request.id, second_request.id]
@@ -305,14 +300,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert %{
              "lifecycle_id" => ^lifecycle_id,
-             "generation" => 2,
-             "reused" => false,
-             "reconnected" => true
+             "generation" => 1,
+             "reused" => true,
+             "reconnected" => false
            } = upstream_connection(third_attempt)
 
     assert settlement_count(third_request) == 1
-    assert FakeUpstream.websocket_connection_count(upstream) == 2
-    assert length(FakeUpstream.requests(upstream)) == 4
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert length(FakeUpstream.requests(upstream)) == 3
 
     requests = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
     assert length(requests) == 3
@@ -1000,6 +995,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.status == "failed"
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
+
     assert [websocket_request] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
     assert FakeUpstream.http_request_count(upstream) == 0

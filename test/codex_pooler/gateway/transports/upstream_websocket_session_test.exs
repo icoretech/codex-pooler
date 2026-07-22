@@ -304,7 +304,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         {:sequence,
          [
            websocket_success("resp_ws_before_invalidation"),
-           websocket_success("resp_ws_after_invalidation")
+           websocket_success("resp_ws_after_invalidation"),
+           websocket_success("resp_ws_reused_after_invalidation")
          ]}
       )
 
@@ -327,6 +328,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     generation_two = %{initial_lifecycle | generation: 2}
     assert_connection_metadata(second_result, generation_two, false, true)
     assert lifecycle_state(session) == generation_two
+
+    assert {:ok, third_result} = UpstreamWebsocketSession.request(session, request)
+    assert_connection_metadata(third_result, generation_two, true, false)
+    assert lifecycle_state(session) == generation_two
+
+    assert [first_request, second_request, third_request] = FakeUpstream.requests(upstream)
+    assert first_request.websocket_connection_id != second_request.websocket_connection_id
+    assert second_request.websocket_connection_id == third_request.websocket_connection_id
     assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 

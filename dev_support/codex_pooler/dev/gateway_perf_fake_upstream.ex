@@ -123,6 +123,18 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       "close_mode" => "http_error",
       "expected_outcome" => "rate_limited",
       "allowed_statuses" => [429]
+    },
+    %{
+      "name" => "opencode-text-ok",
+      "first_event_delay_ms" => 0,
+      "inter_event_delay_ms" => 0,
+      "event_count" => 8,
+      "chunk_bytes" => 2,
+      "http_status" => 200,
+      "failure_phase" => "before_none",
+      "close_mode" => "clean_close",
+      "expected_outcome" => "success",
+      "allowed_statuses" => [200]
     }
   ]
 
@@ -407,6 +419,96 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     |> maybe_send_done(profile)
   end
 
+  defp stream_events(%{"name" => "opencode-text-ok"}) do
+    response_id = "resp_perf_opencode_text_ok"
+    item_id = "msg_perf_opencode_text_ok"
+    text = "ok"
+
+    message = %{
+      "id" => item_id,
+      "type" => "message",
+      "status" => "completed",
+      "role" => "assistant",
+      "content" => [output_text(text)]
+    }
+
+    response = %{
+      "id" => response_id,
+      "object" => "response",
+      "status" => "completed",
+      "output" => [message],
+      "usage" => %{
+        "input_tokens" => 1,
+        "input_tokens_details" => %{"cached_tokens" => 0},
+        "output_tokens" => 1,
+        "output_tokens_details" => %{"reasoning_tokens" => 0},
+        "total_tokens" => 2
+      }
+    }
+
+    payloads = [
+      %{
+        "type" => "response.created",
+        "sequence_number" => 0,
+        "response" => %{response | "status" => "in_progress", "output" => [], "usage" => nil}
+      },
+      %{
+        "type" => "response.output_item.added",
+        "sequence_number" => 1,
+        "output_index" => 0,
+        "item" => %{message | "status" => "in_progress", "content" => []}
+      },
+      %{
+        "type" => "response.content_part.added",
+        "sequence_number" => 2,
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => output_text("")
+      },
+      %{
+        "type" => "response.output_text.delta",
+        "sequence_number" => 3,
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "delta" => text,
+        "logprobs" => []
+      },
+      %{
+        "type" => "response.output_text.done",
+        "sequence_number" => 4,
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "text" => text,
+        "logprobs" => []
+      },
+      %{
+        "type" => "response.content_part.done",
+        "sequence_number" => 5,
+        "item_id" => item_id,
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => output_text(text)
+      },
+      %{
+        "type" => "response.output_item.done",
+        "sequence_number" => 6,
+        "output_index" => 0,
+        "item" => message
+      },
+      %{
+        "type" => "response.completed",
+        "sequence_number" => 7,
+        "response" => response
+      }
+    ]
+
+    Enum.with_index(payloads, 1)
+    |> Enum.map(fn {payload, index} -> {index, payload["type"], payload} end)
+  end
+
   defp stream_events(%{"event_count" => count} = profile) do
     count = max(count, 0)
 
@@ -415,6 +517,10 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     else
       Enum.map(1..count, fn index -> event_payload(index, profile) end)
     end
+  end
+
+  defp output_text(text) do
+    %{"type" => "output_text", "annotations" => [], "logprobs" => [], "text" => text}
   end
 
   defp event_payload(index, %{"event_count" => count} = profile) when index == count do

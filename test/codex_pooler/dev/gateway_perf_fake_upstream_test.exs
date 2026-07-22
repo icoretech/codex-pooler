@@ -54,7 +54,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
       [502]
     ],
     "timeout" => [999_999, 25, 20, 512, 200, "before_first_event", "timeout", "timeout", [504]],
-    "quota-429" => [0, 0, 0, 0, 429, "before_stream", "http_error", "rate_limited", [429]]
+    "quota-429" => [0, 0, 0, 0, 429, "before_stream", "http_error", "rate_limited", [429]],
+    "opencode-text-ok" => [0, 0, 8, 2, 200, "before_none", "clean_close", "success", [200]]
   }
   @profile_order [
     "short-ok",
@@ -64,7 +65,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     "disconnect-midstream",
     "partial-failure",
     "timeout",
-    "quota-429"
+    "quota-429",
+    "opencode-text-ok"
   ]
 
   setup_all do
@@ -202,6 +204,66 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
              Jason.decode!(text)
   end
 
+  test "opencode text profile emits one internally consistent AI SDK response" do
+    assert {:ok, [profile]} =
+             GatewayPerfFakeUpstream.profiles_from_selector("opencode-text-ok")
+
+    events = GatewayPerfFakeUpstream.stream_event_payloads(profile)
+
+    assert Enum.map(events, & &1["type"]) == [
+             "response.created",
+             "response.output_item.added",
+             "response.content_part.added",
+             "response.output_text.delta",
+             "response.output_text.done",
+             "response.content_part.done",
+             "response.output_item.done",
+             "response.completed"
+           ]
+
+    assert Enum.map(events, & &1["sequence_number"]) == Enum.to_list(0..7)
+
+    [created, item_added, part_added, delta, text_done, part_done, item_done, completed] =
+      events
+
+    response_id = created["response"]["id"]
+    item_id = item_added["item"]["id"]
+
+    assert created["response"]["status"] == "in_progress"
+    assert created["response"]["output"] == []
+    assert item_added["output_index"] == 0
+    assert item_added["item"]["status"] == "in_progress"
+    assert item_added["item"]["content"] == []
+
+    for event <- [part_added, delta, text_done, part_done] do
+      assert event["item_id"] == item_id
+      assert event["output_index"] == 0
+      assert event["content_index"] == 0
+    end
+
+    assert part_added["part"] == output_text("")
+    assert delta["delta"] == "ok"
+    assert text_done["text"] == "ok"
+    assert part_done["part"] == output_text("ok")
+    assert item_done["output_index"] == 0
+    assert item_done["item"]["id"] == item_id
+    assert item_done["item"]["status"] == "completed"
+    assert item_done["item"]["content"] == [output_text("ok")]
+
+    response = completed["response"]
+    assert response["id"] == response_id
+    assert response["status"] == "completed"
+    assert response["output"] == [item_done["item"]]
+
+    assert response["usage"] == %{
+             "input_tokens" => 1,
+             "input_tokens_details" => %{"cached_tokens" => 0},
+             "output_tokens" => 1,
+             "output_tokens_details" => %{"reasoning_tokens" => 0},
+             "total_tokens" => 2
+           }
+  end
+
   test "write_manifest! persists metadata-only manifest JSON" do
     manifest_path =
       Path.join(
@@ -238,6 +300,10 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
 
   defp post_stream!(url, headers \\ []) do
     Req.post!(url, headers: headers, json: %{"model" => "gpt-example"}, retry: false)
+  end
+
+  defp output_text(text) do
+    %{"type" => "output_text", "annotations" => [], "logprobs" => [], "text" => text}
   end
 
   defp profile_tuple(profile) do

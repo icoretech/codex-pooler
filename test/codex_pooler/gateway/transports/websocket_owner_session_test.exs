@@ -989,13 +989,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     owner = pending.owner
     cancel_owner_timer(pending.active_turn.terminal_delivery_timer_ref)
     owner_ref = Process.monitor(owner)
-    send(owner, :renew_owner_lease)
 
     codex_session_id = context.codex_session_id
     owner_lease_token = context.owner_lease_token
 
-    assert_receive {:pending_owner_renewal_attempt, ^codex_session_id, ^owner_lease_token}
-    assert_receive {:DOWN, ^owner_ref, :process, ^owner, {:shutdown, :stale_owner}}
+    logs =
+      capture_log(fn ->
+        send(owner, :renew_owner_lease)
+
+        assert_receive {:pending_owner_renewal_attempt, ^codex_session_id, ^owner_lease_token}
+        assert_receive {:DOWN, ^owner_ref, :process, ^owner, {:shutdown, :stale_owner}}
+      end)
+
+    assert logs =~ "websocket owner renewal stale"
+    assert logs =~ "reason=stale_owner"
     assert_receive {:pending_submitter_outcome, "pending-lease-loss", {:exit, _reason}}
     assert Process.read_timer(pending.active_turn.terminal_delivery_timer_ref) == false
 
