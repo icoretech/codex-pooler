@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.2...codex-pooler-v0.5.3) (2026-07-22)
+
+
+### Bug Fixes
+
+* **routing:** extend the skip policy to circuit writes and pin lock-test backends ([f2671ad](https://github.com/icoretech/codex-pooler/commit/f2671adc7550f6a6cb00622acb90859ff31b185c))
+* **routing:** take canonical reference locks in side-effect writers ([5b40f69](https://github.com/icoretech/codex-pooler/commit/5b40f69cba5b43b6a189f8b4fd8753144e8cb59d))
+* **websocket:** recover frames handed back beside a coalesced transport error ([cb3a312](https://github.com/icoretech/codex-pooler/commit/cb3a312568c46042e1dff665ff8e4f378f4d1442))
+
 ## [0.5.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.1...codex-pooler-v0.5.2) (2026-07-22)
 
 
