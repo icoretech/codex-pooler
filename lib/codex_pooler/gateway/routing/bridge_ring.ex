@@ -9,8 +9,11 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Access
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
@@ -147,7 +150,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     now = now()
 
     if affinity.enabled? and affinity.key_hash do
-      upsert_affinity!(plan, assignment, identity, now)
+      locked_side_effect(:affinity_upsert, assignment, identity, fn ->
+        upsert_affinity!(plan, assignment, identity, now)
+      end)
     end
 
     resolve_demotions!(plan, assignment, now)
@@ -165,13 +170,72 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     reason_code = sanitized_reason_code(reason_code)
     now = now()
 
-    upsert_demotion!(plan, assignment, identity, reason_code, request_id, now)
+    locked_side_effect(:demotion_upsert, assignment, identity, fn ->
+      upsert_demotion!(plan, assignment, identity, reason_code, request_id, now)
+    end)
 
     if plan.affinity.enabled? and plan.affinity.key_hash do
       mark_affinity_miss!(plan, now)
     end
 
     reason_code
+  end
+
+  # The upsert's implicit FK checks lock the assignment row before the identity
+  # row, inverting the canonical identity-first order used by credential
+  # fencing and reconciliation guards (production 40P01, 2026-07-22). Taking
+  # the canonical reference locks first removes the cycle; lock or ownership
+  # failures degrade to a logged skip because routing bookkeeping must never
+  # fail an already-finalized turn.
+  defp locked_side_effect(side_effect, assignment, identity, fun) do
+    run_locked_side_effect(side_effect, assignment, identity, fun, _retry_left = 1)
+  end
+
+  defp run_locked_side_effect(side_effect, assignment, identity, fun, retry_left) do
+    Repo.transaction(fn ->
+      ReferenceLocks.lock_and_validate!(identity.id, assignment.id)
+      fun.()
+    end)
+    |> case do
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        log_skipped_side_effect(side_effect, assignment, identity, skip_code(reason))
+    end
+  rescue
+    error in Postgrex.Error ->
+      cond do
+        deadlock?(error) and retry_left > 0 ->
+          run_locked_side_effect(side_effect, assignment, identity, fun, retry_left - 1)
+
+        deadlock?(error) ->
+          log_skipped_side_effect(
+            side_effect,
+            assignment,
+            identity,
+            "routing_side_effect_deadlock"
+          )
+
+        true ->
+          reraise error, __STACKTRACE__
+      end
+  end
+
+  defp deadlock?(%Postgrex.Error{postgres: %{code: :deadlock_detected}}), do: true
+  defp deadlock?(%Postgrex.Error{}), do: false
+
+  defp skip_code(%{code: code}) when is_binary(code), do: code
+  defp skip_code(%{code: code}) when is_atom(code), do: Atom.to_string(code)
+  defp skip_code(_reason), do: "unknown"
+
+  defp log_skipped_side_effect(side_effect, assignment, identity, code) do
+    Logger.warning(
+      "routing side effect skipped side_effect=#{side_effect} code=#{code} " <>
+        "pool_upstream_assignment_id=#{assignment.id} upstream_identity_id=#{identity.id}"
+    )
+
+    :ok
   end
 
   @spec attempt_metadata(

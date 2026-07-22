@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   import Ecto.Query
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
@@ -216,6 +217,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           state |> RoutingCircuitState.changeset(attrs) |> persist_or_rollback(:update)
 
         nil ->
+          # The first-failure insert references the assignment and identity
+          # rows through FK checks whose implicit lock order inverts the
+          # canonical identity-first order used by credential fencing; take
+          # the canonical reference locks before inserting.
+          ReferenceLocks.lock_and_validate!(assignment.upstream_identity_id, assignment.id)
+
           %RoutingCircuitState{}
           |> RoutingCircuitState.changeset(Map.put(attrs, :created_at, now))
           |> persist_or_rollback(:insert)
