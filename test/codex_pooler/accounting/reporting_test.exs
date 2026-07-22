@@ -65,6 +65,54 @@ defmodule CodexPooler.Accounting.ReportingTest do
     assert sum_decimal_integer(settlements, :settled_cost_micros) == 700_000
   end
 
+  test "upstream model totals expose usage completeness while excluding unknown stored totals" do
+    pool = pool_fixture(%{slug: "reporting-completeness", name: "Reporting Completeness"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    known_model = model_fixture(pool, %{exposed_model_id: "gpt-reporting-known"})
+    unknown_model = model_fixture(pool, %{exposed_model_id: "gpt-reporting-unknown"})
+    started_at = ~U[2026-01-10 11:00:00.000000Z]
+    ended_at = ~U[2026-01-10 12:00:00.000000Z]
+    occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+
+    insert_settlement!(pool, api_key, assignment, identity, occurred_at, %{
+      model_id: known_model.id,
+      request_count: 2,
+      total_tokens: 40,
+      settled_cost_micros: 400
+    })
+
+    insert_settlement!(pool, api_key, assignment, identity, occurred_at, %{
+      model_id: unknown_model.id,
+      usage_status: "usage_unknown",
+      request_count: 3,
+      total_tokens: 999_999,
+      settled_cost_micros: 999_999
+    })
+
+    totals_by_model =
+      Reporting.token_totals_by_upstream_identity_and_model_ids(
+        [identity.id],
+        started_at,
+        ended_at
+      )[identity.id]
+
+    totals = Enum.find(totals_by_model, &(&1.model_id == known_model.id))
+
+    assert totals.request_count == 2
+    assert totals.known_request_count == 2
+    assert totals.unknown_request_count == 0
+    assert totals.total_tokens == 40
+    assert totals.settled_cost_micros == 400
+
+    assert [%{request_count: 3, known_request_count: 0, unknown_request_count: 3} = unknown] =
+             totals_by_model
+             |> Enum.filter(&(&1.unknown_request_count > 0))
+
+    assert unknown.total_tokens == 0
+    assert unknown.settled_cost_micros == 0
+  end
+
   test "settlement usage buckets aggregate exact inclusive windows without model rollups" do
     first_pool = pool_fixture(%{slug: "reporting-buckets-first", name: "Reporting Buckets First"})
 

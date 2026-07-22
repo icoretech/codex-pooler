@@ -207,6 +207,8 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:model_id) => Ecto.UUID.t() | nil,
           required(:total_tokens) => non_neg_integer(),
           required(:request_count) => non_neg_integer(),
+          required(:known_request_count) => non_neg_integer(),
+          required(:unknown_request_count) => non_neg_integer(),
           required(:settled_cost_micros) => non_neg_integer()
         }
 
@@ -240,15 +242,35 @@ defmodule CodexPooler.Accounting.Reporting do
                "CASE WHEN ? = ? THEN ? ELSE 0 END",
                entry.usage_status,
                ^@usage_known,
+               entry.request_count
+             )
+           ),
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN 0 ELSE ? END",
+               entry.usage_status,
+               ^@usage_known,
+               entry.request_count
+             )
+           ),
+           sum(
+             fragment(
+               "CASE WHEN ? = ? THEN ? ELSE 0 END",
+               entry.usage_status,
+               ^@usage_known,
                entry.settled_cost_micros
              )
            )}
     )
-    |> Enum.reduce(%{}, fn {upstream_identity_id, model_id, total, requests, cost}, acc ->
+    |> Enum.reduce(%{}, fn {upstream_identity_id, model_id, total, requests, known_requests,
+                            unknown_requests, cost},
+                           acc ->
       row = %{
         model_id: model_id,
         total_tokens: non_negative_integer(total),
         request_count: non_negative_integer(requests),
+        known_request_count: non_negative_integer(known_requests),
+        unknown_request_count: non_negative_integer(unknown_requests),
         settled_cost_micros: non_negative_integer(cost)
       }
 
