@@ -150,6 +150,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               <div
                 id={"upstream-account-#{@account.identity.id}-token-burn"}
                 data-role="upstream-token-burn-summary"
+                data-usage-state={token_burn_usage_state(@account)}
                 class="text-right"
               >
                 <p
@@ -911,6 +912,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
     "shrink-0 text-[11px] font-medium leading-4 text-base-content/60"
   end
 
+  defp recent_token_count_label(%{token_burn: %{usage_state: :unknown}}),
+    do: "Usage unavailable"
+
+  defp recent_token_count_label(%{token_burn: %{usage_state: :partial, recent_tokens: tokens}})
+       when is_integer(tokens) and tokens >= 0 do
+    "#{Format.token_count(tokens)} confirmed tokens"
+  end
+
   defp recent_token_count_label(%{token_burn: %{recent_tokens: tokens}})
        when is_integer(tokens) and tokens >= 0 do
     "#{Format.token_count(tokens)} tokens"
@@ -924,6 +933,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp recent_request_count_label(_account), do: "0"
+
+  defp token_burn_usage_state(%{token_burn: %{usage_state: usage_state}})
+       when usage_state in [:idle, :complete, :partial, :unknown],
+       do: usage_state
+
+  defp token_burn_usage_state(_account), do: :idle
 
   defp token_burn_active?(%{token_burn: %{level: level}}), do: is_integer(level) and level > 0
   defp token_burn_active?(_account), do: false

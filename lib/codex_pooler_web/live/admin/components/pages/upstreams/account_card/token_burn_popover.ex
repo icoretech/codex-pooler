@@ -14,18 +14,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
     <span
       id={"#{@id}-popover"}
       data-role="upstream-token-burn-popover"
+      data-usage-state={usage_state(@token_burn)}
       class="dropdown dropdown-end dropdown-bottom inline-flex justify-end"
     >
       <button
         id={@id}
         type="button"
+        data-role="upstream-token-burn-trigger"
+        data-usage-state={usage_state(@token_burn)}
         class="inline-flex cursor-pointer items-center justify-end gap-1 rounded px-1 text-xs font-medium text-base-content/70 transition-colors hover:bg-base-300/60 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         tabindex="0"
-        aria-label="Token burn calculation"
+        aria-label={"Token burn calculation: #{@token_burn.title}"}
         aria-haspopup="true"
         aria-describedby={@content_id}
+        title={@token_burn.title}
       >
-        <.icon name="hero-fire" class={token_burn_icon_class(@token_burn)} />
+        <.icon name={token_burn_icon_name(@token_burn)} class={token_burn_icon_class(@token_burn)} />
         <span>{@token_burn.label}</span>
       </button>
       <span
@@ -37,15 +41,36 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
         <span class="block">
           Compares settled tokens from the last 5 minutes with the previous 1 hour baseline.
         </span>
+        <span
+          data-role="upstream-token-burn-state"
+          data-usage-state={usage_state(@token_burn)}
+          class={token_burn_state_class(@token_burn)}
+        >
+          {usage_state_label(@token_burn)}
+        </span>
         <span class="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
           <span class="font-medium text-base-content/55">Last 5 minutes</span>
           <span class="text-base-content">{token_burn_recent_token_label(@token_burn)}</span>
           <span class="font-medium text-base-content/55">Previous 1 hour</span>
           <span class="text-base-content">{token_burn_baseline_token_label(@token_burn)}</span>
         </span>
+        <span
+          :if={usage_state(@token_burn) in [:partial, :unknown]}
+          data-role={missing_usage_role(@token_burn)}
+          class="mt-2 block text-warning"
+        >
+          {missing_usage_label(@token_burn)}
+        </span>
       </span>
     </span>
     """
+  end
+
+  defp token_burn_recent_token_label(%{usage_state: :unknown}), do: "Usage unavailable"
+
+  defp token_burn_recent_token_label(%{usage_state: :partial, recent_tokens: tokens})
+       when is_integer(tokens) and tokens >= 0 do
+    "#{Format.token_count(tokens)} confirmed tokens"
   end
 
   defp token_burn_recent_token_label(%{recent_tokens: tokens})
@@ -62,9 +87,39 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
 
   defp token_burn_baseline_token_label(_token_burn), do: "0 tokens"
 
+  defp usage_state(%{usage_state: usage_state})
+       when usage_state in [:idle, :complete, :partial, :unknown],
+       do: usage_state
+
+  defp usage_state(_token_burn), do: :idle
+
+  defp usage_state_label(%{usage_state: :idle}), do: "No recent usage"
+  defp usage_state_label(%{usage_state: :complete}), do: "Usage complete"
+  defp usage_state_label(%{usage_state: :partial}), do: "Usage partially reported"
+  defp usage_state_label(%{usage_state: :unknown}), do: "Usage unavailable"
+  defp usage_state_label(_token_burn), do: "No recent usage"
+
+  defp missing_usage_label(%{unknown_request_count: 1}), do: "1 usage record missing"
+
+  defp missing_usage_label(%{unknown_request_count: count}) when is_integer(count) and count > 1,
+    do: "#{count} usage records missing"
+
+  defp missing_usage_label(_token_burn), do: "Usage records missing"
+
+  defp missing_usage_role(%{usage_state: :unknown}), do: "upstream-token-burn-usage-unavailable"
+  defp missing_usage_role(_token_burn), do: "upstream-token-burn-missing-usage"
+
+  defp token_burn_state_class(%{usage_state: :unknown}), do: "mt-2 block font-medium text-warning"
+  defp token_burn_state_class(%{usage_state: :partial}), do: "mt-2 block font-medium text-warning"
+  defp token_burn_state_class(_token_burn), do: "mt-2 block font-medium text-base-content/70"
+
+  defp token_burn_icon_name(%{usage_state: :unknown}), do: "hero-question-mark-circle"
+  defp token_burn_icon_name(_token_burn), do: "hero-fire"
+
   defp token_burn_icon_class(%{level: 0}), do: "size-3.5 text-base-content/35"
   defp token_burn_icon_class(%{level: level}) when level in 1..2, do: "size-3.5 text-warning/70"
   defp token_burn_icon_class(%{level: level}) when level in 3..4, do: "size-3.5 text-warning"
   defp token_burn_icon_class(%{level: 5}), do: "size-3.5 text-error"
+  defp token_burn_icon_class(%{usage_state: :unknown}), do: "size-3.5 text-warning/70"
   defp token_burn_icon_class(_token_burn), do: "size-3.5 text-base-content/35"
 end

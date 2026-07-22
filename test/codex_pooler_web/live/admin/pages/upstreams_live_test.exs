@@ -17,12 +17,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Mailer
   alias CodexPooler.Pools
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.OAuthFlows
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.PrimingState
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.SavedResets.AutoEligibility
 
   alias CodexPooler.Upstreams.Schemas.{
     EncryptedSecret,
@@ -109,6 +112,350 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ "pool lifecycle"
     refute html =~ "gateway request trail"
     refute html =~ "system job state"
+  end
+
+  test "renders token burn completeness states without false zero claims", %{
+    conn: conn
+  } do
+    pool = pool_fixture(%{name: "Token burn completeness Pool"})
+    %{api_key: api_key} = api_key_fixture(pool)
+    now = DateTime.utc_now()
+
+    accounts =
+      for state <- [:idle, :complete, :partial, :unknown], into: %{} do
+        %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+        {state, %{identity: identity, assignment: assignment}}
+      end
+
+    seed_settlement = fn %{identity: identity, assignment: assignment}, attrs ->
+      request = request_fixture(%{pool: pool, api_key: api_key})
+
+      ledger_entry_fixture(
+        request,
+        Map.merge(
+          %{
+            pool_upstream_assignment_id: assignment.id,
+            upstream_identity_id: identity.id,
+            occurred_at: DateTime.add(now, -60, :second)
+          },
+          attrs
+        )
+      )
+    end
+
+    seed_settlement.(accounts.complete, %{total_tokens: 0, settled_cost_micros: 0})
+    seed_settlement.(accounts.partial, %{total_tokens: 20, settled_cost_micros: 200})
+
+    seed_settlement.(accounts.partial, %{
+      usage_status: "usage_unknown",
+      total_tokens: 999_999,
+      settled_cost_micros: 999_999
+    })
+
+    for _ <- 1..82 do
+      seed_settlement.(accounts.unknown, %{
+        usage_status: "usage_unknown",
+        total_tokens: 999_999,
+        settled_cost_micros: 999_999
+      })
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    for {state, %{identity: identity}} <- accounts do
+      card_id = "upstream-account-#{identity.id}"
+
+      assert has_element?(
+               view,
+               "##{card_id}-token-burn[data-usage-state='#{state}']"
+             )
+
+      assert has_element?(
+               view,
+               "##{card_id}-token-burn-value-popover[data-usage-state='#{state}']"
+             )
+    end
+
+    complete_card_id = "upstream-account-#{accounts.complete.identity.id}"
+
+    assert has_element?(
+             view,
+             "##{complete_card_id}-token-burn-value[title*='complete usage']",
+             "x0"
+           )
+
+    partial_card_id = "upstream-account-#{accounts.partial.identity.id}"
+
+    assert has_element?(
+             view,
+             "##{partial_card_id}-token-burn-value[title*='1 usage record missing']",
+             "x1"
+           )
+
+    assert has_element?(
+             view,
+             "##{partial_card_id}-token-burn-content [data-role='upstream-token-burn-missing-usage']",
+             "1 usage record missing"
+           )
+
+    unknown_card_id = "upstream-account-#{accounts.unknown.identity.id}"
+    unknown_tokens_trigger_id = "#{unknown_card_id}-tokens-panel-trigger"
+
+    assert has_element?(
+             view,
+             "##{unknown_card_id}-token-burn-value[title*='82 requests'][title*='82 usage records missing']",
+             "usage unavailable"
+           )
+
+    assert has_element?(
+             view,
+             "##{unknown_card_id}-token-burn-content [data-role='upstream-token-burn-state'][data-usage-state='unknown']",
+             "Usage unavailable"
+           )
+
+    assert has_element?(
+             view,
+             "##{unknown_card_id}-token-burn-content [data-role='upstream-token-burn-usage-unavailable']",
+             "82 usage records missing"
+           )
+
+    assert has_element?(
+             view,
+             "##{unknown_tokens_trigger_id}[aria-controls='#{unknown_card_id}-tokens-panel'][aria-expanded='false']"
+           )
+
+    view
+    |> element("##{unknown_tokens_trigger_id}")
+    |> render_click()
+
+    assert has_element?(view, "##{unknown_tokens_trigger_id}[aria-expanded='true']")
+    assert has_element?(view, "##{unknown_card_id}-tokens-panel[aria-hidden='false']")
+  end
+
+  test "renders anchored and floating Spark reset semantics from the shared quota projection", %{
+    conn: conn
+  } do
+    pool = pool_fixture(%{name: "Spark reset semantics Pool"})
+    %{identity: anchored} = upstream_assignment_fixture(pool, %{account_label: "Anchored Spark"})
+    %{identity: floating} = upstream_assignment_fixture(pool, %{account_label: "Floating Spark"})
+
+    observed_at =
+      DateTime.utc_now()
+      |> DateTime.add(-5, :minute)
+      |> DateTime.truncate(:microsecond)
+
+    anchored_window = spark_weekly_quota_window(observed_at, %{"reset_state" => "anchored"})
+
+    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(anchored, [anchored_window])
+
+    for offset <- [0, 60, 300] do
+      floating_observed_at = DateTime.add(observed_at, offset, :second)
+
+      assert {:ok, _window} =
+               EvidenceStore.record_evidence(
+                 floating,
+                 spark_weekly_quota_window(floating_observed_at, %{
+                   "reset_after_seconds" => 604_800
+                 }),
+                 floating_observed_at,
+                 floating_observed_at
+               )
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    anchored_reset_id =
+      "upstream-account-#{anchored.id}-limit-model-codex_spark-secondary-10080-reset"
+
+    floating_reset_id =
+      "upstream-account-#{floating.id}-limit-model-codex_spark-secondary-10080-reset"
+
+    assert has_element?(view, "##{anchored_reset_id}[title^='resets ']")
+    assert has_element?(view, "##{floating_reset_id}", "starts on use")
+
+    assert has_element?(
+             view,
+             "##{floating_reset_id}[title='provider reports a rolling seven-day window until use starts']"
+           )
+  end
+
+  @tag :provider_reset_convergence
+  test "converges anchored and floating Spark cards with weekly-only account routing", %{
+    conn: conn,
+    scope: scope
+  } do
+    pool = pool_fixture(%{name: "Provider reset convergence Pool"})
+
+    %{identity: anchored_identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Anchored Spark convergence"})
+
+    %{identity: floating_identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Floating Spark convergence"})
+
+    %{identity: legacy_identity, assignment: legacy_assignment} =
+      upstream_assignment_fixture(pool, %{account_label: "Weekly-only convergence"})
+
+    as_of = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    old_reset = DateTime.add(as_of, -3, :day)
+    current_reset = DateTime.add(as_of, 6, :day)
+    anchored_spark_observed_at = DateTime.add(as_of, -5, :minute)
+    floating_spark_observed_at = DateTime.add(as_of, -10, :minute)
+    legacy_observed_at = DateTime.add(as_of, -2 * Evidence.freshness_ttl_seconds(), :second)
+
+    current_observed_at =
+      DateTime.add(legacy_observed_at, Evidence.freshness_ttl_seconds(), :second)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(anchored_identity, [
+               spark_weekly_quota_window(anchored_spark_observed_at, %{
+                 "reset_state" => "anchored"
+               })
+             ])
+
+    for offset <- [0, 60, 300] do
+      observed_at = DateTime.add(floating_spark_observed_at, offset, :second)
+
+      assert {:ok, _window} =
+               EvidenceStore.record_evidence(
+                 floating_identity,
+                 spark_weekly_quota_window(observed_at, %{
+                   "reset_after_seconds" => 604_800
+                 }),
+                 observed_at,
+                 observed_at
+               )
+    end
+
+    insert_account_quota_window!(
+      legacy_identity,
+      "primary",
+      "codex_response_headers",
+      legacy_observed_at,
+      old_reset,
+      "100"
+    )
+
+    current_weekly =
+      insert_account_quota_window!(
+        legacy_identity,
+        "secondary",
+        "codex_usage_api",
+        current_observed_at,
+        current_reset,
+        "0"
+      )
+
+    legacy_identity =
+      legacy_identity
+      |> UpstreamIdentity.changeset(%{
+        metadata: %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "source" => "codex_response_headers",
+            "path_style" => "codex_api",
+            "observed_at" => DateTime.to_iso8601(as_of),
+            "usage_path" => "/api/codex/usage",
+            "reason" => nil
+          }
+        },
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_min_blocked_minutes: 60,
+        saved_reset_auto_redeem_keep_credits: 0,
+        updated_at: as_of
+      })
+      |> Repo.update!()
+
+    effective_windows = QuotaWindows.list_quota_windows(legacy_identity, as_of)
+    [effective_weekly] = effective_windows
+
+    assert effective_weekly.id == current_weekly.id
+    assert effective_weekly.window_kind == "secondary"
+    assert effective_weekly.source == "codex_usage_api"
+
+    assert %{eligible?: true, routing_state: :weekly_only_probe, selection: selection} =
+             QuotaWindows.routing_quota_eligibility(legacy_identity, at: as_of)
+
+    assert selection.primary == nil
+    assert selection.secondary.id == current_weekly.id
+    assert [routing_weekly] = selection.routing_windows
+    assert routing_weekly.id == current_weekly.id
+
+    auto_context = %{
+      trigger: :blocked_weekly_exhaustion,
+      pool_upstream_assignment_id: legacy_assignment.id,
+      upstream_identity_id: legacy_identity.id,
+      candidate_assignment_ids: [legacy_assignment.id],
+      candidate_identity_ids: [legacy_identity.id],
+      route_class: "proxy_http"
+    }
+
+    assert {:noop, "gateway_auto_trigger_not_current"} =
+             AutoEligibility.validate_locked_gateway_auto(
+               legacy_identity,
+               legacy_assignment,
+               auto_context,
+               as_of
+             )
+
+    accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    anchored_account = Enum.find(accounts, &(&1.identity.id == anchored_identity.id))
+    floating_account = Enum.find(accounts, &(&1.identity.id == floating_identity.id))
+    legacy_account = Enum.find(accounts, &(&1.identity.id == legacy_identity.id))
+
+    assert anchored_spark =
+             Enum.find(
+               anchored_account.quota_limits,
+               &(&1.key == "model-codex_spark-secondary-10080")
+             )
+
+    assert anchored_spark.reset_semantics == :anchored
+    assert String.starts_with?(anchored_spark.reset_title, "resets ")
+
+    assert floating_spark =
+             Enum.find(
+               floating_account.quota_limits,
+               &(&1.key == "model-codex_spark-secondary-10080")
+             )
+
+    assert floating_spark.reset_semantics == :floating
+    assert floating_spark.reset_label == "starts on use"
+
+    assert floating_spark.reset_title ==
+             "provider reports a rolling seven-day window until use starts"
+
+    assert legacy_account.quota_readiness.state == "weekly_only_probe"
+    assert legacy_account.quota_readiness.label == "Weekly quota probe"
+    assert legacy_account.quota_readiness.routing_ready_now?
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    anchored_reset_id =
+      "upstream-account-#{anchored_identity.id}-limit-model-codex_spark-secondary-10080-reset"
+
+    floating_reset_id =
+      "upstream-account-#{floating_identity.id}-limit-model-codex_spark-secondary-10080-reset"
+
+    legacy_card_id = "upstream-account-#{legacy_identity.id}"
+
+    legacy_reset_title =
+      "resets #{DateTimeDisplay.format_datetime(old_reset, DateTimeDisplay.preferences_for_user(scope.user))}"
+
+    assert has_element?(view, "##{anchored_reset_id}[title^='resets ']")
+
+    assert has_element?(
+             view,
+             "##{floating_reset_id}[title='provider reports a rolling seven-day window until use starts']",
+             "starts on use"
+           )
+
+    assert has_element?(view, "##{legacy_card_id}-quota-readiness-state", "weekly_only_probe")
+    assert has_element?(view, "##{legacy_card_id}-quota-readiness-label", "Weekly quota probe")
+    assert has_element?(view, "##{legacy_card_id}-routing-readiness-state", "ready")
+    assert has_element?(view, "##{legacy_card_id}-routing-readiness-label", "Routing ready")
+    assert has_element?(view, "##{legacy_card_id}-limit-weekly-reset[title^='resets ']")
+    refute has_element?(view, "##{legacy_card_id} [title='#{legacy_reset_title}']")
+    refute has_element?(view, "##{legacy_card_id}", "Quota refresh needed")
   end
 
   test "guides operators to create a Pool before upstream accounts", %{conn: conn} do
@@ -6228,6 +6575,59 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         order_by: [asc: event.occurred_at, asc: event.id]
       )
     )
+  end
+
+  defp spark_weekly_quota_window(observed_at, metadata) do
+    %{
+      quota_key: "gpt_5_3_codex_spark",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: "gpt-5.3-codex-spark",
+      display_label: "GPT-5.3-Codex-Spark",
+      limit_name: "GPT-5.3-Codex-Spark",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("0"),
+      reset_at: DateTime.add(observed_at, 7, :day),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      observed_at: observed_at,
+      metadata: metadata
+    }
+  end
+
+  defp insert_account_quota_window!(
+         identity,
+         window_kind,
+         source,
+         observed_at,
+         reset_at,
+         used_percent
+       ) do
+    {:ok, window} =
+      EvidenceStore.record_evidence(
+        identity,
+        %{
+          quota_key: "account",
+          quota_scope: "account",
+          quota_family: "account",
+          window_kind: window_kind,
+          window_minutes: if(window_kind == "primary", do: 300, else: 10_080),
+          used_percent: Decimal.new(used_percent),
+          reset_at: reset_at,
+          source: source,
+          source_precision: "observed",
+          freshness_state: "fresh",
+          observed_at: observed_at,
+          last_sync_at: observed_at,
+          metadata: %{}
+        },
+        observed_at,
+        observed_at
+      )
+
+    window
   end
 
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
