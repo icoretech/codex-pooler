@@ -6,11 +6,42 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Routing
+  alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.RouteClass
 
   @type auth :: Access.auth_context()
+  @type reset_probe_scope_error ::
+          {:reset_probe_scope_mismatch, CodexPooler.Gateway.Contracts.gateway_error()}
+
+  @spec validate_reset_probe_scope(
+          [CandidateEligibility.FilterInput.candidate()],
+          RequestOptions.t(),
+          RouteState.t()
+        ) :: :ok | {:error, reset_probe_scope_error()}
+  def validate_reset_probe_scope(
+        candidates,
+        %RequestOptions{} = request_options,
+        %RouteState{} = route_state
+      )
+      when is_list(candidates) do
+    case {request_options.routing.reset_probe, route_state.reset_probe} do
+      {nil, nil} ->
+        :ok
+
+      {%ResetProbe{} = probe, nil} ->
+        if ResetProbe.unbound?(probe), do: :ok, else: reset_probe_scope_error()
+
+      {%ResetProbe{} = probe, %ResetProbe{} = route_probe} ->
+        validate_bound_reset_probe_scope(candidates, request_options, probe, route_probe)
+
+      _mismatch ->
+        reset_probe_scope_error()
+    end
+  end
 
   @spec attrs(auth(), map(), String.t(), RequestOptions.t()) :: map()
   def attrs(auth, payload, endpoint, %RequestOptions{} = request_options) when is_map(payload) do
@@ -83,6 +114,48 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
 
   defp accounting_endpoint(endpoint, _request_options), do: endpoint
 
+  defp validate_bound_reset_probe_scope(
+         [{assignment, identity}],
+         %RequestOptions{} = request_options,
+         %ResetProbe{} = probe,
+         %ResetProbe{} = route_probe
+       ) do
+    effective_model =
+      request_options.routing.effective_model || request_options.routing.requested_model
+
+    if probe == route_probe and
+         ResetProbe.matches?(
+           probe,
+           assignment.id,
+           identity.id,
+           effective_model,
+           RequestOptions.route_class(request_options)
+         ) do
+      :ok
+    else
+      reset_probe_scope_error()
+    end
+  end
+
+  defp validate_bound_reset_probe_scope(
+         _candidates,
+         %RequestOptions{},
+         %ResetProbe{},
+         %ResetProbe{}
+       ),
+       do: reset_probe_scope_error()
+
+  defp reset_probe_scope_error do
+    {:error,
+     {:reset_probe_scope_mismatch,
+      %{
+        status: 503,
+        code: "no_eligible_backend",
+        message: "no healthy eligible backend is currently available",
+        param: "model"
+      }}}
+  end
+
   defp request_metadata_attrs(auth, payload, endpoint, request_options, route_state) do
     %RequestOptions{
       request_metadata: request_metadata,
@@ -101,7 +174,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       "request_bytes" => request_metadata.request_bytes,
       "upload_bytes" => request_metadata.upload_bytes,
       "request_content_type" => request_metadata.request_content_type,
-      "quota_decision" => routing.quota_decision
+      "quota_decision" => Routing.accounting_quota_decision(routing)
     }
     |> Map.merge(RequestOptions.client_request_metadata(request_options))
     |> Map.merge(RequestOptions.openai_compatibility_metadata(request_options))

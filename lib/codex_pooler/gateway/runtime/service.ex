@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
@@ -210,6 +211,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          candidates,
          %RouteState{} = route_state
        ) do
+    request_options =
+      RequestOptions.put_routing(request_options, reset_probe: ResetProbe.new())
+
     with :ok <- SessionContinuity.ensure_unique_turn(request_options),
          {:ok, candidates, request_options, route_state} <-
            route_filter_input(
@@ -221,6 +225,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
              candidates
            )
            |> RouteFiltering.filter_candidates_with_route_state(route_state),
+         :ok <-
+           AccountingReservation.validate_reset_probe_scope(
+             candidates,
+             request_options,
+             route_state
+           ),
          {:ok, reserved} <-
            reserve_and_start_turn(auth, model, payload, endpoint, request_options, route_state) do
       dispatch_candidates(
@@ -235,6 +245,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       )
     else
       {:error, %{code: "duplicate_turn"} = reason} ->
+        {:error, reason}
+
+      {:error, {:reset_probe_scope_mismatch, reason}} ->
         {:error, reason}
 
       {:error, %{code: _code} = reason} ->

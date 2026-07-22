@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.{ModelMetadata, RouteLifecycle, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
@@ -101,6 +102,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
       })
 
     with {:ok, context} <- apply_route_selection(context, selection, allow_retry?),
+         {:ok, context} <- validate_reset_probe_scope(context),
          {:ok, context} <- persist_route_metadata(context),
          {:ok, context} <- begin_candidate_circuit(context, selection),
          {:ok, context} <- start_dispatch_attempt(context, selection) do
@@ -223,6 +225,58 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
           nil,
           reason
         )
+    end
+  end
+
+  defp validate_reset_probe_scope(%SelectedCandidateContext{} = context) do
+    case context.request_options.routing.reset_probe do
+      %ResetProbe{} = probe ->
+        validate_bound_reset_probe_scope(context, probe)
+
+      nil ->
+        {:ok, context}
+    end
+  end
+
+  defp validate_bound_reset_probe_scope(context, %ResetProbe{} = probe) do
+    cond do
+      ResetProbe.unbound?(probe) ->
+        {:ok, context}
+
+      ResetProbe.matches?(
+        probe,
+        context.assignment.id,
+        context.identity.id,
+        effective_model(context),
+        context.route_class
+      ) ->
+        {:ok, context}
+
+      true ->
+        finalize_reset_probe_scope_mismatch(context)
+    end
+  end
+
+  defp effective_model(%SelectedCandidateContext{} = context),
+    do: context.request_options.routing.effective_model || context.model.exposed_model_id
+
+  defp finalize_reset_probe_scope_mismatch(%SelectedCandidateContext{} = context) do
+    case AttemptSettlement.finalize_reservation_failure(context.reserved.request, %{
+           response_status_code: 503,
+           last_error_code: "no_eligible_backend",
+           usage_status: "not_applicable"
+         }) do
+      {:ok, _finalized} ->
+        {:error,
+         error(
+           503,
+           "no_eligible_backend",
+           "no healthy eligible backend is currently available",
+           "model"
+         )}
+
+      {:error, gateway_error} ->
+        {:error, gateway_error}
     end
   end
 

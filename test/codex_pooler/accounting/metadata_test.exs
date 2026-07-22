@@ -2,8 +2,36 @@ defmodule CodexPooler.Accounting.MetadataTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Accounting
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+
+  import CodexPooler.AccountingTestSupport
 
   describe "sanitize_metadata/1" do
+    test "redacts the existing reset probe token nested in a quota decision" do
+      token = Ecto.UUID.generate()
+
+      sanitized =
+        Accounting.sanitize_metadata(%{
+          "quota_decision" => %{
+            "routing_state" => "reset_probe",
+            "reset_probe" => %{
+              "token" => token,
+              "upstream_identity_id" => "00000000-0000-0000-0000-000000000002"
+            }
+          }
+        })
+
+      assert get_in(sanitized, ["quota_decision", "reset_probe", "token"]) == "[REDACTED]"
+
+      assert get_in(sanitized, ["quota_decision", "reset_probe", "upstream_identity_id"]) ==
+               "00000000-0000-0000-0000-000000000002"
+
+      token_omitted = not String.contains?(inspect(sanitized), token)
+      assert token_omitted
+    end
+
     test "bridge commitment accepts only its exact string key with a boolean value" do
       assert Accounting.sanitize_metadata(%{"bridge_committed" => true}) == %{
                "bridge_committed" => true
@@ -321,6 +349,80 @@ defmodule CodexPooler.Accounting.MetadataTest do
                "relay_bytes" => 32,
                "passthrough_seen" => true
              }
+    end
+  end
+
+  describe "request log metadata" do
+    test "omits the typed reset probe token and scope before persistence" do
+      setup = accounting_setup()
+      endpoint = "/backend-api/codex/responses"
+      payload = %{"model" => setup.model.exposed_model_id}
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 setup.assignment.id,
+                 setup.identity.id,
+                 setup.model.exposed_model_id,
+                 "proxy_http"
+               )
+
+      quota_decision = %{
+        "allowed" => true,
+        "routing_state" => "reset_probe",
+        "summary" => "guarded probe after saved reset pending confirmation",
+        "reset_probe_candidate_count" => 1,
+        "reset_probe" => %{
+          "token" => probe.token,
+          "scope" => %{
+            "pool_upstream_assignment_id" => setup.assignment.id,
+            "upstream_identity_id" => setup.identity.id,
+            "effective_model" => setup.model.exposed_model_id,
+            "route_class" => "proxy_http"
+          }
+        }
+      }
+
+      request_options =
+        RequestOptions.build(
+          %{
+            requested_model: setup.model.exposed_model_id,
+            effective_model: setup.model.exposed_model_id,
+            quota_decision: quota_decision,
+            reset_probe: bound
+          },
+          endpoint,
+          payload
+        )
+
+      attrs = AccountingReservation.attrs(setup.auth, payload, endpoint, request_options)
+
+      assert {:ok, reserved} = Accounting.reserve(setup.auth, setup.model, payload, attrs)
+
+      persisted_decision = reserved.request.request_metadata["quota_decision"]
+
+      probe_omitted =
+        is_map(persisted_decision) and not Map.has_key?(persisted_decision, "reset_probe")
+
+      token_omitted =
+        not String.contains?(inspect(reserved.request.request_metadata), probe.token)
+
+      assert probe_omitted
+      assert token_omitted
+
+      assert %{items: [request_log], total: 1} = Accounting.list_request_logs(setup.pool)
+
+      logged_decision = request_log.metadata["quota_decision"]
+
+      logged_probe_omitted =
+        is_map(logged_decision) and not Map.has_key?(logged_decision, "reset_probe")
+
+      logged_token_omitted = not String.contains?(inspect(request_log.metadata), probe.token)
+
+      assert logged_probe_omitted
+      assert logged_token_omitted
+      assert logged_decision == persisted_decision
     end
   end
 end
