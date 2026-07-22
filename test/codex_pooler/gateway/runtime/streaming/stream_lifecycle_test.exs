@@ -30,6 +30,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Repo
 
   @endpoint_path "/backend-api/codex/responses"
@@ -795,6 +796,187 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     refute metadata_text =~ "socket closed"
     refute metadata_text =~ "response.created"
     refute metadata_text =~ "data:"
+  end
+
+  test "websocket terminal delivery timeout persists sanitized bridge context once" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+
+    request_options =
+      request_options(auth, payload, setup,
+        endpoint: @public_responses_endpoint,
+        public_openai_responses_stream: true
+      )
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @public_responses_endpoint,
+               transport: "http_sse",
+               correlation_id:
+                 "websocket-terminal-delivery-timeout-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        endpoint: @public_responses_endpoint,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    stream = WebsocketBridgeStream.start("terminal-delivery-finalization", settle_timeout_ms: 20)
+    stream_ref = stream.ref
+    parent = self()
+
+    :ok =
+      WebsocketBridgeStream.arm(stream, nil, fn ->
+        send(parent, {:bridge_submit_task, self()})
+
+        receive do
+          {:return_bridge_result, result} -> result
+        end
+      end)
+
+    assert_receive {:bridge_submit_task, task_pid}, 2_000
+
+    send(
+      stream.relay,
+      {:websocket_owner_frame, stream.correlation_id, nil,
+       {:data, ~s({"type":"response.output_text.delta","delta":"visible"})}}
+    )
+
+    assert_receive {^stream_ref, {:preflight, :stream}}, 2_000
+    assert_receive {^stream_ref, {:data, _data}}, 2_000
+
+    lifecycle_id = Ecto.UUID.generate()
+
+    send(
+      task_pid,
+      {:return_bridge_result,
+       {:error,
+        %{
+          reason: :upstream_websocket_terminal_delivery_timeout,
+          upstream_websocket_connection: %{
+            lifecycle_id: lifecycle_id,
+            generation: 2,
+            reused: true,
+            reconnected: false
+          },
+          transport_failure: %{
+            "phase" => "terminal_delivery",
+            "reason_class" => "owner_terminal_delivery_timeout",
+            "reason" => "upstream_websocket_terminal_delivery_timeout",
+            "pre_visible_output" => true,
+            "upstream_committed" => true,
+            "terminal_seen" => true,
+            "terminal_forwarded" => false,
+            "raw_frame" => "sentinel-frame",
+            "raw_identity" => "sentinel-identity"
+          }
+        }}}
+    )
+
+    assert_receive {^stream_ref, {:bridge_error, :upstream_websocket_terminal_delivery_timeout}},
+                   2_000
+
+    body = public_response_visible_sse()
+
+    state =
+      request_options
+      |> public_responses_stream_state(body)
+      |> Map.put(
+        :usage_observer,
+        StreamUsageObserver.observe(StreamUsageObserver.new(), observer_usage_event([]))
+      )
+
+    response_context = %ResponseContext{
+      context: context,
+      response: %{sse_response() | body: stream}
+    }
+
+    assert {:ok, _finalized} =
+             Streaming.finalize_failure(
+               body,
+               {:upstream_stream_interrupted, :upstream_websocket_terminal_delivery_timeout},
+               response_context,
+               state
+             )
+
+    assert [request] = Repo.all(from(r in Request, where: r.id == ^reserved.request.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+    assert attempt.usage_status == "usage_known"
+
+    assert attempt.response_metadata["upstream_websocket_connection"] == %{
+             "lifecycle_id" => lifecycle_id,
+             "generation" => 2,
+             "reused" => true,
+             "reconnected" => false
+           }
+
+    transport_failure = attempt.response_metadata["transport_failure"]
+
+    assert Map.take(transport_failure, [
+             "phase",
+             "reason_class",
+             "reason",
+             "pre_visible_output",
+             "upstream_committed",
+             "terminal_seen",
+             "terminal_forwarded"
+           ]) == %{
+             "phase" => "terminal_delivery",
+             "reason_class" => "owner_terminal_delivery_timeout",
+             "reason" => "upstream_websocket_terminal_delivery_timeout",
+             "pre_visible_output" => false,
+             "upstream_committed" => true,
+             "terminal_seen" => true,
+             "terminal_forwarded" => false
+           }
+
+    assert transport_failure["text_frame_count"] == 2
+
+    assert Repo.aggregate(
+             from(l in CodexPooler.Accounting.LedgerEntry,
+               where: l.request_id == ^request.id and l.entry_kind == "settlement"
+             ),
+             :count,
+             :id
+           ) == 1
+
+    settlement =
+      Repo.get_by!(CodexPooler.Accounting.LedgerEntry,
+        request_id: request.id,
+        entry_kind: "settlement"
+      )
+
+    assert settlement.usage_status == "usage_known"
+    assert settlement.input_tokens == 16
+    assert settlement.output_tokens == 5
+    assert settlement.total_tokens == 21
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert Repo.reload!(setup.assignment).status == setup.assignment.status
+    assert Repo.reload!(setup.identity).status == setup.identity.status
+
+    metadata_text = inspect(attempt.response_metadata)
+    refute metadata_text =~ "sentinel"
+    refute metadata_text =~ "raw_frame"
+    refute metadata_text =~ "raw_identity"
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
   end
 
   test "untagged Finch close records generic route health without transport metadata" do

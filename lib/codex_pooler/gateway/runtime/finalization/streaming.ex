@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   }
 
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
-  alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
+  alias CodexPooler.Gateway.Runtime.Streaming.{DownstreamStream, StreamUsageObserver}
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -185,6 +185,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       ) do
     code = error_code(reason)
     terminal_failure = terminal_failure_reason(reason)
+    websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
 
     with :ok <-
            record_stream_failure_health(reason, code, terminal_failure, response.headers, context) do
@@ -192,13 +193,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         response
         |> Metadata.response_metadata("stream_interrupted", context.request_options)
         |> Metadata.merge_stream_state_metadata(stream_state)
-        |> merge_upstream_websocket_connection(response_context)
+        |> merge_upstream_websocket_connection(
+          websocket_attempt_metadata.upstream_websocket_connection
+        )
         |> Metadata.maybe_put_masked_error_metadata(
           terminal_failure && terminal_failure.upstream_code,
           code
         )
         |> Metadata.maybe_put_upstream_error_param(terminal_failure)
         |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
+        |> merge_websocket_transport_failure(
+          websocket_attempt_metadata.transport_failure,
+          stream_state
+        )
 
       AttemptSettlement.finalize_partial_stream_failure(
         context.reserved.request,
@@ -242,6 +249,44 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp upstream_websocket_connection(%ResponseContext{} = response_context),
     do: upstream_websocket_attempt_metadata(response_context).upstream_websocket_connection
+
+  defp merge_websocket_transport_failure(metadata, transport_failure, stream_state) do
+    transport_failure =
+      TransportFailureReason.sanitize_transport_failure_metadata(transport_failure)
+
+    if map_size(transport_failure) > 0 do
+      transport_failure = put_actual_visibility(transport_failure, stream_state)
+      inferred_failure = Map.get(metadata, "transport_failure", %{})
+
+      merged_failure =
+        inferred_failure
+        |> Map.merge(transport_failure)
+        |> preserve_upstream_commitment(inferred_failure, transport_failure)
+
+      Map.put(metadata, "transport_failure", merged_failure)
+    else
+      metadata
+    end
+  end
+
+  defp put_actual_visibility(transport_failure, stream_state) do
+    case DownstreamStream.public_openai_responses_stream_metadata(stream_state) do
+      %{"public_openai_responses_stream" => %{"visible_seen" => visible_seen}}
+      when is_boolean(visible_seen) ->
+        Map.put(transport_failure, "pre_visible_output", not visible_seen)
+
+      _metadata ->
+        transport_failure
+    end
+  end
+
+  defp preserve_upstream_commitment(merged, inferred, retained) do
+    if inferred["upstream_committed"] == true or retained["upstream_committed"] == true do
+      Map.put(merged, "upstream_committed", true)
+    else
+      merged
+    end
+  end
 
   @spec error_code(term()) :: String.t()
   def error_code({:chunk, :closed}), do: "client_disconnected"
