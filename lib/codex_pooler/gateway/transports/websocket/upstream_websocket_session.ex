@@ -469,20 +469,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         state = %{state | conn: conn}
         handle_parts(state, responses, receive_state)
 
-      {:error, conn, reason, _responses} ->
-        {{:error,
-          %{
-            body: receive_body(receive_state),
-            reason: reason,
-            headers: state.headers,
-            upstream_error_param: receive_state.terminal_upstream_error_param,
-            websocket_frame_headers: receive_state.websocket_frame_headers,
-            transport_failure: transport_failure_metadata(reason, receive_state, phase: :receive)
-          }}, %{state | conn: conn}}
+      {:error, conn, reason, responses} ->
+        handle_transport_error_parts(%{state | conn: conn}, responses, receive_state, reason)
 
       :unknown ->
         receive_events(state, receive_state)
     end
+  end
+
+  # Mint can hand back responses that were fully parsed before the transport
+  # error surfaced (mint_web_socket returns the pending data batch when
+  # re-arming the socket fails because the peer already closed). A terminal in
+  # that batch is a completed upstream turn; anything short of a halting
+  # outcome still fails with the original reason over the updated state.
+  defp handle_transport_error_parts(state, responses, %ReceiveState{} = receive_state, reason) do
+    responses
+    |> Enum.reduce_while({:continue, state, receive_state}, &handle_part/2)
+    |> case do
+      {:continue, state, receive_state} ->
+        {transport_error_result(state, receive_state, reason), state}
+
+      halted ->
+        {result, state} = finish_receive_result(halted)
+        {result, close_state(state)}
+    end
+  end
+
+  defp transport_error_result(state, %ReceiveState{} = receive_state, reason) do
+    {:error,
+     %{
+       body: receive_body(receive_state),
+       reason: reason,
+       headers: state.headers,
+       upstream_error_param: receive_state.terminal_upstream_error_param,
+       websocket_frame_headers: receive_state.websocket_frame_headers,
+       transport_failure: transport_failure_metadata(reason, receive_state, phase: :receive)
+     }}
   end
 
   defp handle_pong_deadline_message(

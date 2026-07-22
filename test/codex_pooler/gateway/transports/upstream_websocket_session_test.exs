@@ -298,6 +298,106 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert FakeUpstream.http_request_count(upstream) == 0
   end
 
+  test "terminal handed back beside a coalesced transport error completes the turn" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_close_without_terminal_barrier(
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    parent = self()
+    request = websocket_request(FakeUpstream.url(upstream))
+    request = %{request | writer: fn frame -> send(parent, {:coalesced_frame, frame}) end}
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, request)
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    socket = session_socket(session)
+    :ok = :gen_tcp.close(socket)
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_ws_coalesced_terminal", "status" => "completed"}
+      })
+
+    send(session, {:tcp, socket, server_text_frame(terminal)})
+
+    assert {:ok, %{terminal: "response.completed", status: 200, body: body}} =
+             Task.await(request_task, 1_000)
+
+    assert body =~ "resp_ws_coalesced_terminal"
+    assert_receive {:coalesced_frame, frame}, 1_000
+    assert %{"type" => "response.completed"} = Jason.decode!(frame)
+    assert Process.alive?(session)
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+  end
+
+  test "frames handed back beside a coalesced transport error keep a truthful failure" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_close_without_terminal_barrier(
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    parent = self()
+    request = websocket_request(FakeUpstream.url(upstream))
+    request = %{request | writer: fn frame -> send(parent, {:coalesced_delta_frame, frame}) end}
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, request)
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    socket = session_socket(session)
+    :ok = :gen_tcp.close(socket)
+
+    delta =
+      Jason.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => "coalesced partial output"
+      })
+
+    send(session, {:tcp, socket, server_text_frame(delta)})
+
+    assert {:error,
+            %{
+              body: body,
+              reason: %Mint.TransportError{},
+              transport_failure: %{"phase" => "receive", "terminal_seen" => false} = failure
+            }} = Task.await(request_task, 1_000)
+
+    assert body =~ "coalesced partial output"
+    assert failure["text_frame_count"] == 1
+    assert_receive {:coalesced_delta_frame, delta_frame}, 1_000
+    assert delta_frame =~ "coalesced partial output"
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+  end
+
   test "invalidation closes only the current connection and reconnects on the next explicit request" do
     upstream =
       start_upstream(
@@ -1362,6 +1462,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     :ok = :gen_tcp.close(socket)
 
     "http://127.0.0.1:#{port}"
+  end
+
+  defp session_socket(session) do
+    Enum.find(Port.list(), fn port ->
+      :erlang.port_info(port, :connected) == {:connected, session}
+    end) || flunk("no socket port owned by the websocket session")
+  end
+
+  defp server_text_frame(payload) when is_binary(payload) and byte_size(payload) < 126 do
+    <<0x81, byte_size(payload), payload::binary>>
   end
 
   defp request_once_lifecycle_trace(request) do
