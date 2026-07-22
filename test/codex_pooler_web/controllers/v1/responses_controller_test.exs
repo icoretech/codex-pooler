@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
@@ -1736,26 +1737,43 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(metadata) =~ "call_v1_compressed_tool_output"
   end
 
+  @tag :v1_websocket_bridge_usage
   test "POST /v1/responses streaming settles retained terminal usage and pricing", %{
     conn: conn
   } do
+    sentinel = "task-6-http-tail-#{System.unique_integer([:positive])}"
     padding_unit = "retained terminal padding "
 
     retained_padding =
-      String.duplicate(
-        padding_unit,
-        div(RetainedBody.max_bytes(), byte_size(padding_unit)) + 128
-      )
+      sentinel <>
+        String.duplicate(
+          padding_unit,
+          div(RetainedBody.max_bytes(), byte_size(padding_unit)) + 128
+        )
 
     terminal_payload =
       IO.iodata_to_binary([
-        ~s({"type":"response.completed","response":{"id":"resp_v1_retained_usage_terminal","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":),
+        ~s({"type":"response.completed","response":{"id":"resp_v1_retained_usage_terminal","status":"completed","service_tier":"flex","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"reasoning_tokens":0,"total_tokens":21},"output":[{"type":"message","content":[{"type":"output_text","text":),
         Jason.encode!(retained_padding),
-        ~s(}]}],"usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"reasoning_tokens":0,"total_tokens":21},"service_tier":"flex"}})
+        ~s(}]}]}})
       ])
 
     terminal_event = "event: response.completed\ndata: " <> terminal_payload <> "\n\n"
     assert byte_size(terminal_event) > RetainedBody.max_bytes()
+
+    retained_terminal = RetainedBody.append(RetainedBody.empty(), terminal_event)
+
+    assert byte_size(retained_terminal) == RetainedBody.max_bytes()
+
+    assert ResponseUsage.from_sse(retained_terminal) == %{
+             status: "usage_unknown",
+             source: "sse_usage_missing"
+           }
+
+    usage_split = :binary.match(terminal_event, ~s("usage")) |> elem(0) |> Kernel.+(3)
+
+    <<terminal_before_usage::binary-size(^usage_split), terminal_after_usage::binary>> =
+      terminal_event
 
     upstream =
       start_upstream(
@@ -1776,7 +1794,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                }
              }
            }},
-          terminal_event
+          terminal_before_usage,
+          terminal_after_usage
         ])
       )
 
@@ -1789,21 +1808,26 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         output_token_micros: Decimal.new(50)
       })
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "input" => "synthetic retained usage stream request",
-        "service_tier" => "auto",
-        "stream" => true
-      })
+    {{conn, telemetry_events}, log_output} =
+      with_log(fn ->
+        capture_stream_truncation_telemetry(fn ->
+          conn
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic retained usage stream request",
+            "service_tier" => "auto",
+            "stream" => true
+          })
+        end)
+      end)
 
     assert [content_type] = get_resp_header(conn, "content-type")
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert conn.resp_body =~ "resp_v1_retained_usage_progress"
     assert conn.resp_body =~ "resp_v1_retained_usage_terminal"
+    assert conn.resp_body =~ sentinel
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -1818,14 +1842,24 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    assert attempt.upstream_status_code == 200
     assert attempt.usage_status == "usage_known"
 
-    settlement =
-      Repo.get_by!(LedgerEntry,
-        request_id: request.id,
-        entry_kind: "settlement",
-        amount_status: "recorded"
-      )
+    assert %{
+             "terminal_seen" => true,
+             "terminal_kind" => "completed",
+             "terminal_status" => "completed",
+             "synthetic_terminal_sent" => false
+           } = attempt.response_metadata["public_openai_responses_stream"]
+
+    assert [settlement] =
+             Repo.all(
+               from l in LedgerEntry,
+                 where:
+                   l.request_id == ^request.id and l.entry_kind == "settlement" and
+                     l.amount_status == "recorded"
+             )
 
     assert settlement.usage_status == "usage_known"
     assert settlement.input_tokens == 16
@@ -1850,6 +1884,20 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.token_counts.total_tokens == 21
     assert log.cost.status == "priced"
     assert Decimal.positive?(log.cost.usd)
+
+    assert telemetry_events != []
+
+    persisted =
+      inspect({
+        request.request_metadata,
+        attempt.response_metadata,
+        settlement.details,
+        RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+      })
+
+    refute persisted =~ sentinel
+    refute log_output =~ sentinel
+    refute inspect(telemetry_events) =~ sentinel
   end
 
   test "POST /v1/responses rejects unsafe reasoning effort before dispatch", %{conn: conn} do
@@ -6396,6 +6444,38 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       {result, drain_repo_queries(handler_id, [])}
     after
       :telemetry.detach(handler_id)
+    end
+  end
+
+  defp capture_stream_truncation_telemetry(fun) do
+    parent = self()
+    handler_id = "v1-responses-truncation-#{System.unique_integer([:positive])}"
+    event = [:codex_pooler, :gateway, :stream_buffer, :truncated]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event, measurements, metadata, _config ->
+          send(parent, {handler_id, measurements, metadata})
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_stream_truncation_telemetry(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_stream_truncation_telemetry(handler_id, events) do
+    receive do
+      {^handler_id, measurements, metadata} ->
+        drain_stream_truncation_telemetry(handler_id, [{measurements, metadata} | events])
+    after
+      0 -> Enum.reverse(events)
     end
   end
 
