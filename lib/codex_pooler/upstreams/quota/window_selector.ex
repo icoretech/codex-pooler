@@ -41,7 +41,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> Enum.map(fn {_logical_key, candidates} ->
       candidates
       |> reject_prior_cycle_windows(as_of)
-      |> best_by_score(as_of)
+      |> best_logical_window(as_of)
     end)
     |> Enum.sort_by(&logical_sort_key/1)
   end
@@ -141,6 +141,31 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       &selection_score(&1, as_of, extra_rank),
       fn -> nil end
     )
+  end
+
+  defp best_logical_window(windows, as_of) do
+    Enum.max_by(
+      windows,
+      &logical_selection_score(&1, as_of),
+      fn -> nil end
+    )
+  end
+
+  defp logical_selection_score(%Quota.AccountQuotaWindow{} = window, as_of) do
+    {
+      fresh_rank(window, as_of),
+      measurement_rank(window),
+      pressure_rank(window),
+      usable_rank(window, as_of),
+      reset_rank(window),
+      source_precision_rank(window.source_precision),
+      window.merge_precedence || 0,
+      timestamp_rank(window.observed_at),
+      timestamp_rank(window.last_sync_at),
+      timestamp_rank(window.updated_at),
+      timestamp_rank(window.reset_at),
+      to_string(window.id || "")
+    }
   end
 
   defp selection_score(%Quota.AccountQuotaWindow{} = window, as_of, extra_rank) do

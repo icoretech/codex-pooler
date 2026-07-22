@@ -165,6 +165,32 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
     assert WindowSelector.logical_windows([fresh_zero, jittered], @as_of) == [jittered]
   end
 
+  test "fresh exhausted runtime evidence outranks usable usage evidence in one logical window" do
+    usage =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("96"),
+        reset_at: DateTime.add(@as_of, 7, :day),
+        observed_at: DateTime.add(@as_of, -30, :second)
+      )
+
+    exhausted_headers =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@as_of, 3, :day),
+        observed_at: @as_of
+      )
+
+    assert WindowSelector.logical_windows([usage, exhausted_headers], @as_of) == [
+             exhausted_headers
+           ]
+  end
+
   defp account_window(attrs) do
     observed_at = Keyword.get(attrs, :observed_at, @as_of)
 
