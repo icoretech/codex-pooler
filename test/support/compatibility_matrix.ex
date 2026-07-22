@@ -455,7 +455,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :upstream_websocket_bridge,
       contract:
-        "the upstream websocket bridge applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket as a cache-locality heuristic, never a cache guarantee; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt-only upstream_websocket_connection namespace contains exactly lifecycle_id, generation, reused, and reconnected; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape and previous-release owners retain legacy five-minute behavior without connection metadata"
+        "the upstream websocket bridge applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket as a cache-locality heuristic, never a cache guarantee; the bridge commits only on the first upstream event the public Responses normalization forwards downstream, buffering internal codex.* events, and every failure before that visible event falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement; a private owner barrier delays settlement of a terminal-bearing result until its terminal frame is delivered, and a committed terminal-delivery timeout fails once without HTTP fallback or automatic replay; timeout diagnostics move through one atomic one-shot metadata handoff and remain health-neutral; invalidation preserves the owner lifecycle, so the next explicit turn reconnects at generation plus one and a later healthy turn reuses that generation; persisted leases provide two-node owner forwarding, fencing, transfer, and takeover; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt-only upstream_websocket_connection namespace contains exactly lifecycle_id, generation, reused, and reconnected; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape and previous-release owners retain legacy five-minute behavior without connection metadata"
     },
     %{
       slug: :image_generation_permission,
@@ -1425,8 +1425,76 @@ defmodule CodexPooler.CompatibilityMatrix do
         synthetic_missing_terminal_surfaces: ["public_post_http_sse"],
         target: "same_candidate_same_attempt_http",
         settlements: 1,
+        upstream_committed: "no_http_fallback_or_automatic_replay",
         post_visible_upstream_death: "failed_request",
         cache_locality: "heuristic_never_guarantee"
+      },
+      terminal_delivery: %{
+        barrier: "private_owner_terminal_delivery",
+        terminal_classes: ["completed", "failed", "incomplete", "error"],
+        settlement: "after_terminal_send_success",
+        timeout_ms: 1_000,
+        timeout_reason: "upstream_websocket_terminal_delivery_timeout",
+        timeout_phase: "terminal_delivery",
+        timeout_state: %{
+          upstream_committed: true,
+          terminal_seen: true,
+          terminal_forwarded: false
+        },
+        invalidation_scope: "current_physical_connection_only",
+        settlements: 1
+      },
+      metadata_handoff: %{
+        operation: "atomic_one_shot_take",
+        clears_after_take: true,
+        second_take: %{upstream_websocket_connection: nil, transport_failure: nil},
+        upstream_websocket_connection_fields: [
+          "lifecycle_id",
+          "generation",
+          "reused",
+          "reconnected"
+        ],
+        transport_failure_fields: [
+          "exception",
+          "reason_class",
+          "reason",
+          "phase",
+          "pre_visible_output",
+          "upstream_committed",
+          "terminal_seen",
+          "terminal_forwarded",
+          "text_frame_count",
+          "peer_close_code",
+          "peer_close_reason_present",
+          "peer_close_reason_bytes"
+        ],
+        upstream_committed: "monotonic_true",
+        raw_frames_or_payloads: false
+      },
+      recovery: %{
+        failed_turn_automatic_replay: false,
+        next_explicit_turn: "same_lifecycle_generation_plus_one",
+        next_explicit_turn_reconnected: true,
+        later_healthy_turn: "reuse_reconnected_generation"
+      },
+      health: %{
+        terminal_delivery_timeout: "pooler_local_health_neutral",
+        assignment_health_changed: false,
+        quota_eligibility_changed: false,
+        circuit_counters_changed: false
+      },
+      multi_node_owner: %{
+        authority: "persisted_owner_lease",
+        proxy_behavior: "forward_to_current_owner",
+        fenced_messages: [
+          "stale_epoch",
+          "stale_lease_token",
+          "delayed_remote_completion",
+          "drained_owner"
+        ],
+        lease_transfer: "single_replacement_owner",
+        takeover: "new_owner_lifecycle",
+        physical_connection_invalidation: "same_owner_lifecycle_next_generation"
       },
       accounting: %{
         request_transport: "http_sse",

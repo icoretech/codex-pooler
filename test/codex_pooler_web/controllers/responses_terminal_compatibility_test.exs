@@ -80,6 +80,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
              synthetic_missing_terminal_surfaces: ["public_post_http_sse"],
              target: "same_candidate_same_attempt_http",
              settlements: 1,
+             upstream_committed: "no_http_fallback_or_automatic_replay",
              post_visible_upstream_death: "failed_request",
              cache_locality: "heuristic_never_guarantee"
            }

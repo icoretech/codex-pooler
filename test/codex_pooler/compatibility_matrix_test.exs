@@ -201,6 +201,98 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "upstream websocket bridge compatibility contract" do
+    test "pins terminal delivery, committed no-fallback, and atomic metadata handoff" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
+      fixture = CompatibilityMatrix.fixture!(:upstream_websocket_bridge)
+
+      assert feature.contract =~ "private owner barrier"
+      assert feature.contract =~ "without HTTP fallback or automatic replay"
+      assert feature.contract =~ "atomic one-shot metadata handoff"
+      assert feature.contract =~ "health-neutral"
+
+      assert fixture.fallback.upstream_committed == "no_http_fallback_or_automatic_replay"
+
+      assert fixture.terminal_delivery == %{
+               barrier: "private_owner_terminal_delivery",
+               terminal_classes: ["completed", "failed", "incomplete", "error"],
+               settlement: "after_terminal_send_success",
+               timeout_ms: 1_000,
+               timeout_reason: "upstream_websocket_terminal_delivery_timeout",
+               timeout_phase: "terminal_delivery",
+               timeout_state: %{
+                 upstream_committed: true,
+                 terminal_seen: true,
+                 terminal_forwarded: false
+               },
+               invalidation_scope: "current_physical_connection_only",
+               settlements: 1
+             }
+
+      assert fixture.metadata_handoff == %{
+               operation: "atomic_one_shot_take",
+               clears_after_take: true,
+               second_take: %{upstream_websocket_connection: nil, transport_failure: nil},
+               upstream_websocket_connection_fields: [
+                 "lifecycle_id",
+                 "generation",
+                 "reused",
+                 "reconnected"
+               ],
+               transport_failure_fields: [
+                 "exception",
+                 "reason_class",
+                 "reason",
+                 "phase",
+                 "pre_visible_output",
+                 "upstream_committed",
+                 "terminal_seen",
+                 "terminal_forwarded",
+                 "text_frame_count",
+                 "peer_close_code",
+                 "peer_close_reason_present",
+                 "peer_close_reason_bytes"
+               ],
+               upstream_committed: "monotonic_true",
+               raw_frames_or_payloads: false
+             }
+    end
+
+    test "pins health-neutral reconnect and two-node owner recovery" do
+      feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
+      fixture = CompatibilityMatrix.fixture!(:upstream_websocket_bridge)
+
+      assert feature.contract =~ "next explicit turn reconnects at generation plus one"
+      assert feature.contract =~ "two-node owner forwarding, fencing, transfer, and takeover"
+
+      assert fixture.recovery == %{
+               failed_turn_automatic_replay: false,
+               next_explicit_turn: "same_lifecycle_generation_plus_one",
+               next_explicit_turn_reconnected: true,
+               later_healthy_turn: "reuse_reconnected_generation"
+             }
+
+      assert fixture.health == %{
+               terminal_delivery_timeout: "pooler_local_health_neutral",
+               assignment_health_changed: false,
+               quota_eligibility_changed: false,
+               circuit_counters_changed: false
+             }
+
+      assert fixture.multi_node_owner == %{
+               authority: "persisted_owner_lease",
+               proxy_behavior: "forward_to_current_owner",
+               fenced_messages: [
+                 "stale_epoch",
+                 "stale_lease_token",
+                 "delayed_remote_completion",
+                 "drained_owner"
+               ],
+               lease_transfer: "single_replacement_owner",
+               takeover: "new_owner_lifecycle",
+               physical_connection_invalidation: "same_owner_lifecycle_next_generation"
+             }
+    end
+
     test "keeps owner-retention and rolling-deploy contracts explicit" do
       feature = CompatibilityMatrix.by_slug!(:upstream_websocket_bridge)
       fixture = CompatibilityMatrix.fixture!(:upstream_websocket_bridge)
