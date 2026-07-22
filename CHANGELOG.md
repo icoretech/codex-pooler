@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.5.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.1...codex-pooler-v0.5.2) (2026-07-22)
+
+
+### Features
+
+* **accounting:** count known usage settlements ([4206ae2](https://github.com/icoretech/codex-pooler/commit/4206ae23bc1f37672346c0abfbbd787d063639d5))
+* **admin:** classify token usage completeness ([61d32c7](https://github.com/icoretech/codex-pooler/commit/61d32c7641d2d3d05477376c98607f95a70cc430))
+* **admin:** distinguish floating quota resets ([a57cbfe](https://github.com/icoretech/codex-pooler/commit/a57cbfeebea179c03e255b33550522c7e905fc9c))
+* **admin:** expose quota and usage certainty ([7d22c92](https://github.com/icoretech/codex-pooler/commit/7d22c92524ce6258061aca11b92855d8290e167c))
+* **admin:** open the saved reset bank from the banked resets block ([de90929](https://github.com/icoretech/codex-pooler/commit/de909298bbccae2bd6c97f5db9912947d66234b2))
+* **gateway:** add immutable reset probe context ([98ea953](https://github.com/icoretech/codex-pooler/commit/98ea953c20fc2c7cdf1cba5b252d31be22d9eb63))
+* **streaming:** observe usage before truncation ([b338e8f](https://github.com/icoretech/codex-pooler/commit/b338e8f1b9dcf190d16decb791fd52d95a33afa8))
+* **telemetry:** expose usage and quota decisions ([e8988e4](https://github.com/icoretech/codex-pooler/commit/e8988e427ea592e47e05f9e09e0cfc4b67cc8bf7))
+
+
+### Bug Fixes
+
+* **accounting:** persist websocket terminal failure context ([fc881bb](https://github.com/icoretech/codex-pooler/commit/fc881bb8256c899d5c8df52ca62ab6e9adfef84d))
+* **admin:** let the token burn popover escape the account card panels ([4f254d5](https://github.com/icoretech/codex-pooler/commit/4f254d5004f1615b269fec2eb30163f4a537f525))
+* **deps:** update dependency astro to v7.1.3 ([#197](https://github.com/icoretech/codex-pooler/issues/197)) ([e7638d8](https://github.com/icoretech/codex-pooler/commit/e7638d8e1f984f78375a3c788ff954cff1c89602))
+* **deps:** update dependency daisyui to v5.7.0 ([#200](https://github.com/icoretech/codex-pooler/issues/200)) ([61295c8](https://github.com/icoretech/codex-pooler/commit/61295c81a19cdf6378259a5da2b31c2c067e6f84))
+* **gateway:** confirm scoped probes on success ([2d65eb4](https://github.com/icoretech/codex-pooler/commit/2d65eb44085086acea3bdbcf18547dc407770267))
+* **gateway:** reject reset probe scope drift ([9c13632](https://github.com/icoretech/codex-pooler/commit/9c13632d366cfdf3dca6f3b8ef2693341f51ff26))
+* **observability:** distinguish websocket terminal delivery failures ([1271063](https://github.com/icoretech/codex-pooler/commit/12710638c9d2b2501b7f94034f337ca08ac98ecd))
+* **quota:** confirm provider reset cycles durably ([e1b0898](https://github.com/icoretech/codex-pooler/commit/e1b0898c064cd5ebe48abcedfb13fdcf245f5544))
+* **quota:** prefer freshest logical window evidence ([437fae5](https://github.com/icoretech/codex-pooler/commit/437fae572e75480ee123bbaa5afaee15b23210e1))
+* **quota:** reject superseded windows before folding ([5e25bed](https://github.com/icoretech/codex-pooler/commit/5e25bedba3bee03f7a55b3502f1556e4e73d8091))
+* **routing:** bind probes to one eligible route ([d2f272f](https://github.com/icoretech/codex-pooler/commit/d2f272f25e076f673a206a60a6886158647f4a4a))
+* **saved-resets:** block reused consumed credits ([e671b1f](https://github.com/icoretech/codex-pooler/commit/e671b1f2798b9785251c111de0232aad90945145))
+* **saved-resets:** serialize scoped probe leases ([bd055c0](https://github.com/icoretech/codex-pooler/commit/bd055c020e87fffefac498f40ddaaaa0738f9ab6))
+* **streaming:** keep reset probes on one SSE attempt ([ac20fd9](https://github.com/icoretech/codex-pooler/commit/ac20fd92308965b3737ce5ac97ea898f74d20b14))
+* **streaming:** preserve committed websocket outcomes ([3ec2952](https://github.com/icoretech/codex-pooler/commit/3ec2952b6812717bdd0b57d204e47655edfb48c7))
+* **streaming:** preserve observed usage through finalization ([71bf4e1](https://github.com/icoretech/codex-pooler/commit/71bf4e1323d4c48a81cbb096faec38c45787e880))
+* **streaming:** retain websocket bridge attempt diagnostics ([08712b4](https://github.com/icoretech/codex-pooler/commit/08712b4597097cac26a708afddb0556c06b1f0df))
+* **streaming:** serialize websocket timeout commitment ([6c894ea](https://github.com/icoretech/codex-pooler/commit/6c894ea73a0598acbe3db00d4b0d1b9575f6554f))
+* **websocket:** add terminal race controls and connection invalidation ([686fe7e](https://github.com/icoretech/codex-pooler/commit/686fe7e38ddc1e6743769b04fe288e7ed35c0ffc))
+* **websocket:** carry scoped probes through upstream sessions ([f46a0bd](https://github.com/icoretech/codex-pooler/commit/f46a0bd03563f0c54dda085826bcf1fa0da184fc))
+* **websocket:** disable owner recovery for reset probes ([3aef7af](https://github.com/icoretech/codex-pooler/commit/3aef7af2604fa1be66638a4cd7f61726770daa8c))
+* **websocket:** finalize reset probes without retries ([0e2bf2e](https://github.com/icoretech/codex-pooler/commit/0e2bf2ea8d3124633af4a9a4b746fe44a77b8468))
+* **websocket:** keep unassigned owner turns soft ([8405344](https://github.com/icoretech/codex-pooler/commit/8405344ba35621b1c42f7019bcc3f9a71efd3081))
+* **websocket:** mark post-send transport failures committed ([04e08bb](https://github.com/icoretech/codex-pooler/commit/04e08bb88a32abc3fe0ff25c44eaa5d0a26b1d66))
+* **websocket:** preserve terminal delivery before owner settlement ([d1184d9](https://github.com/icoretech/codex-pooler/commit/d1184d9a23e9bcd7d121d8b8fed069a34113c0b8))
+
+
+### Performance Improvements
+
+* **observatory:** index recent outcome lookups ([8a16934](https://github.com/icoretech/codex-pooler/commit/8a16934a93654dad8fdd1ae32ee9975beda417e9))
+
 ## [0.5.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.0...codex-pooler-v0.5.1) (2026-07-21)
 
 
