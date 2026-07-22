@@ -704,6 +704,8 @@ body {
    reads on both themes — sweeping diagonally across once and then resting.
    Re-entering the block replays it. */
 .saved-reset-open-gloss::before {
+  --saved-reset-gloss-core: 0.7;
+  --saved-reset-gloss-edge: 0.25;
   content: "";
   position: absolute;
   inset: 0;
@@ -711,9 +713,9 @@ body {
   background-image: linear-gradient(
     105deg,
     transparent 40%,
-    rgb(255 255 255 / 0.25) 47%,
-    rgb(255 255 255 / 0.7) 50%,
-    rgb(255 255 255 / 0.25) 53%,
+    rgb(255 255 255 / var(--saved-reset-gloss-edge)) 47%,
+    rgb(255 255 255 / var(--saved-reset-gloss-core)) 50%,
+    rgb(255 255 255 / var(--saved-reset-gloss-edge)) 53%,
     transparent 60%
   );
   background-size: 300% 100%;
@@ -721,6 +723,21 @@ body {
   background-position: 100% 0;
   opacity: 0;
   pointer-events: none;
+}
+
+/* The dark theme keeps the same sweep but at moonlight intensity; full
+   white over the charcoal card reads as glare. Covers both the explicit
+   dark selection and the system preference with no explicit choice. */
+:root[data-theme="dark"] .saved-reset-open-gloss::before {
+  --saved-reset-gloss-core: 0.28;
+  --saved-reset-gloss-edge: 0.1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .saved-reset-open-gloss::before {
+    --saved-reset-gloss-core: 0.28;
+    --saved-reset-gloss-edge: 0.1;
+  }
 }
 
 .saved-reset-open-gloss:hover::before,
