@@ -2,6 +2,19 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
   @moduledoc false
 
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+
+  @accounting_quota_decision_keys ~w(
+    allowed
+    summary
+    routing_state
+    precise_candidate_count
+    credit_backed_probe_candidate_count
+    weekly_probe_candidate_count
+    reset_probe_candidate_count
+    eligible_candidate_count
+    refreshed_stale_quota
+  )
 
   defstruct [
     :requested_model,
@@ -10,6 +23,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
     :file_affinity_assignment_id,
     :prompt_cache_key,
     :quota_decision,
+    :reset_probe,
     :reasoning_effort_decision,
     :supports_reasoning_summary_parameter?,
     :routing_attempt_metadata,
@@ -36,6 +50,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
           file_affinity_assignment_id: Ecto.UUID.t() | nil,
           prompt_cache_key: String.t() | nil,
           quota_decision: map() | nil,
+          reset_probe: ResetProbe.t() | nil,
           reasoning_effort_decision: Decision.t() | nil,
           supports_reasoning_summary_parameter?: boolean(),
           routing_attempt_metadata: map() | nil,
@@ -45,6 +60,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
           model_serving_mode_source: model_serving_mode_source() | nil,
           use_responses_lite?: boolean()
         }
+
+  @spec accounting_quota_decision(t()) :: map() | nil
+  def accounting_quota_decision(%__MODULE__{quota_decision: decision}) when is_map(decision) do
+    case Map.take(decision, @accounting_quota_decision_keys) do
+      projection when map_size(projection) == 0 -> nil
+      projection -> projection
+    end
+  end
+
+  def accounting_quota_decision(%__MODULE__{}), do: nil
 
   @spec model_serving_mode_snapshot(t()) :: model_serving_mode_snapshot() | nil
   def model_serving_mode_snapshot(%__MODULE__{
@@ -79,6 +104,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
   def update(%__MODULE__{} = routing, updates) when is_list(updates) do
     snapshot = model_serving_mode_snapshot(routing)
     updated = struct!(routing, updates)
+
+    unless ResetProbe.valid_transition?(routing.reset_probe, updated.reset_probe) do
+      raise ArgumentError, "reset probe context is immutable"
+    end
 
     case snapshot do
       nil ->

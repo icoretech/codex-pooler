@@ -4,8 +4,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
+
+  @assignment_id "00000000-0000-0000-0000-000000000001"
+  @identity_id "00000000-0000-0000-0000-000000000002"
+  @effective_model "gpt-5.4"
+  @reset_probe_route_class "proxy_http"
 
   setup do
     previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
@@ -365,6 +372,319 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.file_bridge.endpoint == "/backend-api/files"
       assert options.file_bridge.route_metadata == %{"routing_strategy" => "affinity"}
       assert options.file_bridge.forwarded_headers == [{"x-codex-client", "fixture"}]
+    end
+  end
+
+  describe "reset probe runtime context" do
+    test "new/0 creates one unbound pooler-owned UUID" do
+      probe = ResetProbe.new()
+      token = probe.token
+
+      assert {:ok, ^token} = Ecto.UUID.cast(token)
+      assert probe.version == nil
+      assert probe.pool_upstream_assignment_id == nil
+      assert probe.upstream_identity_id == nil
+      assert probe.effective_model == nil
+      assert probe.route_class == nil
+      refute ResetProbe.bound?(probe)
+    end
+
+    test "bind/5 adds the exact version 2 route scope without replacing the token" do
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      assert bound.token == probe.token
+      assert bound.version == 2
+      assert bound.pool_upstream_assignment_id == @assignment_id
+      assert bound.upstream_identity_id == @identity_id
+      assert bound.effective_model == @effective_model
+      assert bound.route_class == @reset_probe_route_class
+      assert ResetProbe.bound?(bound)
+
+      assert ResetProbe.matches?(
+               bound,
+               @assignment_id,
+               @identity_id,
+               @effective_model,
+               @reset_probe_route_class
+             )
+    end
+
+    test "bind/5 is idempotent for the identical scope" do
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      assert {:ok, ^bound} =
+               ResetProbe.bind(
+                 bound,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+    end
+
+    test "bind/5 rejects malformed dimensions without changing the unbound value" do
+      probe = ResetProbe.new()
+      token = probe.token
+
+      invalid_scopes = [
+        {nil, @identity_id, @effective_model, @reset_probe_route_class},
+        {"", @identity_id, @effective_model, @reset_probe_route_class},
+        {"not-a-uuid", @identity_id, @effective_model, @reset_probe_route_class},
+        {123, @identity_id, @effective_model, @reset_probe_route_class},
+        {@assignment_id, nil, @effective_model, @reset_probe_route_class},
+        {@assignment_id, " ", @effective_model, @reset_probe_route_class},
+        {@assignment_id, "not-a-uuid", @effective_model, @reset_probe_route_class},
+        {@assignment_id, 123, @effective_model, @reset_probe_route_class},
+        {@assignment_id, @identity_id, nil, @reset_probe_route_class},
+        {@assignment_id, @identity_id, " ", @reset_probe_route_class},
+        {@assignment_id, @identity_id, " gpt-5.4", @reset_probe_route_class},
+        {@assignment_id, @identity_id, 123, @reset_probe_route_class},
+        {@assignment_id, @identity_id, @effective_model, nil},
+        {@assignment_id, @identity_id, @effective_model, " "},
+        {@assignment_id, @identity_id, @effective_model, 123}
+      ]
+
+      for {assignment_id, identity_id, effective_model, route_class} <- invalid_scopes do
+        assert {:error, :invalid_scope} =
+                 ResetProbe.bind(
+                   probe,
+                   assignment_id,
+                   identity_id,
+                   effective_model,
+                   route_class
+                 )
+      end
+
+      assert probe.version == nil
+      assert probe.token == token
+    end
+
+    test "bind/5 rejects every changed or blank dimension without changing the bound value" do
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      changed_scopes = [
+        {:scope_mismatch, "00000000-0000-0000-0000-000000000003", @identity_id, @effective_model,
+         @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, "00000000-0000-0000-0000-000000000004",
+         @effective_model, @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, @identity_id, "gpt-5.4-mini", @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, @identity_id, "GPT-5.4", @reset_probe_route_class},
+        {:scope_mismatch, @assignment_id, @identity_id, @effective_model, "proxy_stream"},
+        {:invalid_scope, "", @identity_id, @effective_model, @reset_probe_route_class},
+        {:invalid_scope, @assignment_id, " ", @effective_model, @reset_probe_route_class},
+        {:invalid_scope, @assignment_id, @identity_id, "", @reset_probe_route_class},
+        {:invalid_scope, @assignment_id, @identity_id, @effective_model, " "}
+      ]
+
+      for {expected_error, assignment_id, identity_id, effective_model, route_class} <-
+            changed_scopes do
+        assert {:error, ^expected_error} =
+                 ResetProbe.bind(
+                   bound,
+                   assignment_id,
+                   identity_id,
+                   effective_model,
+                   route_class
+                 )
+
+        refute ResetProbe.matches?(
+                 bound,
+                 assignment_id,
+                 identity_id,
+                 effective_model,
+                 route_class
+               )
+      end
+
+      assert bound.token == probe.token
+      assert bound.version == 2
+      assert bound.pool_upstream_assignment_id == @assignment_id
+      assert bound.upstream_identity_id == @identity_id
+      assert bound.effective_model == @effective_model
+      assert bound.route_class == @reset_probe_route_class
+    end
+
+    test "one bound token survives existing update and retarget paths" do
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      options =
+        RequestOptions.build(
+          %{reset_probe: bound},
+          "/backend-api/codex/responses",
+          %{"model" => @effective_model}
+        )
+
+      transformed = [
+        RequestOptions.build(options, "/backend-api/codex/responses", %{
+          "model" => @effective_model
+        }),
+        RequestOptions.for_payload(options, "/backend-api/codex/responses", %{
+          "model" => @effective_model
+        }),
+        RequestOptions.retarget(options, "/backend-api/codex/responses/compact", %{
+          "model" => @effective_model
+        }),
+        RequestOptions.for_websocket(options, %{"model" => @effective_model}),
+        RequestOptions.for_file_bridge(options, "/backend-api/files", %{}),
+        RequestOptions.put_routing(options, quota_decision: %{"summary" => "allowed"}),
+        RequestOptions.put_model_serving_mode(options,
+          configured_mode: "full",
+          effective_mode: "full",
+          source: "override"
+        )
+      ]
+
+      assert options.extra == %{}
+
+      assert Enum.all?(transformed, fn transformed_options ->
+               transformed_options.routing.reset_probe == bound
+             end)
+
+      assert Enum.all?(transformed, fn transformed_options ->
+               transformed_options.routing.reset_probe.token == probe.token
+             end)
+    end
+
+    test "routing updates allow only the same probe to become bound" do
+      probe = ResetProbe.new()
+
+      options =
+        RequestOptions.build(
+          %{reset_probe: probe},
+          "/backend-api/codex/responses",
+          %{"model" => @effective_model}
+        )
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      updated = RequestOptions.put_routing(options, reset_probe: bound)
+      assert updated.routing.reset_probe == bound
+
+      replacement = ResetProbe.new()
+
+      assert_raise ArgumentError, "reset probe context is immutable", fn ->
+        RequestOptions.put_routing(updated, reset_probe: replacement)
+      end
+
+      assert_raise ArgumentError, "reset probe context is immutable", fn ->
+        RequestOptions.put_routing(updated,
+          reset_probe: %{bound | effective_model: String.upcase(@effective_model)}
+        )
+      end
+
+      assert_raise ArgumentError, "reset probe context is immutable", fn ->
+        RequestOptions.put_routing(updated,
+          reset_probe: %{bound | route_class: String.upcase(@reset_probe_route_class)}
+        )
+      end
+
+      assert_raise ArgumentError, "reset probe context is immutable", fn ->
+        RequestOptions.put_routing(updated, reset_probe: nil)
+      end
+
+      assert updated.routing.reset_probe == bound
+    end
+  end
+
+  describe "accounting quota decision projection" do
+    test "omits the internal reset probe instead of serializing a redacted copy" do
+      probe = ResetProbe.new()
+
+      assert {:ok, bound} =
+               ResetProbe.bind(
+                 probe,
+                 @assignment_id,
+                 @identity_id,
+                 @effective_model,
+                 @reset_probe_route_class
+               )
+
+      token = probe.token
+
+      quota_decision = %{
+        "allowed" => true,
+        "routing_state" => "reset_probe",
+        "summary" => "guarded probe after saved reset pending confirmation",
+        "reset_probe_candidate_count" => 1,
+        "eligible_candidate_count" => 1,
+        "reset_probe" => %{
+          "token" => token,
+          "scope" => %{
+            "pool_upstream_assignment_id" => @assignment_id,
+            "upstream_identity_id" => @identity_id,
+            "effective_model" => @effective_model,
+            "route_class" => @reset_probe_route_class
+          }
+        }
+      }
+
+      request_options =
+        RequestOptions.build(
+          %{quota_decision: quota_decision, reset_probe: bound},
+          "/backend-api/codex/responses",
+          %{"model" => @effective_model}
+        )
+
+      attrs =
+        AccountingReservation.attrs(
+          %{key_prefix: "sk-cxp-000000000000"},
+          %{"model" => @effective_model},
+          "/backend-api/codex/responses",
+          request_options
+        )
+
+      projected_decision = attrs.request_metadata["quota_decision"]
+      reset_probe_omitted = reset_probe_omitted?(projected_decision)
+      token_omitted = metadata_excludes?(attrs.request_metadata, token)
+      redaction_marker_omitted = metadata_excludes?(attrs.request_metadata, "[REDACTED]")
+
+      assert reset_probe_omitted
+      assert projected_decision == Map.drop(quota_decision, ["reset_probe"])
+      assert token_omitted
+      assert redaction_marker_omitted
     end
   end
 
@@ -1458,4 +1778,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
     :crypto.hash(:sha256, value)
     |> Base.encode16(case: :lower)
   end
+
+  defp reset_probe_omitted?(decision),
+    do: is_map(decision) and not Map.has_key?(decision, "reset_probe")
+
+  defp metadata_excludes?(metadata, value), do: not String.contains?(inspect(metadata), value)
 end

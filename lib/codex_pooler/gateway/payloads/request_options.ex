@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.OpenAICompatibility
   alias __MODULE__.PayloadContext
   alias __MODULE__.RequestMetadata
+  alias __MODULE__.ResetProbe
   alias __MODULE__.Routing
   alias __MODULE__.RuntimeContext
   alias __MODULE__.TimeoutConfig
@@ -115,6 +116,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :public_openai_chat_stream,
     :public_openai_responses_stream,
     :quota_decision,
+    :reset_probe,
     :reasoning_effort_decision,
     :supports_reasoning_summary_parameter?,
     :receive_timeout,
@@ -446,6 +448,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       file_affinity_assignment_id: Map.get(opts, :file_affinity_assignment_id),
       prompt_cache_key: prompt_cache_key(opts, endpoint, payload),
       quota_decision: Map.get(opts, :quota_decision),
+      reset_probe: reset_probe(Map.get(opts, :reset_probe)),
       reasoning_effort_decision: Map.get(opts, :reasoning_effort_decision),
       supports_reasoning_summary_parameter?:
         Map.get(opts, :supports_reasoning_summary_parameter?, true) != false,
@@ -458,6 +461,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     }
     |> validate_routing_model_serving_mode!()
   end
+
+  defp reset_probe(%ResetProbe{} = reset_probe), do: reset_probe
+  defp reset_probe(_value), do: nil
 
   defp validate_routing_model_serving_mode!(%Routing{} = routing) do
     case Routing.model_serving_mode_snapshot(routing) do
