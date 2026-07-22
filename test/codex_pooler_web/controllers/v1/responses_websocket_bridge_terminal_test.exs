@@ -177,11 +177,27 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
                       ^release_ref},
                      1_000
 
+      owner = sole_owner_pid!()
+      active_turn = :sys.get_state(owner).active_turn
+      task_monitor = Process.monitor(active_turn.task_pid)
+
+      assert :erlang.suspend_process(owner)
+
+      on_exit(fn ->
+        if Process.info(owner, :status) == {:status, :suspended} do
+          _result = :erlang.resume_process(owner)
+        end
+      end)
+
       send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
 
       assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
                       ^release_ref},
                      1_000
+
+      assert_receive {:DOWN, ^task_monitor, :process, _task_pid, :normal}, 1_000
+      assert Process.info(owner, :status) == {:status, :suspended}
+      assert :erlang.resume_process(owner)
 
       response = Task.await(request_task, 1_000)
       send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
@@ -305,6 +321,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     do: "succeeded"
 
   defp terminal_request_status(_type), do: "failed"
+
+  defp sole_owner_pid! do
+    assert [owner_pid] =
+             Registry.select(WebsocketOwnerSession.Registry, [
+               {{:"$1", :"$2", :_}, [], [:"$2"]}
+             ])
+
+    owner_pid
+  end
 
   defp set_upstream_receive_timeout!(timeout_ms) do
     previous = Application.get_env(:codex_pooler, OperationalSettings, [])

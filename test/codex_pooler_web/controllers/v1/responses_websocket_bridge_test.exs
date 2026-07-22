@@ -627,6 +627,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert_no_upstream_websocket_metadata(attempt)
     assert FakeUpstream.websocket_connection_count(upstream) == 0
     assert FakeUpstream.websocket_connection_ids(upstream) == []
+    assert FakeUpstream.http_request_count(upstream) == 1
     assert length(FakeUpstream.requests(upstream)) == 1
     assert settlement_count(request) == 1
   end
