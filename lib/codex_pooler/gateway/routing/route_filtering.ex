@@ -26,8 +26,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input),
          filter_input = CandidateEligibility.FilterInput.put_candidates(filter_input, candidates),
-         {:ok, candidates, quota_decision} <-
-           filter_quota_eligible_candidates(filter_input, quota_mode),
+         {:ok, candidates, quota_decision, request_options} <-
+           filter_input
+           |> filter_quota_eligible_candidates(quota_mode)
+           |> filter_quota_eligible_candidates_result(request_options),
          request_options = put_quota_decision(request_options, quota_decision),
          filter_input =
            filter_input
@@ -38,6 +40,23 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
       {:ok, candidates, request_options}
     end
   end
+
+  defp filter_quota_eligible_candidates_result(
+         {:ok, candidates, quota_decision, reset_probe},
+         %RequestOptions{} = request_options
+       ) do
+    {:ok, candidates, quota_decision,
+     RequestOptions.put_routing(request_options, reset_probe: reset_probe)}
+  end
+
+  defp filter_quota_eligible_candidates_result(
+         {:ok, candidates, quota_decision},
+         %RequestOptions{} = request_options
+       ),
+       do: {:ok, candidates, quota_decision, request_options}
+
+  defp filter_quota_eligible_candidates_result({:error, reason}, _request_options),
+    do: {:error, reason}
 
   @spec filter_candidates_with_route_state(
           CandidateEligibility.FilterInput.t(),
@@ -62,7 +81,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
          filter_input = CandidateEligibility.FilterInput.put_candidates(filter_input, candidates),
          {:ok, candidates, quota_decision, route_state} <-
            filter_quota_eligible_candidates(filter_input, route_state, quota_mode),
-         request_options = put_quota_decision(request_options, quota_decision),
+         request_options =
+           request_options
+           |> put_reset_probe(route_state.reset_probe)
+           |> put_quota_decision(quota_decision),
          filter_input =
            filter_input
            |> CandidateEligibility.FilterInput.put_candidates(candidates)
@@ -166,4 +188,9 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
 
   defp put_quota_decision(%RequestOptions{} = request_options, quota_decision),
     do: RequestOptions.put_routing(request_options, quota_decision: quota_decision)
+
+  defp put_reset_probe(%RequestOptions{} = request_options, nil), do: request_options
+
+  defp put_reset_probe(%RequestOptions{} = request_options, reset_probe),
+    do: RequestOptions.put_routing(request_options, reset_probe: reset_probe)
 end

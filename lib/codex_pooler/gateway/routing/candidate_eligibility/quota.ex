@@ -158,13 +158,39 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   end
 
   defp routing_quota_eligibility(identity, %Model{} = model, %RouteState{} = route_state) do
-    route_state
-    |> RouteState.quota_windows_for_identity(identity)
-    |> QuotaWindows.routing_quota_eligibility_from_windows(quota_scope_opts(model))
+    if claimed_pending_reset_probe?(identity) do
+      claimed_pending_reset_probe_exclusion()
+    else
+      route_state
+      |> RouteState.quota_windows_for_identity(identity)
+      |> QuotaWindows.routing_quota_eligibility_from_windows(quota_scope_opts(model))
+    end
   end
 
   defp routing_quota_eligibility(identity, %Model{} = model, _route_state) do
-    QuotaWindows.routing_quota_eligibility(identity, quota_scope_opts(model))
+    if claimed_pending_reset_probe?(identity) do
+      claimed_pending_reset_probe_exclusion()
+    else
+      QuotaWindows.routing_quota_eligibility(identity, quota_scope_opts(model))
+    end
+  end
+
+  defp claimed_pending_reset_probe?(identity) do
+    redemption = redemption_metadata(identity)
+
+    RedemptionLifecycle.phase(redemption) == RedemptionLifecycle.consumed_pending_probe() and
+      is_binary(RedemptionLifecycle.probe_holder(redemption))
+  end
+
+  defp claimed_pending_reset_probe_exclusion do
+    %{
+      exclusions: [
+        %{
+          code: "saved_reset_probe_pending",
+          message: "saved reset probe confirmation is still pending"
+        }
+      ]
+    }
   end
 
   defp add_classified_quota_candidate(

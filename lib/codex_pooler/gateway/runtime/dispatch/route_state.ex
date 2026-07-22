@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Pools.RoutingSettings
@@ -23,6 +24,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     circuit_snapshots: %{},
     circuit_eligibility_snapshots: %{},
     reservation_snapshot_inputs: nil,
+    reset_probe: nil,
     extensions: %{}
   ]
 
@@ -59,6 +61,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           circuit_snapshots: circuit_snapshots(),
           circuit_eligibility_snapshots: circuit_snapshots(),
           reservation_snapshot_inputs: reservation_snapshot_inputs() | nil,
+          reset_probe: ResetProbe.t() | nil,
           extensions: extensions()
         }
 
@@ -74,6 +77,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           optional(:circuit_snapshots) => circuit_snapshots(),
           optional(:circuit_eligibility_snapshots) => circuit_snapshots(),
           optional(:reservation_snapshot_inputs) => reservation_snapshot_inputs() | nil,
+          optional(:reset_probe) => ResetProbe.t() | nil,
           optional(:extensions) => extensions()
         }
 
@@ -93,6 +97,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       circuit_snapshots: circuit_snapshots(attrs),
       circuit_eligibility_snapshots: circuit_snapshots(attrs),
       reservation_snapshot_inputs: Map.get(attrs, :reservation_snapshot_inputs),
+      reset_probe: Map.get(attrs, :reset_probe),
       extensions: Map.get(attrs, :extensions, %{})
     }
   end
@@ -100,6 +105,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   @spec put_candidates(t(), [candidate()]) :: t()
   def put_candidates(%__MODULE__{} = route_state, candidates) when is_list(candidates),
     do: %{route_state | candidates: candidates}
+
+  @spec put_reset_probe(t(), ResetProbe.t()) :: t()
+  def put_reset_probe(%__MODULE__{} = route_state, %ResetProbe{} = reset_probe),
+    do: %{route_state | reset_probe: reset_probe}
 
   @spec put_codex_models_etag(t(), String.t()) :: t()
   def put_codex_models_etag(%__MODULE__{} = route_state, etag) when is_binary(etag) do

@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   require Logger
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -116,8 +117,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     identity = redeem_result.identity
 
     if pending_probe?(redeem_result) do
-      case claim_probe(identity) do
-        {:ok, token} -> force_probe_route(refresh_plan, assignment, identity, token)
+      case claim_probe(refresh_plan, assignment, identity) do
+        {:ok, probe} -> force_probe_route(refresh_plan, assignment, identity, probe)
         {:error, _reason} -> refilter_after_redemption(result, refresh_plan)
       end
     else
@@ -130,46 +131,67 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp pending_probe?(_redeem_result), do: false
 
-  defp claim_probe(%UpstreamIdentity{} = identity) do
+  defp claim_probe(refresh_plan, assignment, %UpstreamIdentity{} = identity) do
     redemption = (identity.metadata || %{})["saved_reset_redemption"] || %{}
-    token = Ecto.UUID.generate()
 
-    case ProbeLease.claim(
-           identity,
-           redemption["generation"],
-           redemption["attempt_id"],
-           token
-         ) do
-      {:ok, :claimed} -> {:ok, token}
+    with %ResetProbe{} = probe <- reset_probe(refresh_plan),
+         {:ok, bound_probe} <-
+           ResetProbe.bind(
+             probe,
+             assignment.id,
+             identity.id,
+             effective_model(refresh_plan),
+             route_class(refresh_plan)
+           ),
+         {:ok, :claimed} <-
+           ProbeLease.claim(
+             identity,
+             redemption["generation"],
+             redemption["attempt_id"],
+             bound_probe
+           ) do
+      {:ok, bound_probe}
+    else
       {:error, reason} -> {:error, reason}
+      _missing_probe -> {:error, :invalid_scope}
     end
   end
 
-  defp force_probe_route(refresh_plan, assignment, identity, token) do
+  defp force_probe_route(refresh_plan, assignment, identity, %ResetProbe{} = probe) do
     candidate = {assignment, identity}
-    decision = reset_probe_decision(identity, token)
+    decision = reset_probe_decision()
 
     case Map.get(refresh_plan, :route_state) do
       %RouteState{} = route_state ->
-        {:ok, [candidate], decision, RouteState.put_candidates(route_state, [candidate])}
+        route_state =
+          route_state
+          |> RouteState.put_candidates([candidate])
+          |> RouteState.put_reset_probe(probe)
+
+        {:ok, [candidate], decision, route_state}
 
       _no_route_state ->
-        {:ok, [candidate], decision}
+        {:ok, [candidate], decision, probe}
     end
   end
 
-  defp reset_probe_decision(%UpstreamIdentity{} = identity, token) do
+  defp reset_probe_decision do
     %{
       "allowed" => true,
       "routing_state" => "reset_probe",
       "summary" => "guarded probe after saved reset pending confirmation",
       "reset_probe_candidate_count" => 1,
-      "reset_probe" => %{
-        "token" => token,
-        "upstream_identity_id" => identity.id
-      }
+      "eligible_candidate_count" => 1
     }
   end
+
+  defp reset_probe(%{filter_input: %{request_options: request_options}}),
+    do: request_options.routing.reset_probe
+
+  defp reset_probe(_refresh_plan), do: nil
+
+  defp effective_model(%{filter_input: %{request_options: request_options, model: model}}),
+    do: request_options.routing.effective_model || model.exposed_model_id
 
   defp refilter_after_redemption(
          result,

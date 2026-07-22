@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
@@ -239,6 +240,32 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       filter_input = filter_input(pool, api_key, assignment, identity, "reset-probe-pending")
 
       assert {:error, %{code: "quota_exhausted"}} = RouteFiltering.filter_candidates(filter_input)
+    end
+
+    test "does not ordinarily route a claimed pending reset probe with otherwise usable quota" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      consumed_at =
+        DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+      redemption =
+        "consumed_pending_probe"
+        |> reset_probe_redemption(consumed_at)
+        |> put_in(
+          ["saved_reset_redemption", "probe"],
+          %{"token" => Ecto.UUID.generate(), "claimed_at" => DateTime.to_iso8601(consumed_at)}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{metadata: redemption})
+
+      upsert_primary_quota!(identity, Decimal.new("15"))
+      filter_input = filter_input(pool, api_key, assignment, identity, "reset-probe-claimed")
+
+      assert {:error, %{code: "quota_evidence_unavailable", candidate_exclusions: exclusions}} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert [%{reasons: [%{"code" => "saved_reset_probe_pending"}]}] = exclusions
     end
 
     test "does not route an exhausted account whose reset-probe window has elapsed" do
@@ -830,6 +857,12 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert filtered_route_state.candidates == [claimed_candidate]
       assert decision.routing.quota_decision["routing_state"] == "reset_probe"
       assert decision.routing.quota_decision["reset_probe_candidate_count"] == 1
+      assert %ResetProbe{} = probe = decision.routing.reset_probe
+      assert probe == filtered_route_state.reset_probe
+      assert probe.pool_upstream_assignment_id == redeeming.assignment.id
+      assert probe.upstream_identity_id == redeeming_identity.id
+      assert probe.effective_model == filter_input.model.exposed_model_id
+      assert probe.route_class == "proxy_http"
       refute sibling.assignment.id in candidate_ids(filtered_route_state.candidates)
 
       assert Enum.count(
@@ -1009,7 +1042,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   defp filter_input(pool, api_key, model, candidates) when is_list(candidates) do
     payload = %{"model" => model.exposed_model_id, "input" => "route filtering"}
-    request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+    request_options = request_options(payload)
 
     FilterInput.new(%{
       auth: %{pool: pool, api_key: api_key},
@@ -1032,7 +1065,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       })
 
     payload = %{"model" => model.exposed_model_id, "input" => "route filtering"}
-    request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+    request_options = request_options(payload)
 
     FilterInput.new(%{
       auth: %{pool: pool, api_key: api_key},
@@ -1042,6 +1075,12 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       request_options: request_options,
       candidates: candidates
     })
+  end
+
+  defp request_options(payload) do
+    %{}
+    |> RequestOptions.build("/backend-api/codex/responses", payload)
+    |> RequestOptions.put_routing(reset_probe: ResetProbe.new())
   end
 
   defp sync_catalog_step(pool, assignment_models) when is_map(assignment_models) do
