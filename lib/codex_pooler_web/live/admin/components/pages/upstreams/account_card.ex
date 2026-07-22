@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           id={"upstream-account-#{@account.identity.id}-panel-switcher"}
           data-role="upstream-account-panel-switcher"
           data-panel-view={@panel_view}
-          class="grid min-w-0 overflow-hidden"
+          class="grid min-w-0"
         >
           <section
             id={"upstream-account-#{@account.identity.id}-usage-panel"}
@@ -219,7 +219,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             <div
               id={"upstream-account-#{@account.identity.id}-token-models"}
               data-role="upstream-account-token-models"
-              class="grid content-start gap-0.5 overflow-y-auto pr-1"
+              class="grid max-h-[24rem] content-start gap-0.5 overflow-y-auto pr-1"
             >
               <p
                 :if={@token_leaderboard == []}
@@ -306,7 +306,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             <div
               id={"upstream-account-#{@account.identity.id}-pool-assignments"}
               data-role="upstream-account-pool-assignments"
-              class="grid gap-3"
+              class="grid max-h-[24rem] gap-3 overflow-y-auto pr-1"
             >
               <div
                 :for={assignment <- @account.assignments}
@@ -488,7 +488,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp pools_panel_available?(_account), do: false
 
   defp account_panel_class(true) do
-    "grid min-w-0 max-h-[28rem] gap-3 overflow-hidden opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none"
+    "grid min-w-0 gap-3 opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none"
   end
 
   defp account_panel_class(false) do

@@ -1624,7 +1624,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute active_badge_class =~ "bg-(--color-reset-bank)/10"
     refute active_badge_class =~ "text-(--color-reset-bank)"
     refute active_badge_class =~ "border-dashed"
-    assert active_usage_panel_class =~ "max-h-[28rem]"
+    refute active_usage_panel_class =~ "max-h-"
+    refute active_usage_panel_class =~ "overflow-hidden"
     assert active_usage_panel_class =~ "transition-opacity"
     refute active_usage_panel_class =~ "translate-y"
     refute active_usage_panel_class =~ "transition-[max-height"
@@ -1738,8 +1739,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "upstream-account-#{active_identity.id}-pools-panel-trigger"
            ) =~ "border-primary/35"
 
-    assert html_element_class(active_card, "upstream-account-#{active_identity.id}-pools-panel") =~
-             "max-h-[28rem]"
+    refute html_element_class(active_card, "upstream-account-#{active_identity.id}-pools-panel") =~
+             "max-h-"
 
     assert html_element_class(active_card, "upstream-account-#{active_identity.id}-usage-panel") =~
              "max-h-0"
