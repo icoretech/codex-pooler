@@ -26,6 +26,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           | :owner_forwarding_disabled
           | :owner_busy
           | :client_disconnected
+          | :upstream_websocket_terminal_delivery_timeout
 
   @type request_status :: binary()
   @type attempt_status :: binary()
@@ -70,7 +71,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     :stale_downstream,
     :owner_forwarding_disabled,
     :owner_busy,
-    :client_disconnected
+    :client_disconnected,
+    :upstream_websocket_terminal_delivery_timeout
   ]
 
   @safe_error_payloads %{
@@ -109,6 +111,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       code: "client_disconnected",
       message: "websocket client disconnected",
       reason: "client_disconnected"
+    ],
+    upstream_websocket_terminal_delivery_timeout: [
+      status: 502,
+      code: "upstream_stream_error",
+      message: "upstream websocket terminal delivery timed out",
+      reason: "upstream_websocket_terminal_delivery_timeout"
     ],
     stale_owner: [
       status: 409,

@@ -465,6 +465,477 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_frame, "request-result", 1, :complete}
   end
 
+  test "terminal-first delivery waits for the matching upstream task result", context do
+    terminal_frame = terminal_frame("response.completed", "resp_terminal_first")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("terminal-first"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    assert_receive {:websocket_owner_frame, "terminal-first", 1, {:data, ^terminal_frame}}
+
+    assert %{active_turn: %{terminal_forwarded?: true, pending_result: nil}} =
+             :sys.get_state(owner)
+
+    refute_received {:websocket_owner_frame, "terminal-first", 1, :complete}
+
+    release_controlled(barriers, controls, :task_result)
+
+    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert_receive {:websocket_owner_frame, "terminal-first", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
+  test "result-first settlement waits until the matching terminal reaches the downstream",
+       context do
+    terminal_frame = terminal_frame("response.completed", "resp_result_first")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("result-first"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+
+    assert %{active_turn: %{terminal_forwarded?: false, pending_result: pending_result}} =
+             await_pending_terminal_result(owner)
+
+    assert pending_result == terminal_result(terminal_frame, "response.completed")
+    assert Task.yield(submit_task, 0) == nil
+    refute_received {:websocket_owner_frame, "result-first", 1, :complete}
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    assert_receive {:websocket_owner_frame, "result-first", 1, {:data, ^terminal_frame}}
+    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert_receive {:websocket_owner_frame, "result-first", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
+  test "result-first settlement preserves every normalized terminal class exactly once",
+       context do
+    for {frame_type, result_type} <- [
+          {"response.completed", "response.completed"},
+          {"response.done", "response.completed"},
+          {"response.failed", "response.failed"},
+          {"response.incomplete", "response.incomplete"},
+          {"error", "error"}
+        ] do
+      case_id = String.replace(frame_type, ".", "-")
+      terminal_frame = terminal_frame(frame_type, "resp_#{case_id}")
+      controls = WebsocketOwnerNodeHarness.two_sender_controls()
+      owner_context = unique_owner_context(context, case_id)
+
+      upstream =
+        WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+          terminal_frames: [terminal_frame],
+          task_result: terminal_result(terminal_frame, result_type)
+        )
+
+      {:ok, owner} = start_owner(owner_context, upstream: upstream)
+      assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+      {:ok, downstream} =
+        WebsocketOwnerSession.attach_downstream(owner, downstream_target(case_id))
+
+      submit_task =
+        Task.async(fn ->
+          WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+        end)
+
+      barriers = await_two_sender_barriers(controls)
+      release_controlled(barriers, controls, :task_result)
+
+      assert %{active_turn: %{pending_result: pending_result}} =
+               await_pending_terminal_result(owner)
+
+      assert pending_result == terminal_result(terminal_frame, result_type)
+
+      release_controlled(barriers, controls, :nonterminal_frames)
+      terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+      release_controlled(terminal_barrier, controls, :terminal_frames)
+
+      assert_receive {:websocket_owner_frame, ^case_id, 1, {:data, ^terminal_frame}}
+      assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, result_type)
+      assert_receive {:websocket_owner_frame, ^case_id, 1, :complete}
+      refute_received {:websocket_owner_frame, ^case_id, 1, {:data, ^terminal_frame}}
+      refute_received {:websocket_owner_frame, ^case_id, 1, :complete}
+      assert %{active_turn: nil} = :sys.get_state(owner)
+    end
+  end
+
+  test "nonterminal task results retain eager settlement", context do
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        task_result: {:ok, %{status: 200, terminal: nil}}
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("nonterminal-result"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+
+    assert Task.await(submit_task, 1_000) == {:ok, %{status: 200, terminal: nil}}
+    assert_receive {:websocket_owner_frame, "nonterminal-result", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
+  test "exact terminal timeout invalidates upstream and emits one committed failure", context do
+    terminal_frame = terminal_frame("response.completed", "resp_timeout")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+    parent = self()
+
+    upstream =
+      self()
+      |> WebsocketOwnerNodeHarness.two_sender_upstream_boundary(controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+      |> Map.put(:invalidate, fn upstream_pid ->
+        send(parent, {:terminal_timeout_invalidation, upstream_pid})
+        WebsocketOwnerNodeHarness.controlled_result(parent, controls, :invalidation_result, :ok)
+      end)
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("terminal-timeout"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+
+    %{active_turn: active_turn} = await_pending_terminal_result(owner)
+    cancel_owner_timer(active_turn.terminal_delivery_timer_ref)
+    {turn_ref, timer_token} = active_turn.terminal_delivery_timeout
+
+    send(owner, {:websocket_owner_terminal_delivery_timeout, turn_ref, make_ref()})
+    assert %{active_turn: %{pending_result: pending_result}} = :sys.get_state(owner)
+    assert pending_result == terminal_result(terminal_frame, "response.completed")
+
+    timer_task = controlled_timer_task(self(), owner, controls, {turn_ref, timer_token})
+    timer_barrier = await_controlled_barrier(:timer_message, controls)
+    release_controlled(timer_barrier, controls, :timer_message)
+    assert Task.await(timer_task, 1_000) == :ok
+
+    assert_receive {:terminal_timeout_invalidation, ^upstream_pid}
+    invalidation_barrier = await_controlled_barrier(:invalidation_result, controls)
+    release_controlled(invalidation_barrier, controls, :invalidation_result)
+
+    assert {:error, timeout_result} = Task.await(submit_task, 1_000)
+    assert timeout_result.reason == :upstream_websocket_terminal_delivery_timeout
+    assert timeout_result.transport_failure["phase"] == "terminal_delivery"
+    assert timeout_result.transport_failure["upstream_committed"] == true
+    assert timeout_result.transport_failure["terminal_seen"] == true
+    assert timeout_result.transport_failure["terminal_forwarded"] == false
+
+    assert_receive {:websocket_owner_frame, "terminal-timeout", 1,
+                    {:error, :upstream_websocket_terminal_delivery_timeout, safe_payload}}
+
+    assert safe_payload.code == "upstream_stream_error"
+    assert safe_payload.metadata.reason == "upstream_websocket_terminal_delivery_timeout"
+    assert_receive {:websocket_owner_frame, "terminal-timeout", 1, :complete}
+    refute_received {:websocket_owner_frame, "terminal-timeout", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+    refute_receive {:websocket_owner_frame, "terminal-timeout", 1, {:data, ^terminal_frame}}
+  end
+
+  test "terminal timeout keeps invalidation failure precedence", context do
+    terminal_frame = terminal_frame("response.completed", "resp_invalidation_failure")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+    parent = self()
+
+    upstream =
+      self()
+      |> WebsocketOwnerNodeHarness.two_sender_upstream_boundary(controls,
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+      |> Map.put(:invalidate, fn _upstream_pid ->
+        WebsocketOwnerNodeHarness.controlled_result(
+          parent,
+          controls,
+          :invalidation_result,
+          {:error, :upstream_websocket_not_connected}
+        )
+      end)
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("invalidation-failure"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+    %{active_turn: active_turn} = await_pending_terminal_result(owner)
+    cancel_owner_timer(active_turn.terminal_delivery_timer_ref)
+    {turn_ref, timer_token} = active_turn.terminal_delivery_timeout
+    send(owner, {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token})
+
+    invalidation_barrier = await_controlled_barrier(:invalidation_result, controls)
+    release_controlled(invalidation_barrier, controls, :invalidation_result)
+
+    assert Task.await(submit_task, 1_000) == {:error, :upstream_websocket_not_connected}
+
+    assert_receive {:websocket_owner_frame, "invalidation-failure", 1,
+                    {:error, :owner_crashed, safe_payload}}
+
+    assert safe_payload.code == "owner_crashed"
+    assert_receive {:websocket_owner_frame, "invalidation-failure", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
+  test "terminal downstream send failure settles once before a late task result", context do
+    terminal_frame = terminal_frame("response.completed", "resp_send_failure")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    downstream_sender =
+      controlled_terminal_downstream_sender(self(), controls, {:error, :owner_unavailable})
+
+    {:ok, owner} = start_owner(context, upstream: upstream, downstream_sender: downstream_sender)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("send-failure"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    send_barrier = await_controlled_barrier(:downstream_send_result, controls)
+    release_controlled(send_barrier, controls, :downstream_send_result)
+
+    assert Task.await(submit_task, 1_000) == {:error, :owner_unavailable}
+
+    assert_receive {:websocket_owner_frame, "send-failure", 1,
+                    {:error, :owner_unavailable, safe_payload}}
+
+    assert safe_payload.code == "owner_unavailable"
+    assert_receive {:websocket_owner_frame, "send-failure", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    release_controlled(barriers, controls, :task_result)
+    refute_received {:websocket_owner_frame, "send-failure", 1, :complete}
+  end
+
+  test "duplicate terminal and stale timeout messages cannot settle the next turn", context do
+    terminal_frame = terminal_frame("response.completed", "resp_duplicate_terminal")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame, terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("duplicate-terminal"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+    %{active_turn: active_turn} = await_pending_terminal_result(owner)
+    stale_timeout = active_turn.terminal_delivery_timeout
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, {:data, ^terminal_frame}}
+    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, :complete}
+    refute_received {:websocket_owner_frame, "duplicate-terminal", 1, {:data, ^terminal_frame}}
+
+    {stale_turn_ref, stale_timer_token} = stale_timeout
+    send(owner, {:websocket_owner_terminal_delivery_timeout, stale_turn_ref, stale_timer_token})
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    next_submit_task =
+      Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, "next-turn") end)
+
+    next_barriers = await_two_sender_barriers(controls)
+    release_controlled(next_barriers, controls, :nonterminal_frames)
+    next_terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(next_terminal_barrier, controls, :terminal_frames)
+    release_controlled(next_barriers, controls, :task_result)
+
+    assert Task.await(next_submit_task, 1_000) ==
+             terminal_result(terminal_frame, "response.completed")
+
+    assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, :complete}
+
+    refute_received {:websocket_owner_frame, "duplicate-terminal", 1,
+                     {:error, :upstream_websocket_terminal_delivery_timeout, _payload}}
+  end
+
+  test "detach while a terminal result is pending keeps client disconnect precedence", context do
+    terminal_frame = terminal_frame("response.completed", "resp_detach_pending")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("detach-pending"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+    %{active_turn: active_turn} = await_pending_terminal_result(owner)
+    timer_ref = active_turn.terminal_delivery_timer_ref
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
+    assert Task.await(submit_task, 1_000) == {:error, :client_disconnected}
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
+    assert Process.read_timer(timer_ref) == false
+    refute_received {:websocket_owner_frame, "detach-pending", 1, _payload}
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
+  test "downstream death while a terminal result is pending preserves the upstream result",
+       context do
+    terminal_frame = terminal_frame("response.completed", "resp_downstream_death_pending")
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame, "response.completed")
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    target = collector(self(), :pending_downstream_death)
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, %{
+        pid: target,
+        correlation_id: "downstream-death-pending"
+      })
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+    %{active_turn: active_turn} = await_pending_terminal_result(owner)
+    timer_ref = active_turn.terminal_delivery_timer_ref
+    target_ref = Process.monitor(target)
+    Process.unlink(target)
+    Process.exit(target, :shutdown)
+    assert_receive {:DOWN, ^target_ref, :process, ^target, :shutdown}
+
+    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
+    assert Process.read_timer(timer_ref) == false
+    refute_received {:collected_owner_frame, :pending_downstream_death, _message}
+
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
   test "forwards a terminal failure body when the upstream request returns an error", context do
     terminal_frame =
       Jason.encode!(%{
@@ -891,6 +1362,107 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   defp await_active_turn_cleared(owner, 0), do: :sys.get_state(owner)
 
+  defp await_pending_terminal_result(owner, attempts \\ 100)
+
+  defp await_pending_terminal_result(owner, attempts) when attempts > 0 do
+    case :sys.get_state(owner) do
+      %{active_turn: %{pending_result: pending_result}} = state when not is_nil(pending_result) ->
+        state
+
+      _state ->
+        yield_once({:await_pending_terminal_result, owner, attempts})
+        await_pending_terminal_result(owner, attempts - 1)
+    end
+  end
+
+  defp await_pending_terminal_result(owner, 0), do: :sys.get_state(owner)
+
+  defp await_two_sender_barriers(controls) do
+    task_result = await_controlled_barrier(:task_result, controls)
+    nonterminal_frames = await_controlled_barrier(:nonterminal_frames, controls)
+    %{task_result: task_result, nonterminal_frames: nonterminal_frames}
+  end
+
+  defp await_controlled_barrier(stage, controls) do
+    release_ref = Map.fetch!(controls, stage)
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    barrier_pid
+  end
+
+  defp release_controlled(barriers, controls, stage) when is_map(barriers) do
+    barriers
+    |> Map.fetch!(stage)
+    |> release_controlled(controls, stage)
+  end
+
+  defp release_controlled(barrier_pid, controls, stage) when is_pid(barrier_pid) do
+    WebsocketOwnerNodeHarness.release_controlled(barrier_pid, controls, stage)
+  end
+
+  defp controlled_timer_task(test_pid, owner, controls, {turn_ref, timer_token}) do
+    Task.async(fn ->
+      WebsocketOwnerNodeHarness.controlled_timer_message(
+        test_pid,
+        owner,
+        controls,
+        {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token}
+      )
+    end)
+  end
+
+  defp controlled_terminal_downstream_sender(test_pid, controls, result) do
+    fn pid, message ->
+      if terminal_downstream_message?(message) do
+        WebsocketOwnerNodeHarness.controlled_result(
+          test_pid,
+          controls,
+          :downstream_send_result,
+          result
+        )
+      else
+        send(pid, message)
+        :ok
+      end
+    end
+  end
+
+  defp terminal_downstream_message?(
+         {:websocket_owner_frame, _correlation_id, _epoch, {:data, payload}}
+       ),
+       do: terminal_payload?(payload)
+
+  defp terminal_downstream_message?(_message), do: false
+
+  defp terminal_payload?(payload) do
+    case Jason.decode(payload) do
+      {:ok, %{"type" => type}} ->
+        type in [
+          "response.completed",
+          "response.done",
+          "response.failed",
+          "response.incomplete",
+          "error"
+        ]
+
+      _result ->
+        false
+    end
+  end
+
+  defp cancel_owner_timer(timer_ref) when is_reference(timer_ref) do
+    assert Process.cancel_timer(timer_ref) != false
+  end
+
+  defp unique_owner_context(context, label) do
+    codex_session_id = "#{context.codex_session_id}-#{label}"
+    on_exit(fn -> cleanup_owner_session(codex_session_id) end)
+    %{context | codex_session_id: codex_session_id}
+  end
+
   defp start_owner(context, opts) do
     WebsocketOwnerSession.start_owner(
       Keyword.merge(opts,
@@ -973,6 +1545,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   end
 
   defp downstream_target(correlation_id), do: %{pid: self(), correlation_id: correlation_id}
+
+  defp websocket_request do
+    %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "request-frame",
+      timeouts: %{},
+      writer: fn _frame -> :ok end
+    }
+  end
+
+  defp terminal_frame(type, response_id) do
+    response =
+      if type in ["response.completed", "response.done"] do
+        %{"id" => response_id, "status" => "completed"}
+      else
+        %{"id" => response_id, "status" => String.replace_prefix(type, "response.", "")}
+      end
+
+    Jason.encode!(%{"type" => type, "response" => response})
+  end
+
+  defp terminal_result(terminal_frame, terminal) do
+    {:ok,
+     %{
+       body: "data: #{terminal_frame}\n\n",
+       terminal: terminal,
+       status: 200,
+       headers: [],
+       websocket_frame_headers: %{}
+     }}
+  end
 
   defp collector(parent, label) do
     spawn_link(fn -> collector_loop(parent, label) end)

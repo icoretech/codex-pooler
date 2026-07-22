@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.{
@@ -21,6 +22,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @restore_downstream_keys [:correlation_id, :epoch, :pid]
   @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
   @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
+  @terminal_delivery_timeout_ms 1_000
+  @terminal_result_types ["response.completed", "response.failed", "response.incomplete", "error"]
 
   defstruct [
     :codex_session_id,
@@ -31,6 +34,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :upstream_pid,
     :upstream_sender,
     :upstream_closer,
+    :upstream_invalidator,
+    :downstream_sender,
     :active_turn,
     :persistence,
     :request_id,
@@ -214,6 +219,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          upstream_pid: upstream_pid,
          upstream_sender: upstream.send,
          upstream_closer: upstream.close,
+         upstream_invalidator: Map.get(upstream, :invalidate, &invalidate_owner_upstream/1),
+         downstream_sender: Keyword.get(opts, :downstream_sender, &send_downstream_message/2),
          persistence: persistence,
          request_id: request_id,
          idle_shutdown_ms: idle_shutdown_ms,
@@ -252,7 +259,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       if DownstreamState.active_turn?(state) do
         finish_active_turn(state, {:error, :owner_drained})
       else
-        _result = send_owner_error(state.downstream, :owner_drained)
+        _result = send_owner_error(state, state.downstream, :owner_drained)
         state
       end
 
@@ -315,8 +322,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             epoch: epoch,
             correlation_id: correlation_id
           })
+          |> Map.put(:downstream, nil)
 
-        {:reply, :ok, %{state | downstream: nil}}
+        state =
+          if state.active_turn && state.active_turn.pending_result do
+            settle_active_turn(state, {:error, :client_disconnected})
+          else
+            state
+          end
+
+        {:reply, :ok, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -349,7 +364,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           task_ref: task.ref,
           submitter_monitor: Process.monitor(submitter_pid),
           reply_to: from,
-          downstream: active_turn_downstream
+          downstream: active_turn_downstream,
+          terminal_forwarded?: false,
+          pending_result: nil,
+          terminal_delivery_timeout: nil,
+          terminal_delivery_timer_ref: nil
         }
 
         {:noreply, %{state | active_turn: active_turn}}
@@ -360,7 +379,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call({:push_downstream, payload}, _from, state) do
-    case send_downstream(state.downstream, payload) do
+    case send_downstream(state, state.downstream, payload) do
       :ok -> {:reply, :ok, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -371,17 +390,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:websocket_owner_upstream_frame, ref, payload},
         %{active_turn: %{ref: ref}} = state
       ) do
-    _result = send_downstream(DownstreamState.active_turn_downstream(state), {:data, payload})
-    {:noreply, state}
+    if terminal_frame?(payload) and state.active_turn.terminal_forwarded? do
+      {:noreply, state}
+    else
+      case send_downstream(
+             state,
+             DownstreamState.active_turn_downstream(state),
+             {:data, payload}
+           ) do
+        :ok -> {:noreply, maybe_complete_terminal_delivery(state, payload)}
+        {:error, reason} -> {:noreply, fail_terminal_delivery(state, payload, reason)}
+      end
+    end
   end
 
   def handle_info({:websocket_owner_upstream_frame, _ref, _payload}, state), do: {:noreply, state}
 
   def handle_info({ref, result}, %{active_turn: %{task_ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
     result = DownstreamState.effective_active_turn_result(state.active_turn, result)
-    reply_active_turn(state, result)
+    state = put_in(state.active_turn.task_ref, nil)
 
-    {:noreply, finish_active_turn(state, result)}
+    if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
+      {:noreply, retain_terminal_result(state, result)}
+    else
+      {:noreply, settle_active_turn(state, result)}
+    end
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{active_turn: %{task_ref: ref}} = state) do
@@ -391,9 +425,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:error, owner_error(reason)}
       )
 
-    reply_active_turn(state, result)
-
-    {:noreply, finish_active_turn(state, result)}
+    {:noreply, settle_active_turn(state, result)}
   end
 
   def handle_info(
@@ -405,12 +437,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     {:noreply, finish_active_turn(state, {:error, :client_disconnected})}
   end
 
+  def handle_info(
+        {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token},
+        %{
+          active_turn: %{
+            ref: turn_ref,
+            pending_result: pending_result,
+            terminal_forwarded?: false,
+            terminal_delivery_timeout: {turn_ref, timer_token}
+          }
+        } = state
+      )
+      when not is_nil(pending_result) do
+    result =
+      case invalidate_upstream(state) do
+        :ok -> terminal_delivery_timeout_result()
+        {:error, reason} -> {:error, reason}
+      end
+
+    {:noreply, settle_active_turn(state, result)}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{downstream_monitor: ref} = state) do
     state =
       state
       |> Map.put(:downstream, nil)
       |> Map.put(:downstream_monitor, nil)
       |> DownstreamState.maybe_schedule_idle_shutdown()
+
+    state =
+      case state.active_turn do
+        %{pending_result: pending_result} when not is_nil(pending_result) ->
+          settle_active_turn(state, pending_result)
+
+        _active_turn ->
+          state
+      end
 
     {:noreply, state}
   end
@@ -507,9 +569,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  defp send_downstream(nil, _payload), do: {:error, :owner_unavailable}
+  defp send_downstream(_state, nil, _payload), do: {:error, :owner_unavailable}
 
   defp send_downstream(
+         state,
          %{
            pid: pid,
            epoch: epoch,
@@ -522,33 +585,40 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     message = {:websocket_owner_frame, correlation_id, epoch, owner_turn_id, payload}
 
     if WebsocketOwnerContract.downstream_message?(message) do
-      send(pid, message)
-      :ok
+      state.downstream_sender.(pid, message)
     else
       {:error, :invalid_downstream_message}
     end
   end
 
-  defp send_downstream(%{owner_turn_id: _invalid_owner_turn_id}, _payload),
+  defp send_downstream(_state, %{owner_turn_id: _invalid_owner_turn_id}, _payload),
     do: {:error, :invalid_downstream_message}
 
-  defp send_downstream(%{pid: pid, epoch: epoch, correlation_id: correlation_id}, payload) do
+  defp send_downstream(
+         state,
+         %{pid: pid, epoch: epoch, correlation_id: correlation_id},
+         payload
+       ) do
     message = {:websocket_owner_frame, correlation_id, epoch, payload}
 
     if WebsocketOwnerContract.downstream_message?(message) do
-      send(pid, message)
-      :ok
+      state.downstream_sender.(pid, message)
     else
       {:error, :invalid_downstream_message}
     end
   end
 
-  defp send_owner_error(downstream, reason) do
+  defp send_owner_error(state, downstream, reason) do
     error = owner_error(reason)
 
     with {:ok, payload} <- WebsocketOwnerContract.safe_error_payload(error, nil) do
-      send_downstream(downstream, {:error, error, payload})
+      send_downstream(state, downstream, {:error, error, payload})
     end
+  end
+
+  defp send_downstream_message(pid, message) do
+    send(pid, message)
+    :ok
   end
 
   defp reply_active_turn(%{active_turn: %{reply_to: reply_to}}, result) do
@@ -588,6 +658,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp finish_active_turn(state, result) do
     downstream = DownstreamState.active_turn_downstream(state)
+    cancel_terminal_delivery_timer(state.active_turn)
     DownstreamState.clear_active_turn_monitors(state.active_turn)
 
     case result do
@@ -599,23 +670,116 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       {:error, %{body: body, forward_error_body?: true, reason: _reason}}
       when is_binary(body) and body != "" ->
-        _result = send_downstream(downstream, {:data, body})
+        _result = send_downstream(state, downstream, {:data, body})
 
       {:error, %{body: _body, reason: _reason}} ->
         :ok
 
+      {:error, %{reason: reason}} ->
+        _result = send_owner_error(state, downstream, reason)
+
       {:error, reason} ->
-        _result = send_owner_error(downstream, reason)
+        _result = send_owner_error(state, downstream, reason)
 
       _other ->
-        _result = send_owner_error(downstream, :owner_crashed)
+        _result = send_owner_error(state, downstream, :owner_crashed)
     end
 
-    _result = send_downstream(downstream, :complete)
+    _result = send_downstream(state, downstream, :complete)
 
     state
     |> Map.put(:active_turn, nil)
     |> DownstreamState.maybe_schedule_idle_shutdown()
+  end
+
+  defp settle_active_turn(state, result) do
+    reply_active_turn(state, result)
+    finish_active_turn(state, result)
+  end
+
+  defp maybe_complete_terminal_delivery(state, payload) do
+    if terminal_frame?(payload) do
+      state = put_in(state.active_turn.terminal_forwarded?, true)
+
+      case state.active_turn.pending_result do
+        nil -> state
+        result -> settle_active_turn(state, result)
+      end
+    else
+      state
+    end
+  end
+
+  defp fail_terminal_delivery(state, payload, reason) do
+    if terminal_frame?(payload) do
+      settle_active_turn(state, {:error, reason})
+    else
+      state
+    end
+  end
+
+  defp retain_terminal_result(state, result) do
+    timer_token = make_ref()
+    turn_ref = state.active_turn.ref
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token},
+        @terminal_delivery_timeout_ms
+      )
+
+    active_turn = %{
+      state.active_turn
+      | pending_result: result,
+        terminal_delivery_timeout: {turn_ref, timer_token},
+        terminal_delivery_timer_ref: timer_ref
+    }
+
+    %{state | active_turn: active_turn}
+  end
+
+  defp terminal_bearing_result?({:ok, %{terminal: terminal}}),
+    do: terminal in @terminal_result_types
+
+  defp terminal_bearing_result?(_result), do: false
+
+  defp terminal_frame?(payload) when is_binary(payload),
+    do: match?({:ok, _outcome}, StreamProtocol.terminal_outcome(payload))
+
+  defp terminal_frame?(_payload), do: false
+
+  defp cancel_terminal_delivery_timer(%{terminal_delivery_timer_ref: ref})
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp cancel_terminal_delivery_timer(_active_turn), do: :ok
+
+  defp invalidate_upstream(state) do
+    state.upstream_invalidator.(state.upstream_pid)
+  catch
+    :exit, _reason -> {:error, :upstream_websocket_not_connected}
+  end
+
+  defp invalidate_owner_upstream(upstream_pid),
+    do: UpstreamWebsocketSession.invalidate_connection(upstream_pid)
+
+  defp terminal_delivery_timeout_result do
+    {:error,
+     %{
+       reason: :upstream_websocket_terminal_delivery_timeout,
+       transport_failure: %{
+         "phase" => "terminal_delivery",
+         "reason_class" => "owner_terminal_delivery_timeout",
+         "reason" => "upstream_websocket_terminal_delivery_timeout",
+         "pre_visible_output" => false,
+         "upstream_committed" => true,
+         "terminal_seen" => true,
+         "terminal_forwarded" => false
+       }
+     }}
   end
 
   defp schedule_owner_renewal(%{owner_renewal_ms: timeout, codex_session_id: session_id} = state)
@@ -729,7 +893,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
               :stale_owner,
               :owner_busy,
               :owner_drained,
-              :client_disconnected
+              :client_disconnected,
+              :upstream_websocket_terminal_delivery_timeout
             ],
        do: error
 

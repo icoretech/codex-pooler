@@ -14,7 +14,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
     :stale_downstream,
     :owner_forwarding_disabled,
     :owner_busy,
-    :client_disconnected
+    :client_disconnected,
+    :upstream_websocket_terminal_delivery_timeout
   ]
 
   describe "owner error taxonomy" do
@@ -64,6 +65,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       assert payload.attempt_status == "failed"
       assert payload.metadata.reason == "client_disconnected"
       assert payload.metadata.owner_error == "client_disconnected"
+      refute inspect(payload) =~ @sentinel
+    end
+
+    test "maps terminal delivery timeout to the committed stream failure contract" do
+      assert {:ok, payload} =
+               WebsocketOwnerContract.safe_error_payload(
+                 :upstream_websocket_terminal_delivery_timeout,
+                 @sentinel
+               )
+
+      assert payload.status == 502
+      assert payload.code == "upstream_stream_error"
+      assert payload.request_status == "failed"
+      assert payload.attempt_status == "failed"
+      assert payload.metadata.reason == "upstream_websocket_terminal_delivery_timeout"
+      assert payload.metadata.owner_error == "upstream_stream_error"
       refute inspect(payload) =~ @sentinel
     end
 
