@@ -4,6 +4,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
 
   @epoch 1
 
@@ -397,6 +400,215 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
            }
   end
 
+  test "real owner terminal delivery timeout commits before its direct error can trigger fallback" do
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+    terminal_frame = terminal_frame("resp_real_owner_timeout")
+
+    upstream =
+      self()
+      |> WebsocketOwnerNodeHarness.two_sender_upstream_boundary(controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame)
+      )
+      |> Map.put(:invalidate, fn _upstream_pid -> :ok end)
+
+    session_id = "bridge-owner-#{System.unique_integer([:positive])}"
+
+    assert {:ok, owner} =
+             WebsocketOwnerSession.start_owner(
+               codex_session_id: session_id,
+               owner_lease_token: "owner-token",
+               owner_instance_id: Atom.to_string(node()),
+               upstream: upstream,
+               persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary()
+             )
+
+    on_exit(fn ->
+      if Process.alive?(owner), do: GenServer.stop(owner)
+    end)
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    stream = WebsocketBridgeStream.start("real-owner-timeout")
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               %{pid: stream.relay, correlation_id: stream.correlation_id},
+               reject_if_busy: true
+             )
+
+    :ok =
+      WebsocketBridgeStream.arm(stream, downstream.epoch, fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    task_result_barrier = await_controlled_barrier(:task_result, controls)
+    nonterminal_barrier = await_controlled_barrier(:nonterminal_frames, controls)
+    release_controlled(task_result_barrier, controls, :task_result)
+
+    active_turn = await_pending_terminal_result(owner)
+    {submitter_pid, _call_tag} = active_turn.reply_to
+    assert :erlang.suspend_process(submitter_pid)
+    assert :erlang.trace(stream.relay, true, [:receive]) == 1
+
+    on_exit(fn ->
+      if Process.alive?(submitter_pid), do: :erlang.resume_process(submitter_pid)
+
+      try do
+        :erlang.trace(stream.relay, false, [:receive])
+      rescue
+        ArgumentError -> false
+      end
+    end)
+
+    assert Process.cancel_timer(active_turn.terminal_delivery_timer_ref) != false
+    {turn_ref, timer_token} = active_turn.terminal_delivery_timeout
+    send(owner, {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token})
+
+    assert %{active_turn: nil} = :sys.get_state(owner)
+    relay_pid = stream.relay
+
+    assert_receive {:trace, ^relay_pid, :receive,
+                    {:websocket_owner_frame, "real-owner-timeout", 1,
+                     {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}}},
+                   1_000
+
+    assert :erlang.resume_process(submitter_pid)
+
+    ref = stream.ref
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_terminal_delivery_timeout}},
+                   2_000
+
+    refute_received {^ref, {:preflight, {:fallback, _reason}}}
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: %{
+               "phase" => "terminal_delivery",
+               "reason_class" => "owner_terminal_delivery_timeout",
+               "reason" => "upstream_websocket_terminal_delivery_timeout",
+               "pre_visible_output" => false,
+               "upstream_committed" => true,
+               "terminal_seen" => true,
+               "terminal_forwarded" => false
+             }
+           }
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
+
+    release_controlled(nonterminal_barrier, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
+  test "real owner terminal delivery timeout stays committed when its submit result arrives first" do
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+    terminal_frame = terminal_frame("resp_real_owner_result_first")
+
+    upstream =
+      self()
+      |> WebsocketOwnerNodeHarness.two_sender_upstream_boundary(controls,
+        terminal_frames: [terminal_frame],
+        task_result: terminal_result(terminal_frame)
+      )
+      |> Map.put(:invalidate, fn _upstream_pid -> :ok end)
+
+    test_pid = self()
+
+    downstream_sender = fn pid, message ->
+      case message do
+        {:websocket_owner_frame, _correlation_id, _epoch,
+         {:error, :upstream_websocket_terminal_delivery_timeout, _safe_payload}} ->
+          WebsocketOwnerNodeHarness.controlled_result(
+            test_pid,
+            controls,
+            :downstream_send_result,
+            :ok
+          )
+
+          send(pid, message)
+          :ok
+
+        _message ->
+          send(pid, message)
+          :ok
+      end
+    end
+
+    session_id = "bridge-owner-result-first-#{System.unique_integer([:positive])}"
+
+    assert {:ok, owner} =
+             WebsocketOwnerSession.start_owner(
+               codex_session_id: session_id,
+               owner_lease_token: "owner-token",
+               owner_instance_id: Atom.to_string(node()),
+               upstream: upstream,
+               downstream_sender: downstream_sender,
+               persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary()
+             )
+
+    on_exit(fn ->
+      if Process.alive?(owner), do: GenServer.stop(owner)
+    end)
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    stream = WebsocketBridgeStream.start("real-owner-result-first")
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               %{pid: stream.relay, correlation_id: stream.correlation_id},
+               reject_if_busy: true
+             )
+
+    :ok =
+      WebsocketBridgeStream.arm(stream, downstream.epoch, fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    task_result_barrier = await_controlled_barrier(:task_result, controls)
+    nonterminal_barrier = await_controlled_barrier(:nonterminal_frames, controls)
+    release_controlled(task_result_barrier, controls, :task_result)
+
+    active_turn = await_pending_terminal_result(owner)
+    assert Process.cancel_timer(active_turn.terminal_delivery_timer_ref) != false
+    {turn_ref, timer_token} = active_turn.terminal_delivery_timeout
+    send(owner, {:websocket_owner_terminal_delivery_timeout, turn_ref, timer_token})
+
+    downstream_barrier = await_controlled_barrier(:downstream_send_result, controls)
+
+    ref = stream.ref
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_terminal_delivery_timeout}},
+                   2_000
+
+    refute_received {^ref, {:preflight, {:fallback, _reason}}}
+    release_controlled(downstream_barrier, controls, :downstream_send_result)
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: terminal_timeout_metadata()
+           }
+
+    assert WebsocketBridgeStream.take_upstream_websocket_attempt_metadata(stream) == %{
+             upstream_websocket_connection: nil,
+             transport_failure: nil
+           }
+
+    release_controlled(nonterminal_barrier, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
   test "post-commit receive failure retains only safe attempt diagnostics" do
     connection = connection_metadata()
     stream = start_armed(registered_submit(self()), settle_timeout_ms: 50)
@@ -646,5 +858,75 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     owner_frame(stream, :complete)
     assert_receive {^ref, :done}, 2_000
     refute_received {:overflow, _event, _measurements, _metadata}
+  end
+
+  defp await_controlled_barrier(stage, controls) do
+    release_ref = Map.fetch!(controls, stage)
+
+    assert_receive {:websocket_owner_harness_controlled_barrier, ^stage, barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    barrier_pid
+  end
+
+  defp release_controlled(barrier_pid, controls, stage) do
+    WebsocketOwnerNodeHarness.release_controlled(barrier_pid, controls, stage)
+  end
+
+  defp await_pending_terminal_result(owner, attempts \\ 100)
+
+  defp await_pending_terminal_result(owner, attempts) when attempts > 0 do
+    case :sys.get_state(owner) do
+      %{active_turn: %{pending_result: pending_result} = active_turn}
+      when not is_nil(pending_result) ->
+        active_turn
+
+      _state ->
+        :erlang.yield()
+        await_pending_terminal_result(owner, attempts - 1)
+    end
+  end
+
+  defp await_pending_terminal_result(_owner, 0), do: flunk("owner never retained terminal result")
+
+  defp websocket_request do
+    %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "request-frame",
+      timeouts: %{},
+      writer: fn _frame -> :ok end
+    }
+  end
+
+  defp terminal_frame(response_id) do
+    Jason.encode!(%{
+      "type" => "response.completed",
+      "response" => %{"id" => response_id, "status" => "completed"}
+    })
+  end
+
+  defp terminal_result(terminal_frame) do
+    {:ok,
+     %{
+       body: "data: #{terminal_frame}\n\n",
+       terminal: "response.completed",
+       status: 200,
+       headers: [],
+       websocket_frame_headers: %{}
+     }}
+  end
+
+  defp terminal_timeout_metadata do
+    %{
+      "phase" => "terminal_delivery",
+      "reason_class" => "owner_terminal_delivery_timeout",
+      "reason" => "upstream_websocket_terminal_delivery_timeout",
+      "pre_visible_output" => false,
+      "upstream_committed" => true,
+      "terminal_seen" => true,
+      "terminal_forwarded" => false
+    }
   end
 end

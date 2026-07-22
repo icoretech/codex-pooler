@@ -231,7 +231,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         fall_back(state, :bridge_no_first_event)
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
-        fall_back(state, owner_error_reason(error))
+        preflight_owner_error(state, error)
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} ->
         preflight_loop(state)
@@ -384,6 +384,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp committed_failure?(%{"upstream_committed" => true}), do: true
   defp committed_failure?(_transport_failure), do: false
+
+  defp preflight_owner_error(state, :upstream_websocket_terminal_delivery_timeout) do
+    state = settle_task(state)
+
+    if committed_failure?(state.transport_failure) do
+      report_stream_error(state.parent, state.ref, :upstream_websocket_terminal_delivery_timeout)
+      metadata_loop(state)
+    else
+      report_fallback(state.parent, state.ref, :upstream_websocket_terminal_delivery_timeout)
+    end
+  end
+
+  defp preflight_owner_error(state, error),
+    do: fall_back(state, owner_error_reason(error))
 
   defp fall_back(state, reason) do
     report_fallback(state.parent, state.ref, reason)
