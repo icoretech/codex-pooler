@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
+  alias Ecto.Adapters.SQL.Sandbox
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
@@ -12,6 +13,40 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
+
+  @terminal_cases [
+    {"response.completed",
+     %{
+       "type" => "response.completed",
+       "response" => %{"id" => "resp_terminal_completed", "status" => "completed"}
+     }, "response.completed"},
+    {"response.done",
+     %{
+       "type" => "response.done",
+       "response" => %{"id" => "resp_terminal_done", "status" => "completed"}
+     }, "response.completed"},
+    {"response.failed",
+     %{
+       "type" => "response.failed",
+       "response" => %{"id" => "resp_terminal_failed", "status" => "failed"},
+       "error" => %{"code" => "server_error", "message" => "synthetic terminal failure"}
+     }, "response.failed"},
+    {"response.incomplete",
+     %{
+       "type" => "response.incomplete",
+       "response" => %{
+         "id" => "resp_terminal_incomplete",
+         "status" => "incomplete",
+         "incomplete_details" => %{"reason" => "context_length_exceeded"}
+       }
+     }, "response.failed"},
+    {"error",
+     %{
+       "type" => "error",
+       "status" => 500,
+       "error" => %{"code" => "server_error", "message" => "synthetic terminal error"}
+     }, "response.failed"}
+  ]
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -94,6 +129,149 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     refute inspect(attempt.response_metadata) =~ "codex.future_event"
   end
 
+  for {terminal_type, terminal, public_type} <- @terminal_cases do
+    @terminal_type terminal_type
+    @terminal terminal
+    @public_type public_type
+
+    test "#{terminal_type} survives an immediate websocket peer close exactly once", %{conn: conn} do
+      release_ref = make_ref()
+
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             FakeUpstream.websocket_terminal_then_close_barrier(@terminal,
+               notify: self(),
+               release_ref: release_ref
+             ),
+             FakeUpstream.sse_stream([
+               {"response.completed",
+                %{
+                  "type" => "response.completed",
+                  "response" => %{"id" => "unexpected_http_replay", "status" => "completed"}
+                }}
+             ])
+           ]}
+        )
+
+      setup = gateway_setup(upstream)
+      session_id = "terminal-close-#{@terminal_type}-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      request_task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          conn
+          |> auth(setup)
+          |> put_req_header("x-session-id", session_id)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic terminal close turn",
+            "stream" => true
+          })
+        end)
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
+                      ^release_ref},
+                     1_000
+
+      send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
+                      ^release_ref},
+                     1_000
+
+      response = Task.await(request_task, 1_000)
+      send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+      assert response.status == 200
+      assert Enum.count(stream_event_types(response.resp_body), &(&1 == @public_type)) == 1
+      refute response.resp_body =~ "unexpected_http_replay"
+
+      assert [upstream_request] = FakeUpstream.requests(upstream)
+      assert upstream_request.method == "WEBSOCKET"
+      assert FakeUpstream.http_request_count(upstream) == 0
+
+      request = latest_request(setup.pool.id)
+      assert request.status == terminal_request_status(@terminal_type)
+
+      assert Repo.aggregate(
+               from(attempt in Attempt, where: attempt.request_id == ^request.id),
+               :count
+             ) == 1
+
+      assert settlement_count(request.id) == 1
+    end
+  end
+
+  test "websocket close without a terminal emits one truthful synthetic failure without replay",
+       %{conn: conn} do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: release_ref
+           ),
+           FakeUpstream.sse_stream([
+             {"response.completed",
+              %{
+                "type" => "response.completed",
+                "response" => %{"id" => "unexpected_http_replay", "status" => "completed"}
+              }}
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session_id = "missing-terminal-close-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        conn
+        |> auth(setup)
+        |> put_req_header("x-session-id", session_id)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic missing terminal turn",
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+    response = Task.await(request_task, 1_000)
+
+    assert response.status == 200
+    assert stream_event_types(response.resp_body) == ["response.failed"]
+    assert response.resp_body =~ "upstream_stream_error"
+    refute response.resp_body =~ "unexpected_http_replay"
+
+    assert [upstream_request] = FakeUpstream.requests(upstream)
+    assert upstream_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    request = latest_request(setup.pool.id)
+    assert request.status == "failed"
+
+    assert Repo.aggregate(
+             from(attempt in Attempt, where: attempt.request_id == ^request.id),
+             :count
+           ) == 1
+
+    assert settlement_count(request.id) == 1
+  end
+
   defp stream_event_types(body) do
     body
     |> String.split("\n\n", trim: true)
@@ -104,6 +282,29 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       end
     end)
   end
+
+  defp latest_request(pool_id) do
+    Repo.one!(
+      from request in Request,
+        where: request.pool_id == ^pool_id,
+        order_by: [desc: request.admitted_at],
+        limit: 1
+    )
+  end
+
+  defp settlement_count(request_id) do
+    Repo.aggregate(
+      from(entry in CodexPooler.Accounting.LedgerEntry,
+        where: entry.request_id == ^request_id and entry.entry_kind == "settlement"
+      ),
+      :count
+    )
+  end
+
+  defp terminal_request_status(type) when type in ["response.completed", "response.done"],
+    do: "succeeded"
+
+  defp terminal_request_status(_type), do: "failed"
 
   defp set_upstream_receive_timeout!(timeout_ms) do
     previous = Application.get_env(:codex_pooler, OperationalSettings, [])

@@ -162,30 +162,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     Repo.all(from a in Attempt, where: a.request_id == ^request.id)
   end
 
-  defp await_upstream_requests(upstream, expected_count, attempts \\ 100)
-
-  defp await_upstream_requests(upstream, expected_count, attempts) when attempts > 0 do
-    requests = FakeUpstream.requests(upstream)
-
-    if length(requests) == expected_count do
-      requests
-    else
-      yield_once({:await_upstream_requests, expected_count, attempts})
-      await_upstream_requests(upstream, expected_count, attempts - 1)
-    end
-  end
-
-  defp await_upstream_requests(upstream, _expected_count, 0),
-    do: FakeUpstream.requests(upstream)
-
-  defp yield_once(message) do
-    send(self(), message)
-
-    receive do
-      ^message -> :ok
-    end
-  end
-
   defp settlement_count(request) do
     Repo.aggregate(
       from(l in LedgerEntry,
@@ -708,13 +684,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "an internal-only event followed by websocket death falls back to HTTP pre-visible", %{
+  test "an internal-only event followed by websocket death fails without HTTP replay", %{
     conn: conn
   } do
-    # The only frame before the websocket dies is a codex.* event the public
-    # normalization filters out: nothing became visible downstream, so the
-    # turn must retry over HTTP on the same attempt with a single settlement
-    # instead of committing to the doomed websocket stream.
     rate_limits_event =
       {"codex.rate_limits",
        %{
@@ -736,24 +708,24 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "previsible turn"))
     assert response.status == 200
-    assert completed_id(response.resp_body) == "resp_previsible_t1"
+    assert event_types(response.resp_body) == ["response.failed"]
+    refute response.resp_body =~ "resp_previsible_t1"
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
-    assert attempt.transport == "http_sse"
-    assert_no_upstream_websocket_metadata(attempt)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
     assert is_reference(connection_id)
 
-    assert [websocket_request, http_fallback_request] = await_upstream_requests(upstream, 2)
+    assert [websocket_request] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
     assert websocket_request.path == "/backend-api/codex/responses"
-    assert http_fallback_request.method == "POST"
-    assert http_fallback_request.path == "/backend-api/codex/responses"
+    assert FakeUpstream.http_request_count(upstream) == 0
 
     assert settlement_count(request) == 1
   end
@@ -861,7 +833,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "a websocket bridge completion before public data falls back on the same attempt", %{
+  test "a websocket bridge completion before public data fails without HTTP replay", %{
     conn: conn
   } do
     upstream =
@@ -878,17 +850,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "completion fallback"))
     assert response.status == 200
-    assert completed_id(response.resp_body) == "resp_complete_fallback"
+    assert event_types(response.resp_body) == ["response.failed"]
+    refute response.resp_body =~ "resp_complete_fallback"
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
-    assert attempt.transport == "http_sse"
-    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_bridge")
-    refute Map.has_key?(attempt.response_metadata, "upstream_transport")
-    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert websocket_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
   end
 
@@ -991,7 +965,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "a websocket bridge preflight timeout before public data falls back on the same attempt",
+  test "a websocket bridge preflight timeout before public data fails without HTTP replay",
        %{conn: conn} do
     set_upstream_receive_timeout!(25)
 
@@ -1015,21 +989,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "timeout fallback"))
     assert response.status == 200
-    assert completed_id(response.resp_body) == "resp_timeout_fallback"
+    assert event_types(response.resp_body) == ["response.failed"]
+    refute response.resp_body =~ "resp_timeout_fallback"
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
-    assert attempt.transport == "http_sse"
-    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_bridge")
-    refute Map.has_key?(attempt.response_metadata, "upstream_transport")
-    refute Map.has_key?(attempt.response_metadata, "upstream_websocket_connection")
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert websocket_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
   end
 
-  test "a failure-coded incomplete websocket terminal falls back to HTTP pre-visible", %{
+  test "a failure-coded incomplete websocket terminal is preserved without HTTP replay", %{
     conn: conn
   } do
     failed_incomplete =
@@ -1058,15 +1034,19 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     response = post_stream(conn, setup, session, stream_payload(setup, "fallback incomplete"))
 
     assert response.status == 200
-    assert completed_id(response.resp_body) == "resp_incomplete_fallback"
-    refute response.resp_body =~ "resp_failed_incomplete"
+    assert event_types(response.resp_body) == ["response.failed"]
+    assert response.resp_body =~ "resp_failed_incomplete"
+    refute response.resp_body =~ "resp_incomplete_fallback"
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert [attempt] = attempts_for(request)
-    assert attempt.transport == "http_sse"
-    refute attempt.response_metadata["upstream_websocket_bridge"]
-    refute attempt.response_metadata["upstream_websocket_connection"]
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert websocket_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
     assert settlement_count(request) == 1
   end
 
