@@ -4,13 +4,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.ProbeLease
-  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
   setup do
@@ -704,48 +706,259 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert redemption["result"]["applied"] == true
     end
 
-    test "concurrent probe claims after a shared consume yield a single holder" do
-      # Both requests observe the same consumed_pending_probe identity and race to
-      # claim the one-shot probe; exactly one token may hold it.
-      consumed_at =
-        DateTime.utc_now() |> DateTime.add(-30, :second) |> DateTime.truncate(:microsecond)
+    @tag :separate_connection_probe_race
+    test "concurrent probe claims serialize across separate PostgreSQL backends" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {500, %{"error" => "synthetic usage failure"}}
+           }}
+        )
 
-      %{identity: identity} =
-        active_upstream_assignment_fixture(pool_fixture(), %{
-          metadata: %{
-            "saved_reset_redemption" => %{
-              "status" => "redeeming",
-              "phase" => "consumed_pending_probe",
-              "attempt_id" => Ecto.UUID.generate(),
-              "generation" => 4,
-              "trigger_kind" => "gateway_auto",
-              "consumed_at" => DateTime.to_iso8601(consumed_at),
-              "deadline_at" =>
-                consumed_at |> RedemptionLifecycle.deadline_at() |> DateTime.to_iso8601(),
-              "result" => %{"code" => "reset", "applied" => true}
-            }
-          }
-        })
+      on_exit(fn -> FakeUpstream.stop(fake) end)
 
-      generation = 4
+      fixture = committed_probe_claim_fixture!(fake)
+      on_exit(fn -> cleanup_committed_probe_claim_fixture!(fixture) end)
 
-      attempt_id =
-        get_in(Repo.reload!(identity).metadata, ["saved_reset_redemption", "attempt_id"])
+      assert {:ok, %{applied?: true, phase: "consumed_pending_probe"}} =
+               run_unboxed(fn -> SavedResetRedemption.redeem(fixture.assignment_id) end)
+
+      consume_requests =
+        fake
+        |> FakeUpstream.requests()
+        |> Enum.filter(&(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
+
+      assert length(consume_requests) == 1
+
+      fixture = committed_probe_claim_context!(fixture)
+      winner_probe = bound_probe!(fixture)
+      loser_probe = bound_probe!(fixture)
 
       parent = self()
+      barrier = make_ref()
 
-      results =
-        for index <- 1..3 do
-          Task.async(fn ->
-            Sandbox.allow(Repo, parent, self())
+      winner_task =
+        start_probe_claim_task(parent, barrier, fixture, :winner, winner_probe)
 
-            ProbeLease.claim(identity, generation, attempt_id, "token-#{index}")
-          end)
+      loser_task =
+        start_probe_claim_task(parent, barrier, fixture, :loser, loser_probe)
+
+      tasks = [winner_task, loser_task]
+
+      try do
+        assert_receive {^barrier, :claim_ready, winner_pid, :winner, winner_backend_pid},
+                       5_000
+
+        assert_receive {^barrier, :claim_ready, loser_pid, :loser, loser_backend_pid}, 5_000
+
+        assert winner_pid == winner_task.pid
+        assert loser_pid == loser_task.pid
+        assert winner_pid != loser_pid
+        assert winner_backend_pid != loser_backend_pid
+
+        handler_id =
+          "saved-reset-probe-lock-#{System.unique_integer([:positive])}"
+
+        :ok =
+          :telemetry.attach(
+            handler_id,
+            [:codex_pooler, :repo, :query],
+            fn _event, _measurements, metadata, _config ->
+              if self() == winner_task.pid and probe_identity_lock_query?(metadata) and
+                   is_nil(Process.get({__MODULE__, barrier, :winner_paused})) do
+                Process.put({__MODULE__, barrier, :winner_paused}, true)
+                send(parent, {barrier, :winner_lock_acquired, winner_backend_pid})
+
+                receive do
+                  {^barrier, :release_winner} -> :ok
+                after
+                  5_000 -> raise "timed out waiting to release the saved-reset probe winner"
+                end
+              end
+            end,
+            nil
+          )
+
+        try do
+          send(winner_task.pid, {barrier, :start_claim})
+
+          assert_receive {^barrier, :claim_started, :winner, ^winner_backend_pid}, 5_000
+          assert_receive {^barrier, :winner_lock_acquired, ^winner_backend_pid}, 5_000
+
+          send(loser_task.pid, {barrier, :start_claim})
+
+          assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, 5_000
+
+          observation =
+            observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
+
+          assert winner_backend_pid in observation.blocking_pids
+          assert observation.wait_event_type == "Lock"
+
+          send(winner_task.pid, {barrier, :release_winner})
+
+          winner_result = Task.await(winner_task, 5_000)
+
+          assert {:winner, ^winner_backend_pid, {:ok, :claimed}} = winner_result
+
+          loser_result = Task.await(loser_task, 5_000)
+
+          assert {:loser, ^loser_backend_pid, {:error, :unavailable}} = loser_result
+
+          persisted_probe = persisted_probe!(fixture.identity_id)
+
+          assert persisted_probe == %{
+                   "claimed_at" => persisted_probe["claimed_at"],
+                   "scope" => %{
+                     "effective_model" => winner_probe.effective_model,
+                     "pool_upstream_assignment_id" => fixture.assignment_id,
+                     "route_class" => winner_probe.route_class,
+                     "upstream_identity_id" => fixture.identity_id
+                   },
+                   "token" => winner_probe.token,
+                   "version" => 2
+                 }
+
+          assert is_binary(persisted_probe["claimed_at"])
+
+          assert {:error, :unavailable} =
+                   run_unboxed(fn ->
+                     ProbeLease.claim(
+                       fixture.identity_id,
+                       fixture.generation,
+                       fixture.attempt_id,
+                       loser_probe
+                     )
+                   end)
+
+          persisted_probe_after_retry = persisted_probe!(fixture.identity_id)
+          assert persisted_probe_after_retry == persisted_probe
+
+          if System.get_env("TASK3_MANUAL_QA") == "1" do
+            result_labels =
+              Enum.map_join([winner_result, loser_result], ",", fn
+                {_role, _backend_pid, {:ok, :claimed}} -> "claimed"
+                {_role, _backend_pid, {:error, :unavailable}} -> "unavailable"
+              end)
+
+            persisted_probe_holder_count =
+              if is_binary(persisted_probe_after_retry["token"]), do: 1, else: 0
+
+            IO.puts(
+              "TASK3_MANUAL_QA backend_pids=#{winner_backend_pid},#{loser_backend_pid} " <>
+                "results=#{result_labels} " <>
+                "provider_consume_count=#{length(consume_requests)} " <>
+                "persisted_probe_holder_count=#{persisted_probe_holder_count} " <>
+                "immutable=#{persisted_probe_after_retry == persisted_probe}"
+            )
+          end
+        after
+          :telemetry.detach(handler_id)
         end
-        |> Task.await_many(15_000)
+      after
+        release_probe_claim_tasks(tasks, barrier)
+      end
+    end
 
-      assert Enum.count(results, &match?({:ok, :claimed}, &1)) == 1
-      assert Enum.count(results, &match?({:error, :unavailable}, &1)) == 2
+    @tag :separate_connection_probe_reassignment_race
+    test "probe claim validates assignment ownership after locking the identity" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {500, %{"error" => "synthetic usage failure"}}
+           }}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_probe_claim_fixture!(fake)
+      on_exit(fn -> cleanup_committed_probe_claim_fixture!(fixture) end)
+
+      assert {:ok, %{applied?: true, phase: "consumed_pending_probe"}} =
+               run_unboxed(fn -> SavedResetRedemption.redeem(fixture.assignment_id) end)
+
+      fixture = committed_probe_claim_context!(fixture)
+      probe = bound_probe!(fixture)
+      foreign_identity_id = fixture.foreign_identity_id
+      parent = self()
+      barrier = make_ref()
+
+      claim_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            send(parent, {barrier, :claim_backend, backend_pid!()})
+
+            ProbeLease.claim(
+              fixture.identity_id,
+              fixture.generation,
+              fixture.attempt_id,
+              probe
+            )
+          end)
+        end)
+
+      handler_id = "saved-reset-probe-identity-first-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if self() == claim_task.pid and probe_identity_lock_query?(metadata) and
+                 is_nil(Process.get({__MODULE__, barrier, :claim_paused})) do
+              Process.put({__MODULE__, barrier, :claim_paused}, true)
+              send(parent, {barrier, :identity_locked})
+
+              receive do
+                {^barrier, :release_claim} -> :ok
+              after
+                5_000 -> raise "timed out waiting to release the reassignment probe claim"
+              end
+            end
+          end,
+          nil
+        )
+
+      try do
+        assert_receive {^barrier, :claim_backend, claim_backend_pid}, 5_000
+        assert_receive {^barrier, :identity_locked}, 5_000
+
+        reassignment_task =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              assignment = Repo.get!(PoolUpstreamAssignment, fixture.assignment_id)
+              send(parent, {barrier, :reassignment_backend, backend_pid!()})
+
+              assignment
+              |> PoolUpstreamAssignment.changeset(%{
+                upstream_identity_id: foreign_identity_id,
+                updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+              })
+              |> Repo.update!()
+            end)
+          end)
+
+        assert_receive {^barrier, :reassignment_backend, reassignment_backend_pid}, 5_000
+        assert claim_backend_pid != reassignment_backend_pid
+
+        reassignment_result = Task.await(reassignment_task, 5_000)
+
+        assert %PoolUpstreamAssignment{
+                 upstream_identity_id: ^foreign_identity_id
+               } = reassignment_result
+
+        send(claim_task.pid, {barrier, :release_claim})
+
+        assert Task.await(claim_task, 5_000) == {:error, :unavailable}
+        assert persisted_probe!(fixture.identity_id) == nil
+      after
+        send(claim_task.pid, {barrier, :release_claim})
+        :telemetry.detach(handler_id)
+      end
     end
   end
 
@@ -1009,5 +1222,195 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         }
       }
     }
+  end
+
+  defp committed_probe_claim_fixture!(fake) do
+    run_unboxed(fn ->
+      unique = System.unique_integer([:positive])
+      pool = pool_fixture(%{slug: "saved-reset-probe-race-#{unique}"})
+
+      %{assignment: assignment, identity: identity} =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "Saved reset probe race #{unique}",
+          chatgpt_account_id: "acct_probe_race_#{unique}",
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "saved_resets" => %{
+              "status" => "reported",
+              "available_count" => 1,
+              "source" => "codex_usage_api",
+              "path_style" => "codex_api",
+              "observed_at" =>
+                DateTime.utc_now()
+                |> DateTime.truncate(:microsecond)
+                |> DateTime.to_iso8601(),
+              "usage_path" => "/api/codex/usage",
+              "reason" => nil
+            }
+          }
+        })
+
+      foreign_identity =
+        active_upstream_identity_fixture(%{
+          account_label: "Saved reset reassignment target #{unique}",
+          chatgpt_account_id: "acct_probe_reassignment_target_#{unique}"
+        })
+
+      %{
+        assignment_id: assignment.id,
+        foreign_identity_id: foreign_identity.id,
+        identity_id: identity.id,
+        pool_id: pool.id
+      }
+    end)
+  end
+
+  defp committed_probe_claim_context!(fixture) do
+    run_unboxed(fn ->
+      identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+      redemption = identity.metadata["saved_reset_redemption"]
+
+      assert redemption["phase"] == "consumed_pending_probe"
+      assert is_integer(redemption["generation"])
+      assert is_binary(redemption["attempt_id"])
+
+      Map.merge(fixture, %{
+        attempt_id: redemption["attempt_id"],
+        generation: redemption["generation"]
+      })
+    end)
+  end
+
+  defp cleanup_committed_probe_claim_fixture!(fixture) do
+    assert %{identities: 2, pools: 1} ==
+             run_unboxed(fn ->
+               {identity_count, _rows} =
+                 Repo.delete_all(
+                   from identity in UpstreamIdentity,
+                     where: identity.id in ^[fixture.identity_id, fixture.foreign_identity_id]
+                 )
+
+               {pool_count, _rows} =
+                 Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+
+               %{identities: identity_count, pools: pool_count}
+             end)
+  end
+
+  defp bound_probe!(fixture) do
+    assert {:ok, probe} =
+             ResetProbe.new()
+             |> ResetProbe.bind(
+               fixture.assignment_id,
+               fixture.identity_id,
+               "gpt-5.4",
+               "proxy_http"
+             )
+
+    probe
+  end
+
+  defp start_probe_claim_task(parent, barrier, fixture, role, probe) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        send(parent, {barrier, :claim_ready, self(), role, backend_pid})
+
+        receive do
+          {^barrier, :start_claim} -> :ok
+        after
+          5_000 -> raise "timed out waiting to start the saved-reset probe claim"
+        end
+
+        send(parent, {barrier, :claim_started, role, backend_pid})
+
+        result =
+          ProbeLease.claim(
+            fixture.identity_id,
+            fixture.generation,
+            fixture.attempt_id,
+            probe
+          )
+
+        {role, backend_pid, result}
+      end)
+    end)
+  end
+
+  defp release_probe_claim_tasks(tasks, barrier) do
+    Enum.each(tasks, fn task ->
+      send(task.pid, {barrier, :start_claim})
+      send(task.pid, {barrier, :release_winner})
+    end)
+
+    Enum.each(tasks, fn task ->
+      if Process.alive?(task.pid) do
+        release_probe_claim_task(task)
+      end
+    end)
+  end
+
+  defp release_probe_claim_task(task) do
+    case Task.yield(task, 5_000) do
+      {:ok, _result} -> :ok
+      {:exit, _reason} -> :ok
+      nil -> Task.shutdown(task, :brutal_kill)
+    end
+  end
+
+  defp persisted_probe!(identity_id) do
+    run_unboxed(fn ->
+      identity = Repo.get!(UpstreamIdentity, identity_id)
+      get_in(identity.metadata, ["saved_reset_redemption", "probe"])
+    end)
+  end
+
+  defp backend_pid! do
+    %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+    backend_pid
+  end
+
+  defp probe_identity_lock_query?(metadata) do
+    metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
+      is_binary(metadata[:query]) and String.contains?(metadata[:query], "FOR UPDATE")
+  end
+
+  defp observe_blocked_probe_claim!(waiter_pid, blocker_pid) do
+    deadline = System.monotonic_time(:millisecond) + 4_000
+    do_observe_blocked_probe_claim!(waiter_pid, blocker_pid, deadline)
+  end
+
+  defp do_observe_blocked_probe_claim!(waiter_pid, blocker_pid, deadline) do
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        "SELECT pg_blocking_pids($1), wait_event_type FROM pg_stat_activity WHERE pid = $1",
+        [waiter_pid]
+      )
+
+    case rows do
+      [[blocking_pids, wait_event_type]] ->
+        if blocker_pid in blocking_pids and wait_event_type == "Lock" do
+          %{blocking_pids: blocking_pids, wait_event_type: wait_event_type}
+        else
+          retry_blocked_probe_observation!(waiter_pid, blocker_pid, deadline)
+        end
+
+      _rows ->
+        retry_blocked_probe_observation!(waiter_pid, blocker_pid, deadline)
+    end
+  end
+
+  defp retry_blocked_probe_observation!(waiter_pid, blocker_pid, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      flunk("losing saved-reset probe claim never waited on the winning PostgreSQL backend")
+    else
+      do_observe_blocked_probe_claim!(waiter_pid, blocker_pid, deadline)
+    end
+  end
+
+  defp run_unboxed(fun) do
+    Task.async(fn -> Sandbox.unboxed_run(Repo, fun) end)
+    |> Task.await(5_000)
   end
 end
