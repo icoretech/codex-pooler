@@ -11,12 +11,15 @@ validate_paths() {
       lib/codex_pooler/quotas/evidence/codex_parsers.ex|\
       lib/codex_pooler/upstreams/quota/window_selector.ex|\
       lib/codex_pooler/upstreams/quota/windows.ex|\
+      lib/codex_pooler/upstreams/quota/windows/cycle_confirmation.ex|\
       lib/codex_pooler/upstreams/quota/windows/evidence_store.ex|\
+      lib/codex_pooler/upstreams/quota/windows/relative_liveness.ex|\
       lib/codex_pooler/upstreams/quota/windows/routing.ex|\
       lib/codex_pooler/upstreams/reconciliation/pool_reconciliation.ex|\
       lib/codex_pooler/upstreams/reconciliation/usage_probe.ex|\
       lib/codex_pooler/upstreams/saved_resets/auto_eligibility.ex|\
       test/codex_pooler/upstreams/saved_reset_redemption_test.exs|\
+      test/codex_pooler/upstreams/quota/windows/provider_cycle_confirmation_test.exs|\
       test/codex_pooler/upstreams_test.exs|\
       test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs|\
       test/codex_pooler_web/live/admin/pages/upstreams_live_test.exs|\
@@ -24,6 +27,7 @@ validate_paths() {
       scripts/verification/quota-convergence/check-scope.sh|\
       scripts/verification/quota-convergence/observe-development-rollout.sh|\
       scripts/verification/quota-convergence/proof.exs|\
+      scripts/verification/quota-convergence/provider_reset_inconsistency.exs|\
       scripts/verification/quota-convergence/run.sh|\
       scripts/verification/quota-convergence/verify-selectors.sh|\
       lib/codex_pooler/upstreams/reconciliation/quota_convergence_verifier.ex|\
@@ -37,7 +41,11 @@ validate_paths() {
 if [[ "${1:-}" == "--self-test" ]]; then
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
-  printf '%s\n' 'lib/codex_pooler/upstreams/quota/windows/evidence_store.ex' 'scripts/verification/quota-convergence/run.sh' >"$temp_dir/safe"
+  printf '%s\n' \
+    'lib/codex_pooler/upstreams/quota/windows/cycle_confirmation.ex' \
+    'scripts/verification/quota-convergence/provider_reset_inconsistency.exs' \
+    'test/codex_pooler/upstreams/quota/windows/provider_cycle_confirmation_test.exs' \
+    >"$temp_dir/safe"
   printf '%s\n' 'lib/codex_pooler/upstreams/quota/windows/evidence_store.ex' '.github/workflows/release.yml' >"$temp_dir/unsafe"
   validate_paths "$temp_dir/safe"
   if validate_paths "$temp_dir/unsafe"; then
