@@ -15,8 +15,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     routing_windows =
       windows
       |> Enum.filter(&window_in_model_scope?(&1, opts))
-      |> WindowSelector.logical_windows(timestamp)
       |> reject_superseded_primary_windows(timestamp)
+      |> WindowSelector.logical_windows(timestamp)
       |> select_current_account_primary_variant(timestamp)
 
     %{
@@ -69,8 +69,38 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
   @spec reject_superseded_primary_windows([Quota.AccountQuotaWindow.t()], DateTime.t()) ::
           [Quota.AccountQuotaWindow.t()]
   def reject_superseded_primary_windows(windows, timestamp \\ now()) when is_list(windows) do
-    Enum.reject(windows, &superseded_primary_window?(&1, windows, timestamp))
+    Enum.reject(windows, fn window ->
+      if superseded_primary_window?(window, windows, timestamp) do
+        :telemetry.execute(
+          [:codex_pooler, :quota, :cycle, :decision],
+          %{count: 1},
+          %{
+            scope: quota_scope(window),
+            decision: :superseded_primary_rejected,
+            source: source_class(window)
+          }
+        )
+
+        true
+      else
+        false
+      end
+    end)
   end
+
+  defp quota_scope(%Quota.AccountQuotaWindow{quota_scope: scope})
+       when scope in ["model", "upstream_model"],
+       do: "model"
+
+  defp quota_scope(%Quota.AccountQuotaWindow{}), do: "account"
+
+  defp source_class(%Quota.AccountQuotaWindow{source: "codex_usage_api"}), do: "provider_usage"
+
+  defp source_class(%Quota.AccountQuotaWindow{source: source})
+       when source in ["runtime", "rate_limit", "response_header"],
+       do: "runtime"
+
+  defp source_class(%Quota.AccountQuotaWindow{}), do: "unknown"
 
   defp superseded_primary_window?(
          %Quota.AccountQuotaWindow{window_kind: "primary"} = window,
@@ -78,14 +108,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
          timestamp
        ) do
     (not fresh_window?(window, timestamp) or Evidence.expired?(window, timestamp)) and
-      Enum.any?(windows, &newer_quota_group_sibling?(&1, window))
+      Enum.any?(windows, &newer_quota_group_sibling?(&1, window, timestamp))
   end
 
   defp superseded_primary_window?(_window, _windows, _timestamp), do: false
 
-  defp newer_quota_group_sibling?(sibling, window) do
+  defp newer_quota_group_sibling?(sibling, window, timestamp) do
     sibling != window and quota_group_key(sibling) == quota_group_key(window) and
-      sync_gap_at_least_freshness_ttl?(sibling, window)
+      sync_gap_at_least_freshness_ttl?(sibling, window, timestamp)
   end
 
   defp quota_group_key(%Quota.AccountQuotaWindow{} = window) do
@@ -95,9 +125,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     {scope, family, model, upstream_model, quota_key}
   end
 
-  defp sync_gap_at_least_freshness_ttl?(sibling, window) do
-    with %DateTime{} = sibling_synced_at <- window_latest_evidence_at(sibling),
-         %DateTime{} = window_synced_at <- window_latest_evidence_at(window) do
+  defp sync_gap_at_least_freshness_ttl?(sibling, window, timestamp) do
+    with %DateTime{} = sibling_synced_at <- window_latest_evidence_at(sibling, timestamp),
+         %DateTime{} = window_synced_at <- window_latest_evidence_at(window, timestamp) do
       DateTime.diff(sibling_synced_at, window_synced_at, :second) >=
         Evidence.freshness_ttl_seconds()
     else
@@ -105,24 +135,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
     end
   end
 
-  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
-         observed_at: %DateTime{} = observed_at,
-         last_sync_at: %DateTime{} = last_sync_at
-       }) do
-    if DateTime.compare(last_sync_at, observed_at) == :gt, do: last_sync_at, else: observed_at
+  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{} = window, timestamp) do
+    [window.observed_at, window.last_sync_at]
+    |> Enum.filter(&(match?(%DateTime{}, &1) and DateTime.compare(&1, timestamp) != :gt))
+    |> Enum.max(DateTime, fn -> nil end)
   end
-
-  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
-         observed_at: %DateTime{} = observed_at
-       }),
-       do: observed_at
-
-  defp window_latest_evidence_at(%Quota.AccountQuotaWindow{
-         last_sync_at: %DateTime{} = last_sync_at
-       }),
-       do: last_sync_at
-
-  defp window_latest_evidence_at(_window), do: nil
 
   @spec fresh_window?(Quota.AccountQuotaWindow.t(), DateTime.t()) :: boolean()
   def fresh_window?(%Quota.AccountQuotaWindow{} = window, timestamp \\ now()) do

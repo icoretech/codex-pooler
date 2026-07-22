@@ -229,8 +229,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows do
   # timestamp so historical evaluations never rank against future rows.
   defp effective_windows(windows, %DateTime{} = as_of) do
     windows
-    |> WindowSelector.logical_windows(as_of)
     |> Routing.reject_superseded_primary_windows(as_of)
+    |> WindowSelector.logical_windows(as_of)
   end
 
   defp list_persisted_quota_windows(identity_or_id) do

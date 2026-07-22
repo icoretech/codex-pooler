@@ -191,6 +191,44 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
            ]
   end
 
+  test "anchored runtime Spark evidence remains selected over newer floating usage evidence" do
+    floating_usage =
+      spark_window(
+        source: "codex_usage_api",
+        merge_precedence: 60,
+        used_percent: Decimal.new("0"),
+        reset_at: ~U[2026-07-28 12:10:00Z],
+        observed_at: DateTime.add(@as_of, -10, :second),
+        metadata: %{"reset_state" => "floating", "reset_after_seconds" => 604_800}
+      )
+
+    anchored_runtime =
+      spark_window(
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        used_percent: Decimal.new("12"),
+        reset_at: ~U[2026-07-26 12:06:16Z],
+        observed_at: DateTime.add(@as_of, -30, :second)
+      )
+
+    assert WindowSelector.logical_windows([floating_usage, anchored_runtime], @as_of) == [
+             anchored_runtime
+           ]
+  end
+
+  test "codex02 and codex03 floating Spark evidence remains selected without an anchored row" do
+    for reset_at <- [~U[2026-07-28 12:10:00Z], ~U[2026-07-28 12:14:00Z]] do
+      floating_usage =
+        spark_window(
+          used_percent: Decimal.new("0"),
+          reset_at: reset_at,
+          metadata: %{"reset_state" => "floating", "reset_after_seconds" => 604_800}
+        )
+
+      assert WindowSelector.logical_windows([floating_usage], @as_of) == [floating_usage]
+    end
+  end
+
   defp account_window(attrs) do
     observed_at = Keyword.get(attrs, :observed_at, @as_of)
 
@@ -203,6 +241,33 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
           quota_family: "account",
           window_kind: "primary",
           window_minutes: 300,
+          source: "codex_usage_api",
+          source_precision: "observed",
+          freshness_state: "fresh",
+          merge_precedence: 60,
+          observed_at: observed_at,
+          last_sync_at: observed_at,
+          updated_at: observed_at,
+          metadata: %{}
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp spark_window(attrs) do
+    observed_at = Keyword.get(attrs, :observed_at, @as_of)
+
+    struct!(
+      AccountQuotaWindow,
+      Keyword.merge(
+        [
+          quota_key: "codex_spark",
+          quota_scope: "model",
+          quota_family: "codex_model",
+          model: "gpt-5.3-codex-spark",
+          window_kind: "secondary",
+          window_minutes: 10_080,
           source: "codex_usage_api",
           source_precision: "observed",
           freshness_state: "fresh",

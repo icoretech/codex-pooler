@@ -3,6 +3,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
 
   @fresh "fresh"
 
@@ -59,25 +60,41 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   @prior_cycle_margin_seconds 60 * 60
 
   defp reject_prior_cycle_windows(candidates, as_of) do
+    confirmed_resets =
+      for window <- candidates,
+          CycleConfirmation.selector_valid?(window, as_of),
+          do: window.reset_at
+
     fresh_resets =
       for window <- candidates,
           fresh?(window, as_of),
           match?(%DateTime{}, window.reset_at),
           do: window.reset_at
 
+    case confirmed_resets do
+      [_first | _rest] = resets ->
+        reject_resets_before(candidates, Enum.max(resets, DateTime), true, as_of)
+
+      [] ->
+        reject_stale_prior_cycle_windows(candidates, fresh_resets, as_of)
+    end
+  end
+
+  defp reject_stale_prior_cycle_windows(candidates, fresh_resets, as_of) do
     case fresh_resets do
       [] ->
         candidates
 
       resets ->
-        newest = Enum.max(resets, DateTime)
-
-        Enum.reject(candidates, fn window ->
-          not fresh?(window, as_of) and
-            match?(%DateTime{}, window.reset_at) and
-            DateTime.diff(newest, window.reset_at, :second) > @prior_cycle_margin_seconds
-        end)
+        reject_resets_before(candidates, Enum.max(resets, DateTime), false, as_of)
     end
+  end
+
+  defp reject_resets_before(candidates, newest, reject_fresh?, as_of) do
+    Enum.reject(candidates, fn window ->
+      (reject_fresh? or not fresh?(window, as_of)) and match?(%DateTime{}, window.reset_at) and
+        DateTime.diff(newest, window.reset_at, :second) > @prior_cycle_margin_seconds
+    end)
   end
 
   # Evidence observed after the evaluation instant did not exist in that form

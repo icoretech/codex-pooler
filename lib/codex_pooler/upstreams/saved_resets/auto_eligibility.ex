@@ -79,6 +79,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     Map.new(windows_by_identity_id, fn {identity_id, windows} ->
       windows =
         windows
+        |> Windows.reject_superseded_primary_windows(timestamp)
         |> compatible_source_windows(snapshot)
         |> WindowSelector.logical_windows(timestamp)
 
