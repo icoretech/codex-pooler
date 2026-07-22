@@ -164,7 +164,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "lifecycle-only frames followed by completion fall back without committing" do
-    stream = start_armed(blocking_submit())
+    stream = start_armed(fn -> :ok end)
     ref = stream.ref
 
     owner_frame(stream, {:data, ~s({"type":"response.created"})})
@@ -189,17 +189,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     refute_receive {^ref, {:data, _data}}, 100
   end
 
-  test "an upstream failure terminal before visible output falls back" do
+  test "an upstream failure terminal before visible output commits" do
     stream = start_armed(blocking_submit())
     ref = stream.ref
 
     owner_frame(stream, {:data, ~s({"type":"response.failed","response":{"status":"failed"}})})
 
-    assert_receive {^ref, {:preflight, {:fallback, :bridge_failed_before_visible}}}, 2_000
-    refute_receive {^ref, {:data, _data}}, 100
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, data}}, 2_000
+    assert data =~ "response.failed"
+    assert_receive {^ref, :done}, 2_000
   end
 
-  test "a failure-coded incomplete terminal before visible output falls back" do
+  test "a failure-coded incomplete terminal before visible output commits" do
     stream = start_armed(blocking_submit())
     ref = stream.ref
 
@@ -215,8 +217,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
        })}
     )
 
-    assert_receive {^ref, {:preflight, {:fallback, :bridge_failed_before_visible}}}, 2_000
-    refute_receive {^ref, {:data, _data}}, 100
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, data}}, 2_000
+    assert data =~ "response.incomplete"
+    assert_receive {^ref, :done}, 2_000
   end
 
   test "an ordinary incomplete terminal remains downstream-visible" do
@@ -297,7 +301,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "a completion with no data falls back instead of committing" do
-    stream = start_armed(blocking_submit())
+    stream = start_armed(fn -> :ok end)
     ref = stream.ref
 
     owner_frame(stream, :complete)

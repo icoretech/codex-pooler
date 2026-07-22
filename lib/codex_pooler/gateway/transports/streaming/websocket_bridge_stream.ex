@@ -205,8 +205,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   # The preflight phase resolves the first upstream signal WITHOUT emitting any
   # real stream part until it has told the dispatcher to commit. Lifecycle-only
-  # frames stay buffered; meaningful, unknown, malformed, and successful
-  # terminal frames commit conservatively. Recognized failures still fall back.
+  # frames stay buffered; meaningful, unknown, malformed, and structural
+  # terminal frames commit conservatively.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp preflight_loop(state) do
     %{
@@ -224,11 +224,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
           :commit -> commit_stream(state, text)
           :terminal -> commit_terminal(state, text)
           :buffer -> buffer_preflight(state, text, &preflight_loop/1)
-          :failure -> fall_back(state, :bridge_failed_before_visible)
         end
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
-        fall_back(state, :bridge_no_first_event)
+        preflight_complete(state)
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, {:error, error, _payload}} ->
         preflight_owner_error(state, error)
@@ -288,9 +287,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
           :buffer ->
             buffer_preflight(state, text, &preflight_after_result/1)
-
-          :failure ->
-            report_fallback(parent, ref, :bridge_failed_before_visible)
         end
 
       {:websocket_owner_frame, ^correlation_id, ^epoch, :complete} ->
@@ -398,6 +394,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   defp preflight_owner_error(state, error),
     do: fall_back(state, owner_error_reason(error))
+
+  defp preflight_complete(state) do
+    state = settle_task(state)
+
+    if committed_failure?(state.transport_failure) do
+      report_stream_error(
+        state.parent,
+        state.ref,
+        transport_failure_reason(state.transport_failure)
+      )
+
+      metadata_loop(state)
+    else
+      report_fallback(state.parent, state.ref, :bridge_no_first_event)
+    end
+  end
 
   defp fall_back(state, reason) do
     report_fallback(state.parent, state.ref, reason)
@@ -591,8 +603,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     case Jason.decode(text) do
       {:ok, %{} = decoded} ->
         case StreamProtocol.terminal_outcome(nil, decoded) do
-          {:ok, %{kind: :failed}} -> :failure
-          {:ok, %{kind: kind}} when kind in [:completed, :incomplete] -> :terminal
+          {:ok, %{kind: kind}} when kind in [:completed, :incomplete, :failed] -> :terminal
           _outcome -> nonterminal_preflight_class(decoded)
         end
 
@@ -628,6 +639,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
   defp error_reason(%{reason: reason}) when is_atom(reason), do: reason
   defp error_reason(reason) when is_atom(reason), do: reason
   defp error_reason(_reason), do: :upstream_websocket_error
+
+  defp transport_failure_reason(%{"reason" => "upstream_websocket_closed_before_terminal"}),
+    do: :upstream_websocket_closed_before_terminal
+
+  defp transport_failure_reason(%{"reason" => "upstream_websocket_receive_timeout"}),
+    do: :upstream_websocket_receive_timeout
+
+  defp transport_failure_reason(%{"reason" => "upstream_websocket_pong_deadline"}),
+    do: :upstream_websocket_pong_deadline
+
+  defp transport_failure_reason(_transport_failure), do: :upstream_websocket_error
 
   defp attempt_metadata(state) do
     %{
