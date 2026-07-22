@@ -11,11 +11,16 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
 
+  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Gateway.Routing.{BridgeRing, CircuitState}
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   import CodexPooler.AccountingTestSupport
+  import ExUnit.CaptureLog
 
   @actor_timeout 15_000
   @barrier_timeout 5_000
@@ -121,6 +126,89 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     end
   end
 
+  describe "degrade-to-skip contract for missing reference pairs" do
+    test "record_success skips with a logged warning and no affinity row" do
+      {plan, assignment, identity} = missing_reference_pair()
+
+      log =
+        capture_log(fn ->
+          assert BridgeRing.record_success(plan, assignment, identity) == :ok
+        end)
+
+      assert log =~ "routing side effect skipped"
+      assert log =~ "side_effect=affinity_upsert"
+      assert log =~ "upstream_identity_not_found"
+      assert Repo.aggregate(BridgeAffinity, :count) == 0
+    end
+
+    test "record_failure still returns the reason code, skips, and logs" do
+      {plan, assignment, identity} = missing_reference_pair()
+
+      log =
+        capture_log(fn ->
+          assert BridgeRing.record_failure(plan, assignment, identity, "upstream_5xx") ==
+                   "upstream_5xx"
+        end)
+
+      assert log =~ "routing side effect skipped"
+      assert log =~ "side_effect=demotion_upsert"
+      assert Repo.aggregate(BridgeDemotion, :count) == 0
+    end
+
+    test "circuit first-failure insert skips instead of failing the turn" do
+      {_plan, assignment, _identity} = missing_reference_pair()
+
+      auth = %{
+        pool: %Pool{id: Ecto.UUID.generate()},
+        api_key: %APIKey{id: Ecto.UUID.generate()}
+      }
+
+      model = %Model{id: Ecto.UUID.generate(), exposed_model_id: "missing-model"}
+
+      log =
+        capture_log(fn ->
+          assert {:ok, :skipped} =
+                   CircuitState.record_failure(
+                     auth,
+                     model,
+                     assignment,
+                     "proxy_stream",
+                     "upstream_5xx"
+                   )
+        end)
+
+      assert log =~ "routing side effect skipped"
+      assert log =~ "side_effect=circuit_failure"
+      assert Repo.aggregate(RoutingCircuitState, :count) == 0
+    end
+  end
+
+  defp missing_reference_pair do
+    identity_id = Ecto.UUID.generate()
+
+    plan = %{
+      affinity: %{
+        enabled?: true,
+        status: "miss",
+        row: nil,
+        kind: "codex_session",
+        key_hash: :crypto.hash(:sha256, "missing-reference-pair"),
+        pool_id: Ecto.UUID.generate(),
+        api_key_id: Ecto.UUID.generate(),
+        model_identifier: "missing-model"
+      }
+    }
+
+    assignment = %PoolUpstreamAssignment{
+      id: Ecto.UUID.generate(),
+      upstream_identity_id: identity_id
+    }
+
+    identity = %UpstreamIdentity{id: identity_id}
+
+    {plan, assignment, identity}
+  end
+
   defp run_schedule(fixture, fencing_order, routing_fun) do
     parent = self()
     release_ref = make_ref()
@@ -135,22 +223,34 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     routing_task_holder = {__MODULE__, make_ref()}
 
     try do
-      assert_receive {:fencing_first_lock_held, ^release_ref}, @barrier_timeout
+      assert_receive {:fencing_first_lock_held, ^release_ref, fencing_backend_pid},
+                     @barrier_timeout
+
+      routing_ref = make_ref()
 
       routing_task =
         Task.async(fn ->
           Sandbox.unboxed_run(Repo, fn ->
-            try do
-              routing_fun.()
-            rescue
-              error in Postgrex.Error -> {:deadlock, error.postgres[:code]}
-            end
+            # Hold one pooled connection for the whole operation so the
+            # backend pid reported here is the pid that blocks.
+            Repo.checkout(fn ->
+              %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+              send(parent, {:routing_backend, routing_ref, backend_pid})
+
+              try do
+                routing_fun.()
+              rescue
+                error in Postgrex.Error -> {:deadlock, error.postgres[:code]}
+              end
+            end)
           end)
         end)
 
       Process.put(routing_task_holder, routing_task)
 
-      held_relations = await_lock_waiter!()
+      assert_receive {:routing_backend, ^routing_ref, routing_backend_pid}, @barrier_timeout
+
+      held_relations = await_lock_waiter!(routing_backend_pid, fencing_backend_pid)
 
       send(fencing_task.pid, {:fencing_release, release_ref})
 
@@ -189,8 +289,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
       end
 
     Repo.transaction(fn ->
+      %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
       first.(identity_id)
-      send(parent, {:fencing_first_lock_held, release_ref})
+      send(parent, {:fencing_first_lock_held, release_ref, backend_pid})
 
       receive do
         {:fencing_release, ^release_ref} -> :ok
@@ -226,29 +327,34 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
     )
   end
 
-  defp await_lock_waiter!(deadline \\ nil) do
+  # Postgrex can pipeline BEGIN with the first statement, leaving the blocked
+  # backend reported as `idle in transaction` with query `BEGIN`, so the
+  # waiter is identified by its pinned backend pid and lock wait alone, its
+  # blocker is asserted to be the fencing backend, and the acquisition order
+  # is proven from the locks it already holds.
+  defp await_lock_waiter!(routing_backend_pid, fencing_backend_pid, deadline \\ nil) do
     deadline = deadline || System.monotonic_time(:millisecond) + @observer_deadline_ms
 
-    # Postgrex can pipeline BEGIN with the first statement, leaving the blocked
-    # backend reported as `idle in transaction` with query `BEGIN`, so the
-    # waiter is identified by its lock wait alone and the acquisition order is
-    # proven from the locks it already holds.
     %{rows: rows} =
       SQL.query!(
         Repo,
-        "SELECT pid FROM pg_stat_activity " <>
-          "WHERE wait_event_type = 'Lock' AND datname = current_database()",
-        []
+        "SELECT pg_blocking_pids($1) FROM pg_stat_activity " <>
+          "WHERE pid = $1 AND wait_event_type = 'Lock'",
+        [routing_backend_pid]
       )
 
     case rows do
-      [[pid] | _rest] ->
+      [[blocking_pids]] ->
+        assert fencing_backend_pid in blocking_pids,
+               "routing backend is lock-blocked by #{inspect(blocking_pids)}, " <>
+                 "not the fencing backend #{fencing_backend_pid}"
+
         %{rows: held} =
           SQL.query!(
             Repo,
             "SELECT relation::regclass::text FROM pg_locks " <>
               "WHERE pid = $1 AND granted AND relation IS NOT NULL",
-            [pid]
+            [routing_backend_pid]
           )
 
         Enum.map(held, fn [relation] -> relation end)
@@ -258,15 +364,16 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
           %{rows: snapshot} =
             SQL.query!(
               Repo,
-              "SELECT state, wait_event_type, wait_event, left(query, 90) " <>
+              "SELECT pid, state, wait_event_type, wait_event, left(query, 90) " <>
                 "FROM pg_stat_activity WHERE datname = current_database() " <>
                 "AND pid <> pg_backend_pid() AND state <> 'idle'",
               []
             )
 
           flunk(
-            "no backend entered a lock wait within #{@observer_deadline_ms}ms; " <>
-              "non-idle activity: #{inspect(snapshot, printable_limit: 800)}"
+            "routing backend #{routing_backend_pid} did not enter a lock wait " <>
+              "within #{@observer_deadline_ms}ms; non-idle activity: " <>
+              inspect(snapshot, printable_limit: 800)
           )
         else
           receive do
@@ -274,7 +381,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
             20 -> :ok
           end
 
-          await_lock_waiter!(deadline)
+          await_lock_waiter!(routing_backend_pid, fencing_backend_pid, deadline)
         end
     end
   end

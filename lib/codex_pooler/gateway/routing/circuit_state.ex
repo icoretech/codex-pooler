@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.Model
@@ -184,7 +186,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       do: {:error, :invalid_route_class}
 
   @spec record_failure(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t(), term()) ::
-          {:ok, RoutingCircuitState.t()} | {:error, term()}
+          {:ok, RoutingCircuitState.t() | :skipped} | {:error, term()}
   def record_failure(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
@@ -197,6 +199,41 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     now = now()
     settings = OperationalSettings.current()
 
+    run_failure_transaction(
+      auth,
+      model,
+      assignment,
+      route_class,
+      reason_code,
+      settings,
+      now,
+      _retry_left = 1
+    )
+  end
+
+  def record_failure(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        %PoolUpstreamAssignment{},
+        _route_class,
+        _reason_code
+      ),
+      do: {:error, :invalid_route_class}
+
+  # Same degrade/retry policy as the BridgeRing side-effect writers: a
+  # reference-lock rollback (missing or reassigned pair) and a retried
+  # residual deadlock must skip the circuit write instead of failing the
+  # turn's finalization path; other errors keep their existing plumbing.
+  defp run_failure_transaction(
+         auth,
+         model,
+         assignment,
+         route_class,
+         reason_code,
+         settings,
+         now,
+         retry_left
+       ) do
     Repo.transaction(fn ->
       state = latest_for_update(auth, model, assignment, route_class)
 
@@ -229,16 +266,53 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       end
     end)
     |> unwrap_transaction()
+    |> degrade_reference_skip(assignment)
+  rescue
+    error in Postgrex.Error ->
+      cond do
+        deadlock?(error) and retry_left > 0 ->
+          run_failure_transaction(
+            auth,
+            model,
+            assignment,
+            route_class,
+            reason_code,
+            settings,
+            now,
+            retry_left - 1
+          )
+
+        deadlock?(error) ->
+          log_skipped_circuit_write(assignment, "routing_side_effect_deadlock")
+          {:ok, :skipped}
+
+        true ->
+          reraise error, __STACKTRACE__
+      end
   end
 
-  def record_failure(
-        %{pool: %Pool{}, api_key: %APIKey{}},
-        %Model{},
-        %PoolUpstreamAssignment{},
-        _route_class,
-        _reason_code
-      ),
-      do: {:error, :invalid_route_class}
+  defp degrade_reference_skip({:error, %{code: code}}, assignment)
+       when code in [
+              :upstream_identity_not_found,
+              :pool_upstream_assignment_not_found,
+              :upstream_reference_mismatch
+            ] do
+    log_skipped_circuit_write(assignment, Atom.to_string(code))
+    {:ok, :skipped}
+  end
+
+  defp degrade_reference_skip(result, _assignment), do: result
+
+  defp deadlock?(%Postgrex.Error{postgres: %{code: :deadlock_detected}}), do: true
+  defp deadlock?(%Postgrex.Error{}), do: false
+
+  defp log_skipped_circuit_write(assignment, code) do
+    Logger.warning(
+      "routing side effect skipped side_effect=circuit_failure code=#{code} " <>
+        "pool_upstream_assignment_id=#{assignment.id} " <>
+        "upstream_identity_id=#{assignment.upstream_identity_id}"
+    )
+  end
 
   @spec record_neutral_completion(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
           {:ok, :ok | RoutingCircuitState.t()} | {:error, term()}
