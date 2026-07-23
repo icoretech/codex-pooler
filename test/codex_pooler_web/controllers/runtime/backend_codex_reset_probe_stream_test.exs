@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -45,9 +46,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
 
   for {label, mode, expected_status, expected_error} <- [
         {"generic 429", FakeUpstream.generic_429(), 429, "upstream_rate_limited"},
-        {"generic 5xx", FakeUpstream.generic_5xx(), 503, "upstream_status"},
-        {"close before headers", FakeUpstream.close_before_headers(), 502,
-         "upstream_network_error"}
+        {"generic 5xx", FakeUpstream.generic_5xx(), 503, "upstream_status"}
       ] do
     test "#{label} does not confirm or reblock the guarded SSE reset probe", %{conn: conn} do
       fixture = reset_probe_fixture(unquote(Macro.escape(mode)))
@@ -65,6 +64,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     end
   end
 
+  test "close before SSE headers leaves the guarded reset probe claimed", %{conn: conn} do
+    fixture = reset_probe_fixture(FakeUpstream.close_before_headers())
+
+    {conn, logs} =
+      with_log([level: :warning], fn -> post_reset_probe(conn, fixture.setup) end)
+
+    assert_upstream_transport_warning!(
+      logs,
+      fixture.setup,
+      "http_sse",
+      "closed",
+      ["reset probe stream fixture"]
+    )
+
+    assert conn.status == 502
+
+    assert_reset_probe_outcome!(
+      fixture,
+      "consumed_pending_probe",
+      "failed",
+      "upstream_network_error"
+    )
+  end
+
   test "timeout before SSE headers leaves the guarded reset probe claimed", %{conn: conn} do
     setup_runtime_timeout(100)
     release_ref = make_ref()
@@ -74,12 +97,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
         FakeUpstream.timeout_before_headers(notify: self(), release_ref: release_ref)
       )
 
-    conn = post_reset_probe(conn, fixture.setup)
+    {conn, logs} =
+      with_log([level: :warning], fn ->
+        conn = post_reset_probe(conn, fixture.setup)
 
-    assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   1_000
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                        ^release_ref},
+                       1_000
 
-    send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+        send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+        conn
+      end)
+
+    assert_upstream_transport_warning!(
+      logs,
+      fixture.setup,
+      "http_sse",
+      "timeout",
+      ["reset probe stream fixture"]
+    )
+
     assert conn.status == 502
 
     assert_reset_probe_outcome!(

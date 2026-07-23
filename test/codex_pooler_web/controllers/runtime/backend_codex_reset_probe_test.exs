@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -200,9 +201,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       {"quota-shaped 429", quota_exhausted_response(), 429, "upstream_rate_limited", "reblocked"},
       {"generic 429", FakeUpstream.generic_429(), 429, "upstream_rate_limited",
        "consumed_pending_probe"},
-      {"5xx", FakeUpstream.generic_5xx(), 503, "upstream_status", "consumed_pending_probe"},
-      {"connection close", FakeUpstream.close_before_headers(), 502, "upstream_network_error",
-       "consumed_pending_probe"}
+      {"5xx", FakeUpstream.generic_5xx(), 503, "upstream_status", "consumed_pending_probe"}
     ]
 
     for {label, response_mode, response_status, error_code, expected_phase} <- scenarios do
@@ -221,6 +220,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     end
   end
 
+  test "HTTP reset probe connection close retains the one-shot claim", %{conn: conn} do
+    fixture = reset_probe_fixture(FakeUpstream.close_before_headers())
+
+    {response, logs} =
+      with_log([level: :warning], fn ->
+        post_reset_probe(conn, fixture, "connection close reset probe")
+      end)
+
+    assert_upstream_transport_warning!(
+      logs,
+      fixture.setup,
+      "http_json",
+      "closed",
+      ["connection close reset probe"]
+    )
+
+    assert response.status == 502
+    assert_failure_accounting!(fixture, 502, "upstream_network_error")
+    assert_probe_outcome!(fixture, "consumed_pending_probe")
+    assert_no_replacement_probe!(conn, fixture, "connection close")
+  end
+
   test "HTTP reset probe receive timeout retains the one-shot claim", %{conn: conn} do
     release_ref = make_ref()
 
@@ -236,17 +257,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
 
     parent = self()
 
-    task =
-      Task.async(fn ->
-        Sandbox.allow(Repo, parent, self())
-        post_reset_probe(conn, fixture, "receive timeout reset probe")
+    {response, logs} =
+      with_log([level: :warning], fn ->
+        task =
+          Task.async(fn ->
+            Sandbox.allow(Repo, parent, self())
+            post_reset_probe(conn, fixture, "receive timeout reset probe")
+          end)
+
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                        ^release_ref},
+                       1_000
+
+        response = Task.await(task, 1_000)
+        send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+        response
       end)
 
-    assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   1_000
-
-    response = Task.await(task, 1_000)
-    send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+    assert_upstream_transport_warning!(
+      logs,
+      fixture.setup,
+      "http_json",
+      "timeout",
+      ["receive timeout reset probe"]
+    )
 
     assert response.status == 502
     assert_failure_accounting!(fixture, 502, "upstream_network_error")

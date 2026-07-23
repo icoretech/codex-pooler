@@ -166,6 +166,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     refute metadata_text =~ "auth.json"
   end
 
+  def assert_upstream_transport_warning!(logs, setup, transport, reason, sentinels \\ []) do
+    warnings =
+      logs
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.contains?(&1, "gateway upstream transport failed"))
+
+    assert [warning] = warnings
+    assert warning =~ "transport=#{transport}"
+    assert warning =~ "endpoint=/backend-api/codex/responses"
+    assert warning =~ "exception=Req.TransportError"
+    assert warning =~ "reason=#{reason}"
+    assert warning =~ "upstream_identity_id=#{setup.identity.id}"
+    assert warning =~ "pool_upstream_assignment_id=#{setup.assignment.id}"
+
+    Enum.each([setup.authorization, setup.raw_key, "upstream-token" | sentinels], fn sentinel ->
+      refute logs =~ sentinel
+    end)
+  end
+
   def assert_safe_stream_metadata!(request, attempts) do
     metadata_text =
       inspect({request.request_metadata, Enum.map(attempts, & &1.response_metadata)})

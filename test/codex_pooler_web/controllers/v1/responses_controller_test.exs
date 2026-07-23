@@ -5135,18 +5135,19 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     setup = gateway_setup(upstream)
     port = start_public_endpoint!()
 
-    {:ok, http_conn, ref, started} =
-      start_public_v1_responses_request(port, setup, %{
-        "model" => setup.model.exposed_model_id,
-        "input" => "synthetic timeout stream request",
-        "stream" => true
-      })
-
-    assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid, ^release_ref},
-                   @timing_observation_timeout_ms
-
     logs =
       capture_log([level: :warning], fn ->
+        {:ok, http_conn, ref, started} =
+          start_public_v1_responses_request(port, setup, %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic timeout stream request",
+            "stream" => true
+          })
+
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, upstream_pid,
+                        ^release_ref},
+                       @timing_observation_timeout_ms
+
         try do
           {http_conn, status, _response_headers, header_elapsed_ms, chunks, done?} =
             await_public_response_headers!(
