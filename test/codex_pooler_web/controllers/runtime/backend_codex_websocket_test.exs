@@ -8767,11 +8767,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       end)
 
     assert length(Regex.scan(~r/websocket native turn failed/, log)) == 1
-    assert log =~ "request_id=ws-ordinary-task-failure-log"
+    assert log =~ "request_id=#{failure_log_fingerprint("ws-ordinary-task-failure-log")}"
     assert log =~ "endpoint=_backend-api_codex_responses"
     assert log =~ "transport=websocket"
     assert log =~ "route_class=proxy_websocket"
-    assert log =~ "error_code=upstream_request_failed"
+    assert log =~ "error_code=#{failure_log_fingerprint("upstream_request_failed")}"
     assert log =~ "phase=receive"
     assert log =~ "visible_output=before_visible_output"
     refute log =~ "websocket response task failed"
@@ -9734,5 +9734,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   defp execute_websocket_response(auth, raw_payload, opts, push_frame) do
     request_options = RequestOptions.for_websocket(opts)
     RuntimeGateway.execute_websocket_response(auth, raw_payload, request_options, push_frame)
+  end
+
+  defp failure_log_fingerprint(value) when is_binary(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 12))
   end
 end

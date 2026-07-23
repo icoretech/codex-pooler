@@ -516,11 +516,69 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
         []
       )
 
-    assert line =~ "error_code=upstream_request_failed"
+    assert line =~ "request_id=#{failure_log_fingerprint("ws-failed-turn")}"
+    assert line =~ "error_code=#{failure_log_fingerprint("upstream_request_failed")}"
     assert line =~ "visible_output=before_visible_output"
     assert line =~ "reason_class=non_atom_reason"
     assert line =~ "codex_session_id=#{log_id_prefix(codex_session_id)}"
     refute logs =~ sentinel
+  end
+
+  test "failed native websocket turn fingerprints opaque request and error identifiers" do
+    opaque_request_id = "opaque-request-id-secret-4fded2a2"
+    opaque_error_code = "opaque-error-code-secret-9a7855b1"
+
+    logs =
+      capture_websocket_lifecycle_log(
+        fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                     %{
+                       request_id: opaque_request_id,
+                       error_code: opaque_error_code,
+                       transport: "websocket",
+                       phase: "receive"
+                     },
+                     {:error, opaque_error_code}
+                   )
+        end,
+        :warning
+      )
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.failed_native_websocket_turn_message(),
+        ~w(error_code phase reason_class request_id transport),
+        []
+      )
+
+    assert line =~ "request_id=#{failure_log_fingerprint(opaque_request_id)}"
+    assert line =~ "error_code=#{failure_log_fingerprint(opaque_error_code)}"
+    refute logs =~ opaque_request_id
+    refute logs =~ opaque_error_code
+  end
+
+  test "failed native websocket turn preserves atom error codes" do
+    logs =
+      capture_websocket_lifecycle_log(fn ->
+        assert :ok =
+                 WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                   %{request_id: "ws-owner-drained", error_code: :owner_drained},
+                   :owner_drained
+                 )
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.failed_native_websocket_turn_message(),
+        ~w(error_code reason_class request_id),
+        []
+      )
+
+    assert line =~ "request_id=#{failure_log_fingerprint("ws-owner-drained")}"
+    assert line =~ "error_code=owner_drained"
   end
 
   test "failed native websocket turn severity treats expected lifecycle outcomes as info" do
@@ -669,6 +727,13 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   defp query_command(_query), do: "UNKNOWN"
 
   defp log_id_prefix(id) when is_binary(id), do: String.slice(id, 0, 8)
+
+  defp failure_log_fingerprint(value) when is_binary(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 12))
+  end
 
   defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do
     lifecycle_lines =

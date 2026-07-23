@@ -479,6 +479,112 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert {:ok, ^done_state} = CodexResponsesSocket.handle_info(drain_frame, done_state)
   end
 
+  test "owner drain logs one native turn failure before its late task completion" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_request_metadata(request_id: "ws-owner-drain-native-log")
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    state =
+      public_turn_state(task_pid, %{
+        opts: opts,
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 19,
+          correlation_id: "corr-drain-native-log",
+          active_turn_reconnect?: false
+        }
+      })
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
+
+    drain_frame =
+      {:websocket_owner_frame, "corr-drain-native-log", 19, task_pid,
+       {:error, :owner_drained, safe_payload}}
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    logs =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert {:push, {:text, payload}, drained_state} =
+                 CodexResponsesSocket.handle_info(drain_frame, state)
+
+        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+
+        assert {:ok, done_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid, {:error, :owner_drained}},
+                   drained_state
+                 )
+
+        assert done_state.public_turn_aborted?
+        assert MapSet.size(done_state.tasks) == 0
+      end)
+
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-native-log")}"
+    assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
+  end
+
+  test "non-public owner drain logs one native turn failure from its late task completion" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+
+    state = %{
+      opts:
+        %{}
+        |> RequestOptions.for_websocket()
+        |> RequestOptions.put_request_metadata(request_id: "ws-owner-drain-late-native-log"),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 20,
+        correlation_id: "corr-drain-late-native-log",
+        active_turn_reconnect?: false
+      }
+    }
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
+
+    drain_frame =
+      {:websocket_owner_frame, "corr-drain-late-native-log", 20,
+       {:error, :owner_drained, safe_payload}}
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    logs =
+      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+        assert {:push, {:text, payload}, drained_state} =
+                 CodexResponsesSocket.handle_info(drain_frame, state)
+
+        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+
+        assert {:ok, done_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid, {:error, :owner_drained}},
+                   drained_state
+                 )
+
+        assert MapSet.size(done_state.tasks) == 0
+      end)
+
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-late-native-log")}"
+    assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
+  end
+
   @tag :task_1_fix_red
   test "owner drain schedules stay aborted through final owner down" do
     for order <- [:task_done_first, :owner_complete_first] do
@@ -725,5 +831,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       monitor when is_reference(monitor) -> Process.demonitor(monitor, [:flush])
       _missing -> :ok
     end
+  end
+
+  defp failure_log_fingerprint(value) when is_binary(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, 12))
   end
 end

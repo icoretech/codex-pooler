@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   ]
 
   @id_prefix_length 8
+  @failure_identifier_hash_length 12
 
   @sensitive_value_patterns [
     "auth.json",
@@ -63,12 +64,12 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @spec log_failed_native_websocket_turn(event_metadata(), term()) :: :ok
   def log_failed_native_websocket_turn(metadata, reason) do
+    metadata = normalize_metadata(metadata)
+
     log_event(
-      failed_native_websocket_turn_level(
-        metadata_value(normalize_metadata(metadata), :error_code)
-      ),
+      failed_native_websocket_turn_level(metadata_value(metadata, :error_code)),
       @failed_native_websocket_turn_message,
-      metadata,
+      failure_log_metadata(metadata),
       reason
     )
   end
@@ -138,6 +139,33 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   defp metadata_value(metadata, key) do
     Map.get(metadata, key) || Map.get(metadata, Atom.to_string(key))
   end
+
+  defp failure_log_metadata(metadata) do
+    metadata
+    |> replace_failure_identifier(:request_id)
+    |> replace_failure_identifier(:error_code)
+  end
+
+  defp replace_failure_identifier(metadata, key) do
+    value = metadata_value(metadata, key)
+
+    metadata = Map.delete(metadata, Atom.to_string(key))
+
+    case failure_identifier(value) do
+      nil -> Map.delete(metadata, key)
+      identifier -> Map.put(metadata, key, identifier)
+    end
+  end
+
+  defp failure_identifier(value) when is_binary(value) do
+    "sha256_" <>
+      (:crypto.hash(:sha256, value)
+       |> Base.encode16(case: :lower)
+       |> String.slice(0, @failure_identifier_hash_length))
+  end
+
+  defp failure_identifier(value) when is_atom(value), do: Atom.to_string(value)
+  defp failure_identifier(_value), do: nil
 
   defp safe_log_value(:codex_session_id, value), do: safe_id_prefix(value)
   defp safe_log_value(_key, value), do: safe_log_value(value)

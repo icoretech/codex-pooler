@@ -250,6 +250,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        do: {:ok, state}
 
   defp handle_public_owner_payload({:error, :owner_drained, payload}, state) do
+    log_failed_native_websocket_turn(
+      state,
+      Map.fetch!(state, :public_response_task_pid),
+      payload,
+      false
+    )
+
     state =
       state
       |> Map.put(:websocket_owner_drain_observed?, true)
@@ -280,6 +287,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload({:error, :owner_drained, payload}, state) do
+    maybe_log_failed_native_websocket_turn(
+      state,
+      tracked_response_task_pid(state),
+      payload,
+      false
+    )
+
     state =
       state
       |> Map.put(:websocket_owner_drain_observed?, true)
@@ -581,6 +595,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     MapSet.member?(Map.get(state, :tasks, MapSet.new()), pid)
   end
 
+  defp tracked_response_task_pid(state) do
+    state
+    |> Map.get(:tasks, MapSet.new())
+    |> Enum.find(&is_pid/1)
+  end
+
   defp public_response_payload?(payload, state) do
     Adapter.public_responses_stream?(state) and
       Adapter.request_row_producing_response_payload?(payload)
@@ -732,6 +752,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> failed_native_websocket_turn_metadata(pid, reason, visible_output?)
     |> WebsocketConnectionLogger.log_failed_native_websocket_turn(reason)
   end
+
+  defp maybe_log_failed_native_websocket_turn(state, pid, reason, visible_output?)
+       when is_pid(pid) do
+    log_failed_native_websocket_turn(state, pid, reason, visible_output?)
+  end
+
+  defp maybe_log_failed_native_websocket_turn(_state, _pid, _reason, _visible_output?), do: :ok
 
   defp failed_native_websocket_turn_metadata(state, pid, reason, visible_output?) do
     opts = response_task_opts(state, pid)
