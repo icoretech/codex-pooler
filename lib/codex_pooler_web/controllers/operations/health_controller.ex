@@ -33,14 +33,7 @@ defmodule CodexPoolerWeb.Operations.HealthController do
   end
 
   @spec draining?() :: boolean()
-  defp draining?, do: OperationalStatus.draining?(drain_marker_path: drain_marker_path())
-
-  @spec drain_marker_path() :: String.t() | nil
-  defp drain_marker_path do
-    :codex_pooler
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:drain_marker_path)
-  end
+  defp draining?, do: OperationalStatus.draining?()
 
   defp readiness_probe do
     :codex_pooler

@@ -5,14 +5,13 @@ defmodule CodexPooler.Gateway.Websocket do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.Contracts
-  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Admission
 
   alias CodexPooler.Gateway.Transports.Websocket.{
-    RolloutDrain,
     UpstreamWebsocketSession,
     WebsocketOwnerContract,
     WebsocketOwnerForwarder,
@@ -69,7 +68,7 @@ defmodule CodexPooler.Gateway.Websocket do
   end
 
   defp reject_if_rollout_draining do
-    if RolloutDrain.draining?(),
+    if OperationalStatus.draining?(),
       do: {:error, :owner_drained},
       else: :ok
   end

@@ -12,9 +12,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   - `owner_unavailable` during request/processed forwarding before upstream
     I/O: request and attempt finalize failed, turn finalizes failed, HTTP/status
     503, code `owner_unavailable`.
-  - `owner_drained` during active turn: request and attempt failed, response
-    status 499, turn interrupted, session interrupted, lease release reason
-    `owner_drained`.
+  - `owner_drained` after the rollout deadline: request and attempt failed,
+    response status 499, turn interrupted, session interrupted, lease release
+    reason `owner_drained`; before that deadline, active turns remain alive.
   - late owner drain after request success: request and attempt remain
     succeeded; turn remains or becomes succeeded; no owner error overwrite.
   - persistence failure during owner exit: sanitized observability event plus
@@ -51,9 +51,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   }
 
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
   alias CodexPooler.Repo
@@ -3613,30 +3615,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  test "local owner clean exit releases lease interrupts active turn and permits fresh owner reconnect" do
+  @tag :rollout_drain_deadline_contract
+  test "local owner deadline expiry releases lease interrupts active turn and permits fresh owner reconnect" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_owner_death"}))
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
-      CodexResponsesSocket.init(%{
-        auth: auth,
-        opts: %{
-          request_id: "ws-owner-clean-exit",
-          accepted_turn_state: "stable-ws-owner-clean-exit",
-          client_ip: "127.0.0.1"
-        }
-      })
+      owner_socket(auth, "ws-owner-clean-exit", "stable-ws-owner-clean-exit",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
 
-    %{request: request, attempt: attempt, turn: turn} =
-      active_turn_fixture(setup, auth, state.codex_session)
+    payload = websocket_payload(setup, "deadline expiry while owner turn is active")
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+
+    assert [turn] =
+             Repo.all(
+               from turn in CodexTurn,
+                 where: turn.codex_session_id == ^state.codex_session.id
+             )
+
+    request = Repo.get!(Request, turn.request_id)
+    attempt = Repo.one!(from attempt in Attempt, where: attempt.request_id == ^request.id)
 
     {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
     old_token = state.codex_session.owner_lease_token
     owner_ref = Process.monitor(owner_pid)
 
-    :ok = GenServer.stop(owner_pid)
+    harness = start_rollout_drain_harness()
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 25, deadline_margin_ms: 20, deadline_floor_ms: 10] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 10}
+    assert Repo.get!(CodexTurn, turn.id).status == "in_progress"
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(harness.deadline, 10)
     assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
+    assert_response_task_stopped!(state)
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 1_000)
 
     assert released_lease = released_owner_lease(state.codex_session.id, old_token)
     assert released_lease.metadata["release_reason"] == "owner_drained"
@@ -3652,14 +3677,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert Repo.get!(Attempt, attempt.id).network_error_code == "owner_drained"
 
     {:ok, reconnect_state} =
-      CodexResponsesSocket.init(%{
-        auth: auth,
-        opts: %{
-          request_id: "ws-owner-clean-exit-reconnect",
-          accepted_turn_state: "stable-ws-owner-clean-exit",
-          client_ip: "127.0.0.1"
-        }
-      })
+      owner_socket(
+        auth,
+        "ws-owner-clean-exit-reconnect",
+        "stable-ws-owner-clean-exit"
+      )
 
     try do
       assert reconnect_state.codex_session.id == state.codex_session.id
@@ -3671,6 +3693,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                reconnect_state.codex_session.owner_lease_token
     after
       CodexResponsesSocket.terminate(:closed, reconnect_state)
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
     end
   end
 
@@ -4067,6 +4090,386 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_no_leak!("late owner drain detach logs", logs)
 
     assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
+  end
+
+  @tag :rollout_drain_t5
+  test "T5 socket terminate aborts an active owner while rollout drain waits" do
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-rollout-wait-disconnect", "rollout-wait-disconnect",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    payload = websocket_payload(setup, "disconnect while rollout drain waits")
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+    owner_pid = state.websocket_owner_pid
+    owner_ref = Process.monitor(owner_pid)
+
+    session =
+      Repo.get_by!(CodexSession, session_key: turn_state_session_key("rollout-wait-disconnect"))
+
+    assert [turn] = Repo.all(from(t in CodexTurn, where: t.codex_session_id == ^session.id))
+    request = Repo.get!(Request, turn.request_id)
+    attempt = Repo.one!(from(a in Attempt, where: a.request_id == ^request.id))
+
+    previous_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
+    harness = start_rollout_drain_harness()
+    deadline = harness.deadline
+    WebsocketRolloutDrainSupport.configure_rollout_drain_server(harness.name)
+
+    on_exit(fn ->
+      if previous_drain_config do
+        Application.put_env(:codex_pooler, RolloutDrain, previous_drain_config)
+      else
+        Application.delete_env(:codex_pooler, RolloutDrain)
+      end
+    end)
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    try do
+      assert_receive {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
+      assert Process.alive?(owner_pid)
+
+      terminate_task =
+        Task.async(fn -> CodexResponsesSocket.terminate({:shutdown, :rollout}, state) end)
+
+      assert :ok = Task.await(terminate_task, 1_000)
+      assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
+      assert_response_task_stopped!(state)
+
+      assert_owner_interruption_state!(%{
+        request: request,
+        attempt: attempt,
+        turn: turn,
+        session: session,
+        error_code: "owner_drained"
+      })
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert %{
+               owners_seen: 1,
+               owners_drained: 0,
+               owners_failed: 1,
+               turns_completed: 0,
+               turns_aborted: 0
+             } = Task.await(drain_task, 1_000)
+
+      refute_received {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
+    after
+      send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
+    end
+  end
+
+  @tag :rollout_drain_t1
+  @tag :rollout_drain_t7
+  test "T1/T7 real terminal succeeds before owner stop and precedes the reconnect close" do
+    release_ref = make_ref()
+
+    terminal = %{
+      "type" => "response.completed",
+      "response" => %{"id" => "resp_rollout_terminal_order", "status" => "completed"}
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_terminal_then_close_barrier(terminal,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_id = "ws-owner-rollout-terminal-order"
+    turn_state = "stable-ws-owner-rollout-terminal-order"
+    {:ok, state} = owner_socket(auth, request_id, turn_state)
+    owner_pid = state.websocket_owner_pid
+    owner_ref = Process.monitor(owner_pid)
+
+    payload = websocket_payload(setup, "synthetic rollout terminal ordering")
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    harness = start_rollout_drain_harness()
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, wait_ms}
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert {:push, {:text, terminal_frame}, state} = receive_owner_socket_push(state)
+    assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
+    assert {:ok, state} = receive_owner_socket_complete(state)
+    assert {:ok, state} = receive_socket_done(state)
+
+    turn =
+      Repo.one!(
+        from turn in CodexTurn,
+          where: turn.codex_session_id == ^state.codex_session.id
+      )
+
+    request = Repo.get!(Request, turn.request_id)
+    attempt = Repo.one!(from attempt in Attempt, where: attempt.request_id == ^request.id)
+    assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
+
+    reconnect_logs =
+      capture_log([level: :warning], fn ->
+        assert {:stop, :normal, {1001, "websocket owner is draining"}, _reconnect_state} =
+                 owner_socket(auth, "ws-owner-rollout-terminal-order-reconnect", turn_state)
+      end)
+
+    assert reconnect_logs =~ WebsocketConnectionLogger.init_failed_message()
+    assert reconnect_logs =~ "phase=init"
+    assert reconnect_logs =~ "reason_class=owner_drained"
+    refute reconnect_logs =~ turn_state
+    refute reconnect_logs =~ "resp_rollout_terminal_order"
+    refute reconnect_logs =~ @sentinel
+    refute reconnect_logs =~ "authorization"
+    refute reconnect_logs =~ "bearer"
+
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, wait_ms)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
+    assert %{turns_completed: 1, turns_aborted: 0} = Task.await(drain_task, 1_000)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
+    assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
+
+    CodexResponsesSocket.terminate(:closed, Map.delete(state, :websocket_owner_downstream))
+  end
+
+  @tag :rollout_drain_t8
+  test "T8 delayed old-owner termination preserves replacement ownership and turn state" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, old_session} =
+      Gateway.start_codex_session(auth, %{
+        accepted_turn_state: "stable-ws-owner-delayed-terminate",
+        owner_instance_id: "old-owner.example"
+      })
+
+    old_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    {:ok, old_owner} =
+      GenServer.start_link(WebsocketOwnerSession,
+        codex_session_id: old_session.id,
+        owner_lease_token: old_session.owner_lease_token,
+        owner_instance_id: old_session.owner_instance_id,
+        upstream: old_upstream
+      )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _old_upstream_pid}
+
+    on_exit(fn ->
+      if Process.alive?(old_owner), do: GenServer.stop(old_owner)
+    end)
+
+    old_owner_ref = Process.monitor(old_owner)
+    old_lease = active_owner_lease(old_session.id)
+
+    replacement_owner_instance = "replacement-owner.example"
+
+    replacement_opts =
+      %{owner_instance_id: replacement_owner_instance}
+      |> RequestOptions.for_websocket()
+
+    assert {:ok, replacement_session} =
+             SessionContinuity.replace_unavailable_owner_lease(old_session, replacement_opts)
+
+    replacement_lease = active_owner_lease(old_session.id)
+    assert replacement_lease.lease_token == replacement_session.owner_lease_token
+    assert replacement_lease.lease_token != old_lease.lease_token
+    assert replacement_lease.owner_instance_id == replacement_owner_instance
+
+    replacement_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    {:ok, replacement_owner} =
+      GenServer.start_link(WebsocketOwnerSession,
+        codex_session_id: replacement_session.id,
+        owner_lease_token: replacement_session.owner_lease_token,
+        owner_instance_id: replacement_session.owner_instance_id,
+        upstream: replacement_upstream
+      )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _replacement_upstream_pid}
+
+    on_exit(fn ->
+      if Process.alive?(replacement_owner), do: GenServer.stop(replacement_owner)
+    end)
+
+    %{request: request, attempt: attempt, turn: turn} =
+      active_turn_fixture(setup, auth, replacement_session)
+
+    assert :ok = GenServer.stop(old_owner)
+    assert_receive {:DOWN, ^old_owner_ref, :process, ^old_owner, :normal}
+
+    assert Process.alive?(replacement_owner)
+    replacement_request = Repo.get!(Request, request.id)
+    replacement_attempt = Repo.get!(Attempt, attempt.id)
+    replacement_turn = Repo.get!(CodexTurn, turn.id)
+    replacement_session = Repo.get!(CodexSession, replacement_session.id)
+
+    assert replacement_request.status == "in_progress"
+    assert is_nil(replacement_request.last_error_code)
+    assert replacement_attempt.status == "in_progress"
+    assert is_nil(replacement_attempt.network_error_code)
+    assert replacement_turn.status == "in_progress"
+    assert replacement_turn.request_id == replacement_request.id
+    assert replacement_turn.codex_session_id == replacement_session.id
+    assert is_nil(replacement_turn.error_code)
+    assert replacement_session.status == "active"
+
+    assert replacement_session.owner_lease_token == replacement_lease.lease_token
+
+    assert Repo.get!(BridgeOwnerLease, replacement_lease.id).status == "active"
+    assert Repo.get!(BridgeOwnerLease, old_lease.id).status == "released"
+
+    assert {:ok, %{request: succeeded_request, attempt: succeeded_attempt}} =
+             Accounting.finalize_request(request, attempt, %{
+               request_status: "succeeded",
+               attempt_status: "succeeded",
+               response_status_code: 200,
+               usage: %{status: "usage_unknown", source: "replacement_owner_turn"}
+             })
+
+    SessionContinuity.complete_codex_turn(
+      {:ok, %{request: succeeded_request, attempt: succeeded_attempt}},
+      "succeeded",
+      nil
+    )
+
+    assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
+    assert :ok = GenServer.stop(replacement_owner)
+    assert_owner_success_preserved!(%{request: request, attempt: attempt, turn: turn})
+  end
+
+  @tag :rollout_drain_t8
+  test "T8 current-owner termination releases its lease and interrupts its active turn" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{
+        accepted_turn_state: "stable-ws-current-owner-terminate",
+        owner_instance_id: "current-owner.example"
+      })
+
+    owner_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    {:ok, owner} =
+      GenServer.start_link(WebsocketOwnerSession,
+        codex_session_id: session.id,
+        owner_lease_token: session.owner_lease_token,
+        owner_instance_id: session.owner_instance_id,
+        upstream: owner_upstream
+      )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _owner_upstream_pid}
+    owner_ref = Process.monitor(owner)
+    lease = active_owner_lease(session.id)
+    %{request: request, attempt: attempt, turn: turn} = active_turn_fixture(setup, auth, session)
+
+    assert :ok = GenServer.stop(owner)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+
+    assert released_owner_lease(session.id, lease.lease_token).metadata["release_reason"] ==
+             "owner_drained"
+
+    assert_owner_interruption_state!(%{
+      request: request,
+      attempt: attempt,
+      turn: turn,
+      session: session,
+      error_code: "owner_drained"
+    })
+  end
+
+  test "T8 same-token plain-HTTP fallback turn survives the drained owner's delayed terminate" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{
+        accepted_turn_state: "stable-ws-fallback-turn-survives-terminate",
+        owner_instance_id: "fallback-owner.example"
+      })
+
+    owner_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    {:ok, owner} =
+      GenServer.start_link(WebsocketOwnerSession,
+        codex_session_id: session.id,
+        owner_lease_token: session.owner_lease_token,
+        owner_instance_id: session.owner_instance_id,
+        upstream: owner_upstream
+      )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _owner_upstream_pid}
+    owner_ref = Process.monitor(owner)
+
+    %{request: ws_request, attempt: ws_attempt, turn: ws_turn} =
+      active_turn_fixture(setup, auth, session)
+
+    %{request: fallback_request, attempt: fallback_attempt, turn: fallback_turn} =
+      active_turn_fixture(setup, auth, session, "http_sse")
+
+    assert :ok = GenServer.stop(owner)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+
+    assert_owner_interruption_state!(%{
+      request: ws_request,
+      attempt: ws_attempt,
+      turn: ws_turn,
+      session: session,
+      error_code: "owner_drained"
+    })
+
+    surviving_request = Repo.get!(Request, fallback_request.id)
+    surviving_attempt = Repo.get!(Attempt, fallback_attempt.id)
+    surviving_turn = Repo.get!(CodexTurn, fallback_turn.id)
+
+    assert surviving_request.status == "in_progress"
+    assert is_nil(surviving_request.last_error_code)
+    assert surviving_attempt.status == "in_progress"
+    assert is_nil(surviving_attempt.network_error_code)
+    assert surviving_turn.status == "in_progress"
+    assert is_nil(surviving_turn.error_code)
   end
 
   @tag :owner_interruption_terminal_state
@@ -6095,7 +6498,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {owner_pid, owner_monitor, owner_down}
   end
 
-  defp active_turn_fixture(setup, auth, session) do
+  defp active_turn_fixture(setup, auth, session, transport \\ "websocket") do
     assert {:ok, reserved} =
              Accounting.reserve(
                auth,
@@ -6103,7 +6506,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                %{"model" => setup.model.exposed_model_id, "input" => "owner lifecycle"},
                %{
                  endpoint: "/backend-api/codex/responses",
-                 transport: "websocket",
+                 transport: transport,
                  correlation_id: "ws-owner-lifecycle-#{System.unique_integer([:positive])}",
                  request_metadata: %{"codex_session_id" => session.id}
                }

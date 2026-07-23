@@ -8,10 +8,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
@@ -49,6 +51,104 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert fresh_owner != owner
     assert_receive {:websocket_owner_harness_upstream_started, fresh_upstream_pid}
     assert fresh_upstream_pid != upstream_pid
+  end
+
+  @tag :rollout_drain_t3
+  test "T3 marker refuses owner creation and reuse while an existing turn still completes",
+       context do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["in-flight-delta", "in-flight-terminal"]
+      )
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("marker-in-flight"))
+
+    submit_task =
+      Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, "in-flight") end)
+
+    assert_receive {:websocket_owner_frame, "marker-in-flight", 1, {:data, "in-flight-delta"}}
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+
+    _marker_path = WebsocketRolloutDrainSupport.configure_drain_marker!()
+
+    fresh_context = unique_owner_context(context, "marker-refusal")
+    fresh_upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    assert {:error, :owner_drained} = start_owner(fresh_context, upstream: fresh_upstream)
+    assert {:error, :owner_drained} = start_owner(context, upstream: upstream)
+    assert Process.alive?(owner)
+    refute_received {:websocket_owner_harness_upstream_started, _fresh_upstream_pid}
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+
+    assert :ok = Task.await(submit_task, 1_000)
+    assert_receive {:websocket_owner_frame, "marker-in-flight", 1, {:data, "in-flight-terminal"}}
+    assert_receive {:websocket_owner_frame, "marker-in-flight", 1, :complete}
+    assert Process.alive?(owner)
+  end
+
+  @tag :rollout_drain_t3
+  test "T3 a draining existing owner refuses reuse without stopping its active turn", context do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["draining-owner-delta", "draining-owner-terminal"]
+      )
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("draining-owner"))
+
+    submit_task =
+      Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, "in-flight") end)
+
+    assert_receive {:websocket_owner_frame, "draining-owner", 1, {:data, "draining-owner-delta"}}
+
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+
+    assert :ok = WebsocketOwnerSession.begin_drain(owner)
+
+    assert {:ok, %{active_turn?: true, draining?: true}} =
+             WebsocketOwnerSession.owner_status(owner)
+
+    assert {:error, :owner_drained} = start_owner(context, upstream: upstream)
+    assert Process.alive?(owner)
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+
+    assert :ok = Task.await(submit_task, 1_000)
+
+    assert_receive {:websocket_owner_frame, "draining-owner", 1,
+                    {:data, "draining-owner-terminal"}}
+
+    assert_receive {:websocket_owner_frame, "draining-owner", 1, :complete}
+    assert Process.alive?(owner)
+  end
+
+  @tag :rollout_drain_t3
+  test "T3 runtime rollout drain refuses fresh owner creation", context do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    WebsocketRolloutDrainSupport.configure_rollout_drain_server(harness.name)
+
+    assert %{result: :ok, owners_seen: 0} =
+             RolloutDrain.start_drain(name: harness.name, timeout_ms: 100)
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    assert {:error, :owner_drained} = start_owner(context, upstream: upstream)
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(context.codex_session_id)
+    refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
   test "owner survives caller shutdown so websocket cleanup can detach", context do
@@ -936,32 +1036,111 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_controlled(terminal_barrier, controls, :terminal_frames)
   end
 
-  test "drain while a terminal result is pending keeps owner drained precedence once", context do
+  @tag :rollout_drain_deadline_contract
+  test "rollout drain deadline aborts a pending terminal result irreversibly", context do
     pending = start_pending_terminal_turn(context, "pending-drain")
     owner = pending.owner
     terminal_frame = pending.terminal_frame
     cancel_owner_timer(pending.active_turn.terminal_delivery_timer_ref)
     owner_ref = Process.monitor(owner)
 
-    assert :ok = WebsocketOwnerSession.drain_owner(owner)
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    on_exit(fn ->
+      frame_sender = pending.barriers.nonterminal_frames
+      if Process.alive?(frame_sender), do: Process.exit(frame_sender, :kill)
+
+      if Process.alive?(pending.submitter), do: Process.exit(pending.submitter, :kill)
+    end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, wait_ms}
+    refute_received {:websocket_owner_frame, "pending-drain", 1, {:error, :owner_drained, _}}
+    assert Process.alive?(owner)
+
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(harness.deadline, wait_ms)
 
     assert_receive {:websocket_owner_frame, "pending-drain", 1,
                     {:error, :owner_drained, safe_payload}}
 
     assert safe_payload.code == "owner_drained"
+    assert safe_payload.message == "websocket owner is draining"
+    assert safe_payload.metadata.reason == "owner_drained"
     assert_receive {:websocket_owner_frame, "pending-drain", 1, :complete}
     assert_receive {:pending_submitter_outcome, "pending-drain", {:exit, _reason}}
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
     assert Process.read_timer(pending.active_turn.terminal_delivery_timer_ref) == false
 
-    release_abandoned_terminal_sender(pending)
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 1_000)
 
+    release_pending_terminal_sender(pending)
     refute_received {:websocket_owner_frame, "pending-drain", 1, {:data, ^terminal_frame}}
-
     refute_received {:websocket_owner_frame, "pending-drain", 1, :complete}
     refute_received {:pending_submitter_outcome, "pending-drain", _outcome}
 
     assert_stale_messages_do_not_settle_fresh_turn(context, pending, "after-drain")
+  end
+
+  test "direct drain characterizes the current immediate active-turn abort contract", context do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["characterization-delta", "unreachable-after-drain"]
+      )
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("direct-drain-characterization")
+             )
+
+    parent = self()
+
+    spawn(fn ->
+      outcome =
+        try do
+          {:return,
+           WebsocketOwnerSession.submit_frame(owner, downstream, "characterization-request")}
+        catch
+          :exit, reason -> {:exit, reason}
+        end
+
+      send(parent, {:direct_drain_characterization_outcome, outcome})
+    end)
+
+    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1,
+                    {:data, "characterization-delta"}}
+
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+    owner_ref = Process.monitor(owner)
+
+    assert :ok = WebsocketOwnerSession.drain_owner(owner)
+
+    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1,
+                    {:error, :owner_drained, safe_payload}}
+
+    assert safe_payload.code == "owner_drained"
+    assert_receive {:websocket_owner_frame, "direct-drain-characterization", 1, :complete}
+    assert_receive {:direct_drain_characterization_outcome, {:exit, _reason}}
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+
+    refute_received {:websocket_owner_frame, "direct-drain-characterization", 1,
+                     {:data, "unreachable-after-drain"}}
   end
 
   test "lease loss while a terminal result is pending stops stale without terminalization",

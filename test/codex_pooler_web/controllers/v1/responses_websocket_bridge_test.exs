@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
   import Ecto.Query
   import ExUnit.CaptureLog
+  alias Ecto.Adapters.SQL.Sandbox
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -23,9 +24,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.Streaming.{RetainedBody, WebsocketBridgeStream}
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -223,6 +227,46 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              ~w(upstream_transport upstream_websocket_bridge upstream_websocket_connection)
            ) ==
              %{}
+  end
+
+  defp response_failed_data(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.find_value(fn block ->
+      with ["response.failed"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
+           [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
+        Jason.decode!(data)
+      else
+        _missing -> nil
+      end
+    end)
+  end
+
+  defp await_visible_turn(pool_id, attempts_left \\ 1_000)
+
+  defp await_visible_turn(_pool_id, 0), do: flunk("expected committed public bridge turn")
+
+  defp await_visible_turn(pool_id, attempts_left) do
+    turn =
+      Repo.one(
+        from turn in CodexTurn,
+          join: request in Request,
+          on: request.id == turn.request_id,
+          where: request.pool_id == ^pool_id,
+          order_by: [desc: turn.started_at],
+          limit: 1
+      )
+
+    case turn do
+      %CodexTurn{first_visible_output_at: %DateTime{}} ->
+        turn
+
+      _pending ->
+        receive do
+        after
+          1 -> await_visible_turn(pool_id, attempts_left - 1)
+        end
+    end
   end
 
   test "three healthy sessioned turns reuse one websocket lifecycle and generation", %{
@@ -627,6 +671,30 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
+  @tag :rollout_drain_t3
+  test "T3 marker makes the websocket bridge fall back to plain HTTP", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_marker_fallback")]))
+    setup = gateway_setup(upstream)
+    session = "marker-fallback-#{System.unique_integer([:positive])}"
+    _marker_path = WebsocketRolloutDrainSupport.configure_drain_marker!()
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "marker fallback"))
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_marker_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    assert_no_upstream_websocket_metadata(attempt)
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert settlement_count(request) == 1
+  end
+
   test "uses the websocket bridge without a Pool toggle", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_off_t1")]))
     setup = gateway_setup(upstream)
@@ -678,6 +746,113 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
            } = upstream_connection(attempt)
 
     assert settlement_count(request) == 1
+  end
+
+  @tag :owner_drained_terminal_state
+  test "a post-budget owner drain emits the public owner_drained terminal", %{conn: conn} do
+    release_ref = make_ref()
+
+    visible_event =
+      {"response.output_text.delta",
+       %{
+         "type" => "response.output_text.delta",
+         "response_id" => "resp_owner_drained",
+         "output_index" => 0,
+         "content_index" => 0,
+         "delta" => "visible before rollout drain"
+       }}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.delayed_terminal_sse_stream(
+          [created_event("resp_owner_drained"), visible_event],
+          completed_event("resp_owner_drained"),
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    session = "owner-drained-session-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        post_stream(conn, setup, session, stream_payload(setup, "owner drain turn"))
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
+                   1_000
+
+    assert %CodexTurn{first_visible_output_at: %DateTime{}} =
+             turn =
+             await_visible_turn(setup.pool.id)
+
+    harness = start_rollout_drain_harness()
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 25, deadline_margin_ms: 20, deadline_floor_ms: 10] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 10}
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+
+    response = Task.await(request_task, 2_000)
+    send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 2_000)
+
+    assert response.status == 200
+
+    assert event_types(response.resp_body) == [
+             "response.created",
+             "response.output_text.delta",
+             "response.failed"
+           ]
+
+    assert response.resp_body =~ "visible before rollout drain"
+
+    assert %{
+             "type" => "response.failed",
+             "error" => %{
+               "code" => "owner_drained",
+               "message" => "websocket owner is draining"
+             },
+             "response" => %{
+               "id" => "resp_owner_drained",
+               "status" => "failed",
+               "error" => %{
+                 "code" => "owner_drained",
+                 "message" => "websocket owner is draining"
+               }
+             }
+           } = response_failed_data(response.resp_body)
+
+    refute response.resp_body =~ "upstream_stream_error"
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert request.response_status_code == 499
+    assert request.last_error_code == "owner_drained"
+
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.network_error_code == "owner_drained"
+
+    assert %CodexTurn{
+             status: "interrupted",
+             error_code: "owner_drained",
+             first_visible_output_at: %DateTime{}
+           } = Repo.reload!(turn)
+
+    assert settlement_count(request) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
   end
 
   test "an internal-only event followed by websocket death fails without HTTP replay", %{

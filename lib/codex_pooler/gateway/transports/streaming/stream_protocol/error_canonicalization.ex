@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   @synthetic_public_openai_responses_failure_code "upstream_stream_error"
   @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
+  @owner_drained_public_openai_responses_failure_code "owner_drained"
+  @owner_drained_public_openai_responses_failure_message "websocket owner is draining"
 
   @type event_summary :: EventSummary.t()
 
@@ -52,10 +54,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
           term(),
           non_neg_integer() | nil
         ) :: binary()
-  def synthetic_public_openai_responses_failure_sse(response_id, _reason, sequence_number) do
+  def synthetic_public_openai_responses_failure_sse(response_id, reason, sequence_number) do
+    {code, message} = synthetic_public_openai_responses_failure(reason)
+
     error = %{
-      "code" => @synthetic_public_openai_responses_failure_code,
-      "message" => @synthetic_public_openai_responses_failure_message
+      "code" => code,
+      "message" => message
     }
 
     response =
@@ -77,6 +81,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
       "\n\n"
     ]
     |> IO.iodata_to_binary()
+  end
+
+  defp synthetic_public_openai_responses_failure({:upstream_websocket_bridge, :owner_drained}) do
+    {@owner_drained_public_openai_responses_failure_code,
+     @owner_drained_public_openai_responses_failure_message}
+  end
+
+  defp synthetic_public_openai_responses_failure(_reason) do
+    {@synthetic_public_openai_responses_failure_code,
+     @synthetic_public_openai_responses_failure_message}
   end
 
   defp put_synthetic_sequence_number(event, sequence_number)

@@ -4,10 +4,7 @@ if System.get_env("PHX_SERVER") in ~w(true 1) do
   config :codex_pooler, CodexPoolerWeb.Endpoint, server: true
 end
 
-websocket_drain_timeout_ms =
-  CodexPooler.Gateway.Transports.Websocket.RolloutDrain.configured_timeout_ms()
-
-endpoint_shutdown_timeout_ms = websocket_drain_timeout_ms + 5_000
+endpoint_shutdown_timeout_ms = 10_000
 
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   http: [
@@ -19,7 +16,7 @@ config :codex_pooler,
        :websocket_owner_forwarding_enabled,
        CodexPooler.Gateway.OperationalSettings.parse_websocket_owner_forwarding_env!()
 
-config :codex_pooler, CodexPoolerWeb.Operations.HealthController,
+config :codex_pooler, CodexPooler.Gateway.OperationalStatus,
   drain_marker_path: System.get_env("CODEX_POOLER_DRAIN_MARKER_PATH")
 
 if config_env() == :prod do

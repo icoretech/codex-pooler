@@ -768,6 +768,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "accept Codex-native Responses web_search hosted tool shapes"
       assert feature.contract =~ "keeping web_search_preview type-only"
       assert feature.contract =~ "emit sanitized response.failed upstream_stream_error"
+      assert feature.contract =~ "emit response.failed owner_drained"
+      assert feature.contract =~ "websocket owner is draining"
+      assert feature.contract =~ "only when a committed websocket-bridge turn is aborted"
+
+      assert feature.contract =~
+               "keep precommit drain admission on its existing fallback or refusal path"
+
+      assert feature.contract =~
+               "keep client disconnect and non-drain interruption mappings unchanged"
+
       assert feature.contract =~ "preserve backend raw/websocket stream behavior"
 
       assert fixture.stream_interruption_contract == %{
@@ -776,6 +786,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                error_code: "upstream_stream_error",
                safe_message:
                  "upstream request failed: stream interrupted before terminal response event",
+               post_budget_owner_drain: %{
+                 applies_to: "committed websocket bridge turn aborted after rollout drain budget",
+                 error_code: "owner_drained",
+                 safe_message: "websocket owner is draining"
+               },
+               precommit_drain: "existing_fallback_or_refusal",
+               client_disconnect: "unchanged",
+               non_drain_interruptions: "byte_identical",
                backend_raw_streams: "unchanged",
                websocket_streams: "unchanged",
                raw_error_details: false

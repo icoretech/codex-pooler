@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.ConnCase do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AccountsFixtures
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias Phoenix.ConnTest
 
   using do
@@ -68,5 +69,10 @@ defmodule CodexPoolerWeb.ConnCase do
       :live_socket_id,
       CodexPoolerWeb.UserAuth.live_socket_id_for_token(token)
     )
+  end
+
+  @spec start_rollout_drain_harness(keyword()) :: %{deadline: pid(), name: atom()}
+  def start_rollout_drain_harness(opts \\ []) do
+    WebsocketRolloutDrainSupport.start_rollout_drain_harness(self(), opts)
   end
 end

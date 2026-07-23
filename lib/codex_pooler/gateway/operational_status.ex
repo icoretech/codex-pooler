@@ -3,14 +3,21 @@ defmodule CodexPooler.Gateway.OperationalStatus do
 
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
 
-  @type option :: {:drain_marker_path, String.t() | nil}
-
-  @spec draining?([option()]) :: boolean()
-  def draining?(opts \\ []) do
-    marker_draining?(Keyword.get(opts, :drain_marker_path)) or RolloutDrain.draining?()
+  @spec draining?() :: boolean()
+  def draining? do
+    marker_draining?() or RolloutDrain.draining?()
   end
 
-  @spec marker_draining?(String.t() | nil) :: boolean()
-  def marker_draining?(path) when is_binary(path) and path != "", do: File.exists?(path)
-  def marker_draining?(_path), do: false
+  defp marker_draining? do
+    case drain_marker_path() do
+      path when is_binary(path) and path != "" -> File.exists?(path)
+      _path -> false
+    end
+  end
+
+  defp drain_marker_path do
+    :codex_pooler
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:drain_marker_path)
+  end
 end

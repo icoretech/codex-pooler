@@ -494,6 +494,47 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute serialized =~ "synthetic-token"
       refute serialized =~ "raw upstream exception"
     end
+
+    test "maps only a committed websocket bridge owner drain to owner_drained" do
+      owner_drained =
+        StreamProtocol.synthetic_public_openai_responses_failure_sse(
+          "resp_owner_drained",
+          {:upstream_websocket_bridge, :owner_drained}
+        )
+
+      assert [%{"event" => "response.failed", "data" => drained_data}] =
+               public_sse_events(owner_drained)
+
+      assert drained_data["error"] == %{
+               "code" => "owner_drained",
+               "message" => "websocket owner is draining"
+             }
+
+      assert drained_data["response"]["error"] == drained_data["error"]
+
+      ordinary =
+        StreamProtocol.synthetic_public_openai_responses_failure_sse(
+          "resp_owner_drained",
+          {:upstream_websocket_bridge, :upstream_websocket_error}
+        )
+
+      generic_owner_drained =
+        StreamProtocol.synthetic_public_openai_responses_failure_sse(
+          "resp_owner_drained",
+          :owner_drained
+        )
+
+      assert ordinary == generic_owner_drained
+
+      assert [%{"event" => "response.failed", "data" => ordinary_data}] =
+               public_sse_events(ordinary)
+
+      assert ordinary_data["error"] == %{
+               "code" => "upstream_stream_error",
+               "message" =>
+                 "upstream request failed: stream interrupted before terminal response event"
+             }
+    end
   end
 
   describe "wrapped websocket/direct JSON terminal error frames" do

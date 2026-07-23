@@ -14,9 +14,11 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @websocket_frame_timeout 1_000
   @supported_compression_model "gpt-4o"
@@ -220,6 +222,27 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       assert ^runtime = runtime
       assert :sys.get_state(owner_pid) == owner_state_before
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
+    end
+
+    @tag :rollout_drain_t3
+    test "T3 marker rejects native admission with the owner-drained 1001 close", %{auth: auth} do
+      _marker_path = WebsocketRolloutDrainSupport.configure_drain_marker!()
+      opts = owner_opts("marker-native-admission")
+
+      assert {:error, :owner_drained} = Gateway.prepare_websocket_session(auth, opts)
+
+      logs =
+        capture_log([level: :warning], fn ->
+          assert {:stop, :normal, {1001, "websocket owner is draining"}, _state} =
+                   CodexResponsesSocket.init(%{auth: auth, opts: opts})
+        end)
+
+      assert logs =~ "websocket init failed before request reservation"
+      assert logs =~ "phase=init"
+      assert logs =~ "reason_class=owner_drained"
+      refute logs =~ "marker-native-admission"
+      refute logs =~ "authorization"
+      refute logs =~ "bearer"
     end
   end
 

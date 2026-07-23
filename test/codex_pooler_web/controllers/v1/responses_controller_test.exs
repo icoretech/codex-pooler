@@ -210,6 +210,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     SessionContinuity
   }
 
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.PublicGatewayResult
   alias Ecto.Adapters.SQL.Sandbox
@@ -4186,6 +4189,119 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute persistence_text =~ "visible-before-upstream-close"
   end
 
+  @tag :owner_drained_terminal_state
+  test "POST /v1/responses streaming emits owner_drained only for a post-budget bridge drain",
+       %{conn: conn} do
+    enable_websocket_owner_forwarding!()
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.delayed_terminal_sse_stream(
+          [
+            {"response.created",
+             %{
+               "type" => "response.created",
+               "response" => %{"id" => "resp_controller_owner_drained", "status" => "in_progress"}
+             }},
+            {"response.output_text.delta",
+             %{
+               "type" => "response.output_text.delta",
+               "response_id" => "resp_controller_owner_drained",
+               "output_index" => 0,
+               "content_index" => 0,
+               "delta" => "visible before controller drain"
+             }}
+          ],
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{"id" => "resp_controller_owner_drained", "status" => "completed"}
+           }},
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        conn
+        |> auth(setup)
+        |> put_req_header(
+          "x-session-id",
+          "controller-owner-drained-#{System.unique_integer([:positive])}"
+        )
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic controller owner drain",
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
+                   1_000
+
+    assert %CodexTurn{first_visible_output_at: %DateTime{}} =
+             turn = await_committed_public_turn(setup.pool.id)
+
+    harness = start_rollout_drain_harness()
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 25, deadline_margin_ms: 20, deadline_floor_ms: 10] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, deadline, 10}
+    assert deadline == harness.deadline
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+
+    response = Task.await(request_task, 2_000)
+    send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 2_000)
+
+    assert response.status == 200
+    assert response.resp_body =~ "visible before controller drain"
+
+    assert [%{"data" => data}] =
+             response.resp_body
+             |> public_sse_events()
+             |> Enum.filter(&(&1["event"] == "response.failed"))
+
+    assert data["error"] == %{
+             "code" => "owner_drained",
+             "message" => "websocket owner is draining"
+           }
+
+    assert get_in(data, ["response", "error"]) == data["error"]
+    refute response.resp_body =~ "upstream_stream_error"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 499
+    assert request.last_error_code == "owner_drained"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert attempt.network_error_code == "owner_drained"
+
+    assert %CodexTurn{
+             status: "interrupted",
+             error_code: "owner_drained",
+             first_visible_output_at: %DateTime{}
+           } = Repo.reload!(turn)
+
+    assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
   @tag :streaming_sequence
   test "POST /v1/responses streaming keeps non-timeout terminal-missing interruptions health-neutral after visible data",
        %{conn: conn} do
@@ -6751,6 +6867,60 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         event -> [event]
       end
     end)
+  end
+
+  defp await_committed_public_turn(pool_id, attempts_left \\ 1_000)
+
+  defp await_committed_public_turn(_pool_id, 0),
+    do: flunk("expected committed public bridge turn")
+
+  defp await_committed_public_turn(pool_id, attempts_left) do
+    turn =
+      Repo.one(
+        from turn in CodexTurn,
+          join: request in Request,
+          on: request.id == turn.request_id,
+          where: request.pool_id == ^pool_id,
+          order_by: [desc: turn.started_at],
+          limit: 1
+      )
+
+    case turn do
+      %CodexTurn{first_visible_output_at: %DateTime{}} ->
+        turn
+
+      _pending ->
+        receive do
+        after
+          1 -> await_committed_public_turn(pool_id, attempts_left - 1)
+        end
+    end
+  end
+
+  defp enable_websocket_owner_forwarding! do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      capture_log(&stop_websocket_owners/0)
+
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+  end
+
+  defp stop_websocket_owners do
+    WebsocketOwnerSession.Registry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.each(&stop_websocket_owner/1)
+  end
+
+  defp stop_websocket_owner(session_id) do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(session_id) do
+      GenServer.stop(owner_pid, :shutdown, 1_000)
+    end
   end
 
   defp public_sse_event(block) do

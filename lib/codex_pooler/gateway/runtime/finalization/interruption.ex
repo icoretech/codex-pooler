@@ -75,27 +75,53 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     Repo.transaction(fn ->
       case codex_session_for_update(session_id) do
         %CodexSession{} = session ->
-          in_progress_turns = in_progress_turns_for_session(session_id)
-          Enum.each(in_progress_turns, &interrupt_turn!(&1, reason, now))
-
-          session
-          |> Ecto.Changeset.change(%{
-            status: next_status,
-            disconnected_at: now,
-            closed_at: if(next_status == @session_closed, do: now, else: nil),
-            owner_lease_expires_at: lease_expires_at,
-            last_heartbeat_at: now,
-            updated_at: now
-          })
-          |> Repo.update!()
-
-          %{interrupted_turn_count: length(in_progress_turns)}
+          interrupt_owned_session(
+            session,
+            opts,
+            reason,
+            now,
+            next_status,
+            lease_expires_at
+          )
 
         nil ->
           %{interrupted_turn_count: 0}
       end
     end)
     |> unwrap_transaction()
+  end
+
+  defp interrupt_owned_session(
+         %CodexSession{} = session,
+         %RequestOptions{} = opts,
+         reason,
+         now,
+         next_status,
+         lease_expires_at
+       ) do
+    if terminating_owner_still_owns_session?(session, opts) do
+      in_progress_turns =
+        session.id
+        |> in_progress_turns_for_session()
+        |> Enum.filter(&owner_carried_turn?/1)
+
+      Enum.each(in_progress_turns, &interrupt_turn!(&1, reason, now))
+
+      session
+      |> Ecto.Changeset.change(%{
+        status: next_status,
+        disconnected_at: now,
+        closed_at: if(next_status == @session_closed, do: now, else: nil),
+        owner_lease_expires_at: lease_expires_at,
+        last_heartbeat_at: now,
+        updated_at: now
+      })
+      |> Repo.update!()
+
+      %{interrupted_turn_count: length(in_progress_turns)}
+    else
+      %{interrupted_turn_count: 0}
+    end
   end
 
   defp interrupt_session_turn(session_id, request_id, %RequestOptions{} = opts, reason) do
@@ -227,6 +253,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     )
   end
 
+  # A same-session turn that fell back to plain HTTP while this owner was
+  # draining is served by a live request process under the same lease token;
+  # the terminating owner must not force-fail it. Only turns actually carried
+  # over this owner's websocket are interrupted. A turn with no attempt yet
+  # keeps today's conservative interrupt because its carrier is undecided.
+  defp owner_carried_turn?(%CodexTurn{request_id: request_id}) do
+    case latest_attempt_transport(request_id) do
+      nil -> true
+      "websocket" -> true
+      _transport -> false
+    end
+  end
+
+  defp latest_attempt_transport(request_id) do
+    Repo.one(
+      from attempt in Attempt,
+        where: attempt.request_id == ^request_id,
+        order_by: [desc: attempt.attempt_number],
+        limit: 1,
+        select: attempt.transport
+    )
+  end
+
   defp in_progress_turn_for_request(session_id, request_id) do
     Repo.one(
       from turn in CodexTurn,
@@ -323,6 +372,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   end
 
   defp request_id(%RequestOptions{}), do: nil
+
+  defp terminating_owner_still_owns_session?(
+         %CodexSession{owner_lease_token: current_lease_token},
+         %RequestOptions{transport: %{websocket_owner: %{lease_token: terminating_lease_token}}}
+       )
+       when is_binary(terminating_lease_token),
+       do: current_lease_token == terminating_lease_token
+
+  defp terminating_owner_still_owns_session?(%CodexSession{}, %RequestOptions{}), do: true
 
   defp owner_recovery_reason(:owner_drained), do: "owner_drained"
   defp owner_recovery_reason("owner_drained"), do: "owner_drained"

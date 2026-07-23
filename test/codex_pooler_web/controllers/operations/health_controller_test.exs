@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Gateway.OperationalStatus
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Repo
 
@@ -11,6 +12,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     previous_config =
       Application.get_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
 
+    previous_operational_status_config = Application.get_env(:codex_pooler, OperationalStatus)
     previous_rollout_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
 
     on_exit(fn ->
@@ -22,6 +24,12 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
         )
       else
         Application.delete_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController)
+      end
+
+      if previous_operational_status_config do
+        Application.put_env(:codex_pooler, OperationalStatus, previous_operational_status_config)
+      else
+        Application.delete_env(:codex_pooler, OperationalStatus)
       end
 
       if previous_rollout_drain_config do
@@ -47,14 +55,34 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   test "GET /readyz stays ready when configured drain marker is absent", %{conn: conn} do
     drain_marker_path = drain_marker_path()
 
+    Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
+
     Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      drain_marker_path: drain_marker_path,
       readiness_probe: __MODULE__.AvailableReadinessProbe
     )
 
     conn = get(conn, ~p"/readyz")
 
     assert json_response(conn, 200) == %{"status" => "ready"}
+    assert_receive :available_readiness_probe_called
+  end
+
+  test "GET /readyz returns to ready after a configured drain marker is removed", %{conn: conn} do
+    drain_marker_path = drain_marker_path()
+    File.write!(drain_marker_path, "draining")
+
+    Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
+
+    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
+      readiness_probe: __MODULE__.AvailableReadinessProbe
+    )
+
+    assert conn |> get(~p"/readyz") |> json_response(503) == %{"status" => "unavailable"}
+    refute_received :available_readiness_probe_called
+
+    assert :ok = File.rm(drain_marker_path)
+
+    assert conn |> recycle() |> get(~p"/readyz") |> json_response(200) == %{"status" => "ready"}
     assert_receive :available_readiness_probe_called
   end
 
@@ -65,8 +93,9 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     File.write!(drain_marker_path, "draining")
     on_exit(fn -> File.rm(drain_marker_path) end)
 
+    Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path)
+
     Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      drain_marker_path: drain_marker_path,
       readiness_probe: __MODULE__.UnexpectedReadinessProbe
     )
 
@@ -83,8 +112,9 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     start_supervised!({RolloutDrain, name: drain_name})
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
 
+    Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path())
+
     Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
-      drain_marker_path: drain_marker_path(),
       readiness_probe: __MODULE__.UnexpectedReadinessProbe
     )
 

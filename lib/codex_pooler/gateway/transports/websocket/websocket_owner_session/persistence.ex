@@ -48,7 +48,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
       if reason == :stale_owner or not uuid?(state.codex_session_id) do
         :ok
       else
-        opts = interrupt_options(reason)
+        opts = interrupt_options(reason, state.owner_lease_token)
         state.persistence.interrupt_codex_session.(state.codex_session_id, opts)
       end
     end)
@@ -61,7 +61,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
         Interruption.recover_owner_lifecycle_leftovers(
           state.codex_session_id,
           owner_exit_reason,
-          interrupt_options(owner_exit_reason)
+          interrupt_options(owner_exit_reason, state.owner_lease_token)
         )
 
       :ok
@@ -92,10 +92,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
       :ok
   end
 
-  defp interrupt_options(reason) do
+  defp interrupt_options(reason, owner_lease_token) do
     %{
       interrupt_reason: Atom.to_string(reason),
-      reconnect_window_seconds: 300
+      reconnect_window_seconds: 300,
+      websocket_owner_lease_token: owner_lease_token
     }
     |> RequestOptions.for_websocket()
   end

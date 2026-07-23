@@ -3,7 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   use GenServer
 
-  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -55,6 +55,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @type start_result :: {:ok, pid()} | {:ok, pid(), :existing} | {:error, term()}
 
+  @type owner_status :: %{
+          required(:codex_session_id) => binary(),
+          required(:owner_lease_token) => binary(),
+          required(:owner_instance_id) => binary(),
+          required(:upstream_alive?) => boolean(),
+          required(:draining?) => boolean(),
+          required(:active_turn?) => boolean()
+        }
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     codex_session_id = Keyword.fetch!(opts, :codex_session_id)
@@ -73,20 +82,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def start_owner(opts), do: start_owner(opts, 100)
 
   defp start_owner(opts, attempts) when attempts > 0 do
-    case start(opts) do
-      {:ok, pid} ->
-        Logger.owner_started(pid, opts)
-        {:ok, pid}
+    if OperationalStatus.draining?() do
+      {:error, :owner_drained}
+    else
+      case start(opts) do
+        {:ok, pid} ->
+          Logger.owner_started(pid, opts)
+          {:ok, pid}
 
-      {:error, {:already_started, pid}} ->
-        existing_owner_result(pid, opts, attempts)
+        {:error, {:already_started, pid}} ->
+          existing_owner_result(pid, opts, attempts)
 
-      {:error, {:already_registered, pid}} ->
-        existing_owner_result(pid, opts, attempts)
+        {:error, {:already_registered, pid}} ->
+          existing_owner_result(pid, opts, attempts)
 
-      {:error, reason} ->
-        Logger.owner_start_failed(reason, opts)
-        {:error, reason}
+        {:error, reason} ->
+          Logger.owner_start_failed(reason, opts)
+          {:error, reason}
+      end
     end
   end
 
@@ -94,25 +107,40 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp existing_owner_result(pid, opts, attempts) when is_pid(pid) do
     cond do
+      OperationalStatus.draining?() ->
+        {:error, :owner_drained}
+
       not Process.alive?(pid) ->
         Logger.owner_lookup_missed(Keyword.fetch!(opts, :codex_session_id), :dead_pid, pid, opts)
         :erlang.yield()
         start_owner(opts, attempts - 1)
 
-      not uuid?(Keyword.fetch!(opts, :codex_session_id)) or owner_reusable?(pid, opts) ->
-        Logger.owner_reused(pid, opts)
-        {:ok, pid, :existing}
-
       true ->
-        Logger.owner_stale_replaced(pid, opts)
-        _result = GenServer.stop(pid, {:shutdown, :stale_owner}, owner_call_timeout())
-        :erlang.yield()
-        start_owner(opts, attempts - 1)
+        case owner_reuse_status(pid, opts) do
+          :draining ->
+            {:error, :owner_drained}
+
+          :reusable ->
+            Logger.owner_reused(pid, opts)
+            {:ok, pid, :existing}
+
+          :stale ->
+            Logger.owner_stale_replaced(pid, opts)
+            _result = GenServer.stop(pid, {:shutdown, :stale_owner}, owner_call_timeout())
+            :erlang.yield()
+            start_owner(opts, attempts - 1)
+        end
     end
   end
 
   @spec drain_owner(GenServer.server()) :: :ok | {:error, term()}
   def drain_owner(owner), do: GenServer.call(owner, :drain, owner_call_timeout())
+
+  @spec begin_drain(GenServer.server()) :: :ok
+  def begin_drain(owner), do: GenServer.cast(owner, :begin_drain)
+
+  @spec owner_status(GenServer.server()) :: {:ok, owner_status()}
+  def owner_status(owner), do: GenServer.call(owner, :owner_status, owner_call_timeout())
 
   @spec lookup(binary(), keyword()) :: {:ok, pid()} | {:error, :owner_unavailable}
   def lookup(codex_session_id, metadata \\ []) when is_binary(codex_session_id) do
@@ -250,7 +278,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         owner_lease_token: state.owner_lease_token,
         owner_instance_id: state.owner_instance_id,
         upstream_alive?: Process.alive?(state.upstream_pid),
-        draining?: state.draining?
+        draining?: state.draining?,
+        active_turn?: DownstreamState.active_turn?(state)
       }}, state}
   end
 
@@ -386,6 +415,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @impl GenServer
+  def handle_cast(:begin_drain, state) do
+    {:noreply, %{state | draining?: true}}
+  end
+
+  @impl GenServer
   def handle_info(
         {:websocket_owner_upstream_frame, ref, payload},
         %{active_turn: %{ref: ref}} = state
@@ -515,7 +549,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :ok
   end
 
-  defp owner_reusable?(pid, opts) do
+  defp owner_reuse_status(pid, opts) do
     expected = %{
       codex_session_id: Keyword.fetch!(opts, :codex_session_id),
       owner_lease_token: Keyword.fetch!(opts, :owner_lease_token),
@@ -523,14 +557,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     }
 
     case GenServer.call(pid, :owner_status, owner_call_timeout()) do
-      {:ok, %{upstream_alive?: true, draining?: false} = status} ->
-        Map.take(status, Map.keys(expected)) == expected
+      {:ok, %{draining?: true}} ->
+        :draining
+
+      {:ok, status} when not is_map_key(status, :draining?) ->
+        :stale
+
+      {:ok, status} ->
+        cond do
+          not uuid?(expected.codex_session_id) -> :reusable
+          status.upstream_alive? and Map.take(status, Map.keys(expected)) == expected -> :reusable
+          true -> :stale
+        end
 
       _other ->
-        false
+        :stale
     end
   catch
-    :exit, _reason -> false
+    :exit, _reason -> :stale
   end
 
   defp start_upstream_task(state, ref, upstream_payload) do

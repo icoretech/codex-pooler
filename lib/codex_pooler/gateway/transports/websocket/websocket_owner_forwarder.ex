@@ -8,7 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   local upstream websocket behavior remains active.
   """
 
-  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -313,7 +313,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     do: recover_remote_owner(codex_session_id, downstream, opts, :reuse_lease)
 
   defp recover_remote_owner(codex_session_id, downstream, opts, lease_recovery) do
-    with %CodexSession{} = session <- Repo.get(CodexSession, codex_session_id),
+    with :ok <- reject_if_rollout_draining(),
+         %CodexSession{} = session <- Repo.get(CodexSession, codex_session_id),
          :ok <- require_local_owner_session(session, opts),
          {:ok, recovery_session} <- recover_remote_owner_lease(session, opts, lease_recovery),
          {:ok, owner_pid} <- start_recovered_remote_owner(recovery_session, opts),
@@ -323,6 +324,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       nil -> {:error, :owner_unavailable}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp reject_if_rollout_draining do
+    if OperationalStatus.draining?(), do: {:error, :owner_drained}, else: :ok
   end
 
   defp submit_remote_owner_request(owner_pid, codex_session_id, downstream, request, opts) do

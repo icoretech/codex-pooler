@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
 
   @epmd_ready_timeout_ms 2_000
@@ -77,6 +78,107 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     assert body =~ "resp_local_recovery_options"
     assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+  end
+
+  @tag :rollout_drain_t3
+  test "T3 marker refuses target-side missing-owner resurrection", %{auth: auth} do
+    local_node_string = Atom.to_string(node())
+    %{session: session, token: token} = owner_session_fixture(auth, local_node_string)
+    original_lease = Repo.get_by!(BridgeOwnerLease, lease_token: token)
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame("resp_marker_must_not_run")],
+        return_request_result?: true
+      )
+
+    _marker_path = WebsocketRolloutDrainSupport.configure_drain_marker!()
+
+    assert {:error, :owner_drained} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("corr-marker-resurrection"),
+               request("marker-resurrection"),
+               upstream: upstream,
+               request_id: "marker-resurrection"
+             )
+
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+    refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == token
+    assert Repo.get!(BridgeOwnerLease, original_lease.id).status == "active"
+  end
+
+  @tag :rollout_drain_t3
+  test "T3 marker refuses crashed-owner takeover before visible output", %{auth: auth} do
+    local_node_string = Atom.to_string(node())
+    %{session: session, token: token} = owner_session_fixture(auth, local_node_string)
+    original_lease = Repo.get_by!(BridgeOwnerLease, lease_token: token)
+    parent = self()
+    release_ref = make_ref()
+
+    first_upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        send(parent, {:marker_takeover_submit_started, self(), release_ref})
+
+        receive do
+          {:release_marker_takeover_submit, ^release_ref} -> :ok
+        end
+      end,
+      close: fn upstream_pid ->
+        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
+      end
+    }
+
+    {:ok, first_owner} = start_owner(session, first_upstream)
+
+    assert {:ok, stable_downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               first_owner,
+               downstream("corr-marker-takeover")
+             )
+
+    recovery_upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame("resp_marker_takeover_must_not_run")],
+        return_request_result?: true
+      )
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerForwarder.remote_submit_request(
+          session.id,
+          stable_downstream,
+          request("marker-takeover"),
+          upstream: recovery_upstream,
+          local_node_string: local_node_string,
+          request_id: "marker-takeover"
+        )
+      end)
+
+    assert_receive {:marker_takeover_submit_started, first_worker, ^release_ref}
+    _marker_path = WebsocketRolloutDrainSupport.configure_drain_marker!()
+
+    first_owner_ref = Process.monitor(first_owner)
+    Process.exit(first_owner, :kill)
+    assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
+    send(first_worker, {:release_marker_takeover_submit, release_ref})
+
+    assert Task.await(submitter, 2_000) == {:error, :owner_drained}
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+    refute_received {:websocket_owner_runtime_recovered, _, _, _}
+    refute_received {:websocket_owner_harness_upstream_started, _recovery_upstream_pid}
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == token
+    assert Repo.get!(BridgeOwnerLease, original_lease.id).status == "active"
+
+    assert Repo.aggregate(
+             from(lease in BridgeOwnerLease,
+               where: lease.codex_session_id == ^session.id and lease.status == "active"
+             ),
+             :count
+           ) == 1
   end
 
   test "bound reset probe does not recover a missing local owner", %{auth: auth} do
