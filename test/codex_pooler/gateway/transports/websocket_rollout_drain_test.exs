@@ -200,7 +200,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
         {DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 1_000}
       )
 
-    {first_elapsed_us, first_summary} = :timer.tc(fn -> RolloutDrain.drain_for_shutdown() end)
+    first_summary = RolloutDrain.drain_for_shutdown()
 
     assert_receive {:rollout_drain_probe_started, ^owner_key}
 
@@ -213,15 +213,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              already_draining?: false
            } = first_summary
 
-    {second_elapsed_us, second_summary} = :timer.tc(fn -> RolloutDrain.drain_for_shutdown() end)
+    # A live owner that a restarted budget would have to enumerate and drain.
+    # Spending a fresh timeout is now observable rather than inferred from how
+    # long the second call took: an exhausted budget returns without ever asking
+    # this probe to drain, and echoes the original 120ms budget, where a
+    # `{:remaining, n}` drain would report the smaller leftover instead.
+    survivor_key = owner_key()
 
-    assert second_elapsed_us < first_elapsed_us / 2
+    _survivor =
+      start_supervised!(
+        {DrainProbeOwner, key: survivor_key, parent: self(), release_timeout_ms: 1_000}
+      )
+
+    second_summary = RolloutDrain.drain_for_shutdown()
+
+    refute_received {:rollout_drain_probe_started, ^survivor_key}
 
     assert %{
              result: :ok,
              owners_seen: 0,
              owners_drained: 0,
              owners_failed: 0,
+             timeout_ms: 120,
+             elapsed_ms: 0,
              already_draining?: true
            } = second_summary
   end
