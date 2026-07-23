@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.3...codex-pooler-v0.5.4) (2026-07-23)
+
+
+### Features
+
+* **gateway:** let rollout drain finish in-flight websocket turns ([11af461](https://github.com/icoretech/codex-pooler/commit/11af4612c99bd867f68e675fbcb571cf63237ab1))
+* **gateway:** retry bridged turns over HTTP when the peer dies pre-content ([8f89c10](https://github.com/icoretech/codex-pooler/commit/8f89c10769791b8be32f9d93bc2f5081d6b50e03))
+
+
+### Bug Fixes
+
+* **saved-resets:** harden the auto-consume latch against review findings ([06cadea](https://github.com/icoretech/codex-pooler/commit/06cadea82de6854bb35001f7cfeda0747a603e6c))
+* **saved-resets:** latch automatic redemption until post-consume quota converges ([228ca44](https://github.com/icoretech/codex-pooler/commit/228ca445bbe69402c2d0b83ddb6942d1366c3f52))
+
 ## [0.5.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.2...codex-pooler-v0.5.3) (2026-07-22)
 
 
