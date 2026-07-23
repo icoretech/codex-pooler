@@ -6,9 +6,19 @@ end
 
 endpoint_shutdown_timeout_ms = 10_000
 
+# The listener speaks HTTP/1.1 only. Bandit otherwise accepts cleartext HTTP/2
+# on the same port via the prior-knowledge preface, and a Plug that raises
+# after `send_chunked/2` then drops the stream with neither END_STREAM nor
+# RST_STREAM, leaving the peer waiting for its own timeout. Websockets are
+# unaffected: Bandit does not implement RFC 8441, so an upgrade already
+# requires HTTP/1.1. The mechanism and this restriction are pinned by
+# test/codex_pooler_web/endpoint_http2_half_open_stream_test.exs.
+endpoint_http_2_options = [enabled: false]
+
 config :codex_pooler, CodexPoolerWeb.Endpoint,
   http: [
     port: String.to_integer(System.get_env("PORT", "4000")),
+    http_2_options: endpoint_http_2_options,
     thousand_island_options: [shutdown_timeout: endpoint_shutdown_timeout_ms]
   ]
 
@@ -99,6 +109,7 @@ if config_env() == :prod do
     http: [
       port: String.to_integer(System.get_env("PORT", "4000")),
       ip: {0, 0, 0, 0},
+      http_2_options: endpoint_http_2_options,
       thousand_island_options: [shutdown_timeout: endpoint_shutdown_timeout_ms]
     ],
     secret_key_base: secret_key_base

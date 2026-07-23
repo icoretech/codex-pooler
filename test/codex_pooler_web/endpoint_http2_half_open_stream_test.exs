@@ -19,9 +19,15 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   # END_STREAM and without RST_STREAM, so the peer sees a stream that simply
   # stops producing frames and waits for its own timeout.
   #
-  # These tests drive a real Bandit listener over raw TCP so the transport under
-  # test is the one that ships. Only frame headers are inspected; no request or
-  # response payload beyond a synthetic marker is involved.
+  # The endpoint answers this by refusing cleartext HTTP/2 outright
+  # (config/runtime.exs), so the hazard below is not reachable through the
+  # shipped listener. These tests keep the mechanism pinned anyway: they are the
+  # record of why the restriction exists, and the last one asserts the
+  # restriction itself still holds.
+  #
+  # They drive a real Bandit listener over raw TCP so the transport under test is
+  # the one that ships. Only frame headers are inspected; no request or response
+  # payload beyond a synthetic marker is involved.
   use ExUnit.Case, async: true
 
   import Bitwise
@@ -183,16 +189,40 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
     end
   end
 
-  describe "endpoint configuration" do
-    test "the shipped listener does not disable HTTP/2" do
-      http_options =
-        :codex_pooler
-        |> Application.fetch_env!(CodexPoolerWeb.Endpoint)
-        |> Keyword.fetch!(:http)
+  describe "the shipped listener" do
+    test "refuses cleartext HTTP/2 while still serving HTTP/1.1" do
+      # Started with the endpoint's own protocol options, so this fails if the
+      # restriction is ever dropped from config/runtime.exs.
+      port = start_listener(http_2_options: endpoint_http_2_options())
 
-      refute get_in(http_options, [:http_2_options, :enabled]) == false,
-             "HTTP/2 was disabled on the endpoint; revisit the half-open stream coverage above"
+      # `Bandit.InitialHandler` recognises the prior-knowledge preface but has no
+      # HTTP/2 handler to switch to, so it closes the connection instead of
+      # serving a stream that could later be abandoned half-open.
+      assert {:error, :closed} = recv_frame(connect_h2c(port))
+
+      {:ok, socket} =
+        :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false, nodelay: true])
+
+      :ok =
+        :gen_tcp.send(socket, [
+          "GET /barrier HTTP/1.1\r\n",
+          "host: 127.0.0.1:#{port}\r\n",
+          "connection: close\r\n",
+          "\r\n"
+        ])
+
+      response = read_until_closed(socket, [])
+
+      assert response =~ "HTTP/1.1 200 OK"
+      assert response =~ "barrier"
     end
+  end
+
+  defp endpoint_http_2_options do
+    :codex_pooler
+    |> Application.fetch_env!(CodexPoolerWeb.Endpoint)
+    |> Keyword.fetch!(:http)
+    |> Keyword.fetch!(:http_2_options)
   end
 
   defp start_listener(extra_options \\ []) do
