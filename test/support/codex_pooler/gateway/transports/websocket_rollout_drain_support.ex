@@ -15,6 +15,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
 
     use GenServer
 
+    # A safety net so a test that forgets to release the probe fails instead of
+    # hanging the suite. It must stay well above every drain budget under test,
+    # or a loaded machine lets this fire first and reports a synthetic
+    # `:owner_unavailable` for a drain that was merely slow to be released. A
+    # test that abandons its probe on purpose should pass a short
+    # `:release_timeout_ms` so teardown does not wait out this default.
+    @release_timeout_ms 15_000
+
     @spec child_spec(keyword()) :: Supervisor.child_spec()
     def child_spec(opts) do
       key = Keyword.fetch!(opts, :key)
@@ -39,7 +47,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
 
     @impl GenServer
     def init(opts) do
-      {:ok, %{key: Keyword.fetch!(opts, :key), parent: Keyword.fetch!(opts, :parent)}}
+      {:ok,
+       %{
+         key: Keyword.fetch!(opts, :key),
+         parent: Keyword.fetch!(opts, :parent),
+         release_timeout_ms: Keyword.get(opts, :release_timeout_ms, @release_timeout_ms)
+       }}
     end
 
     @impl GenServer
@@ -57,7 +70,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
         receive do
           {:release_rollout_drain_probe, ^key} -> :ok
         after
-          1_000 -> {:error, :owner_unavailable}
+          state.release_timeout_ms -> {:error, :owner_unavailable}
         end
 
       {:stop, :normal, result, state}
@@ -68,6 +81,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     @moduledoc false
 
     use GenServer
+
+    # Safety net only; see the note on `DrainProbeOwner`.
+    @release_timeout_ms 15_000
 
     @spec child_spec(keyword()) :: Supervisor.child_spec()
     def child_spec(opts) do
@@ -116,7 +132,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
       receive do
         {:release_active_shutdown_probe, ^key} -> :ok
       after
-        1_000 -> exit(:active_shutdown_probe_timeout)
+        @release_timeout_ms -> exit(:active_shutdown_probe_timeout)
       end
 
       {:reply, :ok, %{state | drain_calls: drain_calls}}
@@ -461,21 +477,35 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
-  @spec await_active_drain_waiters(GenServer.server(), pos_integer(), non_neg_integer()) ::
+  # Bounded by wall clock rather than by a fixed number of yields: a loaded
+  # machine burns a spin budget long before the second caller has joined the
+  # drain, which turns "the machine was busy" into "the waiters never
+  # registered".
+  @waiter_timeout_ms 5_000
+
+  @spec await_active_drain_waiters(GenServer.server(), pos_integer(), pos_integer()) ::
           :ok | {:error, :timeout}
-  def await_active_drain_waiters(drain_name, expected_count, attempts_left \\ 1_000)
+  def await_active_drain_waiters(drain_name, expected_count, timeout_ms \\ @waiter_timeout_ms) do
+    await_active_drain_waiters_until(
+      drain_name,
+      expected_count,
+      System.monotonic_time(:millisecond) + timeout_ms
+    )
+  end
 
-  def await_active_drain_waiters(_drain_name, _expected_count, 0), do: {:error, :timeout}
-
-  def await_active_drain_waiters(drain_name, expected_count, attempts_left) do
+  defp await_active_drain_waiters_until(drain_name, expected_count, deadline_ms) do
     case :sys.get_state(drain_name) do
       %{active_drain: %{waiters: waiters}} when length(waiters) >= expected_count ->
         :ok
 
       _state ->
-        receive do
-        after
-          0 -> await_active_drain_waiters(drain_name, expected_count, attempts_left - 1)
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          {:error, :timeout}
+        else
+          receive do
+          after
+            1 -> await_active_drain_waiters_until(drain_name, expected_count, deadline_ms)
+          end
         end
     end
   end

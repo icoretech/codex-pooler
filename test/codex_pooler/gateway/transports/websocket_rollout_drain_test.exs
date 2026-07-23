@@ -16,6 +16,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
 
+  # Two independent clocks run in most tests here: the drain's own `timeout_ms`,
+  # which is the budget under test, and the test's wait for the result. When they
+  # are set to the same value the wait has no headroom, and a loaded machine turns
+  # a drain that was merely slow into an await crash. Keep the detection budget
+  # well above every scenario budget so only the drain's own clock decides an
+  # outcome.
+  @drain_timeout_ms 1_000
+  @await_timeout_ms 10_000
+
   setup do
     previous_config = Application.get_env(:codex_pooler, RolloutDrain)
     previous_timeout = System.get_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS")
@@ -65,10 +74,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_failed: 0,
              turns_completed: 0,
              turns_aborted: 0,
-             timeout_ms: 1_000,
+             timeout_ms: @drain_timeout_ms,
              elapsed_ms: elapsed_ms,
              already_draining?: false
-           } = RolloutDrain.start_drain(name: drain_name, timeout_ms: 1_000)
+           } = RolloutDrain.start_drain(name: drain_name, timeout_ms: @drain_timeout_ms)
 
     assert is_integer(elapsed_ms) and elapsed_ms >= 0
     assert RolloutDrain.draining?(name: drain_name)
@@ -88,7 +97,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     first_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(name: drain_name, timeout_ms: 1_000)
+        RolloutDrain.start_drain(name: drain_name, timeout_ms: @drain_timeout_ms)
       end)
 
     assert_receive {:rollout_drain_probe_started, ^first_key}
@@ -96,7 +105,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     second_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(name: drain_name, timeout_ms: 1_000)
+        RolloutDrain.start_drain(name: drain_name, timeout_ms: @drain_timeout_ms)
       end)
 
     send(first_owner, {:release_rollout_drain_probe, first_key})
@@ -107,8 +116,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_drained: 1,
              owners_idle: 1,
              owners_failed: 0,
-             timeout_ms: 1_000
-           } = Task.await(first_task, 1_000)
+             timeout_ms: @drain_timeout_ms
+           } = Task.await(first_task, @await_timeout_ms)
 
     assert %{
              result: :ok,
@@ -116,15 +125,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_drained: 1,
              owners_idle: 1,
              owners_failed: 0,
-             timeout_ms: 1_000
-           } = Task.await(second_task, 1_000)
+             timeout_ms: @drain_timeout_ms
+           } = Task.await(second_task, @await_timeout_ms)
 
     second_owner =
       start_supervised!({DrainProbeOwner, key: second_key, parent: self()})
 
     repeated_task =
       Task.async(fn ->
-        RolloutDrain.start_drain(name: drain_name, timeout_ms: 1_000)
+        RolloutDrain.start_drain(name: drain_name, timeout_ms: @drain_timeout_ms)
       end)
 
     assert_receive {:rollout_drain_probe_started, ^second_key}
@@ -136,9 +145,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_drained: 1,
              owners_idle: 1,
              owners_failed: 0,
-             timeout_ms: 1_000,
+             timeout_ms: @drain_timeout_ms,
              already_draining?: true
-           } = Task.await(repeated_task, 1_000)
+           } = Task.await(repeated_task, @await_timeout_ms)
   end
 
   test "release-callable shutdown drain is idempotent through configured app server",
@@ -161,7 +170,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_failed: 0,
              timeout_ms: 750,
              already_draining?: false
-           } = Task.await(first_task, 1_000)
+           } = Task.await(first_task, @await_timeout_ms)
 
     assert %{
              result: :ok,
@@ -181,7 +190,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     System.put_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", "120")
 
     owner_key = owner_key()
-    _owner = start_supervised!({DrainProbeOwner, key: owner_key, parent: self()})
+
+    # This probe is never released: the drain is meant to spend its 120ms budget
+    # and report a failed owner. A short release timeout keeps teardown quick
+    # without affecting the assertions, which hold whichever of the two fires
+    # first.
+    _owner =
+      start_supervised!(
+        {DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 1_000}
+      )
 
     {first_elapsed_us, first_summary} = :timer.tc(fn -> RolloutDrain.drain_for_shutdown() end)
 
@@ -239,7 +256,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     send(owner, {:release_rollout_drain_probe, owner_key})
 
-    assert :shutdown_state = Task.await(prep_stop_task, 1_000)
+    assert :shutdown_state = Task.await(prep_stop_task, @await_timeout_ms)
     assert RolloutDrain.draining?(name: drain_name)
   end
 
@@ -270,10 +287,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_failed: 0,
              timeout_ms: 240,
              already_draining?: false
-           } = Task.await(first_task, 1_000)
+           } = Task.await(first_task, @await_timeout_ms)
 
-    assert :duplicate_shutdown_state = Task.await(prep_stop_task, 1_000)
-    assert GenServer.call(owner, :drain_calls, 250) == 1
+    assert :duplicate_shutdown_state = Task.await(prep_stop_task, @await_timeout_ms)
+    assert GenServer.call(owner, :drain_calls, @await_timeout_ms) == 1
   end
 
   @tag :rollout_drain_t1
@@ -311,7 +328,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_failed: 0,
              turns_completed: 1,
              turns_aborted: 0
-           } = Task.await(drain_task, 1_000)
+           } = Task.await(drain_task, @await_timeout_ms)
 
     assert VirtualDeadline.waiter_pids(deadline) == []
   end
@@ -351,7 +368,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              turns_completed: 0,
              turns_aborted: 1,
              timeout_ms: 25
-           } = Task.await(drain_task, 1_000)
+           } = Task.await(drain_task, @await_timeout_ms)
   end
 
   @tag :rollout_drain_t4
@@ -377,8 +394,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert_receive {:rollout_drain_owner_stopped, ^owner_key, :completed, 1}
     refute_received {:rollout_drain_owner_stopped, ^owner_key, _outcome, 2}
 
-    first_summary = Task.await(first_task, 1_000)
-    assert Task.await(second_task, 1_000) == first_summary
+    first_summary = Task.await(first_task, @await_timeout_ms)
+    assert Task.await(second_task, @await_timeout_ms) == first_summary
     assert first_summary.turns_completed == 1
     assert first_summary.turns_aborted == 0
   end
@@ -402,7 +419,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert_receive {:rollout_drain_owner_stopped, ^owner_key, :aborted, 1}
     assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
 
-    assert %{owners_failed: 1, turns_completed: 0} = Task.await(drain_task, 1_000)
+    assert %{owners_failed: 1, turns_completed: 0} = Task.await(drain_task, @await_timeout_ms)
     refute_received {:rollout_drain_owner_stopped, ^owner_key, _outcome, 2}
     assert VirtualDeadline.waiter_pids(harness.deadline) == []
   end
@@ -528,6 +545,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              owners_failed: 1,
              turns_completed: 0,
              turns_aborted: 0
-           } = Task.await(drain_task, 1_000)
+           } = Task.await(drain_task, @await_timeout_ms)
   end
 end
