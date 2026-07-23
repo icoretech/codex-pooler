@@ -601,6 +601,51 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   end
 
   @tag :streaming_chat
+  test "POST /v1/chat/completions keeps clean no-terminal EOF successful", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.output_text.delta",
+             %{
+               "type" => "response.output_text.delta",
+               "delta" => "visible-before-clean-eof"
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", chat_payload(setup) |> Map.put("stream", true))
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "\"role\":\"assistant\""
+    assert conn.resp_body =~ "\"content\":\"visible-before-clean-eof\""
+    refute conn.resp_body =~ "\"error\""
+    refute conn.resp_body =~ "data: [DONE]\n\n"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "succeeded"
+    assert is_nil(request.last_error_code)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert is_nil(attempt.network_error_code)
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert FakeUpstream.count(upstream) == 1
+  end
+
+  @tag :streaming_chat
   test "POST /v1/chat/completions keeps post-tool-call interruption health-neutral", %{
     conn: conn
   } do

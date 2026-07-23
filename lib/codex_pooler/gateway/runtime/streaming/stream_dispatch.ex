@@ -309,14 +309,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp missing_public_openai_responses_terminal_result(state) do
-    reason =
-      DownstreamStream.terminal_missing_interruption_reason(state, :upstream_stream_interrupted)
-
-    case write_public_openai_responses_terminal_failure(state, reason) do
-      {:ok, state, ""} when is_tuple(reason) -> {:failure, state, "", reason}
+    case write_public_openai_responses_terminal_failure(state, :upstream_stream_interrupted) do
       {:ok, state, ""} -> {:ok, state, ""}
-      {:ok, state, data} -> {:failure, state, data, reason}
-      {:error, _reason} -> {:failure, state, "", reason}
+      {:ok, state, data} -> {:failure, state, data, :upstream_stream_interrupted}
+      {:error, _reason} -> {:failure, state, "", :upstream_stream_interrupted}
     end
   end
 
