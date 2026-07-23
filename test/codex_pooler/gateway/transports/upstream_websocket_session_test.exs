@@ -290,12 +290,126 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
             %{
               body: "",
               reason: :upstream_websocket_closed_before_terminal,
-              transport_failure: %{"phase" => "upstream_close"}
+              transport_failure: %{
+                "phase" => "upstream_close",
+                "last_upstream_event_type" => "none",
+                "last_upstream_event_class" => "none",
+                "terminal_candidate_seen" => false
+              }
             }} = Task.await(request_task, 1_000)
 
     assert Process.alive?(session)
     assert lifecycle_state(session).generation == 1
     assert FakeUpstream.http_request_count(upstream) == 0
+  end
+
+  test "peer close after an arbitrary nonterminal event records only bounded protocol buckets" do
+    raw_event_type = "response.private_event_sentinel_deadbeef"
+    raw_payload = "private-frame-sentinel-cafefeed"
+    raw_close_reason = "private-close-sentinel-feedface"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close(
+          [
+            %{
+              "type" => raw_event_type,
+              "delta" => raw_payload
+            }
+          ],
+          code: 1000,
+          reason: raw_close_reason
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    {result, captured_log} =
+      with_log(fn ->
+        UpstreamWebsocketSession.request(
+          session,
+          websocket_request(FakeUpstream.url(upstream))
+        )
+      end)
+
+    assert {:error, failure} = result
+
+    assert Map.take(failure.transport_failure, [
+             "last_upstream_event_type",
+             "last_upstream_event_class",
+             "terminal_candidate_seen"
+           ]) == %{
+             "last_upstream_event_type" => "response.other",
+             "last_upstream_event_class" => "response_event",
+             "terminal_candidate_seen" => false
+           }
+
+    refute Map.has_key?(failure.transport_failure, "terminal_candidate_type")
+    refute Map.has_key?(failure.transport_failure, "terminal_candidate_class")
+    refute Map.has_key?(failure.transport_failure, "terminal_candidate_rejection")
+
+    for sentinel <- [raw_event_type, raw_payload, raw_close_reason] do
+      refute inspect(failure.transport_failure) =~ sentinel
+      refute captured_log =~ sentinel
+    end
+  end
+
+  test "peer close after a rejected terminal candidate records the bounded rejection reason" do
+    raw_status = "private-status-sentinel-deadbeef"
+    raw_response_id = "private-response-sentinel-cafefeed"
+    raw_close_reason = "private-close-sentinel-feedface"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close(
+          [
+            %{
+              "type" => "response.done",
+              "response" => %{
+                "id" => raw_response_id,
+                "status" => raw_status
+              }
+            }
+          ],
+          code: 1000,
+          reason: raw_close_reason
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    {result, captured_log} =
+      with_log(fn ->
+        UpstreamWebsocketSession.request(
+          session,
+          websocket_request(FakeUpstream.url(upstream))
+        )
+      end)
+
+    assert {:error, failure} = result
+
+    assert Map.take(failure.transport_failure, [
+             "last_upstream_event_type",
+             "last_upstream_event_class",
+             "terminal_candidate_seen",
+             "terminal_candidate_type",
+             "terminal_candidate_class",
+             "terminal_candidate_rejection"
+           ]) == %{
+             "last_upstream_event_type" => "response.done",
+             "last_upstream_event_class" => "terminal_success_candidate",
+             "terminal_candidate_seen" => true,
+             "terminal_candidate_type" => "response.done",
+             "terminal_candidate_class" => "success",
+             "terminal_candidate_rejection" => "invalid_response_status"
+           }
+
+    for sentinel <- [raw_status, raw_response_id, raw_close_reason] do
+      refute inspect(failure.transport_failure) =~ sentinel
+      refute captured_log =~ sentinel
+    end
   end
 
   test "terminal handed back beside a coalesced transport error completes the turn" do

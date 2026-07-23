@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
 
   @default_keepalive_interval_ms 25_000
@@ -684,12 +685,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp handle_text_frame(state, %ReceiveState{} = receive_state, raw_text, text) do
+    terminal_discriminator = TerminalDiscriminator.classify(text)
+
     receive_state =
       raw_text
       |> maybe_put_terminal_upstream_error(receive_state)
       |> put_websocket_frame_headers(raw_text)
       |> increment_text_frame_count()
       |> append_receive_body(text)
+      |> put_terminal_discriminator(terminal_discriminator)
 
     case retryable_first_text_frame(raw_text, receive_state) do
       {:ok, reason} ->
@@ -701,7 +705,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
         receive_state = maybe_mark_downstream_output_started(receive_state, raw_text)
 
-        case terminal_type(text) do
+        case terminal_discriminator.terminal do
           nil -> {:cont, {:continue, state, receive_state}}
           terminal -> {:halt, {:terminal, state, mark_terminal_seen(receive_state), terminal}}
         end
@@ -716,6 +720,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           pre_visible_output: not receive_state.downstream_output_started?,
           upstream_committed: true,
           terminal_seen: receive_state.terminal_seen?,
+          last_upstream_event_type: receive_state.last_upstream_event_type,
+          last_upstream_event_class: receive_state.last_upstream_event_class,
+          terminal_candidate_seen: receive_state.terminal_candidate_seen?,
+          terminal_candidate_type: receive_state.terminal_candidate_type,
+          terminal_candidate_class: receive_state.terminal_candidate_class,
+          terminal_candidate_rejection: receive_state.terminal_candidate_rejection,
           text_frame_count: receive_state.text_frame_count
         },
         receive_state.peer_close_metadata
@@ -785,6 +795,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     %{receive_state | text_frame_count: count + 1}
   end
 
+  defp put_terminal_discriminator(
+         %ReceiveState{} = receive_state,
+         %TerminalDiscriminator{} = terminal_discriminator
+       ) do
+    receive_state = %{
+      receive_state
+      | last_upstream_event_type: terminal_discriminator.last_upstream_event_type,
+        last_upstream_event_class: terminal_discriminator.last_upstream_event_class
+    }
+
+    if terminal_discriminator.terminal_candidate? do
+      %{
+        receive_state
+        | terminal_candidate_seen?: true,
+          terminal_candidate_type: terminal_discriminator.terminal_candidate_type,
+          terminal_candidate_class: terminal_discriminator.terminal_candidate_class,
+          terminal_candidate_rejection: terminal_discriminator.terminal_candidate_rejection
+      }
+    else
+      receive_state
+    end
+  end
+
   defp mark_terminal_seen(%ReceiveState{} = receive_state),
     do: %{receive_state | terminal_seen?: true}
 
@@ -844,26 +877,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp send_frame(state, frame), do: WebsocketFrameWriter.send_frame(state, frame)
-
-  defp terminal_type(text) do
-    case Jason.decode(text) do
-      {:ok, %{} = decoded} ->
-        case StreamProtocol.terminal_outcome(nil, decoded) do
-          {:ok, %{kind: :completed}} ->
-            "response.completed"
-
-          {:ok, %{event_type: type}}
-          when type in ["response.failed", "response.incomplete", "error"] ->
-            type
-
-          _outcome ->
-            nil
-        end
-
-      _decoded ->
-        nil
-    end
-  end
 
   defp websocket_body(body) when is_binary(body), do: body
 

@@ -3585,6 +3585,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert second_attempt.status == "failed"
 
       assert second_attempt.response_metadata["transport_failure"] == %{
+               "last_upstream_event_class" => "response_event",
+               "last_upstream_event_type" => "response.other",
                "peer_close_code" => 1001,
                "peer_close_reason_bytes" => 40,
                "peer_close_reason_present" => true,
@@ -3592,6 +3594,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                "pre_visible_output" => false,
                "reason" => "upstream_websocket_closed_before_terminal",
                "reason_class" => "upstream_websocket_closed_before_terminal",
+               "terminal_candidate_seen" => false,
                "terminal_seen" => false,
                "text_frame_count" => 1,
                "upstream_committed" => true
@@ -6783,6 +6786,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert first_attempt.network_error_code == "upstream_stream_error"
 
     assert first_attempt.response_metadata["transport_failure"] == %{
+             "last_upstream_event_class" => "none",
+             "last_upstream_event_type" => "none",
              "peer_close_code" => 1001,
              "peer_close_reason_bytes" => 30,
              "peer_close_reason_present" => true,
@@ -6790,6 +6795,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "pre_visible_output" => true,
              "reason" => "upstream_websocket_closed_before_terminal",
              "reason_class" => "upstream_websocket_closed_before_terminal",
+             "terminal_candidate_seen" => false,
              "terminal_seen" => false,
              "text_frame_count" => 0,
              "upstream_committed" => true

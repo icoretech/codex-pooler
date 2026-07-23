@@ -139,6 +139,57 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
     refute inspect(metadata) =~ "sentinel"
   end
 
+  test "keeps only bounded websocket terminal discriminator metadata" do
+    metadata =
+      TransportFailureReason.transport_failure_metadata(
+        :upstream_websocket_closed_before_terminal,
+        %{
+          phase: :upstream_close,
+          last_upstream_event_type: "response.done",
+          last_upstream_event_class: "terminal_success_candidate",
+          terminal_candidate_seen: true,
+          terminal_candidate_type: "response.done",
+          terminal_candidate_class: "success",
+          terminal_candidate_rejection: "invalid_response_status"
+        }
+      )
+
+    assert Map.take(metadata, [
+             "last_upstream_event_type",
+             "last_upstream_event_class",
+             "terminal_candidate_seen",
+             "terminal_candidate_type",
+             "terminal_candidate_class",
+             "terminal_candidate_rejection"
+           ]) == %{
+             "last_upstream_event_type" => "response.done",
+             "last_upstream_event_class" => "terminal_success_candidate",
+             "terminal_candidate_seen" => true,
+             "terminal_candidate_type" => "response.done",
+             "terminal_candidate_class" => "success",
+             "terminal_candidate_rejection" => "invalid_response_status"
+           }
+  end
+
+  test "drops caller-controlled websocket terminal discriminator values" do
+    sentinel = "private-terminal-sentinel-deadbeef"
+
+    metadata =
+      TransportFailureReason.sanitize_transport_failure_metadata(%{
+        "last_upstream_event_type" => "response.#{sentinel}",
+        "last_upstream_event_class" => sentinel,
+        "terminal_candidate_seen" => true,
+        "terminal_candidate_type" => sentinel,
+        "terminal_candidate_class" => sentinel,
+        "terminal_candidate_rejection" => sentinel,
+        "raw_frame" => sentinel,
+        "response_status" => sentinel
+      })
+
+    assert metadata == %{"terminal_candidate_seen" => true}
+    refute inspect(metadata) =~ sentinel
+  end
+
   test "sanitizes peer close diagnostics before transport failure metadata is built" do
     cases = [
       {1000, "short",

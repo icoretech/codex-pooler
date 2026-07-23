@@ -17,6 +17,52 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     unexpected_frame
     upstream_close
   )
+  @allowed_last_upstream_event_types ~w(
+    none
+    invalid_json
+    non_object_json
+    invalid_type
+    missing_type
+    response.completed
+    response.done
+    response.failed
+    response.incomplete
+    error
+    response.created
+    response.in_progress
+    response.other
+    codex.rate_limits
+    codex.other
+    other
+  )
+  @allowed_last_upstream_event_classes ~w(
+    none
+    invalid_frame
+    terminal_success_candidate
+    terminal_failure_candidate
+    legacy_success_candidate
+    response_lifecycle
+    response_event
+    rate_limit_event
+    codex_event
+    untyped_event
+    other_event
+  )
+  @allowed_terminal_candidate_types [
+    "response.completed",
+    "response.done",
+    "response.failed",
+    "response.incomplete",
+    "error",
+    "legacy_response"
+  ]
+  @allowed_terminal_candidate_classes ~w(success failure legacy_success)
+  @allowed_terminal_candidate_rejections ~w(
+    missing_response_object
+    invalid_response_status
+    invalid_legacy_id
+    parser_rejected
+  )
 
   @type transport_failure_metadata :: %{String.t() => String.t() | non_neg_integer() | boolean()}
   @type upstream_transport_error :: %{
@@ -46,6 +92,32 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "terminal_seen" => safe_boolean(Map.get(attrs, :terminal_seen)),
       "terminal_forwarded" =>
         safe_boolean(metadata_attr(attrs, "terminal_forwarded", :terminal_forwarded)),
+      "last_upstream_event_type" =>
+        safe_last_upstream_event_type(
+          metadata_attr(attrs, "last_upstream_event_type", :last_upstream_event_type)
+        ),
+      "last_upstream_event_class" =>
+        safe_last_upstream_event_class(
+          metadata_attr(attrs, "last_upstream_event_class", :last_upstream_event_class)
+        ),
+      "terminal_candidate_seen" =>
+        safe_boolean(metadata_attr(attrs, "terminal_candidate_seen", :terminal_candidate_seen)),
+      "terminal_candidate_type" =>
+        safe_terminal_candidate_type(
+          metadata_attr(attrs, "terminal_candidate_type", :terminal_candidate_type)
+        ),
+      "terminal_candidate_class" =>
+        safe_terminal_candidate_class(
+          metadata_attr(attrs, "terminal_candidate_class", :terminal_candidate_class)
+        ),
+      "terminal_candidate_rejection" =>
+        safe_terminal_candidate_rejection(
+          metadata_attr(
+            attrs,
+            "terminal_candidate_rejection",
+            :terminal_candidate_rejection
+          )
+        ),
       "text_frame_count" => safe_non_negative_integer(Map.get(attrs, :text_frame_count)),
       "peer_close_code" =>
         safe_peer_close_code(metadata_attr(attrs, "peer_close_code", :peer_close_code)),
@@ -76,6 +148,32 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "terminal_seen" => safe_boolean(metadata_attr(metadata, "terminal_seen", :terminal_seen)),
       "terminal_forwarded" =>
         safe_boolean(metadata_attr(metadata, "terminal_forwarded", :terminal_forwarded)),
+      "last_upstream_event_type" =>
+        safe_last_upstream_event_type(
+          metadata_attr(metadata, "last_upstream_event_type", :last_upstream_event_type)
+        ),
+      "last_upstream_event_class" =>
+        safe_last_upstream_event_class(
+          metadata_attr(metadata, "last_upstream_event_class", :last_upstream_event_class)
+        ),
+      "terminal_candidate_seen" =>
+        safe_boolean(metadata_attr(metadata, "terminal_candidate_seen", :terminal_candidate_seen)),
+      "terminal_candidate_type" =>
+        safe_terminal_candidate_type(
+          metadata_attr(metadata, "terminal_candidate_type", :terminal_candidate_type)
+        ),
+      "terminal_candidate_class" =>
+        safe_terminal_candidate_class(
+          metadata_attr(metadata, "terminal_candidate_class", :terminal_candidate_class)
+        ),
+      "terminal_candidate_rejection" =>
+        safe_terminal_candidate_rejection(
+          metadata_attr(
+            metadata,
+            "terminal_candidate_rejection",
+            :terminal_candidate_rejection
+          )
+        ),
       "text_frame_count" =>
         safe_non_negative_integer(metadata_attr(metadata, "text_frame_count", :text_frame_count)),
       "peer_close_code" =>
@@ -226,6 +324,36 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
 
   defp safe_non_negative_integer(value) when is_integer(value) and value >= 0, do: value
   defp safe_non_negative_integer(_value), do: nil
+
+  defp safe_last_upstream_event_type(value)
+       when value in @allowed_last_upstream_event_types,
+       do: value
+
+  defp safe_last_upstream_event_type(_value), do: nil
+
+  defp safe_last_upstream_event_class(value)
+       when value in @allowed_last_upstream_event_classes,
+       do: value
+
+  defp safe_last_upstream_event_class(_value), do: nil
+
+  defp safe_terminal_candidate_type(value)
+       when value in @allowed_terminal_candidate_types,
+       do: value
+
+  defp safe_terminal_candidate_type(_value), do: nil
+
+  defp safe_terminal_candidate_class(value)
+       when value in @allowed_terminal_candidate_classes,
+       do: value
+
+  defp safe_terminal_candidate_class(_value), do: nil
+
+  defp safe_terminal_candidate_rejection(value)
+       when value in @allowed_terminal_candidate_rejections,
+       do: value
+
+  defp safe_terminal_candidate_rejection(_value), do: nil
 
   defp safe_peer_close_code(value) when is_integer(value) and value in 0..65_535, do: value
   defp safe_peer_close_code(_value), do: nil
