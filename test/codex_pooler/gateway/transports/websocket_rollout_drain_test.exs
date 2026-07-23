@@ -191,13 +191,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     owner_key = owner_key()
 
-    # This probe is never released: the drain is meant to spend its 120ms budget
-    # and report a failed owner. A short release timeout keeps teardown quick
-    # without affecting the assertions, which hold whichever of the two fires
-    # first.
+    # Never released, so the drain reports a failed owner and the shutdown budget
+    # ends up exhausted. The drain keeps waiting on the owner call well past its
+    # own 120ms deadline, so this timeout is what actually ends the call: keep it
+    # just above that deadline rather than at the generous default, which would
+    # cost the suite a second of pure waiting. The assertions below hold
+    # whichever of the two elapses first.
     _owner =
       start_supervised!(
-        {DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 1_000}
+        {DrainProbeOwner, key: owner_key, parent: self(), release_timeout_ms: 250}
       )
 
     first_summary = RolloutDrain.drain_for_shutdown()
