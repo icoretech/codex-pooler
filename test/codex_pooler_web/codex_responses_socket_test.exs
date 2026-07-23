@@ -1,22 +1,6 @@
 defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   use ExUnit.Case, async: false
 
-  @native_turn_console_filter :codex_pooler_test_native_turn_console_filter
-
-  :ok =
-    :logger.add_handler_filter(
-      :default,
-      @native_turn_console_filter,
-      {fn
-         %{msg: {:string, "websocket native turn failed" <> _rest}}, _extra -> :stop
-         log_event, _extra -> log_event
-       end, nil}
-    )
-
-  ExUnit.after_suite(fn _result ->
-    :ok = :logger.remove_handler_filter(:default, :codex_pooler_test_native_turn_console_filter)
-  end)
-
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
