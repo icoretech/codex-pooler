@@ -8708,7 +8708,118 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert log =~ "request_id=ws-task-crash-log"
     assert log =~ "payload_type=response.create"
     assert log =~ "payload_model=gpt-test-model"
+    assert length(Regex.scan(~r/websocket response task failed/, log)) == 1
+    refute log =~ "websocket native turn failed"
     refute log =~ "sensitive prompt sentinel"
+  end
+
+  test "ordinary websocket response task failures log once and reach the client without a task-crash log" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_upgrade_error(
+          %{"error" => %{"code" => "upgrade_rejected"}},
+          status: 403
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-ordinary-task-failure-log",
+          accepted_turn_state: "ws-ordinary-task-failure-log",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    log =
+      capture_log(fn ->
+        payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => "ordinary failure prompt sentinel",
+            "stream" => true,
+            "generate" => true
+          })
+
+        assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+        assert {:push, {:text, frame}, state} =
+                 receive_socket_done(state, @large_websocket_frame_timeout)
+
+        assert Jason.decode!(frame) == %{
+                 "type" => "error",
+                 "status" => 502,
+                 "error" => %{
+                   "message" => "upstream request failed",
+                   "type" => "invalid_request_error",
+                   "code" => "upstream_request_failed",
+                   "param" => nil
+                 }
+               }
+
+        assert MapSet.size(state.tasks) == 0
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    assert length(Regex.scan(~r/websocket native turn failed/, log)) == 1
+    assert log =~ "request_id=ws-ordinary-task-failure-log"
+    assert log =~ "endpoint=_backend-api_codex_responses"
+    assert log =~ "transport=websocket"
+    assert log =~ "route_class=proxy_websocket"
+    assert log =~ "error_code=upstream_request_failed"
+    assert log =~ "phase=receive"
+    assert log =~ "visible_output=before_visible_output"
+    refute log =~ "websocket response task failed"
+    refute log =~ "ordinary failure prompt sentinel"
+  end
+
+  test "successful websocket response tasks do not log native turn failures" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_websocket_logging_success",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-success-task-no-failure-log",
+          accepted_turn_state: "ws-success-task-no-failure-log",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    log =
+      capture_log(fn ->
+        payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => [],
+            "stream" => true,
+            "generate" => true
+          })
+
+        assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+        assert {:ok, state} = receive_socket_done(state, @large_websocket_frame_timeout)
+        assert MapSet.size(state.tasks) == 0
+        assert :ok = CodexResponsesSocket.terminate(:closed, state)
+      end)
+
+    refute log =~ "websocket native turn failed"
   end
 
   test "websocket response task DOWN messages remove tasks that exit before done" do

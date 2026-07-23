@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @init_failed_message "websocket init failed before request reservation"
   @closed_message "websocket closed before request reservation"
+  @failed_native_websocket_turn_message "websocket native turn failed"
   @bandit_oversize_fragmented_message_reason "Received oversize fragmented message"
 
   @metadata_keys [
@@ -12,10 +13,12 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :endpoint,
     :transport,
     :route_class,
+    :error_code,
     :phase,
     :reason_class,
     :elapsed_ms,
     :codex_session_id,
+    :visible_output,
     :owner_instance_id,
     :proxy_instance_id,
     :downstream_epoch
@@ -45,6 +48,9 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   @spec closed_message() :: String.t()
   def closed_message, do: @closed_message
 
+  @spec failed_native_websocket_turn_message() :: String.t()
+  def failed_native_websocket_turn_message, do: @failed_native_websocket_turn_message
+
   @spec log_init_failed_before_request_reservation(event_metadata(), term()) :: :ok
   def log_init_failed_before_request_reservation(metadata, reason) do
     log_event(:warning, @init_failed_message, metadata, reason)
@@ -54,6 +60,25 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   def log_closed_before_request_reservation(metadata, reason) do
     log_event(:info, @closed_message, metadata, reason)
   end
+
+  @spec log_failed_native_websocket_turn(event_metadata(), term()) :: :ok
+  def log_failed_native_websocket_turn(metadata, reason) do
+    log_event(
+      failed_native_websocket_turn_level(
+        metadata_value(normalize_metadata(metadata), :error_code)
+      ),
+      @failed_native_websocket_turn_message,
+      metadata,
+      reason
+    )
+  end
+
+  @spec failed_native_websocket_turn_level(term()) :: :info | :warning
+  def failed_native_websocket_turn_level(:client_disconnected), do: :info
+  def failed_native_websocket_turn_level(:owner_drained), do: :info
+  def failed_native_websocket_turn_level("client_disconnected"), do: :info
+  def failed_native_websocket_turn_level("owner_drained"), do: :info
+  def failed_native_websocket_turn_level(_error_code), do: :warning
 
   @spec reason_class(term()) :: String.t()
   def reason_class(:normal), do: "normal"

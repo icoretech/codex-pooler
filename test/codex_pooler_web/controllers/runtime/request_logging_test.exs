@@ -21,6 +21,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     downstream_epoch
     elapsed_ms
     endpoint
+    error_code
     owner_instance_id
     phase
     proxy_instance_id
@@ -28,6 +29,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     request_id
     route_class
     transport
+    visible_output
   )
 
   @websocket_lifecycle_forbidden_terms ~w(
@@ -436,6 +438,117 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     refute line =~ "raw_frame"
   end
 
+  test "websocket lifecycle logger keeps existing allowlist and redaction behavior" do
+    sentinel = "SENTINEL_EXISTING_PROMPT_BODY_TOKEN_HEADER_FRAME"
+
+    logs =
+      capture_websocket_lifecycle_log(fn ->
+        assert :ok =
+                 WebsocketConnectionLogger.log_closed_before_request_reservation(
+                   %{
+                     request_id: "ws-existing-sanitization",
+                     endpoint: "/backend-api/codex/responses?authorization=#{sentinel}",
+                     transport: "websocket",
+                     route_class: "proxy_websocket",
+                     phase: "terminate",
+                     elapsed_ms: 13,
+                     codex_session_id: "session-#{sentinel}",
+                     prompt: sentinel,
+                     body: sentinel,
+                     token: sentinel,
+                     headers: [{"authorization", sentinel}],
+                     raw_frame: sentinel
+                   },
+                   {:error, %{prompt: sentinel}}
+                 )
+      end)
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.closed_message(),
+        ~w(codex_session_id elapsed_ms endpoint phase reason_class request_id route_class transport),
+        []
+      )
+
+    assert line =~ "endpoint=redacted"
+    assert line =~ "codex_session_id=redacted"
+    assert line =~ "reason_class=non_atom_reason"
+    refute logs =~ sentinel
+  end
+
+  test "failed native websocket turn logs one safe warning with required outcome fields" do
+    sentinel = "SENTINEL_FAILED_TURN_PROMPT_BODY_TOKEN_HEADER_FRAME"
+    codex_session_id = Ecto.UUID.generate()
+
+    logs =
+      capture_websocket_lifecycle_log(
+        fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                     %{
+                       request_id: "ws-failed-turn",
+                       endpoint: "/backend-api/codex/responses",
+                       transport: "websocket",
+                       route_class: "proxy_websocket",
+                       error_code: "upstream_request_failed",
+                       phase: "receive",
+                       elapsed_ms: 42,
+                       codex_session_id: codex_session_id,
+                       visible_output: :before_visible_output,
+                       prompt: sentinel,
+                       body: sentinel,
+                       token: sentinel,
+                       headers: [{"authorization", sentinel}],
+                       raw_frame: sentinel
+                     },
+                     {:error, %{prompt: sentinel, frame: sentinel}}
+                   )
+        end,
+        :warning
+      )
+
+    line =
+      assert_websocket_lifecycle_line!(
+        logs,
+        WebsocketConnectionLogger.failed_native_websocket_turn_message(),
+        ~w(codex_session_id elapsed_ms endpoint error_code phase reason_class request_id route_class transport visible_output),
+        []
+      )
+
+    assert line =~ "error_code=upstream_request_failed"
+    assert line =~ "visible_output=before_visible_output"
+    assert line =~ "reason_class=non_atom_reason"
+    assert line =~ "codex_session_id=#{log_id_prefix(codex_session_id)}"
+    refute logs =~ sentinel
+  end
+
+  test "failed native websocket turn severity treats expected lifecycle outcomes as info" do
+    assert :info ==
+             WebsocketConnectionLogger.failed_native_websocket_turn_level("client_disconnected")
+
+    assert :info == WebsocketConnectionLogger.failed_native_websocket_turn_level(:owner_drained)
+
+    assert :warning ==
+             WebsocketConnectionLogger.failed_native_websocket_turn_level(
+               "upstream_request_failed"
+             )
+
+    logs =
+      capture_log([level: :warning], fn ->
+        assert :ok =
+                 WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                   %{
+                     request_id: "ws-client-disconnected",
+                     error_code: "client_disconnected"
+                   },
+                   :client_disconnected
+                 )
+      end)
+
+    assert logs == ""
+  end
+
   test "healthy backend response coalesces routing request metadata writes", %{conn: conn} do
     input = "metadata coalescing input #{System.unique_integer([:positive])}"
 
@@ -494,10 +607,11 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
-  defp capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
+  defp capture_websocket_lifecycle_log(fun, level \\ :info)
+       when is_function(fun, 0) and level in [:info, :warning] do
     capture_log(
       [
-        level: :info,
+        level: level,
         format: "$metadata$message\n",
         metadata: @websocket_lifecycle_metadata_keys,
         colors: [enabled: false]
