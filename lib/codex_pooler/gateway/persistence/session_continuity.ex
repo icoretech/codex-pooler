@@ -179,6 +179,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     to: OwnerLease,
     as: :release
 
+  @spec release_owner_lease(
+          session_ref(),
+          Ecto.UUID.t() | String.t(),
+          String.t(),
+          :idle_expiry | :drain_cut | nil
+        ) :: :ok | {:error, :stale_owner | :owner_unavailable}
+  defdelegate release_owner_lease(session_ref, owner_lease_token, reason, owner_exit_cause),
+    to: OwnerLease,
+    as: :release
+
   @spec replace_unavailable_owner_lease(session_ref(), opts()) :: session_result()
   defdelegate replace_unavailable_owner_lease(session_ref, opts),
     to: OwnerLease,

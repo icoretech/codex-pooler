@@ -145,12 +145,25 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   @spec release(session_ref(), Ecto.UUID.t() | String.t(), String.t()) ::
           :ok | {:error, :stale_owner | :owner_unavailable}
   def release(session_ref, owner_lease_token, reason) when is_binary(reason) do
+    release(session_ref, owner_lease_token, reason, nil)
+  end
+
+  def release(_session_ref, _owner_lease_token, _reason), do: {:error, :owner_unavailable}
+
+  @spec release(
+          session_ref(),
+          Ecto.UUID.t() | String.t(),
+          String.t(),
+          :idle_expiry | :drain_cut | nil
+        ) :: :ok | {:error, :stale_owner | :owner_unavailable}
+  def release(session_ref, owner_lease_token, reason, owner_exit_cause)
+      when is_binary(reason) and owner_exit_cause in [:idle_expiry, :drain_cut, nil] do
     now = now()
 
     Repo.transaction(fn ->
       with {:ok, session_id} <- session_id(session_ref),
            %BridgeOwnerLease{} = lease <- for_update(session_id, owner_lease_token) do
-        release!(lease, reason, now)
+        release!(lease, reason, owner_exit_cause, now)
       else
         {:error, reason} -> Repo.rollback(reason)
         nil -> Repo.rollback(owner_release_missing_reason(session_ref))
@@ -159,7 +172,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     |> unwrap_ok_transaction()
   end
 
-  def release(_session_ref, _owner_lease_token, _reason), do: {:error, :owner_unavailable}
+  def release(_session_ref, _owner_lease_token, _reason, _owner_exit_cause),
+    do: {:error, :owner_unavailable}
 
   @spec replace_unavailable(session_ref(), RequestOptions.t()) ::
           {:ok, CodexSession.t()} | {:error, term()}
@@ -201,13 +215,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     )
   end
 
-  defp release!(%BridgeOwnerLease{status: @lease_released}, _reason, _now), do: :ok
+  defp release!(%BridgeOwnerLease{status: @lease_released}, _reason, _owner_exit_cause, _now),
+    do: :ok
 
-  defp release!(%BridgeOwnerLease{} = lease, reason, now) do
+  defp release!(%BridgeOwnerLease{} = lease, reason, owner_exit_cause, now) do
     metadata =
       lease.metadata
       |> normalize_metadata()
       |> Map.put("release_reason", reason)
+      |> maybe_put_owner_exit_cause(owner_exit_cause)
 
     lease
     |> Ecto.Changeset.change(%{
@@ -237,12 +253,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   defp release_active_for_takeover!(session_id, now) do
     case active_for_update(session_id) do
       %BridgeOwnerLease{} = lease ->
-        release!(lease, "owner_unavailable_takeover", now)
+        release!(lease, "owner_unavailable_takeover", nil, now)
 
       nil ->
         :ok
     end
   end
+
+  defp maybe_put_owner_exit_cause(metadata, owner_exit_cause)
+       when owner_exit_cause in [:idle_expiry, :drain_cut] do
+    Map.put(metadata, "owner_exit_cause", Atom.to_string(owner_exit_cause))
+  end
+
+  defp maybe_put_owner_exit_cause(metadata, nil), do: metadata
 
   defp insert_takeover!(%CodexSession{} = session, owner, opts, now) do
     expires_at = DateTime.add(now, bridge_owner_lease_ttl_seconds(opts), :second)

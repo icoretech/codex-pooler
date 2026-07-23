@@ -27,16 +27,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
     _kind, reason -> {:error, reason}
   end
 
-  @spec release_owner_lease(map(), atom()) :: :ok
-  def release_owner_lease(state, reason) do
+  @spec release_owner_lease(map(), atom(), :idle_expiry | :drain_cut | nil) :: :ok
+  def release_owner_lease(state, reason, owner_exit_cause) do
     safe_persist_owner_exit(:release_owner_lease, state, reason, fn ->
       if reason == :stale_owner or not uuid?(state.codex_session_id) do
         :ok
       else
-        state.persistence.release_owner_lease.(
+        release_owner_lease(
+          state.persistence.release_owner_lease,
           state.codex_session_id,
           state.owner_lease_token,
-          Atom.to_string(reason)
+          Atom.to_string(reason),
+          owner_exit_cause
         )
       end
     end)
@@ -99,6 +101,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Persist
       websocket_owner_lease_token: owner_lease_token
     }
     |> RequestOptions.for_websocket()
+  end
+
+  defp release_owner_lease(
+         release_owner_lease,
+         session_id,
+         owner_lease_token,
+         reason,
+         owner_exit_cause
+       )
+       when is_function(release_owner_lease, 4) do
+    release_owner_lease.(session_id, owner_lease_token, reason, owner_exit_cause)
+  end
+
+  defp release_owner_lease(
+         release_owner_lease,
+         session_id,
+         owner_lease_token,
+         reason,
+         _owner_exit_cause
+       )
+       when is_function(release_owner_lease, 3) do
+    release_owner_lease.(session_id, owner_lease_token, reason)
   end
 
   defp uuid?(value) when is_binary(value) do

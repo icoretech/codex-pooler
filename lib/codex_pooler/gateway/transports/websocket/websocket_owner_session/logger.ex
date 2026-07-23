@@ -78,14 +78,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
     )
   end
 
-  @spec owner_terminated(term(), atom(), map()) :: :ok
-  def owner_terminated(reason, owner_exit_reason, state) do
+  @spec owner_terminated(term(), atom(), :idle_expiry | :drain_cut | nil, map()) :: :ok
+  def owner_terminated(reason, owner_exit_reason, owner_exit_cause, state) do
     owner_event(:info, "websocket owner terminated",
       codex_session_id: state.codex_session_id,
       owner_instance_id: state.owner_instance_id,
       owner_pid: self(),
       reason: Metadata.safe_reason(reason),
       owner_exit_reason: owner_exit_reason,
+      owner_exit_cause: owner_exit_cause,
       request_id: state.request_id,
       downstream_epoch: downstream_epoch(state.downstream)
     )

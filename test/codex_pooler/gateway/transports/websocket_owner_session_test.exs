@@ -1143,6 +1143,53 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                      {:data, "unreachable-after-drain"}}
   end
 
+  @tag :owner_exit_reason_label_baseline
+  test "idle expiry and rollout deadline cut retain existing owner-exit metadata" do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    idle_context = db_owner_context()
+    drain_context = db_owner_context()
+
+    on_exit(fn -> cleanup_owner_session(idle_context.codex_session_id) end)
+    on_exit(fn -> cleanup_owner_session(drain_context.codex_session_id) end)
+
+    idle_exit = observe_owner_exit(idle_context, :idle_expiry)
+    drain_exit = observe_owner_exit(drain_context, :rollout_deadline_cut)
+
+    assert Map.take(idle_exit.metadata, [:owner_exit_reason, :release_reason]) == %{
+             owner_exit_reason: "owner_drained",
+             release_reason: "owner_drained"
+           }
+
+    assert Map.take(drain_exit.metadata, [:owner_exit_reason, :release_reason]) ==
+             Map.take(idle_exit.metadata, [:owner_exit_reason, :release_reason])
+  end
+
+  @tag :owner_exit_reason_label_red
+  test "owner exit metadata adds a bounded cause without replacing owner_drained" do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    idle_context = db_owner_context()
+    drain_context = db_owner_context()
+
+    on_exit(fn -> cleanup_owner_session(idle_context.codex_session_id) end)
+    on_exit(fn -> cleanup_owner_session(drain_context.codex_session_id) end)
+
+    idle_exit = observe_owner_exit(idle_context, :idle_expiry)
+    drain_exit = observe_owner_exit(drain_context, :rollout_deadline_cut)
+
+    assert idle_exit.metadata.owner_exit_reason == "owner_drained"
+    assert drain_exit.metadata.owner_exit_reason == "owner_drained"
+    assert idle_exit.metadata.owner_exit_cause == "idle_expiry"
+    assert drain_exit.metadata.owner_exit_cause == "drain_cut"
+    assert idle_exit.metadata.persisted_owner_exit_cause == "idle_expiry"
+    assert drain_exit.metadata.persisted_owner_exit_cause == "drain_cut"
+  end
+
   test "lease loss while a terminal result is pending stops stale without terminalization",
        context do
     parent = self()
@@ -1901,6 +1948,168 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     )
   end
 
+  defp start_supervised_owner(context, opts) do
+    start_supervised!(%{
+      id: {WebsocketOwnerSession, context.codex_session_id},
+      restart: :temporary,
+      start:
+        {WebsocketOwnerSession, :start_link,
+         [
+           Keyword.merge(opts,
+             codex_session_id: context.codex_session_id,
+             owner_lease_token: context.owner_lease_token,
+             owner_instance_id: context.owner_instance_id
+           )
+         ]}
+    })
+  end
+
+  defp observe_owner_exit(context, :idle_expiry) do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+
+    owner = start_supervised_owner(context, upstream: upstream, idle_shutdown_ms: 1)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("idle-exit-metadata")
+             )
+
+    owner_ref = Process.monitor(owner)
+
+    logs =
+      capture_log([level: :info], fn ->
+        assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
+        assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+      end)
+
+    assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
+    owner_exit_observation(logs, context.codex_session_id)
+  end
+
+  defp observe_owner_exit(context, :rollout_deadline_cut) do
+    block_ref = make_ref()
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        block_ref: block_ref,
+        messages: ["rollout-cut-before-deadline", "unreachable-after-rollout-cut"]
+      )
+
+    owner = start_supervised_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("rollout-deadline-cut-metadata")
+             )
+
+    parent = self()
+
+    submitter =
+      spawn(fn ->
+        outcome =
+          try do
+            {:return,
+             WebsocketOwnerSession.submit_frame(owner, downstream, "rollout-cut-request")}
+          catch
+            :exit, reason -> {:exit, reason}
+          end
+
+        send(parent, {:rollout_deadline_cut_submitter_outcome, outcome})
+      end)
+
+    submitter_ref = Process.monitor(submitter)
+
+    assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
+                    {:data, "rollout-cut-before-deadline"}}
+
+    assert_receive {:websocket_owner_harness_barrier, barrier_pid, ^block_ref}
+
+    owner_ref = Process.monitor(owner)
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    deadline = harness.deadline
+
+    logs =
+      capture_log([level: :info], fn ->
+        drain_task =
+          Task.async(fn ->
+            RolloutDrain.start_drain(
+              [name: harness.name, timeout_ms: 25, deadline_margin_ms: 20, deadline_floor_ms: 10] ++
+                WebsocketRolloutDrainSupport.deadline_options(deadline)
+            )
+          end)
+
+        assert_receive {:rollout_drain_deadline_wait, ^deadline, 10}
+
+        refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
+                         {:error, :owner_drained, _safe_payload}}
+
+        assert Process.alive?(owner)
+        assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+
+        assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
+                        {:error, :owner_drained, _safe_payload}}
+
+        assert_receive {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1, :complete}
+        assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
+
+        assert %{
+                 result: :ok,
+                 owners_seen: 1,
+                 owners_drained: 1,
+                 owners_idle: 0,
+                 owners_failed: 0,
+                 turns_completed: 0,
+                 turns_aborted: 1,
+                 timeout_ms: 25,
+                 already_draining?: false
+               } = Task.await(drain_task, 1_000)
+
+        assert WebsocketRolloutDrainSupport.VirtualDeadline.waiter_pids(deadline) == []
+      end)
+
+    assert_receive {:websocket_owner_harness_upstream_closed, ^upstream_pid}
+    assert_receive {:rollout_deadline_cut_submitter_outcome, {:exit, _reason}}
+    assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, _reason}
+
+    send(barrier_pid, {:websocket_owner_harness_release, block_ref})
+
+    refute_received {:websocket_owner_frame, "rollout-deadline-cut-metadata", 1,
+                     {:data, "unreachable-after-rollout-cut"}}
+
+    owner_exit_observation(logs, context.codex_session_id)
+  end
+
+  defp owner_exit_observation(logs, codex_session_id) do
+    assert logs =~ "websocket owner terminated"
+    assert logs =~ "codex_session_id=#{codex_session_id}"
+
+    %{
+      logs: logs,
+      metadata: %{
+        owner_exit_reason: logged_owner_exit_reason(logs),
+        owner_exit_cause: logged_owner_exit_cause(logs),
+        release_reason: released_lease!(codex_session_id).metadata["release_reason"],
+        persisted_owner_exit_cause: released_lease!(codex_session_id).metadata["owner_exit_cause"]
+      }
+    }
+  end
+
+  defp logged_owner_exit_reason(logs) do
+    assert [_, reason] = Regex.run(~r/owner_exit_reason=([a-z_]+)/, logs)
+    reason
+  end
+
+  defp logged_owner_exit_cause(logs) do
+    case Regex.run(~r/owner_exit_cause=([a-z_]+)/, logs) do
+      [_, cause] -> cause
+      nil -> nil
+    end
+  end
+
   defp auth_context do
     %{user: owner} = bootstrap_owner_fixture()
     pool = pool_fixture(%{created_by_user_id: owner.id})
@@ -1958,6 +2167,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     Repo.one!(
       from lease in BridgeOwnerLease,
         where: lease.codex_session_id == ^session_id and lease.status == "active",
+        limit: 1
+    )
+  end
+
+  defp released_lease!(session_id) do
+    Repo.one!(
+      from lease in BridgeOwnerLease,
+        where: lease.codex_session_id == ^session_id and lease.status == "released",
         limit: 1
     )
   end

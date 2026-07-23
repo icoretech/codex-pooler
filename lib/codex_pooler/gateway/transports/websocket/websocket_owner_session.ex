@@ -40,6 +40,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :persistence,
     :request_id,
     :draining?,
+    :owner_exit_cause,
     :idle_shutdown_ms,
     :idle_shutdown_ref,
     :owner_renewal_ms,
@@ -292,7 +293,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         state
       end
 
-    {:stop, :normal, :ok, %{state | draining?: true}}
+    {:stop, :normal, :ok, %{state | draining?: true, owner_exit_cause: :drain_cut}}
   end
 
   def handle_call(
@@ -512,7 +513,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_info(:idle_shutdown, %{downstream: nil, active_turn: nil} = state) do
-    {:stop, :normal, %{state | idle_shutdown_ref: nil, draining?: true}}
+    {:stop, :normal,
+     %{state | idle_shutdown_ref: nil, draining?: true, owner_exit_cause: :idle_expiry}}
   end
 
   def handle_info(:idle_shutdown, state) do
@@ -542,8 +544,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def terminate(reason, state) do
     state = cancel_owner_renewal(state)
     owner_exit_reason = owner_exit_reason(reason, state)
-    Logger.owner_terminated(reason, owner_exit_reason, state)
-    _result = Persistence.release_owner_lease(state, owner_exit_reason)
+    owner_exit_cause = owner_exit_cause(reason, state)
+    Logger.owner_terminated(reason, owner_exit_reason, owner_exit_cause, state)
+    _result = Persistence.release_owner_lease(state, owner_exit_reason, owner_exit_cause)
     _result = Persistence.interrupt_codex_session(state, owner_exit_reason)
     close_upstream(state.upstream_closer, state.upstream_pid)
     :ok
@@ -906,7 +909,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp persistence_boundary(opts) do
     Keyword.get_lazy(opts, :persistence, fn ->
       %{
-        release_owner_lease: &SessionContinuity.release_owner_lease/3,
+        release_owner_lease: &SessionContinuity.release_owner_lease/4,
         renew_owner_token: &SessionContinuity.renew_owner_token/3,
         interrupt_codex_session: &Interruption.interrupt_codex_session/2
       }
@@ -930,6 +933,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp owner_exit_reason(:shutdown, _state), do: :owner_drained
   defp owner_exit_reason({:shutdown, _details}, _state), do: :owner_drained
   defp owner_exit_reason(_reason, _state), do: :owner_crashed
+
+  defp owner_exit_cause(:normal, %{owner_exit_cause: cause})
+       when cause in [:idle_expiry, :drain_cut],
+       do: cause
+
+  defp owner_exit_cause(_reason, _state), do: nil
 
   defp owner_error(error)
        when error in [
