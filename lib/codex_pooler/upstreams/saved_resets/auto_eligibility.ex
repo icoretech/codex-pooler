@@ -246,14 +246,18 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       when is_list(candidate_identity_ids) and is_map(windows_by_identity_id) and
              is_struct(latched_identity_ids, MapSet) do
     # A latched identity just spent a credit, so its pre-reset windows are
-    # exactly the evidence the latch distrusts: treat it as not-at-threshold
-    # instead of letting that stale pressure arm a consume on a sibling.
-    candidate_identity_ids != [] and policy.trigger_mode == "threshold" and
-      Enum.all?(candidate_identity_ids, fn identity_id ->
-        identity_id not in latched_identity_ids and
-          windows_by_identity_id
-          |> Map.get(identity_id, [])
-          |> Enum.any?(&weekly_pressure_window?(&1, policy, timestamp))
+    # exactly the evidence the latch distrusts: leave it out of the pool-wide
+    # computation entirely, so its stale pressure neither arms a consume on a
+    # sibling nor vetoes the trigger for healthy siblings. A pool whose every
+    # candidate is latched cannot trigger.
+    active_candidate_ids =
+      Enum.reject(candidate_identity_ids, &(&1 in latched_identity_ids))
+
+    active_candidate_ids != [] and policy.trigger_mode == "threshold" and
+      Enum.all?(active_candidate_ids, fn identity_id ->
+        windows_by_identity_id
+        |> Map.get(identity_id, [])
+        |> Enum.any?(&weekly_pressure_window?(&1, policy, timestamp))
       end)
   end
 

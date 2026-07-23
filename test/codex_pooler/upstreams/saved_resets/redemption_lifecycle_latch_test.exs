@@ -70,6 +70,56 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleLatchTest do
              ) == :clear
     end
 
+    test "an unapplied overwrite keeps the carried consume cooldown" do
+      carried_claim =
+        record(%{
+          "status" => "redeeming",
+          "phase" => "consuming",
+          "result" => nil,
+          "consumed_at" => nil,
+          "last_applied_consume_at" => @inside_window
+        })
+
+      assert RedemptionLifecycle.gateway_auto_latch(carried_claim, @now) == :cooldown
+
+      carried_failed =
+        record(%{
+          "status" => "failed",
+          "phase" => nil,
+          "result" => %{"code" => "http_5xx", "applied" => false},
+          "consumed_at" => nil,
+          "last_applied_consume_at" => @inside_window
+        })
+
+      assert RedemptionLifecycle.gateway_auto_latch(carried_failed, @now) == :cooldown
+
+      assert RedemptionLifecycle.gateway_auto_latch(
+               record(%{
+                 "status" => "failed",
+                 "phase" => nil,
+                 "result" => %{"code" => "http_5xx", "applied" => false},
+                 "consumed_at" => nil,
+                 "last_applied_consume_at" => @outside_window
+               }),
+               @now
+             ) == :clear
+    end
+
+    test "a grossly future-dated consume timestamp fails open instead of latching" do
+      slightly_future = @now |> DateTime.add(30, :second) |> DateTime.to_iso8601()
+      far_future = @now |> DateTime.add(10, :minute) |> DateTime.to_iso8601()
+
+      assert RedemptionLifecycle.gateway_auto_latch(
+               record(%{"phase" => "confirmed_by_quota", "consumed_at" => slightly_future}),
+               @now
+             ) == :cooldown
+
+      assert RedemptionLifecycle.gateway_auto_latch(
+               record(%{"phase" => "confirmed_by_quota", "consumed_at" => far_future}),
+               @now
+             ) == :clear
+    end
+
     test "a manual applied consume arms the automatic latch too" do
       manual = record(%{"phase" => "confirmed_by_quota", "trigger_kind" => "admin_manual"})
 

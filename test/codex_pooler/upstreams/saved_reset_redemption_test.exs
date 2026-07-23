@@ -1166,6 +1166,78 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
+    test "a failed manual attempt does not disarm the automatic latch" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {500, %{"error" => "unavailable"}},
+             "/api/codex/usage" => {200, usage_payload(1)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
+        )
+
+      manual_result = SavedResetRedemption.redeem(assignment)
+      refute match?({:ok, %{applied?: true}}, manual_result)
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_consume_cooldown"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [manual_consume] = FakeUpstream.requests(fake)
+      assert manual_consume.path == "/api/codex/rate-limit-reset-credits/consume"
+    end
+
+    test "a permanently latched sibling no longer vetoes the threshold trigger" do
+      {:ok, latched_fake} = codex_reset_fake(0)
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: latched_identity} =
+        assignment_with_fake(latched_fake, "/api/codex/usage", "codex_api",
+          redemption: applied_gateway_auto_redemption("reblocked", 5)
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity =
+        enable_saved_reset_auto_redeem!(identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 60
+        })
+
+      upsert_weekly_pressure_quota!(identity, Decimal.new("95"))
+
+      context = %{
+        trigger: :threshold_pressure,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        candidate_assignment_ids: [assignment.id],
+        candidate_identity_ids: [latched_identity.id, identity.id],
+        route_class: "proxy_http"
+      }
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [consume_request | _rest] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert [] = FakeUpstream.requests(latched_fake)
+    end
+
     test "a manual applied consume latches the following automatic attempt" do
       {:ok, fake} = codex_reset_fake(0)
 

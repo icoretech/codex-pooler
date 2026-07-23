@@ -62,6 +62,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   # ~18 minutes after a reset, and post-consume classification can settle a
   # threshold-mode record to `confirmed_by_quota` on exactly that stale data.
   @gateway_auto_consume_cooldown_ms 30 * 60 * 1000
+  @future_consume_tolerance_ms 60 * 1000
 
   @legacy_status_by_phase %{
     @consuming => "redeeming",
@@ -229,7 +230,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   def gateway_auto_latch(redemption, %DateTime{} = now) do
     cond do
       not applied_consume?(redemption) ->
-        :clear
+        if within_carried_consume_cooldown?(redemption, now), do: :cooldown, else: :clear
 
       phase(redemption) in [nil, @confirmed_by_quota] ->
         if within_consume_cooldown?(redemption, now), do: :cooldown, else: :clear
@@ -239,14 +240,60 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     end
   end
 
+  @doc """
+  The applied-consume timestamp a replacement claim must carry so an
+  unapplied overwrite (for example a failed manual attempt) cannot disarm
+  the cooldown inside the same provider-staleness window.
+  """
+  @spec carried_applied_consume_at(redemption() | term()) :: String.t() | nil
+  def carried_applied_consume_at(redemption) do
+    if applied_consume?(redemption) do
+      case consumed_or_started_at(redemption) do
+        %DateTime{} = consumed_at -> DateTime.to_iso8601(consumed_at)
+        nil -> carried_consume_value(redemption)
+      end
+    else
+      carried_consume_value(redemption)
+    end
+  end
+
+  defp carried_consume_value(%{"last_applied_consume_at" => value}) when is_binary(value),
+    do: value
+
+  defp carried_consume_value(_redemption), do: nil
+
+  defp within_carried_consume_cooldown?(redemption, now) do
+    case redemption do
+      %{"last_applied_consume_at" => value} when is_binary(value) ->
+        case parse_datetime(value) do
+          %DateTime{} = carried_at -> within_cooldown_window?(carried_at, now)
+          nil -> false
+        end
+
+      _redemption ->
+        false
+    end
+  end
+
   defp within_consume_cooldown?(redemption, now) do
     case consumed_or_started_at(redemption) do
       %DateTime{} = consumed_at ->
-        DateTime.diff(now, consumed_at, :millisecond) < @gateway_auto_consume_cooldown_ms
+        within_cooldown_window?(consumed_at, now)
 
       nil ->
         false
     end
+  end
+
+  # A grossly future-dated consume timestamp (broken writer clock) must not
+  # hold the latch until the reader's clock catches up; small skew keeps the
+  # cooldown, anything beyond the tolerance fails open per the
+  # no-permanent-latch rule.
+  defp within_cooldown_window?(%DateTime{} = consumed_at, now) do
+    elapsed_ms = DateTime.diff(now, consumed_at, :millisecond)
+
+    elapsed_ms >= -@future_consume_tolerance_ms and
+      elapsed_ms < @gateway_auto_consume_cooldown_ms
   end
 
   defp consumed_or_started_at(%{"consumed_at" => consumed_at} = redemption)

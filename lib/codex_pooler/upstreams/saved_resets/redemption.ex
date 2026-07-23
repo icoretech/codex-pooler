@@ -375,8 +375,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
        ) do
     {attempt_id, generation} = claim_attempt_identity(metadata)
 
-    claimed_identity =
-      update_redemption_metadata!(locked_identity, metadata, %{
+    # The claim replaces the whole redemption record, so the prior applied
+    # consume's timestamp must ride along or an unapplied attempt would
+    # disarm the gateway_auto cooldown inside the same staleness window.
+    claim =
+      %{
         "status" => "redeeming",
         "phase" => RedemptionLifecycle.consuming(),
         "attempt_id" => attempt_id,
@@ -385,7 +388,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         "started_at" => DateTime.to_iso8601(started_at),
         "finished_at" => nil,
         "result" => nil
-      })
+      }
+      |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
+
+    claimed_identity = update_redemption_metadata!(locked_identity, metadata, claim)
 
     %{
       identity: claimed_identity,
@@ -749,6 +755,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           "result" => metadata_result(result)
         }
 
+        base = put_carried_applied_consume(base, redemption)
+
         updated_identity =
           update_redemption_metadata!(
             identity,
@@ -886,21 +894,33 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     metadata = identity.metadata || %{}
     generation = next_generation(metadata)
 
-    update_redemption_metadata!(identity, metadata, %{
-      "status" => "failed",
-      "attempt_id" => redemption["attempt_id"] || Ecto.UUID.generate(),
-      "generation" => generation,
-      "trigger_kind" => redemption["trigger_kind"] || "admin_manual",
-      "started_at" => redemption["started_at"],
-      "finished_at" => DateTime.to_iso8601(finished_at),
-      "result" => %{
-        "code" => "stale_redemption_unknown",
-        "applied" => false,
-        "available_count_before" => nil,
-        "available_count_after" => nil,
-        "http_status" => nil
+    update_redemption_metadata!(
+      identity,
+      metadata,
+      %{
+        "status" => "failed",
+        "attempt_id" => redemption["attempt_id"] || Ecto.UUID.generate(),
+        "generation" => generation,
+        "trigger_kind" => redemption["trigger_kind"] || "admin_manual",
+        "started_at" => redemption["started_at"],
+        "finished_at" => DateTime.to_iso8601(finished_at),
+        "result" => %{
+          "code" => "stale_redemption_unknown",
+          "applied" => false,
+          "available_count_before" => nil,
+          "available_count_after" => nil,
+          "http_status" => nil
+        }
       }
-    })
+      |> put_carried_applied_consume(redemption)
+    )
+  end
+
+  defp put_carried_applied_consume(base, redemption) do
+    case RedemptionLifecycle.carried_applied_consume_at(redemption) do
+      nil -> base
+      carried_at -> Map.put(base, "last_applied_consume_at", carried_at)
+    end
   end
 
   defp update_redemption_metadata!(identity, metadata, redemption) do

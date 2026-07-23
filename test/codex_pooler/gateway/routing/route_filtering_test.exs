@@ -492,7 +492,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       latched_identity = enable_saved_reset_auto_redeem!(latched_identity, threshold_policy)
       sibling_identity = enable_saved_reset_auto_redeem!(sibling_identity, threshold_policy)
       upsert_weekly_pressure_quota!(latched_identity, Decimal.new("95"))
-      upsert_weekly_pressure_quota!(sibling_identity, Decimal.new("95"))
+      upsert_weekly_pressure_quota!(sibling_identity, Decimal.new("30"))
 
       filter_input =
         filter_input(
@@ -504,8 +504,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       assert {:ok, [_ | _], _filtered_options} = RouteFiltering.filter_candidates(filter_input)
 
-      # No credit is spent anywhere: the latched identity's stale pressure no
-      # longer counts toward the all-candidates-at-threshold trigger.
+      # No credit is spent anywhere: the latched identity's stale pressure is
+      # excluded from the trigger computation, and the sibling's own genuine
+      # pressure sits below the threshold, so nothing arms. A sibling at
+      # genuine threshold pressure may still redeem on its own evidence.
       assert [] = FakeUpstream.requests(latched_upstream)
       assert [] = FakeUpstream.requests(sibling_upstream)
     end
