@@ -819,6 +819,94 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                reason
     end
 
+    test "tags terminal-missing interruptions after visible public Chat data" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      delta =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => "visible chat answer"
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(delta, "/v1/chat/completions", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) ==
+               {:upstream_stream_interrupted, reason}
+    end
+
+    test "tags terminal-missing interruptions after public Chat tool and moderation chunks" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+
+      visible_events = [
+        sse_event("response.output_item.added", %{
+          "type" => "response.output_item.added",
+          "item" => %{"type" => "function_call", "name" => "lookup", "arguments" => ""}
+        }),
+        sse_event("response.moderation.completed", %{
+          "type" => "response.moderation.completed",
+          "moderation" => %{"input" => %{}, "output" => %{}}
+        })
+      ]
+
+      for event <- visible_events do
+        state = DownstreamStream.initial_state(:relay, opts)
+
+        assert {chunk, state} =
+                 DownstreamStream.normalize_data(event, "/v1/chat/completions", opts, state)
+
+        assert chunk != ""
+
+        assert DownstreamStream.terminal_missing_interruption_reason(state, reason) ==
+                 {:upstream_stream_interrupted, reason}
+      end
+    end
+
+    test "does not tag terminal-missing interruptions after a public Chat terminal" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      stream =
+        [
+          sse_event("response.output_text.delta", %{
+            "type" => "response.output_text.delta",
+            "delta" => "visible chat answer"
+          }),
+          sse_event("response.failed", %{
+            "type" => "response.failed",
+            "response" => %{"status" => "failed"}
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(stream, "/v1/chat/completions", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+    end
+
     test "reuses a response id observed on a response-bearing nonterminal event" do
       opts =
         RequestOptions.build(

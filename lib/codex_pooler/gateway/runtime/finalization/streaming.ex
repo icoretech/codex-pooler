@@ -376,6 +376,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp health_neutral_error_code?(code) do
     code in [
       "context_length_exceeded",
+      "cyber_policy",
       "invalid_request",
       "invalid_request_error",
       "invalid_previous_response_id",

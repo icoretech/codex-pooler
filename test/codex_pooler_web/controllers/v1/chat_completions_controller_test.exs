@@ -22,7 +22,13 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Persistence.CodexSession
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
+    CodexSession,
+    RoutingCircuitState
+  }
+
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
@@ -539,6 +545,139 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
     assert request.status == "succeeded"
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions keeps post-content upstream interruption health-neutral", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.abrupt_close_mid_stream([
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "delta" => "visible-before-abrupt-close"
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", chat_payload(setup) |> Map.put("stream", true))
+
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    assert conn.status == 200
+    assert conn.resp_body =~ "\"role\":\"assistant\""
+    assert conn.resp_body =~ "\"content\":\"visible-before-abrupt-close\""
+    refute conn.resp_body =~ "\"error\""
+    refute conn.resp_body =~ "data: [DONE]\n\n"
+    refute conn.resp_body =~ "response.output_text.delta"
+
+    assert [
+             %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
+             %{"choices" => [%{"delta" => %{"content" => "visible-before-abrupt-close"}}]}
+           ] =
+             chat_chunks(conn.resp_body)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.transport == "http_sse"
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert FakeUpstream.count(upstream) == 1
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions keeps post-tool-call interruption health-neutral", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.abrupt_close_mid_stream([
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 0,
+             "item_id" => "call_chat_interrupted_tool",
+             "item" => %{
+               "type" => "function_call",
+               "name" => "lookup_fixture",
+               "arguments" => ""
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    responses =
+      for _ <- 1..2 do
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/chat/completions",
+          chat_payload(setup)
+          |> Map.put("stream", true)
+          |> Map.put("tools", [function_tool()])
+        )
+      end
+
+    for response <- responses do
+      assert [content_type] = get_resp_header(response, "content-type")
+      assert content_type =~ "text/event-stream"
+      assert response.status == 200
+      refute response.resp_body =~ "\"role\":\"assistant\""
+      refute response.resp_body =~ "\"error\""
+      refute response.resp_body =~ "data: [DONE]\n\n"
+      refute response.resp_body =~ "response.output_item.added"
+
+      assert [
+               %{
+                 "choices" => [
+                   %{
+                     "delta" => %{
+                       "tool_calls" => [
+                         %{
+                           "id" => "call_chat_interrupted_tool",
+                           "type" => "function",
+                           "function" => %{"name" => "lookup_fixture", "arguments" => ""}
+                         }
+                       ]
+                     }
+                   }
+                 ]
+               }
+             ] = chat_chunks(response.resp_body)
+    end
+
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 2
+    assert Enum.all?(requests, &(&1.transport == "http_sse"))
+    assert Enum.all?(requests, &(&1.status == "failed"))
+    assert Enum.all?(requests, &(&1.last_error_code == "upstream_stream_error"))
+
+    attempts = Repo.all(from(a in Attempt, where: a.request_id in ^Enum.map(requests, & &1.id)))
+    assert length(attempts) == 2
+    assert Enum.all?(attempts, &(&1.status == "failed"))
+    assert Enum.all?(attempts, &(&1.network_error_code == "upstream_stream_error"))
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+    assert FakeUpstream.count(upstream) == 2
   end
 
   @tag :streaming_chat

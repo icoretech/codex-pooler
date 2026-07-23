@@ -145,6 +145,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  def terminal_missing_interruption_reason(
+        %{public_openai_chat: stream_state},
+        original_reason
+      ) do
+    if ChatCompletions.visible_seen?(stream_state) and
+         not ChatCompletions.terminal_seen?(stream_state) do
+      {:upstream_stream_interrupted, original_reason}
+    else
+      original_reason
+    end
+  end
+
   def terminal_missing_interruption_reason(_state, original_reason), do: original_reason
 
   @spec public_openai_responses_stream_metadata(state()) :: map()

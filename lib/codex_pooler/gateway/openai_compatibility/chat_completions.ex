@@ -32,6 +32,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
           required(:created) => integer(),
           required(:model) => String.t() | nil,
           required(:role_sent?) => boolean(),
+          required(:visible_seen?) => boolean(),
+          required(:terminal_seen?) => boolean(),
           required(:include_usage?) => boolean(),
           required(:discarding_oversized?) => boolean()
         }
@@ -40,6 +42,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   @spec stream_state(map()) :: stream_state()
   def stream_state(chat_payload), do: initial_state(chat_payload)
+
+  @spec visible_seen?(stream_state()) :: boolean()
+  def visible_seen?(%{visible_seen?: visible_seen?}) when is_boolean(visible_seen?),
+    do: visible_seen?
+
+  def visible_seen?(_state), do: false
+
+  @spec terminal_seen?(stream_state()) :: boolean()
+  def terminal_seen?(%{terminal_seen?: terminal_seen?}) when is_boolean(terminal_seen?),
+    do: terminal_seen?
+
+  def terminal_seen?(_state), do: false
 
   @spec normalize_stream_data(binary(), stream_state()) :: {binary(), stream_state()}
   def normalize_stream_data(data, %{discarding_oversized?: true} = state) when is_binary(data) do
@@ -142,7 +156,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         {[], state}
 
       terminal_event?(type) ->
-        terminal_stream_chunk(type, decoded, state)
+        {data, state} = terminal_stream_chunk(type, decoded, state)
+        {data, %{state | terminal_seen?: true}}
 
       moderation = moderation_metadata(decoded) ->
         moderation_stream_chunk(moderation, sync_response_state(state, decoded))
@@ -175,19 +190,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp maybe_role_chunk(%{role_sent?: true} = state), do: {[], state}
 
   defp maybe_role_chunk(state) do
-    {chat_sse_chunk(%{"role" => "assistant"}, nil, %{state | role_sent?: true}),
-     %{state | role_sent?: true}}
+    state = %{state | role_sent?: true}
+    {chat_sse_chunk(%{"role" => "assistant"}, nil, state), mark_visible(state)}
   end
 
   defp text_delta_chunk("", state), do: {[], state}
 
   defp text_delta_chunk(delta, %{role_sent?: false} = state) do
     {prefix, state} = maybe_role_chunk(state)
-    {[prefix, chat_sse_chunk(%{"content" => delta}, nil, state)], state}
+    {[prefix, chat_sse_chunk(%{"content" => delta}, nil, state)], mark_visible(state)}
   end
 
   defp text_delta_chunk(delta, state),
-    do: {chat_sse_chunk(%{"content" => delta}, nil, state), state}
+    do: {chat_sse_chunk(%{"content" => delta}, nil, state), mark_visible(state)}
 
   defp tool_call_item_chunk(%{"type" => "function_call"} = item, context, state) do
     index = tool_call_index(item, context)
@@ -206,7 +221,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       ]
     }
 
-    {chat_sse_chunk(delta, nil, state), state}
+    {chat_sse_chunk(delta, nil, state), mark_visible(state)}
   end
 
   defp tool_call_item_chunk(_item, _context, state), do: {[], state}
@@ -223,7 +238,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       ]
     }
 
-    {chat_sse_chunk(delta, nil, state), state}
+    {chat_sse_chunk(delta, nil, state), mark_visible(state)}
   end
 
   defp terminal_stream_chunk(type, decoded, %{role_sent?: false} = state)
@@ -260,7 +275,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       "moderation" => moderation
     }
 
-    {["data: ", Jason.encode!(payload), "\n\n"], state}
+    {["data: ", Jason.encode!(payload), "\n\n"], mark_visible(state)}
   end
 
   defp chat_sse_chunk(delta, finish_reason, state) do
@@ -288,6 +303,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       created: System.system_time(:second),
       model: Map.get(chat_payload, "model"),
       role_sent?: false,
+      visible_seen?: false,
+      terminal_seen?: false,
       include_usage?: get_in(chat_payload, ["stream_options", "include_usage"]) == true,
       discarding_oversized?: false
     }
@@ -313,6 +330,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   defp usage_stream_chunk(_decoded, _state), do: []
+
+  defp mark_visible(state), do: %{state | visible_seen?: true}
 
   defp sync_response_state(state, decoded) do
     response = response_map(decoded)

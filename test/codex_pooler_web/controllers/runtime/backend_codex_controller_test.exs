@@ -8188,6 +8188,66 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "SSE provider cyber_policy terminal stays health-neutral" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.failed",
+             %{
+               "type" => "response.failed",
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{"code" => "cyber_policy"}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %{stream: stream}} =
+             execute_gateway(
+               auth,
+               "/backend-api/codex/responses",
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "synthetic provider policy terminal fixture",
+                 "stream" => true
+               },
+               %{
+                 request_id: "provider-cyber-policy-terminal",
+                 upstream_endpoint: "/backend-api/codex/responses"
+               }
+             )
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+    assert stream_conn.resp_body =~ "event: response.failed\n"
+    assert stream_conn.resp_body =~ ~s("code":"cyber_policy")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.transport == "http_sse"
+    assert request.last_error_code == "cyber_policy"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "cyber_policy"
+
+    assert {
+             Repo.aggregate(from(d in BridgeDemotion), :count, :id),
+             Repo.aggregate(from(c in RoutingCircuitState), :count, :id)
+           } == {0, 0}
+  end
+
   test "SSE previous response miss is masked while preserving upstream metadata" do
     upstream =
       start_upstream(
