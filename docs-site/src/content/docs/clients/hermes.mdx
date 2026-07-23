@@ -50,6 +50,9 @@ image_gen:
   provider: openai
   model: gpt-image-2-medium
 
+compression:
+  threshold: 0.95
+
 auxiliary:
   compression:
     timeout: 900
@@ -85,7 +88,7 @@ using OpenAI's default endpoint instead of Codex Pooler.
 
 Current Codex Pooler releases also expose an SDK-readable `context_length` value on `/v1/models`, derived from the effective Codex `context_window` metadata; it is authoritative when available, so Hermes' automatic probes can resolve the Pooler window. For the GPT-5.6 examples here, use the Codex raw 272000 window and the 258400 effective advertised value. Keep `context_length: 258400` in Hermes config as an explicit override when Hermes cannot read `/v1/models` first.
 
-Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout`.
+`compression.threshold: 0.95` starts Hermes compression at 245480 tokens, 95% of the advertised 258400-token window. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout`.
 
 Remote HTTP MCP servers require Hermes' `mcp` extra. If `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not available`, install MCP support into the Hermes environment, following the [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp), and rerun the test.
 
@@ -120,6 +123,9 @@ model:
 
 agent:
   image_input_mode: native
+
+compression:
+  threshold: 0.95
 
 auxiliary:
   compression:

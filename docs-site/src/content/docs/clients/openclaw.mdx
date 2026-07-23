@@ -36,7 +36,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
           },
         ],
       },
-      compaction: { reserveTokens: 128000 },
+      compaction: { reserveTokens: 20000 },
     },
   },
   models: {
@@ -85,7 +85,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
 
 Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseUrl` to `http://localhost:4000/v1`.
 
-OpenClaw separates the provider/native `contextWindow` from the effective runtime `contextTokens` budget. Codex-served GPT-5.6 examples use the Codex raw 272k window, the 258400 effective budget, and a 128k output budget. The explicit compaction reserve keeps local prompt history under the remaining 130400-token budget before a long completion. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning. When available, `/v1/models.context_length` is authoritative for `contextTokens`; it does not replace the native `contextWindow`.
+OpenClaw separates the provider/native `contextWindow` from the effective runtime `contextTokens` budget. Codex-served GPT-5.6 examples use the Codex raw 272k window, the 258400 effective budget, and a 128k output budget. OpenClaw enforces a minimum 20000-token compaction reserve, so this is the latest supported trigger: local compaction starts at 238400 tokens, about 92.26% of the effective window. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning. When available, `/v1/models.context_length` is authoritative for `contextTokens`; it does not replace the native `contextWindow`.
 
 ## Operator MCP server
 

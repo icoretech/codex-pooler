@@ -88,7 +88,7 @@ For local setup, change `baseUrl` to `http://localhost:4000/v1`.
 
 Current Pi source still requires `thinkingLevelMap.xhigh` for Pi to expose `xhigh` for this custom model. Without it, Pi clamps `--thinking xhigh` and `defaultThinkingLevel: "xhigh"` down to `high`.
 
-Pi accepts `contextWindow` and `maxTokens` for custom models; it has no `contextTokens` field. Use a 258.4k context window and 128k output budget for the GPT-5.6 custom entries so Pi's local context accounting matches Codex Pooler's advertised model metadata. When available, `/v1/models.context_length` is the authoritative effective value for its one-field `contextWindow`.
+Pi accepts `contextWindow` and `maxTokens` for custom models; it has no `contextTokens` field. Use a 258.4k context window and 128k output budget for the GPT-5.6 custom entries so Pi's local context accounting matches Codex Pooler's advertised model metadata. Pi compacts when usage exceeds `contextWindow - reserveTokens`, so `reserveTokens: 12920` starts compaction at 245480 tokens, 95% of the effective window. Pi also uses this reserve for summary generation, so this profile deliberately favors retaining raw context. When available, `/v1/models.context_length` is the authoritative effective value for its one-field `contextWindow`.
 
 ## Default model
 
@@ -105,7 +105,7 @@ If you want plain `pi` or `pi -p ...` to start on Codex Pooler, add the defaults
     "codex-pooler/gpt-5.6-sol"
   ],
   "compaction": {
-    "reserveTokens": 128000
+    "reserveTokens": 12920
   }
 }
 ```

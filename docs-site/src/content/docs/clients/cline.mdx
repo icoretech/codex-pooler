@@ -15,7 +15,7 @@ cline auth \
 
 For local setup, change `--baseurl` to `http://localhost:4000/v1`.
 
-Cline's user-facing model metadata names are `contextWindow`, `maxInputTokens`, and `maxTokens`. If you add a manual Codex Pooler model entry in Cline settings, use `contextWindow: 258400`, `maxInputTokens: 130400`, and `maxTokens: 128000` for `gpt-5.6-terra`; Cline's compaction trigger then leaves room for a long completion inside the 258.4k Pooler window. When available, `/v1/models.context_length` is the authoritative effective value for `contextWindow`.
+Cline's user-facing model metadata names are `contextWindow`, `maxInputTokens`, and `maxTokens`. If you add a manual Codex Pooler model entry in Cline settings, use `contextWindow: 258400`, `maxInputTokens: 258400`, and `maxTokens: 128000` for `gpt-5.6-terra`. Cline applies its fixed 90% compaction ratio to the effective maximum input, so it starts compaction at 232560 tokens. `maxTokens` remains a separate response cap and does not move the local compaction boundary. When available, `/v1/models.context_length` is the authoritative effective value for `contextWindow`.
 
 Check the headless CLI path after saving auth:
 

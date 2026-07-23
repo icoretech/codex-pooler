@@ -167,7 +167,7 @@ OpenAI Realtime SDK compatibility.
   "small_model": "openai/gpt-5.6-luna",
   "compaction": {
     "auto": true,
-    "reserved": 20000
+    "reserved": 7080
   },
   "provider": {
     "openai": {
@@ -294,9 +294,9 @@ request.
 
 OpenCode subtracts its compaction reserve from `limit.input` before deciding a
 conversation is full. These examples set `limit.input` to `252560` and reserve
-`20000`, so OpenCode starts compaction at `232560` tokens: the same automatic
-compaction boundary Codex publishes for GPT-5.6. `limit.input` is the local
-pre-compaction boundary, not a simultaneous input-plus-output envelope.
+`7080`, so OpenCode starts compaction at `245480` tokens: 95% of the effective
+258400-token Pooler window. `limit.input` is the local pre-compaction boundary,
+not a simultaneous input-plus-output envelope.
 OpenCode's request layer caps output at 32k by default; set
 `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only if you want OpenCode to
 request the full 64k cap.
@@ -396,13 +396,10 @@ runtime auth, but Codex will no longer appear signed in for that provider and
 account-dependent features, including mobile/app-server features, may be
 unavailable.
 
-When Codex Pooler serves current model metadata, Codex does not need explicit
-client-side context overrides. If you must pin `gpt-5.6-terra` before Codex has
-refreshed backend metadata, use Codex's raw window fields:
-`model_context_window = 272000` and `model_auto_compact_token_limit = 232560`.
-Codex computes an effective 95% turn budget, so the client-visible budget is
-258400 tokens, and it does not send an OpenAI SDK-style output cap on normal
-`/responses` turns.
+When Codex Pooler serves current model metadata, Codex CLI and Codex Desktop
+derive their effective context window and automatic compaction boundary from
+that metadata. Leave context sizing automatic so the client follows catalog
+changes without stale local overrides.
 
 Optional operator-only MCP metadata add-on. Omit for normal Codex runtime use:
 
@@ -516,7 +513,7 @@ point the OpenAI provider at Codex Pooler and use the current OpenClaw runtime i
           },
         ],
       },
-      compaction: { reserveTokens: 128000 },
+      compaction: { reserveTokens: 20000 },
     },
   },
   models: {
@@ -582,10 +579,11 @@ operator MCP add-on, change its `url` to `https://codex-pooler.example.com/mcp`.
 OpenClaw keeps `contextWindow` as the provider/native window and uses
 `contextTokens` as the effective runtime budget. Codex-served GPT-5.6 examples
 use the Codex raw 272k window, the 258400 effective budget, and a 128k output
-budget; the explicit compaction reserve keeps local prompt history under the
-remaining 130400-token budget before a long completion. Use `gpt-5.6-luna` for
-background routing, keep `gpt-5.6-terra` as the primary model, and switch a
-session to `gpt-5.6-sol` only for heavy reasoning.
+budget. OpenClaw enforces a minimum 20000-token compaction reserve, so this is
+the latest supported trigger: local compaction starts at 238400 tokens, about
+92.26% of the effective window. Use `gpt-5.6-luna` for background routing, keep
+`gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only
+for heavy reasoning.
 
 If you prefer to keep Codex Pooler separate from OpenClaw's built-in OpenAI
 provider behavior, use a custom provider id such as `codex-pooler/gpt-5.6-terra`
@@ -631,6 +629,9 @@ image_gen:
   provider: openai
   model: gpt-image-2-medium
 
+compression:
+  threshold: 0.95
+
 auxiliary:
   compression:
     timeout: 900
@@ -669,10 +670,11 @@ here, use the Codex raw 272000 window and the 258400 effective advertised value.
 Keep `context_length: 258400` in Hermes config as an explicit override when
 Hermes cannot read `/v1/models` first.
 
-Hermes context compression uses its own auxiliary request timeout. Keep
-`auxiliary.compression.timeout: 900` so large retained contexts can finish
-instead of cycling through the older 120-second compression budget. This is
-independent from the optional MCP server `timeout`.
+`compression.threshold: 0.95` starts Hermes compression at 245480 tokens, 95%
+of the advertised 258400-token window. Hermes context compression uses its own
+auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large
+retained contexts can finish instead of cycling through the older 120-second
+compression budget. This is independent from the optional MCP server `timeout`.
 
 Remote HTTP MCP servers require Hermes' `mcp` extra. If
 `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not
@@ -710,6 +712,9 @@ model:
 
 agent:
   image_input_mode: native
+
+compression:
+  threshold: 0.95
 
 auxiliary:
   compression:
@@ -830,9 +835,11 @@ as unsupported for a custom model and clamps `--thinking xhigh` or
 Pi accepts `contextWindow` and `maxTokens` for custom models; it has no
 `contextTokens` field. Use a 258.4k context window and 128k output budget for the
 GPT-5.6 custom entries so Pi's local context accounting matches Codex
-Pooler's advertised model metadata. The explicit
-compaction reserve makes Pi compact before a prompt plus a long completion can
-exceed that 258.4k window.
+Pooler's advertised model metadata. Pi compacts when usage exceeds
+`contextWindow - reserveTokens`. `reserveTokens: 12920` therefore starts
+compaction at 245480 tokens, 95% of the 258400-token window. Pi also uses this
+reserve for summary generation, so this profile deliberately favors retaining
+raw context.
 
 Optionally set Codex Pooler as the default Pi model in
 `~/.pi/agent/settings.json`:
@@ -848,7 +855,7 @@ Optionally set Codex Pooler as the default Pi model in
     "codex-pooler/gpt-5.6-sol"
   ],
   "compaction": {
-    "reserveTokens": 128000
+    "reserveTokens": 12920
   }
 }
 ```
@@ -964,9 +971,10 @@ OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept
 `contextTokens`. The examples keep the GPT-5.6 tiered models on a 258.4k context
 window and 128k output budget: `gpt-5.6-luna` handles lightweight roles,
 `gpt-5.6-terra` handles daily agent work, and `gpt-5.6-sol` is reserved for
-slow, planning, and design escalation. `compaction.reserveTokens: 128000` asks
-OMP to compact before a prompt plus a long completion can exceed that 258.4k
-window.
+slow, planning, and design escalation. `compaction.thresholdPercent: 95` starts
+automatic compaction at 245480 tokens. `reserveTokens: 128000` remains aligned
+with the configured output budget; the percentage field independently defines
+the trigger.
 
 For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist
 handoff material to disk. Those settings reduce context-overflow risk, but they
@@ -1006,6 +1014,7 @@ modelRoles:
   commit: codex-pooler/gpt-5.6-luna:minimal
   designer: codex-pooler/gpt-5.6-sol:high
 compaction:
+  thresholdPercent: 95
   reserveTokens: 128000
   remoteEnabled: true
   remoteStreamingV2Enabled: true
@@ -1066,7 +1075,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 258400,
             "output": 64000
           }
         },
@@ -1082,7 +1091,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 258400,
             "output": 64000
           }
         },
@@ -1098,7 +1107,7 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
           },
           "limit": {
             "context": 258400,
-            "input": 194400,
+            "input": 258400,
             "output": 64000
           }
         }
@@ -1106,15 +1115,18 @@ Then configure the provider in `~/.config/kilo/kilo.jsonc`:
     }
   },
   "compaction": {
-    "threshold_percent": 75
+    "reserved": 12920,
+    "threshold_percent": 95
   }
 }
 ```
 
 Kilo uses OpenCode-style `limit.{context,input,output}` fields, but it includes
 reasoning tokens in overflow accounting and uses `compaction.threshold_percent`
-for preflight compaction. `limit.input: 194400` leaves 174.4k usable input tokens
-after the default 20k reserve; the 75% threshold asks Kilo to compact earlier.
+for preflight compaction. `limit.input: 258400`,
+`compaction.reserved: 12920`, and `threshold_percent: 95` make both safety
+checks meet at 245480 tokens, 95% of the effective window. `limit.input` is the
+local pre-compaction boundary, not a simultaneous input-plus-output envelope.
 For GPT-5 OpenAI-compatible models, Kilo suppresses the outgoing max-token
 request field to avoid incompatible `max_tokens`, so `limit.output` is still
 important for local context math and UI even when it is not forwarded.
@@ -1395,9 +1407,10 @@ cline auth \
 
 Cline's model metadata names are `contextWindow`, `maxInputTokens`, and
 `maxTokens`. If you add a manual Codex Pooler model entry in Cline settings, use
-`contextWindow: 258400`, `maxInputTokens: 130400`, and `maxTokens: 128000` so
-Cline's compaction trigger leaves room for a long completion inside the 258.4k
-Pooler window.
+`contextWindow: 258400`, `maxInputTokens: 258400`, and `maxTokens: 128000`.
+Cline applies its fixed 90% compaction ratio to the effective maximum input, so
+it starts compaction at 232560 tokens. `maxTokens` remains a separate response
+cap and does not move the local compaction boundary.
 
 Check the headless CLI path after saving auth:
 
@@ -1462,13 +1475,13 @@ OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 258400
 GOOSE_MAX_TOKENS: 128000
-GOOSE_AUTO_COMPACT_THRESHOLD: 0.63
+GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
 Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config.
 Its auto-compaction threshold is a ratio of the context limit, not an output
-reserve, so `0.63` compacts before prompt history can crowd out a 128k
-completion in Codex Pooler's 258.4k `gpt-5.6-terra` window.
+reserve, so `0.95` starts compaction at 245480 tokens, 95% of Codex Pooler's
+258400-token `gpt-5.6-terra` window.
 
 Check the headless CLI path with tool access enabled:
 

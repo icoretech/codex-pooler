@@ -26,12 +26,12 @@ OPENAI_HOST: https://codex-pooler.example.com
 OPENAI_BASE_PATH: v1/chat/completions
 GOOSE_CONTEXT_LIMIT: 258400
 GOOSE_MAX_TOKENS: 128000
-GOOSE_AUTO_COMPACT_THRESHOLD: 0.63
+GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
 For local setup, change `OPENAI_HOST` to `http://localhost:4000`.
 
-Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. Its auto-compaction threshold is a ratio of the context limit, not an output reserve, so `0.63` compacts before prompt history can crowd out a 128k completion in Codex Pooler's 258.4k `gpt-5.6-terra` window. When available, `/v1/models.context_length` is the authoritative effective value for `GOOSE_CONTEXT_LIMIT`.
+Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. Its auto-compaction threshold is a ratio of the context limit, not an output reserve, so `0.95` starts compaction at 245480 tokens, 95% of Codex Pooler's 258400-token `gpt-5.6-terra` window. When available, `/v1/models.context_length` is the authoritative effective value for `GOOSE_CONTEXT_LIMIT`.
 
 Check the headless CLI path with tool access enabled:
 

@@ -73,7 +73,7 @@ Keep `remoteCompaction` under the `codex-pooler` provider so `/compact remote` c
 
 Current OMP derives an effort thinking surface, including `xhigh`, for custom `openai-responses` models that set `reasoning: true`. Add an explicit `thinking` block only when you want to override the inferred effort list, wire mapping, or per-model default level.
 
-OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept `contextTokens`. The examples keep the GPT-5.6 tiered models on a 258.4k context window and 128k output budget: `gpt-5.6-luna` handles lightweight roles, `gpt-5.6-terra` handles daily agent work, and `gpt-5.6-sol` is reserved for slow, planning, and design escalation. `compaction.reserveTokens: 128000` asks OMP to compact before a prompt plus a long completion can exceed that 258.4k window. When available, `/v1/models.context_length` is the authoritative effective value for its one-field `contextWindow`.
+OMP accepts `contextWindow` and `maxTokens` in `models.yml`; it does not accept `contextTokens`. The examples keep the GPT-5.6 tiered models on a 258.4k context window and 128k output budget: `gpt-5.6-luna` handles lightweight roles, `gpt-5.6-terra` handles daily agent work, and `gpt-5.6-sol` is reserved for slow, planning, and design escalation. `compaction.thresholdPercent: 95` starts automatic compaction at 245480 tokens. `reserveTokens: 128000` remains aligned with the configured output budget; the percentage field independently defines the trigger. When available, `/v1/models.context_length` is the authoritative effective value for its one-field `contextWindow`.
 
 For long tool-heavy OMP sessions, keep mid-turn compaction enabled and persist handoff material to disk. Those settings reduce context-overflow risk, but they cannot repair an OMP client bug that skips its own mid-run compaction check. If an OMP plan appears to restart work after a very large turn, upgrade OMP when a newer release is available and restart or resume the session before treating it as a Codex Pooler routing issue.
 
@@ -105,6 +105,7 @@ modelRoles:
   commit: codex-pooler/gpt-5.6-luna:minimal
   designer: codex-pooler/gpt-5.6-sol:high
 compaction:
+  thresholdPercent: 95
   reserveTokens: 128000
   remoteEnabled: true
   remoteStreamingV2Enabled: true
