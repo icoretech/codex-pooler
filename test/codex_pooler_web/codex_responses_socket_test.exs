@@ -1,5 +1,21 @@
 defmodule CodexPoolerWeb.CodexResponsesSocketTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  @native_turn_console_filter :codex_pooler_test_native_turn_console_filter
+
+  :ok =
+    :logger.add_handler_filter(
+      :default,
+      @native_turn_console_filter,
+      {fn
+         %{msg: {:string, "websocket native turn failed" <> _rest}}, _extra -> :stop
+         log_event, _extra -> log_event
+       end, nil}
+    )
+
+  ExUnit.after_suite(fn _result ->
+    :ok = :logger.remove_handler_filter(:default, :codex_pooler_test_native_turn_console_filter)
+  end)
 
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -453,30 +469,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     drain_frame =
       {:websocket_owner_frame, "corr-drain", 15, task_pid, {:error, :owner_drained, safe_payload}}
 
-    assert {:push, {:text, payload}, aborted_state} =
-             CodexResponsesSocket.handle_info(drain_frame, state)
+    {_done_state, logs} =
+      with_native_turn_log(:info, fn ->
+        assert {:push, {:text, payload}, aborted_state} =
+                 CodexResponsesSocket.handle_info(drain_frame, state)
 
-    assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
-    assert aborted_state.public_turn_aborted?
-    assert aborted_state.websocket_owner_drain_observed?
-    assert :queue.len(aborted_state.queued_response_payloads) == 0
+        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert aborted_state.public_turn_aborted?
+        assert aborted_state.websocket_owner_drain_observed?
+        assert :queue.len(aborted_state.queued_response_payloads) == 0
 
-    assert {:ok, done_state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, task_pid, {:error, :owner_drained}},
-               aborted_state
-             )
+        assert {:ok, done_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid, {:error, :owner_drained}},
+                   aborted_state
+                 )
 
-    assert done_state.public_turn_aborted?
-    assert :queue.len(done_state.queued_response_payloads) == 0
+        assert done_state.public_turn_aborted?
+        assert :queue.len(done_state.queued_response_payloads) == 0
 
-    assert {:ok, ^done_state} =
-             CodexResponsesSocket.handle_info(
-               {:websocket_owner_frame, "corr-drain", 15, task_pid, :complete},
-               done_state
-             )
+        assert {:ok, ^done_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:websocket_owner_frame, "corr-drain", 15, task_pid, :complete},
+                   done_state
+                 )
 
-    assert {:ok, ^done_state} = CodexResponsesSocket.handle_info(drain_frame, done_state)
+        assert {:ok, ^done_state} = CodexResponsesSocket.handle_info(drain_frame, done_state)
+        done_state
+      end)
+
+    assert_native_turn_logs(logs, 1)
   end
 
   test "owner drain logs one native turn failure before its late task completion" do
@@ -507,12 +529,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       {:websocket_owner_frame, "corr-drain-native-log", 19, task_pid,
        {:error, :owner_drained, safe_payload}}
 
-    previous_level = Logger.level()
-    Logger.configure(level: :info)
-    on_exit(fn -> Logger.configure(level: previous_level) end)
-
-    logs =
-      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+    {_result, logs} =
+      with_native_turn_log(:info, fn ->
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
@@ -528,7 +546,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert MapSet.size(done_state.tasks) == 0
       end)
 
-    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    assert_native_turn_logs(logs, 1)
     assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-native-log")}"
     assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
   end
@@ -560,12 +578,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       {:websocket_owner_frame, "corr-drain-late-native-log", 20,
        {:error, :owner_drained, safe_payload}}
 
-    previous_level = Logger.level()
-    Logger.configure(level: :info)
-    on_exit(fn -> Logger.configure(level: previous_level) end)
-
-    logs =
-      ExUnit.CaptureLog.capture_log([level: :info], fn ->
+    {_result, logs} =
+      with_native_turn_log(:info, fn ->
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
@@ -580,7 +594,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert MapSet.size(done_state.tasks) == 0
       end)
 
-    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    assert_native_turn_logs(logs, 1)
     assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-late-native-log")}"
     assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
   end
@@ -620,51 +634,58 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       complete =
         {:websocket_owner_frame, "corr-drain-down", 16, task_pid, :complete}
 
-      assert {:push, {:text, error_payload}, aborted_state} =
-               CodexResponsesSocket.handle_info(drain_frame, state)
+      {final_signal_state, native_turn_logs} =
+        with_native_turn_log(:info, fn ->
+          assert {:push, {:text, error_payload}, aborted_state} =
+                   CodexResponsesSocket.handle_info(drain_frame, state)
 
-      assert Jason.decode!(error_payload)["error"]["code"] == "owner_drained"
-      assert aborted_state.public_turn_aborted?
-      assert aborted_state.websocket_owner_drain_observed?
-      assert :queue.len(aborted_state.queued_response_payloads) == 0
+          assert Jason.decode!(error_payload)["error"]["code"] == "owner_drained"
+          assert aborted_state.public_turn_aborted?
+          assert aborted_state.websocket_owner_drain_observed?
+          assert :queue.len(aborted_state.queued_response_payloads) == 0
 
-      final_signal_state =
-        case order do
-          :task_done_first ->
-            assert {:ok, done_state} =
-                     CodexResponsesSocket.handle_info(
-                       {:codex_response_done, task_pid, {:error, :owner_drained}},
-                       aborted_state
-                     )
+          final_signal_state =
+            case order do
+              :task_done_first ->
+                assert {:ok, done_state} =
+                         CodexResponsesSocket.handle_info(
+                           {:codex_response_done, task_pid, {:error, :owner_drained}},
+                           aborted_state
+                         )
 
-            assert {:ok, final_signal_state} =
-                     CodexResponsesSocket.handle_info(complete, done_state)
+                assert {:ok, final_signal_state} =
+                         CodexResponsesSocket.handle_info(complete, done_state)
 
-            final_signal_state
+                final_signal_state
 
-          :owner_complete_first ->
-            assert {:ok, complete_state} =
-                     CodexResponsesSocket.handle_info(complete, aborted_state)
+              :owner_complete_first ->
+                assert {:ok, complete_state} =
+                         CodexResponsesSocket.handle_info(complete, aborted_state)
 
-            assert {:ok, final_signal_state} =
-                     CodexResponsesSocket.handle_info(
-                       {:codex_response_done, task_pid, {:error, :owner_drained}},
-                       complete_state
-                     )
+                assert {:ok, final_signal_state} =
+                         CodexResponsesSocket.handle_info(
+                           {:codex_response_done, task_pid, {:error, :owner_drained}},
+                           complete_state
+                         )
 
-            final_signal_state
-        end
+                final_signal_state
+            end
 
-      assert final_signal_state.public_turn_aborted?
-      assert :queue.len(final_signal_state.queued_response_payloads) == 0
-      assert MapSet.size(final_signal_state.tasks) == 0
-      assert final_signal_state.public_response_task_pid == task_pid
+          assert final_signal_state.public_turn_aborted?
+          assert :queue.len(final_signal_state.queued_response_payloads) == 0
+          assert MapSet.size(final_signal_state.tasks) == 0
+          assert final_signal_state.public_response_task_pid == task_pid
 
-      assert {:ok, ^final_signal_state} =
-               CodexResponsesSocket.handle_info(drain_frame, final_signal_state)
+          assert {:ok, ^final_signal_state} =
+                   CodexResponsesSocket.handle_info(drain_frame, final_signal_state)
 
-      assert {:ok, ^final_signal_state} =
-               CodexResponsesSocket.handle_info(complete, final_signal_state)
+          assert {:ok, ^final_signal_state} =
+                   CodexResponsesSocket.handle_info(complete, final_signal_state)
+
+          final_signal_state
+        end)
+
+      assert_native_turn_logs(native_turn_logs, 1)
 
       send(owner_pid, :stop)
       assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal}
@@ -692,80 +713,94 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   test "websocket error frames carry pinned continuation recovery fields" do
-    for error <- [
-          Contracts.pinned_continuation_reauth_required_error(),
-          Contracts.pinned_continuation_unavailable_error(%{
-            "internal_reason" => "quota_exhausted"
-          })
-        ] do
-      state = %{tasks: MapSet.new(), task_monitors: %{}}
+    {_result, logs} =
+      with_native_turn_log(:warning, fn ->
+        for error <- [
+              Contracts.pinned_continuation_reauth_required_error(),
+              Contracts.pinned_continuation_unavailable_error(%{
+                "internal_reason" => "quota_exhausted"
+              })
+            ] do
+          state = %{tasks: MapSet.new(), task_monitors: %{}}
 
-      assert {:push, {:text, payload}, ^state} =
-               CodexResponsesSocket.handle_info(
-                 {:codex_response_done, self(), {:error, error}},
-                 state
-               )
+          assert {:push, {:text, payload}, ^state} =
+                   CodexResponsesSocket.handle_info(
+                     {:codex_response_done, self(), {:error, error}},
+                     state
+                   )
 
-      assert %{
-               "type" => "error",
-               "status" => 503,
-               "error" => %{
-                 "code" => code,
-                 "retryable" => false,
-                 "requires_new_upstream_session" => true,
-                 "recovery_kind" => "restart_with_full_context",
-                 "recovery" => recovery
-               }
-             } = Jason.decode!(payload)
+          assert %{
+                   "type" => "error",
+                   "status" => 503,
+                   "error" => %{
+                     "code" => code,
+                     "retryable" => false,
+                     "requires_new_upstream_session" => true,
+                     "recovery_kind" => "restart_with_full_context",
+                     "recovery" => recovery
+                   }
+                 } = Jason.decode!(payload)
 
-      assert code in [
-               "pinned_continuation_reauth_required",
-               "pinned_continuation_unavailable"
-             ]
+          assert code in [
+                   "pinned_continuation_reauth_required",
+                   "pinned_continuation_unavailable"
+                 ]
 
-      assert recovery["kind"] == "restart_with_full_context"
-      assert recovery["anchor_removal"]["body"] == ["previous_response_id"]
+          assert recovery["kind"] == "restart_with_full_context"
+          assert recovery["anchor_removal"]["body"] == ["previous_response_id"]
 
-      assert recovery["anchor_removal"]["headers"] == [
-               "x-codex-previous-response-id",
-               "x-codex-turn-state",
-               "x-codex-window-id",
-               "x-codex-session-id",
-               "session-id",
-               "x-session-id",
-               "x-session-affinity",
-               "session_id",
-               "x-codex-conversation-id"
-             ]
-    end
+          assert recovery["anchor_removal"]["headers"] == [
+                   "x-codex-previous-response-id",
+                   "x-codex-turn-state",
+                   "x-codex-window-id",
+                   "x-codex-session-id",
+                   "session-id",
+                   "x-session-id",
+                   "x-session-affinity",
+                   "session_id",
+                   "x-codex-conversation-id"
+                 ]
+        end
+      end)
+
+    assert_native_turn_logs(logs, 2)
   end
 
   test "websocket error frames leave unrelated errors without recovery fields" do
-    for reason <- [
-          %{status: 503, code: "session_assignment_unavailable", message: "session unavailable"},
-          %{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-          %{status: 400, code: "invalid_request", message: "request invalid"}
-        ] do
-      assert {:push, {:text, payload}, _state} =
-               CodexResponsesSocket.handle_info(
-                 {:codex_response_done, self(), {:error, reason}},
-                 %{tasks: MapSet.new(), task_monitors: %{}}
-               )
+    {_result, logs} =
+      with_native_turn_log(:warning, fn ->
+        for reason <- [
+              %{
+                status: 503,
+                code: "session_assignment_unavailable",
+                message: "session unavailable"
+              },
+              %{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
+              %{status: 400, code: "invalid_request", message: "request invalid"}
+            ] do
+          assert {:push, {:text, payload}, _state} =
+                   CodexResponsesSocket.handle_info(
+                     {:codex_response_done, self(), {:error, reason}},
+                     %{tasks: MapSet.new(), task_monitors: %{}}
+                   )
 
-      decoded = Jason.decode!(payload)
+          decoded = Jason.decode!(payload)
 
-      assert decoded["error"] == %{
-               "message" => reason.message,
-               "type" => "invalid_request_error",
-               "code" => reason.code,
-               "param" => nil
-             }
+          assert decoded["error"] == %{
+                   "message" => reason.message,
+                   "type" => "invalid_request_error",
+                   "code" => reason.code,
+                   "param" => nil
+                 }
 
-      refute Map.has_key?(decoded["error"], "recovery")
-      refute Map.has_key?(decoded["error"], "recovery_kind")
-      refute Map.has_key?(decoded["error"], "requires_new_upstream_session")
-      refute Map.has_key?(decoded["error"], "retryable")
-    end
+          refute Map.has_key?(decoded["error"], "recovery")
+          refute Map.has_key?(decoded["error"], "recovery_kind")
+          refute Map.has_key?(decoded["error"], "requires_new_upstream_session")
+          refute Map.has_key?(decoded["error"], "retryable")
+        end
+      end)
+
+    assert_native_turn_logs(logs, 3)
   end
 
   test "websocket client error frames classify prompt token and idempotency-bearing terms" do
@@ -777,21 +812,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state = %{tasks: MapSet.new(), task_monitors: %{}}
 
-    assert {:push, {:text, payload}, ^state} =
-             CodexResponsesSocket.handle_info(
-               {:codex_response_done, self(), {:error, secret_reason}},
-               state
-             )
+    {_result, logs} =
+      with_native_turn_log(:warning, fn ->
+        assert {:push, {:text, payload}, ^state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, self(), {:error, secret_reason}},
+                   state
+                 )
 
-    decoded = Jason.decode!(payload)
-    assert decoded["type"] == "error"
-    assert decoded["status"] == 500
-    assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
-    assert decoded["error"]["code"] == "websocket_request_failed"
+        decoded = Jason.decode!(payload)
+        assert decoded["type"] == "error"
+        assert decoded["status"] == 500
+        assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
+        assert decoded["error"]["code"] == "websocket_request_failed"
 
-    refute payload =~ "raw-idempotency-key-secret"
-    refute payload =~ "raw websocket prompt"
-    refute payload =~ "websocket-secret-token"
+        refute payload =~ "raw-idempotency-key-secret"
+        refute payload =~ "raw websocket prompt"
+        refute payload =~ "websocket-secret-token"
+      end)
+
+    assert_native_turn_logs(logs, 1)
   end
 
   defp public_turn_state(task_pid, overrides \\ %{}) when is_pid(task_pid) do
@@ -838,5 +878,21 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       (:crypto.hash(:sha256, value)
        |> Base.encode16(case: :lower)
        |> String.slice(0, 12))
+  end
+
+  defp with_native_turn_log(level, fun) when level in [:info, :warning] and is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: level)
+
+    try do
+      ExUnit.CaptureLog.with_log([level: level], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
+  defp assert_native_turn_logs(logs, expected_count) do
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
+    assert logs =~ "error_code=sha256_"
   end
 end

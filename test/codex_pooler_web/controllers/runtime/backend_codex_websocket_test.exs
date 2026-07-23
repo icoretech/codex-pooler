@@ -1236,46 +1236,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state, path)
 
       try do
-        payload =
-          %{
-            "type" => "response.create",
-            "model" => setup.model.exposed_model_id,
-            "input" => "synthetic websocket policy denial",
-            "stream" => true,
-            "generate" => true
-          }
-          |> Map.merge(effort_payload)
-          |> Jason.encode!()
+        {_updated_conn, logs} =
+          capture_native_turn_warning(fn ->
+            payload =
+              %{
+                "type" => "response.create",
+                "model" => setup.model.exposed_model_id,
+                "input" => "synthetic websocket policy denial",
+                "stream" => true,
+                "generate" => true
+              }
+              |> Map.merge(effort_payload)
+              |> Jason.encode!()
 
-        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
-        {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+            {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
-        assert %{
-                 "type" => "error",
-                 "status" => 400,
-                 "error" => %{
-                   "code" => "reasoning_effort_not_allowed",
-                   "message" => @reasoning_denial_message,
-                   "param" => "reasoning.effort"
-                 }
-               } = Jason.decode!(frame)
+            assert %{
+                     "type" => "error",
+                     "status" => 400,
+                     "error" => %{
+                       "code" => "reasoning_effort_not_allowed",
+                       "message" => @reasoning_denial_message,
+                       "param" => "reasoning.effort"
+                     }
+                   } = Jason.decode!(frame)
 
-        assert FakeUpstream.count(upstream) == 0
-        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-        assert request.status == "rejected"
-        assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+            assert FakeUpstream.count(upstream) == 0
+            assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+            assert request.status == "rejected"
 
-        assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) ==
-                 0
+            assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) ==
+                     0
 
-        assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-                 "policy_mode" => "allow_up_to",
-                 "configured_effort" => "medium",
-                 "requested_effort" => persisted_effort,
-                 "applied_effort" => nil
-               }
+            assert Repo.aggregate(
+                     from(l in LedgerEntry, where: l.request_id == ^request.id),
+                     :count
+                   ) ==
+                     0
 
-        conn
+            assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
+                     "policy_mode" => "allow_up_to",
+                     "configured_effort" => "medium",
+                     "requested_effort" => persisted_effort,
+                     "applied_effort" => nil
+                   }
+
+            conn
+          end)
+
+        assert_native_turn_warnings(logs, 1)
       after
         Mint.HTTP.close(conn)
       end
@@ -3533,15 +3543,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           "previous_response_id" => "resp_ws_partial_close"
         })
 
-      assert {:ok, state} =
-               CodexResponsesSocket.handle_in({second_payload, [opcode: :text]}, state)
+      {error_frame, logs} =
+        capture_native_turn_warning(fn ->
+          assert {:ok, state} =
+                   CodexResponsesSocket.handle_in({second_payload, [opcode: :text]}, state)
 
-      assert {:push, {:text, partial_frame}, state} = receive_socket_push(state)
+          assert {:push, {:text, partial_frame}, state} = receive_socket_push(state)
 
-      assert %{"type" => "response.output_text.delta", "delta" => "partial"} =
-               Jason.decode!(partial_frame)
+          assert %{"type" => "response.output_text.delta", "delta" => "partial"} =
+                   Jason.decode!(partial_frame)
 
-      assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+          assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+          error_frame
+        end)
+
+      assert_native_turn_warnings(logs, 1)
 
       assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
                Jason.decode!(error_frame)
@@ -4658,8 +4674,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           "previous_response_id" => previous_response_id
         })
 
-      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
-      assert {:push, {:text, error_frame}, _state_after} = receive_socket_done(state)
+      {error_frame, logs} =
+        capture_native_turn_warning(fn ->
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, error_frame}, _state_after} = receive_socket_done(state)
+          error_frame
+        end)
+
+      assert_native_turn_warnings(logs, 1)
 
       assert_pinned_reauth_websocket_frame!(error_frame)
       refute error_frame =~ previous_response_id
@@ -4768,8 +4790,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           "previous_response_id" => previous_response_id
         })
 
-      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
-      assert {:push, {:text, error_frame}, _state_after} = receive_socket_done(state)
+      {error_frame, logs} =
+        capture_native_turn_warning(fn ->
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, error_frame}, _state_after} = receive_socket_done(state)
+          error_frame
+        end)
+
+      assert_native_turn_warnings(logs, 1)
 
       assert_pinned_reauth_websocket_frame!(error_frame)
       refute error_frame =~ previous_response_id
@@ -9065,6 +9093,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     after
       Logger.configure(level: previous_level)
     end
+  end
+
+  defp capture_native_turn_warning(fun) when is_function(fun, 0) do
+    ExUnit.CaptureLog.with_log([level: :warning], fun)
+  end
+
+  defp assert_native_turn_warnings(logs, expected_count) do
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
+    assert logs =~ "error_code=sha256_"
   end
 
   defp websocket_lifecycle_request_options(request_id, attrs \\ []) when is_binary(request_id) do
