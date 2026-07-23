@@ -358,7 +358,10 @@ Tokens/5m cells double as the panel toggles: an absolutely positioned overlay
 `<button>` (`phx-click="toggle_account_pools_panel"` /
 `"toggle_account_tokens_panel"`, `aria-controls` + `aria-expanded`) sits under
 pointer-events-disabled text, and the open panel keeps its cell in the hover
-tint (`text-primary/70` label). Minimal cell:
+tint (`text-primary/70` label). Tokens/5m uses plain `{count} tokens` when
+usage accounting is complete, `{count}+ tokens` when reported usage is only a
+verified lower bound, and `Usage unavailable` when no token total can be
+claimed. Minimal cell:
 
 ```heex
 <div class="min-w-0 pr-3" data-role="upstream-routing-cell">
@@ -389,6 +392,10 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 - **Motion:** width/color transitions 260/180ms; cards with recent burn run
   the gloss sweep. Firefox falls back to a static bar; `prefers-reduced-motion`
   disables all of it.
+- **Reset timing:** anchored reset labels use the `RelativeCountdown` hook to
+  keep the compact `6d 23h` / `1h 30m` / `42m` value current without a
+  LiveView round trip. Floating rolling windows remain static as
+  `starts on use` until provider evidence anchors their reset.
 - **A11y:** the `<progress>` carries `aria-label` "{label} remaining {pct}"
   and the percent renders as text besides the bar.
 

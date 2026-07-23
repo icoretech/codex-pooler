@@ -15,6 +15,7 @@ import {
 	ObservatoryRefresh,
 	observatoryRefreshConnectParams,
 } from "./observatory_refresh.mjs";
+import { RelativeCountdown } from "./relative_countdown.mjs";
 import {
 	connectionActionLabel,
 	connectionFooterParts,
@@ -1307,6 +1308,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		OtpInput,
 		ObservatoryRefresh,
 		QuotaPressureChart,
+		RelativeCountdown,
 		TotpSetupTools,
 		WorkerFailureMarker,
 	},

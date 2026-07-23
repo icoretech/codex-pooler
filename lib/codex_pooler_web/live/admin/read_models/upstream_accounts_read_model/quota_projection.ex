@@ -36,6 +36,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:percent_label) => String.t(),
           required(:count_label) => String.t() | nil,
           required(:reset_semantics) => :anchored | :floating | :unknown,
+          required(:reset_at) => DateTime.t() | nil,
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
@@ -373,6 +374,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       count_label: quota_count_label(window),
       credit_backed: credit_backed_window?(window),
       reset_semantics: reset_semantics,
+      reset_at: window.reset_at,
       reset_label: reset_label,
       reset_title: reset_title
     }
@@ -388,6 +390,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       count_label: nil,
       credit_backed: false,
       reset_semantics: :unknown,
+      reset_at: nil,
       reset_label: nil,
       reset_title: nil
     }

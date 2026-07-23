@@ -86,7 +86,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.TokenBurnPopov
 
   defp token_burn_recent_token_label(%{usage_state: :partial, recent_tokens: tokens})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)} confirmed tokens"
+    "at least #{Format.token_count(tokens)} tokens"
   end
 
   defp token_burn_recent_token_label(%{recent_tokens: tokens})

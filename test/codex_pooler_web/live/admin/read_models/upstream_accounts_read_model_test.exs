@@ -306,7 +306,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
              %{
                label: "x1",
                title:
-                 "last 5m: 20 tokens; previous 1h: 0 tokens; confirmed usage for 1 of 2 requests; 1 usage record missing",
+                 "last 5m: 20 tokens; previous 1h: 0 tokens; settled usage reported for 1 of 2 requests; 1 usage record missing",
                usage_state: :partial,
                recent_requests: 2,
                known_request_count: 1,

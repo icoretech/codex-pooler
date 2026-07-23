@@ -177,6 +177,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     end
 
     complete_card_id = "upstream-account-#{accounts.complete.identity.id}"
+    complete_tokens_value_id = "#{complete_card_id}-tokens-5m-value"
 
     assert has_element?(
              view,
@@ -184,7 +185,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "x0"
            )
 
+    assert has_element?(
+             view,
+             "##{complete_tokens_value_id}[data-usage-state='complete'][title*='complete usage']",
+             "0 tokens"
+           )
+
     partial_card_id = "upstream-account-#{accounts.partial.identity.id}"
+    partial_tokens_value_id = "#{partial_card_id}-tokens-5m-value"
 
     assert has_element?(
              view,
@@ -197,6 +205,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "##{partial_card_id}-token-burn-content [data-role='upstream-token-burn-missing-usage']",
              "1 usage record missing"
            )
+
+    assert has_element?(
+             view,
+             "##{partial_tokens_value_id}[data-usage-state='partial'][title*='1 usage record missing']",
+             "20+ tokens"
+           )
+
+    assert has_element?(
+             view,
+             "##{partial_card_id}-token-burn-content",
+             "at least 20 tokens"
+           )
+
+    refute has_element?(view, "##{partial_card_id}", "confirmed tokens")
 
     unknown_card_id = "upstream-account-#{accounts.unknown.identity.id}"
     unknown_tokens_trigger_id = "#{unknown_card_id}-tokens-panel-trigger"
@@ -270,8 +292,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     floating_reset_id =
       "upstream-account-#{floating.id}-limit-model-codex_spark-secondary-10080-reset"
 
-    assert has_element?(view, "##{anchored_reset_id}[title^='resets ']")
-    assert has_element?(view, "##{floating_reset_id}", "starts on use")
+    assert has_element?(
+             view,
+             "##{anchored_reset_id}[title^='resets '][data-countdown-state='running'][phx-hook='RelativeCountdown'][data-countdown-at]"
+           )
+
+    assert has_element?(
+             view,
+             "##{anchored_reset_id} [data-role='relative-countdown-value']"
+           )
+
+    assert has_element?(
+             view,
+             "##{floating_reset_id}[data-countdown-state='waiting']",
+             "starts on use"
+           )
+
+    refute has_element?(view, "##{floating_reset_id}[phx-hook]")
 
     assert has_element?(
              view,

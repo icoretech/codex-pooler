@@ -36,6 +36,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         <span
           :if={@limit.reset_label}
           id={"#{@id}-reset"}
+          data-countdown-at={countdown_at(@limit)}
+          data-countdown-state={countdown_state(@limit)}
+          phx-hook={countdown_hook(@limit)}
           class="inline-flex items-baseline gap-1"
           title={@limit.reset_title}
         >
@@ -43,7 +46,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
           box center shifts per engine, the baseline doesn't. Bottom-on-
           baseline puts the 12px icon ~2px high of the glyph ink center. --%>
           <.icon name="hero-clock" class="size-3 translate-y-0.5" />
-          <span>{strip_in_prefix(@limit.reset_label)}</span>
+          <span data-role="relative-countdown-value">{strip_in_prefix(@limit.reset_label)}</span>
         </span>
       </div>
     </div>
@@ -54,6 +57,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   # redundant next to it.
   defp strip_in_prefix("in " <> rest), do: rest
   defp strip_in_prefix(label), do: label
+
+  defp countdown_at(%{reset_semantics: :anchored, reset_at: %DateTime{} = reset_at}),
+    do: DateTime.to_iso8601(reset_at)
+
+  defp countdown_at(_limit), do: nil
+
+  defp countdown_state(%{reset_semantics: :anchored}), do: "running"
+  defp countdown_state(%{reset_semantics: :floating}), do: "waiting"
+  defp countdown_state(_limit), do: "unknown"
+
+  defp countdown_hook(%{reset_semantics: :anchored, reset_at: %DateTime{}}),
+    do: "RelativeCountdown"
+
+  defp countdown_hook(_limit), do: nil
 
   defp quota_limit_details?(%{count_label: count_label, reset_label: reset_label}) do
     present_string?(count_label) or present_string?(reset_label)

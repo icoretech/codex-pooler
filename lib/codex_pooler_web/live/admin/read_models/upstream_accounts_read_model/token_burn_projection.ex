@@ -184,7 +184,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          unknown_request_count
        ) do
     token_comparison_title(recent_tokens, baseline_tokens) <>
-      "; confirmed usage for #{known_request_count} of #{recent_requests} requests; #{usage_record_count_label(unknown_request_count)} missing"
+      "; settled usage reported for #{known_request_count} of #{recent_requests} requests; #{usage_record_count_label(unknown_request_count)} missing"
   end
 
   defp usage_title(

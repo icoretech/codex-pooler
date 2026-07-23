@@ -409,6 +409,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 phx-click="toggle_account_tokens_panel"
                 phx-value-id={@account.identity.id}
                 aria-controls={"upstream-account-#{@account.identity.id}-tokens-panel"}
+                aria-describedby={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
                 aria-expanded={aria_bool(@panel_view == :tokens)}
                 aria-label={tokens_panel_trigger_label(@panel_view)}
               >
@@ -418,7 +419,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 tokens/<span class="normal-case">5m</span>
               </span>
             </dt>
-            <dd class={footer_panel_value_class(@panel_view == :tokens)}>
+            <dd
+              id={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
+              data-usage-state={token_burn_usage_state(@account)}
+              class={footer_panel_value_class(@panel_view == :tokens)}
+              title={token_burn_title(@account)}
+            >
               {recent_token_count_label(@account)}
             </dd>
           </div>
@@ -918,7 +924,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp recent_token_count_label(%{token_burn: %{usage_state: :partial, recent_tokens: tokens}})
        when is_integer(tokens) and tokens >= 0 do
-    "#{Format.token_count(tokens)} confirmed tokens"
+    "#{Format.token_count(tokens)}+ tokens"
   end
 
   defp recent_token_count_label(%{token_burn: %{recent_tokens: tokens}})
@@ -927,6 +933,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   defp recent_token_count_label(_account), do: "0 tokens"
+
+  defp token_burn_title(%{token_burn: %{title: title}}) when is_binary(title), do: title
+  defp token_burn_title(_account), do: "Token usage in the last 5 minutes"
 
   defp recent_request_count_label(%{token_burn: %{recent_requests: requests}})
        when is_integer(requests) and requests >= 0 do
