@@ -50,9 +50,14 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
 
   @aborted_stream_id 1
   @barrier_stream_id 3
-  # The default `assert_receive` window is far too tight for a listener start
-  # plus a TCP round trip while the rest of the suite is running.
-  @recv_timeout 5_000
+
+  # The connection-idle backstop is a scenario budget: it is the behaviour under
+  # test. Everything else here is failure detection and must stay well above it,
+  # because a listener start plus a TCP round trip can take seconds when the
+  # suite saturates the machine. The default `assert_receive` window of 100ms is
+  # nowhere near enough.
+  @idle_timeout_ms 1_000
+  @recv_timeout 15_000
 
   defmodule RaiseAfterChunkPlug do
     @moduledoc false
@@ -140,7 +145,7 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
       # it with GOAWAY (deps/bandit/lib/bandit/http2/handler.ex:56-63). Any
       # multiplexed traffic on the same connection keeps resetting that timer, so
       # it is not a per-stream remedy.
-      port = start_listener(thousand_island_options: [read_timeout: 1_000])
+      port = start_listener(thousand_island_options: [read_timeout: @idle_timeout_ms])
       socket = connect_h2c(port)
 
       send_request(socket, @aborted_stream_id, "/stream-then-raise", port)
@@ -271,7 +276,18 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   end
 
   defp collect_until_end_of_stream(socket, stream_id, acc \\ []) do
-    {:ok, frame} = recv_frame(socket)
+    frame =
+      case recv_frame(socket) do
+        {:ok, frame} ->
+          frame
+
+        {:error, reason} ->
+          flunk(
+            "stopped receiving frames (#{inspect(reason)}) before stream #{stream_id} ended: " <>
+              summarize(Enum.reverse(acc))
+          )
+      end
+
     acc = [frame | acc]
 
     cond do
@@ -295,6 +311,12 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
 
       {:error, :closed} ->
         Enum.reverse(acc)
+
+      {:error, :timeout} ->
+        flunk(
+          "connection stayed open for #{@recv_timeout}ms instead of closing: " <>
+            summarize(Enum.reverse(acc))
+        )
     end
   end
 
@@ -315,8 +337,17 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
 
   defp read_until_closed(socket, acc) do
     case :gen_tcp.recv(socket, 0, @recv_timeout) do
-      {:ok, data} -> read_until_closed(socket, [acc, data])
-      {:error, :closed} -> IO.iodata_to_binary(acc)
+      {:ok, data} ->
+        read_until_closed(socket, [acc, data])
+
+      {:error, :closed} ->
+        IO.iodata_to_binary(acc)
+
+      {:error, :timeout} ->
+        flunk(
+          "peer did not close within #{@recv_timeout}ms after " <>
+            "#{byte_size(IO.iodata_to_binary(acc))} bytes"
+        )
     end
   end
 
