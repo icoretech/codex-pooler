@@ -245,9 +245,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     assert_receive {^ref, :done}, 2_000
   end
 
+  # codex.* markers moved to the buffer side with the pre-content retry work;
+  # unknown response.* types, typeless maps, and malformed frames stay
+  # fail-closed commits.
   test "conservative frames commit without waiting for later output" do
     frames = [
-      ~s({"type":"codex.future_event","detail":{}}),
       ~s({"type":"response.future_event","detail":{}}),
       ~s({"detail":{"kind":"future"}}),
       ~s({not-json)
@@ -262,6 +264,149 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
       assert_receive {^ref, {:data, data}}, 2_000
       assert data == WebsocketBridgeStream.sse_block(frame)
     end)
+  end
+
+  test "envelope and internal frames buffer until content commits and flushes in order" do
+    stream = start_armed(blocking_submit())
+    ref = stream.ref
+
+    owner_frame(stream, {:data, ~s({"type":"codex.future_event","detail":{}})})
+    owner_frame(stream, {:data, ~s({"type":"response.output_item.added","output_index":0})})
+    owner_frame(stream, {:data, ~s({"type":"response.content_part.added","output_index":0})})
+
+    refute_receive {^ref, {:preflight, _decision}}, 100
+
+    owner_frame(stream, {:data, ~s({"type":"response.output_text.delta","delta":"answer"})})
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, first}}, 2_000
+    assert first =~ "codex.future_event"
+    assert_receive {^ref, {:data, second}}, 2_000
+    assert second =~ "response.output_item.added"
+    assert_receive {^ref, {:data, third}}, 2_000
+    assert third =~ "response.content_part.added"
+    assert_receive {^ref, {:data, fourth}}, 2_000
+    assert fourth =~ "response.output_text.delta"
+  end
+
+  test "a pre-content peer close from the submit result falls back instead of committing" do
+    stream =
+      start_armed(fn ->
+        {:error,
+         %{
+           body: "",
+           reason: :upstream_websocket_closed_before_terminal,
+           transport_failure: %{
+             "reason" => "upstream_websocket_closed_before_terminal",
+             "phase" => "upstream_close",
+             "upstream_committed" => true,
+             "pre_visible_output" => true,
+             "terminal_seen" => false,
+             "text_frame_count" => 0
+           }
+         }}
+      end)
+
+    ref = stream.ref
+
+    assert_receive {^ref, {:preflight, {:fallback, :upstream_websocket_closed_before_terminal}}},
+                   2_000
+
+    refute_receive {^ref, _part}, 100
+  end
+
+  test "a pre-content peer close reported beside owner completion falls back" do
+    stream = start_armed(registered_submit(self()))
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, 2_000
+
+    owner_frame(stream, {:data, ~s({"type":"codex.rate_limits","rate_limits":{}})})
+    owner_frame(stream, :complete)
+
+    send(
+      task_pid,
+      {:return,
+       {:error,
+        %{
+          body: "",
+          reason: :upstream_websocket_closed_before_terminal,
+          transport_failure: %{
+            "reason" => "upstream_websocket_closed_before_terminal",
+            "phase" => "upstream_close",
+            "upstream_committed" => true,
+            "pre_visible_output" => true,
+            "terminal_seen" => false,
+            "text_frame_count" => 1
+          }
+        }}}
+    )
+
+    assert_receive {^ref, {:preflight, {:fallback, _reason}}}, 2_000
+    refute_receive {^ref, {:data, _data}}, 100
+  end
+
+  test "a pre-content receive timeout stays a committed fatal" do
+    stream =
+      start_armed(fn ->
+        {:error,
+         %{
+           body: "",
+           reason: :upstream_websocket_receive_timeout,
+           transport_failure: %{
+             "reason" => "upstream_websocket_receive_timeout",
+             "phase" => "receive_timeout",
+             "upstream_committed" => true,
+             "pre_visible_output" => true,
+             "terminal_seen" => false,
+             "text_frame_count" => 0
+           }
+         }}
+      end)
+
+    ref = stream.ref
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:bridge_error, :upstream_websocket_receive_timeout}}, 2_000
+    refute_received {^ref, {:preflight, {:fallback, _reason}}}
+  end
+
+  test "an owner error after buffered envelopes falls back pre-content" do
+    stream = start_armed(registered_submit(self()))
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, 2_000
+
+    owner_frame(stream, {:data, ~s({"type":"response.output_item.added","output_index":0})})
+    owner_frame(stream, {:error, :owner_drained, %{"code" => "owner_drained"}})
+
+    assert_receive {^ref, {:preflight, {:fallback, :owner_drained}}}, 2_000
+    refute_receive {^ref, {:data, _data}}, 100
+    send(task_pid, {:return, {:error, :owner_drained}})
+  end
+
+  test "the pre-content deadline commits and flushes buffered envelopes in order" do
+    stream = start_armed(registered_submit(self()), precontent_deadline_ms: 40)
+    ref = stream.ref
+
+    assert_receive {:submit_task, task_pid}, 2_000
+
+    owner_frame(stream, {:data, ~s({"type":"response.created"})})
+    owner_frame(stream, {:data, ~s({"type":"response.in_progress"})})
+
+    assert_receive {^ref, {:preflight, :stream}}, 2_000
+    assert_receive {^ref, {:data, first}}, 2_000
+    assert_receive {^ref, {:data, second}}, 2_000
+    assert first =~ "response.created"
+    assert second =~ "response.in_progress"
+
+    owner_frame(stream, {:data, ~s({"type":"response.output_text.delta","delta":"late"})})
+    assert_receive {^ref, {:data, third}}, 2_000
+    assert third =~ "response.output_text.delta"
+
+    send(task_pid, {:return, {:ok, %{}}})
+    owner_frame(stream, :complete)
+    assert_receive {^ref, :done}, 2_000
   end
 
   test "exact legacy typeless success commits and latches completion" do

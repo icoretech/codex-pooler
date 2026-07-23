@@ -617,16 +617,29 @@ its downstream contract while first attempting upstream dispatch through the
 continuity owner's websocket. This has no Pool-level enablement toggle.
 Qualification requires websocket owner forwarding, no attached websocket
 writer, and a continuity session that is unpinned or pinned to the selected
-assignment. The explicit pre-commit lifecycle events remain buffered and do not
-commit the bridge. The bridge commits when the first event that public Responses
-normalization would expose is forwarded downstream.
+assignment. Pre-commit events that carry no client-rendered content remain
+buffered and do not commit the bridge. The bridge commits on the first
+content-bearing event (text, refusal, reasoning, or tool-argument fragments),
+on any unknown event fail-closed, on any structurally valid terminal, or when
+the bounded pre-commit buffer reaches its caps or its pre-content commit
+deadline.
 
-Any bridge failure before that commit boundary falls back to plain HTTP on the same candidate and attempt, with one settlement. After a public event has committed the websocket transport, Codex Pooler does not replay the turn over HTTP; a later upstream websocket failure ends the request as failed. Reusing an owner websocket is a cache-locality heuristic, never a cache guarantee.
+Before that commit boundary, a peer-initiated websocket death — a close
+without a terminal, a TCP cut, or an explicit peer Close frame — falls back to
+plain HTTP on the same candidate and attempt, with one settlement. A
+pre-commit locally-declared death (a receive or pong timeout) fails once
+without HTTP fallback, because the upstream turn may still be running. After a
+public event has committed the websocket transport, Codex Pooler does not
+replay the turn over HTTP; a later upstream websocket failure ends the request
+as failed. Reusing an owner websocket is a cache-locality heuristic, never a
+cache guarantee.
 
-The pre-commit buffer is limited to `response.created`,
-`response.in_progress`, `response.queued`, and `codex.rate_limits`. Unknown
-typed events commit conservatively. Legacy typeless success commits as a
-completed response while backend routes retain its original payload.
+The pre-commit buffer holds `response.created`, `response.in_progress`,
+`response.queued`, item and part envelope adds (`response.output_item.added`,
+`response.content_part.added`, `response.reasoning_summary_part.added`), and
+internal `codex.*` events. Unknown typed events commit conservatively. Legacy
+typeless success commits as a completed response while backend routes retain
+its original payload.
 
 Backend Responses SSE and websocket routes preserve upstream `response.done`
 and legacy typeless success payloads. Public `POST /v1/responses` SSE and

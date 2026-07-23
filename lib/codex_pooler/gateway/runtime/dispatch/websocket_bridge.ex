@@ -7,9 +7,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
   is unpinned or pinned to the selected assignment. The upstream payload is
   rebuilt with the same normalizer pipeline the native websocket path uses,
   then submitted through the owner-session machinery; the resulting event
-  stream feeds the unchanged HTTP SSE relay via `WebsocketBridgeStream`. Every
-  failure before the first upstream event falls back to plain HTTP dispatch on
-  the same candidate and attempt.
+  stream feeds the unchanged HTTP SSE relay via `WebsocketBridgeStream`. The
+  relay decides commitment (first client-rendered content, bounded buffer
+  caps, or its pre-content deadline) and which pre-commit deaths fall back to
+  plain HTTP dispatch on the same candidate and attempt; this module's
+  preflight timeout only guards turns that never produced any frame at all.
   """
 
   require Logger

@@ -855,7 +855,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert FakeUpstream.http_request_count(upstream) == 0
   end
 
-  test "an internal-only event followed by websocket death fails without HTTP replay", %{
+  # Deliberately reversed by the bridged-pre-content-retry work: a peer close
+  # before any client-rendered content now keeps the pre-commit HTTP fallback
+  # instead of surfacing a fatal synthetic (locally-declared timeouts still
+  # pin the fatal contract below).
+  test "an internal-only event followed by websocket death falls back to plain HTTP", %{
     conn: conn
   } do
     rate_limits_event =
@@ -878,27 +882,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     session = "previsible-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "previsible turn"))
-    assert response.status == 200
-    assert event_types(response.resp_body) == ["response.failed"]
-    refute response.resp_body =~ "resp_previsible_t1"
 
-    request = latest_request(setup.pool)
-    assert request.status == "failed"
-    assert request.transport == "http_sse"
-    assert [attempt] = attempts_for(request)
-    assert attempt.status == "failed"
-    assert attempt.transport == "websocket"
-    assert attempt.response_metadata["upstream_websocket_bridge"] == true
-    assert FakeUpstream.websocket_connection_count(upstream) == 1
-    assert [connection_id] = FakeUpstream.websocket_connection_ids(upstream)
-    assert is_reference(connection_id)
-
-    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert [websocket_request | _rest] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
     assert websocket_request.path == "/backend-api/codex/responses"
-    assert FakeUpstream.http_request_count(upstream) == 0
 
-    assert settlement_count(request) == 1
+    assert_precontent_fallback_success(response, upstream, setup, "resp_previsible_t1")
   end
 
   test "a failed transparent reconnect persists only a scrubbed HTTP fallback failure", %{
@@ -1004,7 +993,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "a websocket bridge completion before public data fails without HTTP replay", %{
+  # Deliberately reversed by the bridged-pre-content-retry work: a peer close
+  # with zero delivered frames is a pre-content peer-close death and falls
+  # back to plain HTTP on the same attempt.
+  test "a websocket close before any frame falls back to plain HTTP", %{
     conn: conn
   } do
     upstream =
@@ -1020,21 +1012,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     session = "completion-fallback-session-#{System.unique_integer([:positive])}"
 
     response = post_stream(conn, setup, session, stream_payload(setup, "completion fallback"))
-    assert response.status == 200
-    assert event_types(response.resp_body) == ["response.failed"]
-    refute response.resp_body =~ "resp_complete_fallback"
 
-    request = latest_request(setup.pool)
-    assert request.status == "failed"
-    assert request.transport == "http_sse"
-    assert [attempt] = attempts_for(request)
-    assert attempt.status == "failed"
-    assert attempt.transport == "websocket"
-    assert attempt.response_metadata["upstream_websocket_bridge"] == true
-    assert [websocket_request] = FakeUpstream.requests(upstream)
+    assert [websocket_request | _rest] = FakeUpstream.requests(upstream)
     assert websocket_request.method == "WEBSOCKET"
-    assert FakeUpstream.http_request_count(upstream) == 0
-    assert settlement_count(request) == 1
+
+    assert_precontent_fallback_success(response, upstream, setup, "resp_complete_fallback")
   end
 
   @tag :task_9b_codex_buffering
@@ -1352,6 +1334,264 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert is_binary(lifecycle_id)
     assert settlement_count(second_request) == 1
+  end
+
+  # ── Pre-content retry family (bridged-pre-content-retry plan) ──
+  #
+  # A bridged turn whose upstream channel is killed by the peer before any
+  # client-rendered content falls back to plain HTTP on the same attempt;
+  # content commits the bridge; locally-declared timeouts stay fatal.
+
+  defp output_item_added_event(response_id, item_type) do
+    {"response.output_item.added",
+     %{
+       "type" => "response.output_item.added",
+       "response_id" => response_id,
+       "output_index" => 0,
+       "item" => %{"type" => item_type, "id" => "item_#{item_type}"}
+     }}
+  end
+
+  defp content_part_added_event(response_id) do
+    {"response.content_part.added",
+     %{
+       "type" => "response.content_part.added",
+       "response_id" => response_id,
+       "output_index" => 0,
+       "content_index" => 0,
+       "part" => %{"type" => "output_text", "text" => ""}
+     }}
+  end
+
+  defp codex_marker_event do
+    {"codex.event_marker", %{"type" => "codex.event_marker", "detail" => %{"count" => 1}}}
+  end
+
+  defp assert_precontent_fallback_success(response, upstream, setup, fallback_id) do
+    assert response.status == 200
+    assert completed_id(response.resp_body) == fallback_id
+    refute "response.failed" in event_types(response.resp_body)
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    assert_no_upstream_websocket_metadata(attempt)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert settlement_count(request) == 1
+  end
+
+  test "envelope frames followed by a peer close fall back to plain HTTP", %{conn: conn} do
+    events = [
+      created_event("resp_precontent_ws"),
+      output_item_added_event("resp_precontent_ws", "reasoning"),
+      codex_marker_event()
+    ]
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close(events),
+           FakeUpstream.sse_stream([completed_event("resp_precontent_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "precontent-close-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "precontent close turn"))
+
+    assert_precontent_fallback_success(response, upstream, setup, "resp_precontent_fallback")
+  end
+
+  test "multi-item envelopes without content still fall back on a peer close", %{conn: conn} do
+    events = [
+      created_event("resp_multi_item_ws"),
+      output_item_added_event("resp_multi_item_ws", "reasoning"),
+      output_item_added_event("resp_multi_item_ws", "message"),
+      content_part_added_event("resp_multi_item_ws")
+    ]
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close(events),
+           FakeUpstream.sse_stream([completed_event("resp_multi_item_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "precontent-multi-item-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "multi item turn"))
+
+    assert_precontent_fallback_success(response, upstream, setup, "resp_multi_item_fallback")
+  end
+
+  test "a reasoning summary delta commits the bridge so a later close stays fatal", %{conn: conn} do
+    events = [
+      created_event("resp_reasoning_commit"),
+      output_item_added_event("resp_reasoning_commit", "reasoning"),
+      {"response.reasoning_summary_text.delta",
+       %{
+         "type" => "response.reasoning_summary_text.delta",
+         "response_id" => "resp_reasoning_commit",
+         "output_index" => 0,
+         "summary_index" => 0,
+         "delta" => "thinking out loud"
+       }}
+    ]
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close(events),
+           FakeUpstream.sse_stream([completed_event("resp_reasoning_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "reasoning-commit-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "reasoning commit turn"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == nil
+    refute response.resp_body =~ "resp_reasoning_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "failed"
+    assert attempt.transport == "websocket"
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert settlement_count(request) == 1
+  end
+
+  test "an unknown event type commits the bridge so a later close stays fatal", %{conn: conn} do
+    events = [
+      created_event("resp_unknown_commit"),
+      {"response.entirely_new_event",
+       %{"type" => "response.entirely_new_event", "response_id" => "resp_unknown_commit"}}
+    ]
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close(events),
+           FakeUpstream.sse_stream([completed_event("resp_unknown_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "unknown-commit-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "unknown commit turn"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == nil
+    refute response.resp_body =~ "resp_unknown_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert [attempt] = attempts_for(request)
+    assert attempt.transport == "websocket"
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert settlement_count(request) == 1
+  end
+
+  test "pre-content buffer overflow commits so a later close stays fatal", %{conn: conn} do
+    markers = List.duplicate(codex_marker_event(), 65)
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_sse_then_close([created_event("resp_overflow_ws") | markers]),
+           FakeUpstream.sse_stream([completed_event("resp_overflow_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "precontent-overflow-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "overflow turn"))
+    assert response.status == 200
+    assert completed_id(response.resp_body) == nil
+    refute response.resp_body =~ "resp_overflow_fallback"
+
+    request = latest_request(setup.pool)
+    assert request.status == "failed"
+    assert [attempt] = attempts_for(request)
+    assert attempt.transport == "websocket"
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert settlement_count(request) == 1
+  end
+
+  @tag :rollout_drain_precontent_fallback
+  test "a pre-content drain cut falls back to plain HTTP instead of owner_drained", %{conn: conn} do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_close_without_terminal_barrier(
+             notify: self(),
+             release_ref: release_ref
+           ),
+           FakeUpstream.sse_stream([completed_event("resp_drain_precontent_fallback")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "drain-precontent-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        post_stream(conn, setup, session, stream_payload(setup, "drain precontent turn"))
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    harness = start_rollout_drain_harness()
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 25, deadline_margin_ms: 20, deadline_floor_ms: 10] ++
+            WebsocketRolloutDrainSupport.deadline_options(deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, 10}
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+
+    response = Task.await(request_task, 2_000)
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+    assert %{turns_completed: 0, turns_aborted: 1} = Task.await(drain_task, 2_000)
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_drain_precontent_fallback"
+    refute response.resp_body =~ "owner_drained"
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "http_sse"
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert settlement_count(request) == 1
   end
 
   defp compression_log_fixture(omitted_sentinel) do
