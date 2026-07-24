@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.4...codex-pooler-v0.5.5) (2026-07-24)
+
+
+### Features
+
+* **websocket:** record bounded upstream terminal diagnostics ([9dc076e](https://github.com/icoretech/codex-pooler/commit/9dc076e9595016e76695f4529d11353173cb11d7))
+
+
+### Bug Fixes
+
+* **admin:** keep quota reset timers and usage bounds clear ([0f4f955](https://github.com/icoretech/codex-pooler/commit/0f4f95595c70e74f5392b716806280eeffab764f))
+* **deps:** update dependency @astrojs/starlight to v0.41.4 ([#205](https://github.com/icoretech/codex-pooler/issues/205)) ([2ae48ed](https://github.com/icoretech/codex-pooler/commit/2ae48edbd2a02b176b21eaad435e11d2097172ce))
+* **endpoint:** serve HTTP/1.1 only on the cleartext listener ([552c999](https://github.com/icoretech/codex-pooler/commit/552c9998203e86751494b975eff712fab0c9aeda))
+* preserve saved reset discovery timestamps ([2848445](https://github.com/icoretech/codex-pooler/commit/2848445374627596a817af11c3da959acdb9addf))
+* **streaming:** classify visible stream failures neutrally ([9acba38](https://github.com/icoretech/codex-pooler/commit/9acba383be3e77f5a6f4591895d3cfe34b27fd46))
+* **streaming:** preserve clean EOF settlement ([ecdf221](https://github.com/icoretech/codex-pooler/commit/ecdf22144394b2501201a6ee9e2c78814ebfdfd4))
+* **websocket:** log failed native turns safely ([3f73b88](https://github.com/icoretech/codex-pooler/commit/3f73b884fb90c85ecbe283da9d9b34b7e946400b))
+* **websocket:** record bounded owner exit causes ([fa23be4](https://github.com/icoretech/codex-pooler/commit/fa23be4380fd980832d8b9bfceaba7eb2c746019))
+* **websocket:** sanitize native turn failure logs ([410fa87](https://github.com/icoretech/codex-pooler/commit/410fa8718092d3d793bc8500cd5c28c8e3a3fa81))
+
 ## [0.5.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.3...codex-pooler-v0.5.4) (2026-07-23)
 
 
