@@ -1,7 +1,11 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "complete_sse_blocks/2" do
     test "bounds oversized incomplete SSE blocks when requested" do
@@ -538,6 +542,140 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "wrapped websocket/direct JSON terminal error frames" do
+    test "emits the exact native previous-response retry event at the downstream adapter" do
+      frame =
+        Jason.encode!(%{
+          "type" => "error",
+          "status" => 404,
+          "error" => %{
+            "code" => "previous_response_not_found",
+            "message" => "synthetic upstream detail must not survive"
+          }
+        })
+
+      expected = %{
+        "type" => "error",
+        "status" => 400,
+        "error" => %{
+          "type" => "invalid_request_error",
+          "code" => "previous_response_not_found",
+          "message" => "Previous response was not found. Retrying the full request."
+        }
+      }
+
+      native_options =
+        RequestOptions.build(
+          %{transport: "websocket"},
+          "/backend-api/codex/responses",
+          %{"type" => "response.create"}
+        )
+
+      mapped = native_options |> capture_upstream_message_mapper() |> then(& &1.(frame))
+      adapted = Adapter.downstream_response_chunk(frame)
+      remapped = Adapter.downstream_response_chunk(mapped)
+
+      assert mapped == Jason.encode!(expected)
+      assert adapted == Jason.encode!(expected)
+      assert remapped == Jason.encode!(expected)
+      assert Jason.decode!(adapted) == expected
+      refute adapted =~ "synthetic upstream detail"
+    end
+
+    test "delegates native retry near-misses to existing canonicalization" do
+      invalid_previous_response_id = %{
+        "type" => "error",
+        "status" => 400,
+        "error" => %{"code" => "invalid_previous_response_id"}
+      }
+
+      missing_code = %{
+        "type" => "error",
+        "status" => 400,
+        "error" => %{"message" => "previous_response_not_found"}
+      }
+
+      wrong_event_type = %{
+        "type" => "response.failed",
+        "status" => 400,
+        "error" => %{"code" => "previous_response_not_found"}
+      }
+
+      assert %{"type" => "response.failed", "error" => %{"code" => "stream_incomplete"}} =
+               invalid_previous_response_id
+               |> Jason.encode!()
+               |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+               |> Jason.decode!()
+
+      assert missing_code ==
+               missing_code
+               |> Jason.encode!()
+               |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+               |> Jason.decode!()
+
+      assert %{"type" => "response.failed", "error" => %{"code" => "stream_incomplete"}} =
+               wrong_event_type
+               |> Jason.encode!()
+               |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+               |> Jason.decode!()
+    end
+
+    test "keeps public websocket and bridge options on generic mapping before stateful adaptation" do
+      frame =
+        Jason.encode!(%{
+          "type" => "error",
+          "status" => 400,
+          "error" => %{"code" => "previous_response_not_found"}
+        })
+
+      public_options = [
+        RequestOptions.build(
+          %{
+            transport: "websocket",
+            openai_source_endpoint: "/v1/responses",
+            openai_translated_endpoint: "/backend-api/codex/responses",
+            public_openai_responses_stream: true
+          },
+          "/backend-api/codex/responses",
+          %{"type" => "response.create"}
+        ),
+        RequestOptions.build(
+          %{
+            transport: "http_sse",
+            openai_source_endpoint: "/v1/responses",
+            openai_translated_endpoint: "/backend-api/codex/responses",
+            public_openai_responses_stream: true
+          },
+          "/backend-api/codex/responses",
+          %{"stream" => true}
+        )
+      ]
+
+      for options <- public_options do
+        mapper = capture_upstream_message_mapper(options)
+        mapped = mapper.(frame)
+        state = Adapter.public_responses_turn_state()
+
+        assert %{
+                 "type" => "response.failed",
+                 "error" => %{"code" => "stream_incomplete"},
+                 "response" => %{
+                   "status" => "failed",
+                   "error" => %{"code" => "stream_incomplete"}
+                 }
+               } = Jason.decode!(mapped)
+
+        assert {:push, pushed, next_state} = Adapter.downstream_response_chunk(mapped, state)
+
+        assert %{
+                 "type" => "response.failed",
+                 "sequence_number" => 0,
+                 "error" => %{"code" => "stream_incomplete"}
+               } = Jason.decode!(pushed)
+
+        assert next_state.terminal_latched?
+      end
+    end
+
     test "extracts the first present validated upstream error param by exact precedence" do
       fixtures = [
         {"response.error.param",
@@ -995,5 +1133,39 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       }
     })
     |> Jason.encode!()
+  end
+
+  defp capture_upstream_message_mapper(options) do
+    parent = self()
+
+    session =
+      spawn_link(fn ->
+        receive do
+          {:"$gen_call", from, {:request, request}} ->
+            send(parent, {:captured_upstream_message_mapper, request.message_mapper})
+
+            GenServer.reply(
+              from,
+              {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []}}
+            )
+        end
+      end)
+
+    options = RequestOptions.put_transport(options, upstream_websocket_session: session)
+
+    assert {:ok, %{status: 200}} =
+             UpstreamDispatch.websocket_request(%UpstreamDispatch.Request{
+               url: "https://upstream.example.test/backend-api/codex/responses",
+               token: "redacted",
+               upstream_payload: "{}",
+               identity: %UpstreamIdentity{},
+               accounting_request: nil,
+               writer: fn _message -> :ok end,
+               assignment_advertised?: false,
+               request_options: options
+             })
+
+    assert_receive {:captured_upstream_message_mapper, mapper}
+    mapper
   end
 end

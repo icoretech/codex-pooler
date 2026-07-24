@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   )
   @allowed_termination_sources ~w(
     connection_establish_error
+    continuation_generation_guard
     mint_stream_done
     mint_transport_error
     payload_send_error
@@ -102,6 +103,13 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   defdelegate safe_exception(reason), to: SharedTransportFailureReason
 
   @spec transport_failure_metadata(term(), map()) :: transport_failure_metadata()
+  def transport_failure_metadata(:previous_response_generation_mismatch, attrs)
+      when is_map(attrs) do
+    attrs
+    |> metadata_attr("connection_use", :connection_use)
+    |> continuation_generation_guard_metadata()
+  end
+
   def transport_failure_metadata(reason, attrs) when is_map(attrs) do
     %{
       "exception" => safe_exception(reason),
@@ -181,6 +189,51 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
 
   @spec sanitize_transport_failure_metadata(term()) :: transport_failure_metadata()
   def sanitize_transport_failure_metadata(metadata) when is_map(metadata) do
+    if continuation_generation_guard_candidate?(metadata) do
+      sanitize_continuation_generation_guard_metadata(metadata)
+    else
+      sanitize_general_transport_failure_metadata(metadata)
+    end
+  end
+
+  def sanitize_transport_failure_metadata(_metadata), do: %{}
+
+  @spec continuation_generation_guard_metadata(term()) :: transport_failure_metadata()
+  def continuation_generation_guard_metadata(connection_use)
+      when connection_use in [:fresh, :reconnected, "fresh", "reconnected"] do
+    %{
+      "connection_use" => to_string(connection_use),
+      "phase" => "send_payload",
+      "pre_visible_output" => true,
+      "reason" => "previous_response_generation_mismatch",
+      "reason_class" => "previous_response_generation_mismatch",
+      "termination_source" => "continuation_generation_guard",
+      "terminal_seen" => false,
+      "text_frame_count" => 0,
+      "upstream_committed" => false
+    }
+  end
+
+  def continuation_generation_guard_metadata(_connection_use), do: %{}
+
+  @spec sanitize_continuation_generation_guard_metadata(term()) ::
+          transport_failure_metadata()
+  def sanitize_continuation_generation_guard_metadata(metadata) when is_map(metadata) do
+    expected =
+      metadata
+      |> metadata_attr("connection_use", :connection_use)
+      |> continuation_generation_guard_metadata()
+
+    if guard_metadata_matches_expected?(metadata, expected) do
+      expected
+    else
+      %{}
+    end
+  end
+
+  def sanitize_continuation_generation_guard_metadata(_metadata), do: %{}
+
+  defp sanitize_general_transport_failure_metadata(metadata) do
     %{
       "exception" => safe_exception_name(metadata_attr(metadata, "exception", :exception)),
       "reason_class" =>
@@ -261,8 +314,6 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     }
     |> compact_metadata()
   end
-
-  def sanitize_transport_failure_metadata(_metadata), do: %{}
 
   @spec peer_close_metadata(term(), term()) :: transport_failure_metadata()
   def peer_close_metadata(code, reason) do
@@ -486,6 +537,20 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       :error -> Map.get(attrs, atom_key)
     end
   end
+
+  defp continuation_generation_guard_candidate?(metadata) do
+    metadata_attr(metadata, "reason", :reason) == "previous_response_generation_mismatch" or
+      metadata_attr(metadata, "termination_source", :termination_source) ==
+        "continuation_generation_guard"
+  end
+
+  defp guard_metadata_matches_expected?(metadata, expected) when map_size(expected) > 0 do
+    Enum.all?(expected, fn {key, value} ->
+      metadata_attr(metadata, key, String.to_existing_atom(key)) == value
+    end)
+  end
+
+  defp guard_metadata_matches_expected?(_metadata, _expected), do: false
 
   defp truncate_reason(reason) when byte_size(reason) > @max_reason_length,
     do: binary_part(reason, 0, @max_reason_length)

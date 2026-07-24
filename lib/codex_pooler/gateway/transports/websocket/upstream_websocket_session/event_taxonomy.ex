@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Even
     {"response.output_item", ~w(response.output_item.added response.output_item.done)},
     {"response.content_part", ~w(response.content_part.added response.content_part.done)},
     {"response.reasoning", ~w(
+       response.reasoning
        response.reasoning_text.delta
        response.reasoning_text.done
        response.reasoning_summary.delta

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   use ExUnit.Case, async: false
 
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -1603,6 +1604,218 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            ] = reason_headers
 
     refute inspect({reason_headers, result}) =~ "upgrade body sentinel"
+  end
+
+  @tag :continuation_generation_boundary
+  test "marked continuation forwards unchanged on a reused connection" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           websocket_success_without_id()
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = websocket_request(FakeUpstream.url(upstream))
+    marked_request = %{request | connection_bound_continuation?: true}
+
+    assert {:ok, _warmup} = UpstreamWebsocketSession.request(session, request)
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, marked_request)
+
+    assert result.upstream_websocket_connection.reused
+    refute result.upstream_websocket_connection.reconnected
+    assert [warmup_request, continuation_request] = FakeUpstream.requests(upstream)
+    assert continuation_request.body == marked_request.payload
+    assert warmup_request.websocket_connection_id == continuation_request.websocket_connection_id
+  end
+
+  @tag :continuation_generation_boundary
+  test "marked continuation on a replacement connection writes one retry terminal and keeps it reusable" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           websocket_success_without_id()
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    warmup_request = websocket_request(FakeUpstream.url(upstream))
+    replacement_request = %{warmup_request | url: warmup_request.url <> "?scope=replacement"}
+
+    assert {:ok, _warmup} = UpstreamWebsocketSession.request(session, warmup_request)
+
+    assert_guard_terminal(
+      session,
+      %{replacement_request | connection_bound_continuation?: true},
+      :replacement_guard,
+      :fresh
+    )
+
+    assert [_warmup] = FakeUpstream.requests(upstream)
+
+    assert {:ok, later_result} =
+             UpstreamWebsocketSession.request(session, replacement_request)
+
+    assert later_result.upstream_websocket_connection.reused
+    assert [warmup, later_full_request] = FakeUpstream.requests(upstream)
+    assert warmup.websocket_connection_id != later_full_request.websocket_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  @tag :continuation_generation_boundary
+  test "marked continuation after invalidation writes one retry terminal and keeps reconnect reusable" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           websocket_success_without_id()
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = websocket_request(FakeUpstream.url(upstream))
+    assert {:ok, _warmup} = UpstreamWebsocketSession.request(session, request)
+    assert :ok = UpstreamWebsocketSession.invalidate_connection(session)
+
+    assert_guard_terminal(
+      session,
+      %{request | connection_bound_continuation?: true},
+      :invalidation_guard,
+      :reconnected
+    )
+
+    assert [_warmup] = FakeUpstream.requests(upstream)
+
+    assert {:ok, later_result} = UpstreamWebsocketSession.request(session, request)
+    assert later_result.upstream_websocket_connection.reused
+    assert length(FakeUpstream.requests(upstream)) == 2
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  @tag :continuation_generation_boundary
+  test "transparent reconnect never replays a marked continuation on the next generation" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           FakeUpstream.websocket_sse_then_close([]),
+           websocket_success_without_id()
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = websocket_request(FakeUpstream.url(upstream))
+    assert {:ok, _warmup} = UpstreamWebsocketSession.request(session, request)
+
+    assert_guard_terminal(
+      session,
+      %{request | connection_bound_continuation?: true},
+      :transparent_reconnect_guard,
+      :reconnected
+    )
+
+    assert [warmup, continuation] = FakeUpstream.requests(upstream)
+    assert warmup.websocket_connection_id == continuation.websocket_connection_id
+
+    assert {:ok, later_result} = UpstreamWebsocketSession.request(session, request)
+    assert later_result.upstream_websocket_connection.reused
+
+    assert [_warmup, continuation, later_full_request] = FakeUpstream.requests(upstream)
+    assert later_full_request.websocket_connection_id != continuation.websocket_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  @tag :continuation_generation_boundary
+  test "request_once writes one retry terminal without sending marked continuation bytes" do
+    upstream = start_upstream(websocket_success_without_id())
+    parent = self()
+
+    request =
+      FakeUpstream.url(upstream)
+      |> websocket_request()
+      |> Map.put(:connection_bound_continuation?, true)
+      |> Map.put(:writer, fn frame -> send(parent, {:guard_frame, :request_once_guard, frame}) end)
+
+    assert_guard_result(
+      UpstreamWebsocketSession.request_once(request),
+      :request_once_guard,
+      :fresh
+    )
+
+    assert FakeUpstream.requests(upstream) == []
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+  end
+
+  defp assert_guard_terminal(session, request, label, connection_use) do
+    parent = self()
+    request = %{request | writer: fn frame -> send(parent, {:guard_frame, label, frame}) end}
+
+    assert_guard_result(UpstreamWebsocketSession.request(session, request), label, connection_use)
+  end
+
+  defp assert_guard_result(result, label, connection_use) do
+    terminal = native_retry_terminal()
+
+    assert {:ok,
+            %{
+              body: "data: " <> ^terminal <> "\n\n",
+              terminal: "error",
+              status: 200,
+              headers: headers,
+              upstream_error_code: "previous_response_not_found",
+              upstream_error_param: "previous_response_id",
+              websocket_frame_headers: %{},
+              transport_failure: transport_failure,
+              upstream_websocket_connection: connection
+            }} = result
+
+    assert transport_failure ==
+             TransportFailureReason.continuation_generation_guard_metadata(connection_use)
+
+    assert connection.reused == false
+    assert connection.reconnected == (connection_use == :reconnected)
+
+    assert Enum.any?(headers, fn {name, value} ->
+             name == "sec-websocket-accept" and byte_size(value) > 0
+           end)
+
+    assert_receive {:guard_frame, ^label, ^terminal}, 1_000
+    refute_received {:guard_frame, ^label, _extra_terminal}
+  end
+
+  defp native_retry_terminal do
+    Jason.encode!(%{
+      "type" => "error",
+      "status" => 400,
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => "previous_response_not_found",
+        "message" => "Previous response was not found. Retrying the full request."
+      }
+    })
+  end
+
+  defp websocket_success_without_id do
+    FakeUpstream.websocket_text_frames([
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ])
   end
 
   defp websocket_success(response_id) do

@@ -52,6 +52,30 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     result
   end
 
+  @spec terminal_barrier_downstream_sender(pid(), binary(), reference()) ::
+          (pid(), term() -> :ok)
+  def terminal_barrier_downstream_sender(test_pid, terminal, release_ref)
+      when is_pid(test_pid) and is_binary(terminal) and is_reference(release_ref) do
+    fn downstream_pid, message ->
+      if terminal_downstream_message?(message, terminal) do
+        send(test_pid, {:websocket_owner_harness_terminal_delivery_barrier, self(), release_ref})
+
+        receive do
+          {:websocket_owner_harness_release_terminal_delivery, ^release_ref} -> :ok
+        after
+          5_000 -> raise "timed out waiting for websocket owner terminal delivery release"
+        end
+
+        send(downstream_pid, message)
+        send(test_pid, {:websocket_owner_harness_terminal_delivered, release_ref})
+        :ok
+      else
+        send(downstream_pid, message)
+        :ok
+      end
+    end
+  end
+
   @spec controlled_timer_message(pid(), pid(), map(), term()) :: :ok
   def controlled_timer_message(test_pid, target, controls, message)
       when is_pid(test_pid) and is_pid(target) and is_map(controls) do
@@ -151,7 +175,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     receive do
       {^ready_ref, :ready} -> {:ok, runtime}
     after
-      2_000 -> {:error, :owner_runtime_start_timeout}
+      10_000 -> {:error, :owner_runtime_start_timeout}
     end
   end
 
@@ -203,6 +227,14 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   end
 
   defp drop_connection_metadata(result), do: result
+
+  defp terminal_downstream_message?(
+         {:websocket_owner_frame, _correlation_id, _epoch, {:data, terminal}},
+         terminal
+       ),
+       do: true
+
+  defp terminal_downstream_message?(_message, _terminal), do: false
 
   defp start_fake_upstream(test_pid) do
     Agent.start_link(fn -> %{frames: [], closed?: false} end)

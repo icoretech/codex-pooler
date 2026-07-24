@@ -1,8 +1,18 @@
 defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
-  use ExUnit.Case, async: true
+  use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query
+
+  alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
+  alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Repo
+
+  import CodexPooler.AccountingTestSupport, only: [accounting_setup: 0]
 
   test "HTTP attempt metadata includes safe payload compression savings" do
     sensitive_placeholder =
@@ -179,6 +189,298 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
            )
 
     assert Metadata.request_metadata(not_attempted) == %{}
+  end
+
+  test "terminal websocket failure settles once with the sanitized local guard diagnostic" do
+    setup = accounting_setup()
+    payload = %{"model" => setup.model.exposed_model_id, "stream" => true}
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "websocket",
+               correlation_id:
+                 "continuation-guard-finalization-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    circuit =
+      %RoutingCircuitState{
+        pool_id: setup.auth.pool.id,
+        pool_upstream_assignment_id: setup.assignment.id,
+        upstream_identity_id: setup.identity.id,
+        model_identifier: setup.model.exposed_model_id,
+        route_class: "proxy_websocket",
+        status: "half_open",
+        reason_code: "upstream_5xx",
+        failure_count: 3,
+        success_count: 0,
+        opened_at: DateTime.add(now, -120, :second),
+        half_opened_at: now,
+        metadata: %{"probe_in_flight_count" => 1},
+        created_at: DateTime.add(now, -120, :second),
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    request_options =
+      %{
+        request_id: "continuation-guard-finalization",
+        upstream_endpoint: "/backend-api/codex/responses"
+      }
+      |> RequestOptions.for_websocket(payload)
+
+    context = %SelectedCandidateContext{
+      auth: setup.auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: setup.model,
+      reserved: reserved,
+      request_options: request_options,
+      assignment: setup.assignment,
+      identity: setup.identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: true,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_websocket",
+      routing_circuit_state: circuit,
+      attempt: attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    raw_sentinel = "caller-controlled-terminal-sentinel"
+
+    terminal_result = %{
+      body: ~s(data: {"type":"error","error":{"code":"previous_response_not_found"}}\n\n),
+      terminal: "error",
+      status: 200,
+      headers: [],
+      started: System.monotonic_time(:millisecond),
+      upstream_error_code: "previous_response_not_found",
+      upstream_error_param: raw_sentinel,
+      transport_failure: %{
+        "reason" => "previous_response_generation_mismatch",
+        "reason_class" => "previous_response_generation_mismatch",
+        "phase" => "send_payload",
+        "termination_source" => "continuation_generation_guard",
+        "connection_use" => "fresh",
+        "pre_visible_output" => true,
+        "upstream_committed" => false,
+        "terminal_seen" => false,
+        "text_frame_count" => 0,
+        "previous_response_id" => raw_sentinel,
+        "message" => raw_sentinel,
+        "raw_frame" => raw_sentinel
+      }
+    }
+
+    assert {:ok, %{status: 200, websocket_messages: []}} =
+             Finalization.finalize_terminal_websocket_response(context, terminal_result)
+
+    request = Repo.get!(Request, reserved.request.id)
+    attempt = Repo.get!(Attempt, attempt.id)
+
+    assert request.status == "failed"
+    assert request.last_error_code == "stream_incomplete"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "stream_incomplete"
+    assert attempt.response_metadata["upstream_error_code"] == "previous_response_not_found"
+    assert attempt.response_metadata["upstream_error_param"] == "previous_response_id"
+
+    assert attempt.response_metadata["transport_failure"] == %{
+             "connection_use" => "fresh",
+             "phase" => "send_payload",
+             "pre_visible_output" => true,
+             "reason" => "previous_response_generation_mismatch",
+             "reason_class" => "previous_response_generation_mismatch",
+             "termination_source" => "continuation_generation_guard",
+             "terminal_seen" => false,
+             "text_frame_count" => 0,
+             "upstream_committed" => false
+           }
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.all(from(demotion in BridgeDemotion)) == []
+
+    updated_circuit = Repo.get!(RoutingCircuitState, circuit.id)
+    assert updated_circuit.status == "half_open"
+    assert updated_circuit.reason_code == "upstream_5xx"
+    assert updated_circuit.failure_count == 3
+    assert updated_circuit.success_count == 0
+    assert updated_circuit.metadata["probe_in_flight_count"] == 0
+
+    refute inspect({request.request_metadata, attempt.response_metadata}) =~ raw_sentinel
+  end
+
+  test "exact previous response miss fixes the param when guard metadata is stale" do
+    setup = accounting_setup()
+    payload = %{"model" => setup.model.exposed_model_id, "stream" => true}
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "websocket",
+               correlation_id: "continuation-guard-stale-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    request_options =
+      RequestOptions.for_websocket(
+        %{
+          request_id: "continuation-guard-stale",
+          upstream_endpoint: "/backend-api/codex/responses"
+        },
+        payload
+      )
+
+    context = %SelectedCandidateContext{
+      auth: setup.auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: setup.model,
+      reserved: reserved,
+      request_options: request_options,
+      assignment: setup.assignment,
+      identity: setup.identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: true,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_websocket",
+      attempt: attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    raw_sentinel = "caller-controlled-stale-guard-sentinel"
+
+    assert {:ok, %{status: 200, websocket_messages: []}} =
+             Finalization.finalize_terminal_websocket_response(context, %{
+               body:
+                 ~s(data: {"type":"error","error":{"code":"previous_response_not_found"}}\n\n),
+               terminal: "error",
+               status: 200,
+               headers: [],
+               started: System.monotonic_time(:millisecond),
+               upstream_error_code: "previous_response_not_found",
+               upstream_error_param: raw_sentinel,
+               transport_failure: %{
+                 "connection_use" => "reused",
+                 "phase" => "receive",
+                 "pre_visible_output" => false,
+                 "reason" => "previous_response_generation_mismatch",
+                 "reason_class" => raw_sentinel,
+                 "termination_source" => "continuation_generation_guard",
+                 "terminal_seen" => true,
+                 "text_frame_count" => 99,
+                 "upstream_committed" => true,
+                 "previous_response_id" => raw_sentinel,
+                 "message" => raw_sentinel,
+                 "raw_frame" => raw_sentinel
+               }
+             })
+
+    request = Repo.get!(Request, reserved.request.id)
+    attempt = Repo.get!(Attempt, attempt.id)
+
+    assert request.status == "failed"
+    assert request.last_error_code == "stream_incomplete"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "stream_incomplete"
+    assert attempt.response_metadata["upstream_error_code"] == "previous_response_not_found"
+    assert attempt.response_metadata["upstream_error_param"] == "previous_response_id"
+    refute Map.has_key?(attempt.response_metadata, "transport_failure")
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.all(from(demotion in BridgeDemotion)) == []
+    refute inspect({request.request_metadata, attempt.response_metadata}) =~ raw_sentinel
+  end
+
+  test "terminal websocket finalization rejects a valid guard map for another terminal code" do
+    setup = accounting_setup()
+    payload = %{"model" => setup.model.exposed_model_id, "stream" => true}
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "websocket",
+               correlation_id:
+                 "continuation-guard-near-miss-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    request_options =
+      RequestOptions.for_websocket(
+        %{
+          request_id: "continuation-guard-near-miss",
+          upstream_endpoint: "/backend-api/codex/responses"
+        },
+        payload
+      )
+
+    context = %SelectedCandidateContext{
+      auth: setup.auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: setup.model,
+      reserved: reserved,
+      request_options: request_options,
+      assignment: setup.assignment,
+      identity: setup.identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: true,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_websocket",
+      attempt: attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    assert {:ok, %{status: 200}} =
+             Finalization.finalize_terminal_websocket_response(context, %{
+               body: ~s(data: {"type":"error","error":{"code":"server_error"}}\n\n),
+               terminal: "error",
+               status: 200,
+               headers: [],
+               started: System.monotonic_time(:millisecond),
+               upstream_error_code: "server_error",
+               upstream_error_param: "reasoning.summary",
+               transport_failure: %{
+                 "connection_use" => "fresh",
+                 "phase" => "send_payload",
+                 "pre_visible_output" => true,
+                 "reason" => "previous_response_generation_mismatch",
+                 "reason_class" => "previous_response_generation_mismatch",
+                 "termination_source" => "continuation_generation_guard",
+                 "terminal_seen" => false,
+                 "text_frame_count" => 0,
+                 "upstream_committed" => false
+               }
+             })
+
+    attempt = Repo.get!(Attempt, attempt.id)
+    refute Map.has_key?(attempt.response_metadata, "transport_failure")
+    assert attempt.response_metadata["upstream_error_param"] == "reasoning.summary"
   end
 
   defp request_options do

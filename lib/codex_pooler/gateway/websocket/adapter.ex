@@ -73,7 +73,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
 
   @spec downstream_response_chunk(binary()) :: binary()
   def downstream_response_chunk(data) when is_binary(data) do
-    StreamProtocol.canonicalize_codex_responses_json_message(data)
+    StreamProtocol.canonicalize_native_codex_responses_json_message(data)
   end
 
   @spec downstream_response_chunk(

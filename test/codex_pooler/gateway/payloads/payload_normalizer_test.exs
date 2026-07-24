@@ -6,6 +6,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
+  alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "upstream_payload/4" do
     test "materializes present malformed reasoning aliases without lower-priority fallthrough" do
@@ -433,6 +435,130 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
         assert Jason.decode!(encoded)["service_tier"] == tier
       end
+    end
+
+    test "keeps raw continuation options separate from final HTTP and websocket payloads" do
+      previous_response_id = "  response-fixture  "
+
+      payload = %{
+        "model" => "gpt-5.5",
+        "previous_response_id" => previous_response_id,
+        "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}]
+      }
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      http_options =
+        RequestOptions.build(
+          %{previous_response_id: previous_response_id},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert {:ok, http_encoded, normalized_http_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 http_options
+               )
+
+      refute Map.has_key?(Jason.decode!(http_encoded), "previous_response_id")
+      assert normalized_http_options.continuity.previous_response_id == previous_response_id
+
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      assert {:ok, websocket_encoded, normalized_websocket_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 websocket_options
+               )
+
+      assert Jason.decode!(websocket_encoded)["previous_response_id"] == previous_response_id
+      assert normalized_websocket_options.continuity.previous_response_id == previous_response_id
+    end
+
+    test "derives previous response state from only the final normalized payload" do
+      model = %Model{upstream_model_id: "provider-model"}
+
+      cases = [
+        {:valid_websocket, "  response-fixture  ", :websocket, ordinary_input(), true, true},
+        {:blank_websocket, "  ", :websocket, ordinary_input(), true, false},
+        {:non_binary_websocket, 42, :websocket, ordinary_input(), true, false},
+        {:stripped_http, "response-fixture", :http, ordinary_input(), false, false},
+        {:retained_semantic_http, "response-fixture", :http, tool_result_input(), true, true}
+      ]
+
+      for {label, previous_response_id, transport, input, final_id_present?, expected_marker} <-
+            cases do
+        payload = %{
+          "model" => "gpt-5.5",
+          "previous_response_id" => previous_response_id,
+          "input" => input
+        }
+
+        options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+        options =
+          if transport == :websocket,
+            do: RequestOptions.for_websocket(options, payload),
+            else: options
+
+        assert {:ok, encoded, normalized_options} =
+                 PayloadNormalizer.prepare_upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   options
+                 )
+
+        assert Map.has_key?(Jason.decode!(encoded), "previous_response_id") == final_id_present?,
+          message: "case: #{label}"
+
+        assert normalized_options.continuity.upstream_previous_response_id? == expected_marker,
+          message: "case: #{label}"
+
+        assert is_boolean(normalized_options.continuity.upstream_previous_response_id?),
+          message: "case: #{label}"
+      end
+    end
+
+    test "derives connection-bound state on the actual upstream websocket request struct" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "previous_response_id" => "response-fixture",
+        "input" => ordinary_input()
+      }
+
+      native_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      public_options =
+        %{
+          openai_source_endpoint: "/v1/responses",
+          public_openai_responses_stream: true
+        }
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      assert {true, true} = capture_continuation_state(payload, native_options)
+      assert {true, false} = capture_continuation_state(payload, public_options)
+    end
+
+    test "retained semantic native HTTP state is not connection-bound at dispatch" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "previous_response_id" => "response-fixture",
+        "input" => tool_result_input()
+      }
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {true, false} = capture_continuation_state(payload, http_options)
     end
 
     test "carries gateway debug metadata on request options instead of process state" do
@@ -1653,6 +1779,59 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       ]
     }
   end
+
+  defp capture_continuation_state(payload, options) do
+    assert {:ok, encoded, normalized_options} =
+             PayloadNormalizer.prepare_upstream_payload(
+               payload,
+               %Model{upstream_model_id: "provider-model"},
+               "/backend-api/codex/responses",
+               options
+             )
+
+    parent = self()
+
+    session =
+      spawn_link(fn ->
+        receive do
+          {:"$gen_call", from, {:request, request}} ->
+            send(parent, {:captured_upstream_websocket_request, request})
+
+            GenServer.reply(
+              from,
+              {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []}}
+            )
+        end
+      end)
+
+    request_options =
+      RequestOptions.put_transport(normalized_options, upstream_websocket_session: session)
+
+    assert {:ok, %{status: 200}} =
+             UpstreamDispatch.websocket_request(%UpstreamDispatch.Request{
+               url: "https://upstream.example.test/backend-api/codex/responses",
+               token: "redacted",
+               upstream_payload: encoded,
+               identity: %UpstreamIdentity{},
+               accounting_request: nil,
+               writer: fn _message -> :ok end,
+               assignment_advertised?: false,
+               request_options: request_options
+             })
+
+    assert_receive {:captured_upstream_websocket_request, upstream_request}
+
+    {
+      normalized_options.continuity.upstream_previous_response_id?,
+      upstream_request.connection_bound_continuation?
+    }
+  end
+
+  defp ordinary_input,
+    do: [%{"type" => "message", "role" => "user", "content" => "hello"}]
+
+  defp tool_result_input,
+    do: [%{"type" => "function_call_output", "call_id" => "call-fixture", "output" => "ok"}]
 
   defp non_strict_tool_schema_payload do
     %{

@@ -4,8 +4,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
 
@@ -27,6 +29,29 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    test "defaults normalized previous response state false and permits only typed internal updates" do
+      options =
+        RequestOptions.build(
+          %{upstream_previous_response_id?: true},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      refute options.continuity.upstream_previous_response_id?
+      assert options.extra == %{}
+
+      options = RequestOptions.put_continuity(options, upstream_previous_response_id?: true)
+      assert options.continuity.upstream_previous_response_id?
+      assert %Continuity{upstream_previous_response_id?: true} = options.continuity
+
+      invalid_update =
+        RequestOptions.put_continuity(options, upstream_previous_response_id?: "true")
+
+      refute invalid_update.continuity.upstream_previous_response_id?
+
+      assert %Request{connection_bound_continuation?: false} = %Request{}
+    end
+
     test "defaults unresolved legacy inputs to Full without manufacturing a resolved snapshot" do
       options =
         RequestOptions.build(%{}, "/backend-api/codex/responses", %{"model" => "example-model"})
@@ -313,6 +338,28 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.transport.transport == "websocket"
       assert options.transport.upstream_endpoint == "/backend-api/codex/responses"
       assert options.transport.route_class == "proxy_websocket"
+    end
+
+    test "for_websocket preserves trusted native and public origin fields" do
+      payload = %{"model" => "example-model"}
+
+      native_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      public_options =
+        %{
+          openai_source_endpoint: "/v1/responses",
+          public_openai_responses_stream: true
+        }
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      assert native_options.openai_compatibility.source_endpoint == nil
+      refute native_options.openai_compatibility.public_openai_responses_stream
+      assert public_options.openai_compatibility.source_endpoint == "/v1/responses"
+      assert public_options.openai_compatibility.public_openai_responses_stream
     end
 
     test "keeps local alias provenance separate from live websocket continuity" do

@@ -116,6 +116,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
            }
   end
 
+  test "characterization preserves bounded websocket terminal failure metadata" do
+    metadata =
+      []
+      |> Metadata.websocket_response_metadata("stream_incomplete", %{})
+      |> Metadata.maybe_put_masked_error_metadata(
+        "previous_response_not_found",
+        "stream_incomplete"
+      )
+      |> Metadata.maybe_put_upstream_error_param(%{
+        upstream_error_param: "previous_response_id",
+        message: "caller-controlled-message",
+        previous_response_id: "caller-controlled-response-id"
+      })
+
+    assert metadata == %{
+             "content_type" => "application/json",
+             "error_kind" => "stream_incomplete",
+             "masked_error_code" => "stream_incomplete",
+             "status_code" => 200,
+             "upstream_error_code" => "previous_response_not_found",
+             "upstream_error_param" => "previous_response_id",
+             "upstream_transport" => "websocket"
+           }
+
+    refute inspect(metadata) =~ "caller-controlled"
+  end
+
   test "three- and four-argument websocket metadata preserve legacy output byte for byte" do
     legacy_connection = %{"legacy_marker" => "preserved"}
 

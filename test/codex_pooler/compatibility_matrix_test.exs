@@ -339,6 +339,40 @@ defmodule CodexPooler.CompatibilityMatrixTest do
     end
   end
 
+  describe "native websocket continuation compatibility contract" do
+    test "pins the generation guard's native retry signal and public exclusion" do
+      feature = CompatibilityMatrix.by_slug!(:websocket_continuity)
+      fixture = CompatibilityMatrix.fixture!(:websocket_turn)
+
+      assert feature.contract =~ "native websocket continuation"
+      assert feature.contract =~ "reused upstream connection"
+      assert feature.contract =~ "exact previous_response_not_found client retry signal"
+      assert feature.contract =~ "later explicit full request"
+      assert feature.contract =~ "public /v1 terminal masking and shape remain unchanged"
+
+      assert fixture.native_continuation_generation_guard == %{
+               scope: "native_backend_websocket_exact_previous_response_not_found",
+               marked_continuation_connection_use: "reused_only",
+               guarded_connection_uses: ["fresh", "reconnected"],
+               guard: %{
+                 upstream_payload_send: false,
+                 client_error_code: "previous_response_not_found",
+                 client_error_type: "invalid_request_error",
+                 client_status: 400,
+                 client_retry: "later_explicit_full_request_without_previous_response_id",
+                 automatic_replay: false
+               },
+               public_v1: "generic_terminal_masking_and_shape_unchanged",
+               diagnostic: %{
+                 reason: "previous_response_generation_mismatch",
+                 reason_class: "previous_response_generation_mismatch",
+                 termination_source: "continuation_generation_guard",
+                 raw_payloads_or_response_values: false
+               }
+             }
+    end
+  end
+
   describe "image generation compatibility contract" do
     test "connects the documented Pool gate to the production routing schema" do
       feature = CompatibilityMatrix.by_slug!(:image_generation_permission)

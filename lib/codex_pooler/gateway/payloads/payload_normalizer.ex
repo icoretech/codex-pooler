@@ -98,6 +98,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     request_options =
       request_options
+      |> put_upstream_previous_response_id(upstream_payload)
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
 
@@ -421,6 +422,20 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp backend_codex_tool_result_input?(_input), do: false
+
+  defp put_upstream_previous_response_id(
+         %RequestOptions{} = request_options,
+         %{"previous_response_id" => response_id}
+       )
+       when is_binary(response_id) do
+    RequestOptions.put_continuity(request_options,
+      upstream_previous_response_id?: String.trim(response_id) != ""
+    )
+  end
+
+  defp put_upstream_previous_response_id(%RequestOptions{} = request_options, _upstream_payload) do
+    RequestOptions.put_continuity(request_options, upstream_previous_response_id?: false)
+  end
 
   defp normalize_backend_codex_http_input(%{"input" => input} = payload) when is_list(input) do
     input = Enum.reject(input, &backend_codex_encrypted_only_input_item?/1)

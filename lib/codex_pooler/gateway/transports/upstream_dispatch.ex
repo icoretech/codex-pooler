@@ -252,7 +252,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       }) do
     headers = websocket_headers(identity, token)
     timeouts = request_options.timeout_config
-    message_mapper = &StreamProtocol.canonicalize_codex_responses_json_message/1
+    message_mapper = websocket_message_mapper(request_options)
 
     upstream_request = %UpstreamWebsocketSession.Request{
       url: url,
@@ -264,6 +264,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       frame_observer: websocket_frame_observer(identity),
       reset_probe: request_options.routing.reset_probe,
       assignment_advertised?: assignment_advertised?,
+      connection_bound_continuation?: connection_bound_continuation?(request_options),
       forward_error_body?: false
     }
 
@@ -285,6 +286,29 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         owner_request_result({:error, reason}, identity, request)
     end
   end
+
+  defp websocket_message_mapper(%RequestOptions{
+         openai_compatibility: %{
+           source_endpoint: nil,
+           public_openai_responses_stream: false
+         }
+       }),
+       do: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+
+  defp websocket_message_mapper(%RequestOptions{}),
+    do: &StreamProtocol.canonicalize_codex_responses_json_message/1
+
+  defp connection_bound_continuation?(%RequestOptions{
+         continuity: %{upstream_previous_response_id?: true},
+         transport: %{transport: "websocket"},
+         openai_compatibility: %{
+           source_endpoint: nil,
+           public_openai_responses_stream: false
+         }
+       }),
+       do: true
+
+  defp connection_bound_continuation?(%RequestOptions{}), do: false
 
   defp owner_request_forwarder_opts(forwarder_opts, %RequestOptions{} = request_options) do
     timeout =

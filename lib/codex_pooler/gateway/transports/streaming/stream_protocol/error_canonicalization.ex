@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
   @owner_drained_public_openai_responses_failure_code "owner_drained"
   @owner_drained_public_openai_responses_failure_message "websocket owner is draining"
+  @native_previous_response_not_found_message "Previous response was not found. Retrying the full request."
 
   @type event_summary :: EventSummary.t()
 
@@ -110,6 +111,21 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     end
   end
 
+  @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
+  def canonicalize_native_codex_responses_json_message(data) when is_binary(data) do
+    case Jason.decode(data) do
+      {:ok,
+       %{
+         "type" => "error",
+         "error" => %{"code" => "previous_response_not_found"}
+       }} ->
+        Jason.encode!(native_previous_response_not_found_event())
+
+      _other ->
+        canonicalize_codex_responses_json_message(data)
+    end
+  end
+
   @spec terminal_error_code(binary(), String.t() | nil) :: String.t()
   defdelegate terminal_error_code(body, terminal), to: ErrorCodes
 
@@ -206,6 +222,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
       true ->
         data
     end
+  end
+
+  defp native_previous_response_not_found_event do
+    %{
+      "type" => "error",
+      "status" => 400,
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => "previous_response_not_found",
+        "message" => @native_previous_response_not_found_message
+      }
+    }
   end
 
   defp canonical_codex_responses_error_event(decoded) do

@@ -748,6 +748,179 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
+  @tag :opencode_1011_negative_regression
+  test "a reused public bridge closed with 1011 after visible reasoning fails once and recovers only explicitly",
+       %{conn: conn} do
+    private_close_reason = "private-close-reason-#{System.unique_integer([:positive])}"
+    request_input_sentinel = "synthetic-request-input-#{System.unique_integer([:positive])}"
+    reasoning_frame_sentinel = "raw-reasoning-frame-#{System.unique_integer([:positive])}"
+
+    reasoning_event =
+      {"response.reasoning",
+       %{
+         "type" => "response.reasoning",
+         "response_id" => "resp_opencode_1011",
+         "output_index" => 0,
+         "item_id" => "reasoning_opencode_1011",
+         "summary" => reasoning_frame_sentinel
+       }}
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream([completed_event("resp_opencode_established")]),
+           FakeUpstream.websocket_sse_then_close([reasoning_event],
+             code: 1011,
+             reason: private_close_reason
+           ),
+           FakeUpstream.sse_stream([completed_event("resp_opencode_recovered")])
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    session = "opencode-1011-session-#{System.unique_integer([:positive])}"
+
+    established =
+      post_stream(conn, setup, session, stream_payload(setup, "establish public bridge"))
+
+    assert established.status == 200
+    assert completed_id(established.resp_body) == "resp_opencode_established"
+    assert [initial_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+
+    failed =
+      post_stream(
+        conn,
+        setup,
+        session,
+        stream_payload(setup, request_input_sentinel)
+      )
+
+    assert failed.status == 200
+    assert event_types(failed.resp_body) == ["response.reasoning", "response.failed"]
+    assert failed.resp_body =~ reasoning_frame_sentinel
+
+    assert %{
+             "type" => "response.failed",
+             "error" => %{
+               "code" => "upstream_stream_error",
+               "message" =>
+                 "upstream request failed: stream interrupted before terminal response event"
+             },
+             "response" => %{
+               "status" => "failed",
+               "error" => %{"code" => "upstream_stream_error"}
+             }
+           } = response_failed_data(failed.resp_body)
+
+    assert Enum.count(event_types(failed.resp_body), &(&1 == "response.failed")) == 1
+    refute failed.resp_body =~ private_close_reason
+    refute failed.resp_body =~ "previous_response_not_found"
+    refute failed.resp_body =~ "previous_response_generation_mismatch"
+
+    failed_request = latest_request(setup.pool)
+    assert failed_request.status == "failed"
+    assert failed_request.transport == "http_sse"
+    assert failed_request.last_error_code == "upstream_stream_error"
+
+    assert get_in(failed_request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             "/v1/responses"
+
+    assert [failed_attempt] = attempts_for(failed_request)
+    assert failed_attempt.status == "failed"
+    assert failed_attempt.transport == "websocket"
+    assert failed_attempt.network_error_code == "upstream_stream_error"
+
+    assert %{
+             "generation" => 1,
+             "reused" => true,
+             "reconnected" => false,
+             "lifecycle_id" => lifecycle_id
+           } = upstream_connection(failed_attempt)
+
+    transport_failure = failed_attempt.response_metadata["transport_failure"]
+
+    assert Map.take(transport_failure, [
+             "termination_source",
+             "peer_close_code",
+             "peer_close_reason_present",
+             "last_upstream_event_type",
+             "last_upstream_event_class",
+             "terminal_candidate_seen",
+             "text_frame_count",
+             "connection_use",
+             "upstream_committed"
+           ]) == %{
+             "termination_source" => "peer_close_frame",
+             "peer_close_code" => 1011,
+             "peer_close_reason_present" => true,
+             "last_upstream_event_type" => "response.reasoning",
+             "last_upstream_event_class" => "response_event",
+             "terminal_candidate_seen" => false,
+             "text_frame_count" => 1,
+             "connection_use" => "reused",
+             "upstream_committed" => true
+           }
+
+    reason_bytes = transport_failure["peer_close_reason_bytes"]
+
+    assert reason_bytes == byte_size(private_close_reason)
+    refute Map.has_key?(transport_failure, "terminal_candidate_type")
+    refute Map.has_key?(transport_failure, "terminal_candidate_class")
+    refute Map.has_key?(transport_failure, "terminal_candidate_rejection")
+    refute transport_failure["termination_source"] == "continuation_generation_guard"
+    refute inspect(failed_request) =~ private_close_reason
+    refute inspect(failed_attempt) =~ private_close_reason
+    assert settlement_count(failed_request) == 1
+
+    assert [establish_request, failed_upstream_request] = FakeUpstream.requests(upstream)
+    assert establish_request.method == "WEBSOCKET"
+    assert failed_upstream_request.method == "WEBSOCKET"
+    assert inspect(failed_upstream_request.json["input"]) =~ request_input_sentinel
+    refute Map.has_key?(failed_upstream_request.json, "previous_response_id")
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    recovered =
+      post_stream(conn, setup, session, stream_payload(setup, "explicit later client request"))
+
+    assert recovered.status == 200
+    assert completed_id(recovered.resp_body) == "resp_opencode_recovered"
+
+    recovered_request = latest_request(setup.pool)
+    assert recovered_request.id != failed_request.id
+    assert recovered_request.status == "succeeded"
+    assert [recovered_attempt] = attempts_for(recovered_request)
+
+    assert %{
+             "generation" => 2,
+             "reused" => false,
+             "reconnected" => false,
+             "lifecycle_id" => ^lifecycle_id
+           } = upstream_connection(recovered_attempt)
+
+    assert [^initial_connection_id, replacement_connection_id] =
+             FakeUpstream.websocket_connection_ids(upstream)
+
+    assert replacement_connection_id != initial_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert length(FakeUpstream.requests(upstream)) == 3
+    assert settlement_count(recovered_request) == 1
+
+    persisted =
+      inspect({
+        failed_request.request_metadata,
+        failed_attempt.response_metadata,
+        RequestLogs.list(setup.pool, filters: %{request_id: failed_request.id})
+      })
+
+    refute persisted =~ private_close_reason
+    refute persisted =~ request_input_sentinel
+    refute persisted =~ reasoning_frame_sentinel
+    refute persisted =~ "previous_response_not_found"
+    refute persisted =~ "continuation_generation_guard"
+  end
+
   @tag :owner_drained_terminal_state
   test "a post-budget owner drain emits the public owner_drained terminal", %{conn: conn} do
     release_ref = make_ref()

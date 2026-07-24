@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -21,6 +22,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
   @frame "synthetic-frame"
+  @peer_detection_timeout_ms 10_000
+  @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
   setup_all do
     started_epmd? = ensure_epmd_started!()
@@ -952,6 +955,205 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
   end
 
+  @tag :continuation_generation_boundary
+  test "real peer owner guards a replacement generation before proxy settlement" do
+    peer_node = start_current_peer!("continuation_guard_owner")
+    terminal = native_retry_terminal()
+    release_ref = make_ref()
+
+    upstream =
+      start_fake_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           websocket_success_without_id()
+         ]}
+      )
+
+    persistence =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    downstream_sender =
+      :erpc.call(
+        peer_node,
+        WebsocketOwnerNodeHarness,
+        :terminal_barrier_downstream_sender,
+        [self(), terminal, release_ref]
+      )
+
+    session_id = "real-peer-continuation-guard"
+
+    assert {:ok, owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "synthetic-continuation-owner-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 downstream_sender: downstream_sender,
+                 persistence: persistence
+               ]
+             ])
+
+    assert node(owner_pid) == peer_node
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, attached} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream("corr-peer-continuation-guard")],
+               @peer_detection_timeout_ms
+             )
+
+    warmup = request("warmup-request", FakeUpstream.url(upstream))
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_submit_request,
+               [session_id, attached, warmup, []],
+               @peer_detection_timeout_ms
+             )
+
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1,
+                    {:data, _warmup_terminal}}
+
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1, :complete}
+
+    upstream_pid =
+      :erpc.call(peer_node, :erlang, :map_get, [:upstream_pid, :sys.get_state(owner_pid)])
+
+    assert :ok =
+             :erpc.call(peer_node, UpstreamWebsocketSession, :invalidate_connection, [
+               upstream_pid
+             ])
+
+    guarded_request = %{warmup | connection_bound_continuation?: true}
+
+    guarded_submit =
+      Task.async(fn ->
+        client.call_owner(
+          peer_node,
+          WebsocketOwnerForwarder,
+          :remote_submit_request,
+          [session_id, attached, guarded_request, []],
+          @peer_detection_timeout_ms
+        )
+      end)
+
+    assert_receive {:websocket_owner_harness_terminal_delivery_barrier, barrier_pid, ^release_ref}
+    assert Task.yield(guarded_submit, 0) == nil
+
+    refute_received {:websocket_owner_frame, "corr-peer-continuation-guard", 1,
+                     {:data, ^terminal}}
+
+    assert length(FakeUpstream.requests(upstream)) == 1
+
+    send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
+
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1, {:data, ^terminal}}
+
+    assert_receive {:websocket_owner_harness_terminal_delivered, ^release_ref}
+
+    assert {:ok, guarded_result} = Task.await(guarded_submit, @peer_detection_timeout_ms)
+    assert guarded_result.terminal == "error"
+    assert guarded_result.upstream_error_code == "previous_response_not_found"
+    assert guarded_result.upstream_websocket_connection.reconnected
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1, :complete}
+
+    refute_received {:websocket_owner_frame, "corr-peer-continuation-guard", 1,
+                     {:data, ^terminal}}
+
+    refute_received {:websocket_owner_frame, "corr-peer-continuation-guard", 1, :complete}
+    assert length(FakeUpstream.requests(upstream)) == 1
+
+    assert {:ok, retry_result} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_submit_request,
+               [session_id, attached, warmup, []],
+               @peer_detection_timeout_ms
+             )
+
+    assert retry_result.terminal == "response.completed"
+    assert retry_result.upstream_websocket_connection.reused
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1, {:data, _retry}}
+    assert_receive {:websocket_owner_frame, "corr-peer-continuation-guard", 1, :complete}
+
+    assert [warmup_request, retry_request] = FakeUpstream.requests(upstream)
+    assert warmup_request.websocket_connection_id != retry_request.websocket_connection_id
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+  end
+
+  @tag :continuation_generation_boundary
+  test "real peer owner defaults a missing forwarded continuation marker to false" do
+    peer_node = start_current_peer!("legacy_continuation_owner")
+    upstream = start_fake_upstream(websocket_success_without_id())
+
+    persistence =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    session_id = "real-peer-legacy-continuation"
+
+    assert {:ok, _owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "synthetic-legacy-owner-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 persistence: persistence
+               ]
+             ])
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, attached} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream("corr-peer-legacy-continuation")],
+               @peer_detection_timeout_ms
+             )
+
+    private_marker = "synthetic-private-previous-response"
+
+    legacy_request =
+      Jason.encode!(%{"previous_response_id" => private_marker})
+      |> request(FakeUpstream.url(upstream))
+      |> Map.delete(:connection_bound_continuation?)
+
+    assert is_struct(legacy_request, UpstreamWebsocketSession.Request)
+    refute Map.has_key?(legacy_request, :connection_bound_continuation?)
+
+    assert {:ok, result} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_submit_request,
+               [session_id, attached, legacy_request, []],
+               @peer_detection_timeout_ms
+             )
+
+    assert result.terminal == "response.completed"
+    refute Map.has_key?(result, :transport_failure)
+    refute inspect(result) =~ private_marker
+
+    assert [%{json: %{"previous_response_id" => ^private_marker}}] =
+             FakeUpstream.requests(upstream)
+
+    assert_receive {:websocket_owner_frame, "corr-peer-legacy-continuation", 1,
+                    {:data, _terminal}}
+
+    assert_receive {:websocket_owner_frame, "corr-peer-legacy-continuation", 1, :complete}
+  end
+
   test "real peer owner captures its node-local timeout and recovery captures the recovering node timeout",
        %{auth: auth} do
     previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
@@ -1723,6 +1925,42 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       payload: payload,
       timeouts: %{}
     }
+  end
+
+  defp request(payload, base_url) do
+    %UpstreamWebsocketSession.Request{
+      url: base_url <> "/backend-api/codex/responses",
+      headers: [],
+      payload: payload,
+      timeouts: @timeouts
+    }
+  end
+
+  defp start_fake_upstream(mode) do
+    {:ok, upstream} = FakeUpstream.start_link(mode)
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    upstream
+  end
+
+  defp websocket_success_without_id do
+    FakeUpstream.websocket_text_frames([
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ])
+  end
+
+  defp native_retry_terminal do
+    Jason.encode!(%{
+      "type" => "error",
+      "status" => 400,
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => "previous_response_not_found",
+        "message" => "Previous response was not found. Retrying the full request."
+      }
+    })
   end
 
   defp bound_reset_probe do

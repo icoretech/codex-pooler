@@ -52,6 +52,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -1011,6 +1012,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     after
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
+  end
+
+  @tag :continuation_generation_boundary
+  test "direct owner guards a replacement generation and settles once before full retry" do
+    assert_owner_continuation_generation_boundary(:direct)
+  end
+
+  @tag :continuation_generation_boundary
+  test "proxy-to-owner guards a replacement generation and settles once before full retry" do
+    assert_owner_continuation_generation_boundary(:proxy)
   end
 
   test "owner-forwarded reset probe success confirms on the owner" do
@@ -3111,7 +3122,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:ok, first_state} =
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
-    assert_receive {:blocking_owner_upstream_received, owner_worker_pid, ^release_ref}
+    owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
 
     {:ok, second_state} = owner_socket(auth, "ws-owner-active-reconnect-second", turn_state)
     assert second_state.websocket_owner_downstream.epoch == 2
@@ -5965,6 +5976,149 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     }
     |> Map.merge(extra)
     |> Jason.encode!()
+  end
+
+  defp assert_owner_continuation_generation_boundary(route) do
+    previous_response_id = "resp_owner_generation_anchor_#{route}"
+    private_input = "synthetic private owner continuation #{route}"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{"id" => previous_response_id, "object" => "response"}),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_generation_retry_#{route}",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-generation-#{route}", "owner-generation-#{route}")
+    state = maybe_proxy_owner_state(state, route)
+
+    try do
+      anchor_payload = websocket_payload(setup, "synthetic owner generation anchor #{route}")
+      owner_opts = owner_response_options(state, owner_node_opts(state, route))
+
+      assert :ok =
+               Gateway.run_websocket_response(auth, anchor_payload, owner_opts, fn _data ->
+                 :ok
+               end)
+
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(anchor_frame) == previous_response_id
+      assert {:ok, state} = receive_owner_socket_complete(state)
+
+      assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+      upstream_pid = :sys.get_state(owner_pid).upstream_pid
+      assert :ok = UpstreamWebsocketSession.invalidate_connection(upstream_pid)
+
+      continuation_payload =
+        websocket_payload(setup, private_input, %{
+          "previous_response_id" => previous_response_id
+        })
+
+      assert :ok =
+               Gateway.run_websocket_response(auth, continuation_payload, owner_opts, fn _data ->
+                 :ok
+               end)
+
+      assert {:push, {:text, retry_terminal}, state} = receive_owner_socket_push(state)
+      assert Jason.decode!(retry_terminal) == Jason.decode!(native_owner_retry_terminal())
+      assert {:ok, state} = receive_owner_socket_complete(state)
+      refute_received {:websocket_owner_frame, _, _, {:data, ^retry_terminal}}
+      refute_received {:websocket_owner_frame, _, _, :complete}
+      assert FakeUpstream.count(upstream) == 1
+      assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+      full_retry_payload = websocket_payload(setup, "synthetic explicit full retry #{route}")
+
+      assert :ok =
+               Gateway.run_websocket_response(auth, full_retry_payload, owner_opts, fn _data ->
+                 :ok
+               end)
+
+      assert {:push, {:text, full_retry_frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(full_retry_frame) == "resp_owner_generation_retry_#{route}"
+      assert {:ok, _state} = receive_owner_socket_complete(state)
+
+      assert [anchor_upstream_request, full_retry_upstream_request] =
+               FakeUpstream.requests(upstream)
+
+      assert anchor_upstream_request.websocket_connection_id !=
+               full_retry_upstream_request.websocket_connection_id
+
+      assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+      assert [anchor_request, guarded_request, full_retry_request] = request_logs(setup.pool.id)
+      assert anchor_request.status == "succeeded"
+      assert guarded_request.status == "failed"
+      assert guarded_request.last_error_code == "stream_incomplete"
+      assert full_retry_request.status == "succeeded"
+
+      assert [guarded_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^guarded_request.id))
+
+      assert guarded_attempt.status == "failed"
+
+      assert guarded_attempt.response_metadata["transport_failure"]["termination_source"] ==
+               "continuation_generation_guard"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where:
+                   entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(t in CodexTurn, where: t.request_id == ^guarded_request.id),
+               :count
+             ) ==
+               1
+
+      persisted = inspect({guarded_request, guarded_attempt})
+      refute persisted =~ previous_response_id
+      refute persisted =~ private_input
+      refute persisted =~ setup.authorization
+      refute persisted =~ retry_terminal
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  defp maybe_proxy_owner_state(state, :direct), do: state
+
+  defp maybe_proxy_owner_state(state, :proxy) do
+    remote_node = :"codex_pooler@continuation-owner.example"
+
+    remote_owner_state(
+      state,
+      remote_node,
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+    )
+  end
+
+  defp owner_node_opts(_state, :direct), do: []
+  defp owner_node_opts(state, :proxy), do: state.opts.websocket_owner_forwarder_opts
+
+  defp native_owner_retry_terminal do
+    Jason.encode!(%{
+      "type" => "error",
+      "status" => 400,
+      "error" => %{
+        "type" => "invalid_request_error",
+        "code" => "previous_response_not_found",
+        "message" => "Previous response was not found. Retrying the full request."
+      }
+    })
   end
 
   defp model_serving_scope do

@@ -26,7 +26,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :reconnect_window_seconds,
     :codex_session,
     :codex_turn_id,
-    :authenticated_owner_attach
+    :authenticated_owner_attach,
+    upstream_previous_response_id?: false
   ]
 
   @type t :: %__MODULE__{
@@ -42,7 +43,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           reconnect_window_seconds: non_neg_integer() | nil,
           codex_session: term(),
           codex_turn_id: Ecto.UUID.t() | nil,
-          authenticated_owner_attach: boolean()
+          authenticated_owner_attach: boolean(),
+          upstream_previous_response_id?: boolean()
         }
 
   @spec build(map() | keyword()) :: t()
@@ -64,7 +66,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
         Normalization.optional_non_negative_integer(Map.get(opts, :reconnect_window_seconds)),
       codex_session: Map.get(opts, :codex_session),
       codex_turn_id: Map.get(opts, :codex_turn_id),
-      authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true
+      authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true,
+      upstream_previous_response_id?: false
     }
   end
 
@@ -81,6 +84,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       &Normalization.optional_non_negative_integer/1
     )
     |> Normalization.normalize_optional_update(:session_header_source, &session_header_source/1)
+    |> Normalization.normalize_optional_update(:upstream_previous_response_id?, &(&1 == true))
     |> then(&struct!(continuity, &1))
   end
 

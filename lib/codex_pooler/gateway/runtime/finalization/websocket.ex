@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   }
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
 
   @spec finalize_completed(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
@@ -92,7 +93,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         Map.get(finalization, :upstream_websocket_connection),
         code,
         upstream_code,
-        Map.get(finalization, :upstream_error_param)
+        Map.get(finalization, :upstream_error_param),
+        Map.get(finalization, :transport_failure)
       )
 
     case Streaming.record_terminal_health_failure(upstream_code, metadata_headers, context) do
@@ -111,8 +113,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
          upstream_websocket_connection,
          code,
          upstream_code,
-         upstream_error_param
+         upstream_error_param,
+         transport_failure
        ) do
+    continuation_guard = continuation_guard_metadata(upstream_code, transport_failure)
+
+    upstream_error_param =
+      if upstream_code == "previous_response_not_found",
+        do: "previous_response_id",
+        else: upstream_error_param
+
     metadata_headers
     |> Metadata.websocket_response_metadata(
       code,
@@ -122,7 +132,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     )
     |> Metadata.maybe_put_masked_error_metadata(upstream_code, code)
     |> Metadata.maybe_put_upstream_error_param(%{upstream_error_param: upstream_error_param})
+    |> maybe_put_terminal_transport_failure(continuation_guard)
   end
+
+  defp maybe_put_terminal_transport_failure(metadata, transport_failure)
+       when map_size(transport_failure) > 0,
+       do: Map.put(metadata, "transport_failure", transport_failure)
+
+  defp maybe_put_terminal_transport_failure(metadata, _transport_failure), do: metadata
+
+  defp continuation_guard_metadata("previous_response_not_found", transport_failure),
+    do: TransportFailureReason.sanitize_continuation_generation_guard_metadata(transport_failure)
+
+  defp continuation_guard_metadata(_upstream_code, _transport_failure), do: %{}
 
   defp settle_terminal_failure(context, finalization, body, code, attempt_metadata) do
     %{reserved: reserved, attempt: attempt} = context

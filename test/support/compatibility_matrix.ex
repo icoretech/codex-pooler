@@ -257,7 +257,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; public /v1 terminal masking and shape remain unchanged"
     },
     %{
       slug: :reasoning_minimal,
@@ -913,6 +913,26 @@ defmodule CodexPooler.CompatibilityMatrix do
       response_create_client_metadata: %{"x-codex-turn-state" => "fixture-frame-turn-state"},
       turn_state_precedence: "response.create.client_metadata_over_upgrade_header",
       privacy: "raw_value_not_persisted",
+      native_continuation_generation_guard: %{
+        scope: "native_backend_websocket_exact_previous_response_not_found",
+        marked_continuation_connection_use: "reused_only",
+        guarded_connection_uses: ["fresh", "reconnected"],
+        guard: %{
+          upstream_payload_send: false,
+          client_error_code: "previous_response_not_found",
+          client_error_type: "invalid_request_error",
+          client_status: 400,
+          client_retry: "later_explicit_full_request_without_previous_response_id",
+          automatic_replay: false
+        },
+        public_v1: "generic_terminal_masking_and_shape_unchanged",
+        diagnostic: %{
+          reason: "previous_response_generation_mismatch",
+          reason_class: "previous_response_generation_mismatch",
+          termination_source: "continuation_generation_guard",
+          raw_payloads_or_response_values: false
+        }
+      },
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic websocket turn"}
     },
     reasoning_minimal: %{

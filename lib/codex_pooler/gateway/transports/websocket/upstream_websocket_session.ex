@@ -302,7 +302,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       request.url,
       request.headers,
       request.timeouts,
-      request.payload,
+      request,
       receive_state,
       connection_usage
     )
@@ -314,13 +314,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          url,
          headers,
          timeouts,
-         payload,
+         request,
          receive_state,
          connection_usage
        ) do
     case ensure_connection(state, key, url, headers, timeouts) do
       {:ok, state} ->
-        send_request_payload(state, payload, receive_state, connection_usage)
+        connection_use = connection_use(connection_usage)
+
+        if Map.get(request, :connection_bound_continuation?, false) and
+             connection_use != :reused do
+          guard_connection_bound_continuation(state, receive_state, connection_usage)
+        else
+          send_request_payload(state, request.payload, receive_state, connection_usage)
+        end
 
       {:error, reason, state} ->
         state =
@@ -330,6 +337,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
         {:error, reason, state}
     end
+  end
+
+  defp guard_connection_bound_continuation(state, receive_state, connection_usage) do
+    terminal =
+      StreamProtocol.canonicalize_native_codex_responses_json_message(
+        ~s({"type":"error","error":{"code":"previous_response_not_found"}})
+      )
+
+    {:halt, {:terminal, state, receive_state, "error"}} =
+      handle_text_frame(state, receive_state, terminal, terminal)
+
+    {{:ok, result}, state} =
+      finish_receive_result({:terminal, state, receive_state, "error"})
+
+    result =
+      result
+      |> Map.put(:upstream_error_param, "previous_response_id")
+      |> Map.put(
+        :transport_failure,
+        TransportFailureReason.transport_failure_metadata(
+          :previous_response_generation_mismatch,
+          %{connection_use: connection_use(connection_usage)}
+        )
+      )
+
+    {:ok, put_result_connection_metadata({:ok, result}, state, connection_usage), state}
   end
 
   defp send_request_payload(state, payload, receive_state, connection_usage) do

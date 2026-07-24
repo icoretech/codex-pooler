@@ -102,6 +102,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   defdelegate canonicalize_codex_responses_json_message(data), to: ErrorCanonicalization
 
+  @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
+  defdelegate canonicalize_native_codex_responses_json_message(data), to: ErrorCanonicalization
+
   @spec websocket_error_frame_headers(binary()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
 

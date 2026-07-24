@@ -734,6 +734,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "response.create.client_metadata_over_upgrade_header"
 
       assert fixture.privacy == "raw_value_not_persisted"
+
+      assert feature.contract =~ "native websocket continuation"
+      assert feature.contract =~ "reused upstream connection"
+      assert feature.contract =~ "exact previous_response_not_found client retry signal"
+      assert feature.contract =~ "public /v1 terminal masking and shape remain unchanged"
+
+      assert fixture.native_continuation_generation_guard == %{
+               scope: "native_backend_websocket_exact_previous_response_not_found",
+               marked_continuation_connection_use: "reused_only",
+               guarded_connection_uses: ["fresh", "reconnected"],
+               guard: %{
+                 upstream_payload_send: false,
+                 client_error_code: "previous_response_not_found",
+                 client_error_type: "invalid_request_error",
+                 client_status: 400,
+                 client_retry: "later_explicit_full_request_without_previous_response_id",
+                 automatic_replay: false
+               },
+               public_v1: "generic_terminal_masking_and_shape_unchanged",
+               diagnostic: %{
+                 reason: "previous_response_generation_mismatch",
+                 reason_class: "previous_response_generation_mismatch",
+                 termination_source: "continuation_generation_guard",
+                 raw_payloads_or_response_values: false
+               }
+             }
     end
 
     test "documents v1 supported surface as authenticated OpenAI compatibility" do

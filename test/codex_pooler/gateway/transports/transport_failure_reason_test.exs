@@ -114,6 +114,74 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
            }
   end
 
+  test "builds the fixed continuation generation guard diagnostic" do
+    for connection_use <- [:fresh, :reconnected] do
+      expected = %{
+        "connection_use" => Atom.to_string(connection_use),
+        "phase" => "send_payload",
+        "pre_visible_output" => true,
+        "reason" => "previous_response_generation_mismatch",
+        "reason_class" => "previous_response_generation_mismatch",
+        "termination_source" => "continuation_generation_guard",
+        "terminal_seen" => false,
+        "text_frame_count" => 0,
+        "upstream_committed" => false
+      }
+
+      assert TransportFailureReason.continuation_generation_guard_metadata(connection_use) ==
+               expected
+
+      assert TransportFailureReason.transport_failure_metadata(
+               :previous_response_generation_mismatch,
+               %{
+                 connection_use: connection_use,
+                 previous_response_id: "raw-response-id-sentinel",
+                 message: "raw-message-sentinel"
+               }
+             ) == expected
+
+      assert TransportFailureReason.sanitize_transport_failure_metadata(
+               Map.merge(expected, %{
+                 "previous_response_id" => "raw-response-id-sentinel",
+                 "message" => "raw-message-sentinel",
+                 "termination_source_detail" => "raw-source-sentinel"
+               })
+             ) == expected
+    end
+  end
+
+  test "rejects malformed continuation generation guard diagnostics" do
+    sentinel = "raw-response-id-and-message-sentinel"
+
+    for connection_use <- [:reused, "future", sentinel, nil, 1] do
+      assert TransportFailureReason.continuation_generation_guard_metadata(connection_use) == %{}
+
+      assert TransportFailureReason.sanitize_transport_failure_metadata(%{
+               "reason" => "previous_response_generation_mismatch",
+               "reason_class" => sentinel,
+               "phase" => "receive",
+               "termination_source" => sentinel,
+               "connection_use" => connection_use,
+               "pre_visible_output" => false,
+               "upstream_committed" => true,
+               "terminal_seen" => true,
+               "text_frame_count" => 99,
+               "previous_response_id" => sentinel,
+               "message" => sentinel
+             }) == %{}
+    end
+
+    refute inspect(
+             TransportFailureReason.sanitize_transport_failure_metadata(%{
+               "reason" => "previous_response_generation_mismatch",
+               "termination_source" => "continuation_generation_guard",
+               "connection_use" => "fresh",
+               "previous_response_id" => sentinel,
+               "message" => sentinel
+             })
+           ) =~ sentinel
+  end
+
   test "sanitizes retained terminal delivery metadata through the strict allowlist" do
     metadata =
       TransportFailureReason.sanitize_transport_failure_metadata(%{

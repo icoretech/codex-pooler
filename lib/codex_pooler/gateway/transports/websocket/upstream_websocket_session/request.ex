@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :frame_observer,
     :reset_probe,
     assignment_advertised?: false,
+    connection_bound_continuation?: false,
     forward_error_body?: true
   ]
 
@@ -30,6 +31,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           frame_observer: frame_observer(),
           reset_probe: ResetProbe.t() | nil,
           assignment_advertised?: boolean(),
+          connection_bound_continuation?: boolean(),
           forward_error_body?: boolean()
         }
 end

@@ -141,6 +141,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :upload_bytes,
     :upstream_endpoint,
     :upstream_identity_id,
+    :upstream_previous_response_id?,
     :upstream_websocket_session,
     :websocket_owner,
     :websocket_owner_downstream_epoch,
