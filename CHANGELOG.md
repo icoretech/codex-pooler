@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.5...codex-pooler-v0.5.6) (2026-07-24)
+
+
+### Bug Fixes
+
+* **deps:** update Ecto lock to 3.14.1 ([b3567c3](https://github.com/icoretech/codex-pooler/commit/b3567c3e97bf399c778ffc22c917fae2c3f41b86))
+* **deps:** update lazy_html to 0.1.12 ([c1f6977](https://github.com/icoretech/codex-pooler/commit/c1f69779639325b9b72ec84f7f452516eb76ef4c))
+* **websocket:** classify upstream response event families ([e2a95a4](https://github.com/icoretech/codex-pooler/commit/e2a95a46282190fa36816c0d1ca13c948ad851f9))
+* **websocket:** persist causal termination diagnostics ([25e860c](https://github.com/icoretech/codex-pooler/commit/25e860c44fd3a3607cfcadc0c9dc9e1fbddf016a))
+
 ## [0.5.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.4...codex-pooler-v0.5.5) (2026-07-24)
 
 
