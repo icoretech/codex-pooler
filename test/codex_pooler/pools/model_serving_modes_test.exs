@@ -13,6 +13,12 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  # The lock-hold duration is the scenario under test. PubSub, task, and
+  # PostgreSQL-wait detection get independent headroom so a busy test machine
+  # cannot turn a correct stale-revision result into a timeout.
+  @scenario_timeout_ms 5_000
+  @detection_timeout_ms 15_000
+
   describe "snapshots and updates" do
     setup context do
       if context[:unboxed] do
@@ -71,7 +77,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
                           "changed_count" => 1
                         }
                       }},
-                     1_000
+                     @detection_timeout_ms
 
       assert event_pool_id == pool.id
       refute_receive {Events, _event}
@@ -622,13 +628,14 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
                     revision
                   )
               after
-                5_000 -> raise "timed out waiting to persist the first model serving update"
+                @scenario_timeout_ms ->
+                  raise "timed out waiting to persist the first model serving update"
               end
             end)
           end)
         end)
 
-      assert_receive {:model_serving_pool_locked, first_backend_pid}, 5_000
+      assert_receive {:model_serving_pool_locked, first_backend_pid}, @detection_timeout_ms
 
       second =
         Task.async(fn ->
@@ -645,13 +652,13 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
           end)
         end)
 
-      assert_receive {:model_serving_second_ready, second_backend_pid}, 5_000
+      assert_receive {:model_serving_second_ready, second_backend_pid}, @detection_timeout_ms
       refute second_backend_pid == first_backend_pid
       assert_backend_blocked_by!(second_backend_pid, first_backend_pid)
       send(first.pid, :persist_first_update)
 
-      assert {:ok, {:ok, %{changed?: true}}} = Task.await(first, 10_000)
-      assert {:error, %{code: :stale_revision}} = Task.await(second, 10_000)
+      assert {:ok, {:ok, %{changed?: true}}} = Task.await(first, @detection_timeout_ms)
+      assert {:error, %{code: :stale_revision}} = Task.await(second, @detection_timeout_ms)
 
       Sandbox.unboxed_run(Repo, fn ->
         rows =
@@ -721,7 +728,7 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
   end
 
   defp assert_backend_blocked_by!(backend_pid, blocker_pid) do
-    deadline = System.monotonic_time(:millisecond) + 5_000
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
     assert_backend_blocked_by!(backend_pid, blocker_pid, deadline)
   end
 

@@ -98,13 +98,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
         FakeUpstream.websocket_upgrade_timeout(notify: self(), release_ref: release_ref)
       )
 
-    assert {:error, %{code: "upstream_request_failed", status: 502}} =
-             execute_reset_probe(fixture, connect_timeout_ms: 25)
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        execute_reset_probe(fixture, [connect_timeout_ms: 25], parent)
+      end)
 
     assert_receive {:fake_upstream_timeout_barrier, :websocket_upgrade, upstream_pid,
                     ^release_ref},
                    1_000
 
+    assert {:error, %{code: "upstream_request_failed", status: 502}} =
+             Task.await(task, 1_000)
+
+    upstream_ref = Process.monitor(upstream_pid)
     send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
 
     assert_reset_probe_outcome!(
@@ -114,6 +123,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
       "upstream_stream_error",
       0
     )
+
+    assert_receive {:DOWN, ^upstream_ref, :process, ^upstream_pid, _reason}, 1_000
   end
 
   test "upstream websocket close leaves the guarded reset probe claimed" do

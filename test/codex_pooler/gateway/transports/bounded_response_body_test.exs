@@ -3,6 +3,11 @@ defmodule CodexPooler.Gateway.Transports.BoundedResponseBodyTest do
 
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
 
+  # This test has no response-duration behavior under test: each timeout only
+  # detects a stalled local TCP/Req exchange. Keep it well above the loaded
+  # suite's scheduling delays.
+  @detection_timeout_ms 15_000
+
   test "collects response chunks until finalized" do
     collect = BoundedResponseBody.collector(16)
     request = Req.new()
@@ -72,7 +77,7 @@ defmodule CodexPooler.Gateway.Transports.BoundedResponseBodyTest do
     server =
       spawn_link(fn ->
         {:ok, socket} = :gen_tcp.accept(listen_socket)
-        {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, @detection_timeout_ms)
 
         :ok =
           :gen_tcp.send(
@@ -83,7 +88,7 @@ defmodule CodexPooler.Gateway.Transports.BoundedResponseBodyTest do
         receive do
           :close -> :ok
         after
-          1_000 -> :ok
+          @detection_timeout_ms -> :ok
         end
 
         :gen_tcp.close(socket)
@@ -98,7 +103,7 @@ defmodule CodexPooler.Gateway.Transports.BoundedResponseBodyTest do
              Req.get("http://127.0.0.1:#{port}/",
                decode_body: false,
                retry: false,
-               receive_timeout: 1_000,
+               receive_timeout: @detection_timeout_ms,
                into: BoundedResponseBody.collector(4)
              )
 

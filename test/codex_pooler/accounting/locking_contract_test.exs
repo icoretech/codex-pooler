@@ -14,6 +14,9 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   import CodexPooler.AccountingTestSupport
   import CodexPooler.PoolerFixtures
 
+  @scenario_timeout_ms 5_000
+  @detection_timeout_ms 15_000
+
   describe "real FOR UPDATE contracts" do
     test "L08 attempt creation locks the request row" do
       setup = accounting_setup()
@@ -537,7 +540,8 @@ defmodule CodexPooler.Accounting.LockingContractTest do
               receive do
                 {^barrier, :release_attempt} -> :ok
               after
-                5_000 -> raise "timed out waiting to release the A01 membership barrier"
+                @scenario_timeout_ms ->
+                  raise "timed out waiting to release the A01 membership barrier"
               end
             end
           end,
@@ -547,7 +551,9 @@ defmodule CodexPooler.Accounting.LockingContractTest do
       on_exit(fn -> :telemetry.detach(handler_id) end)
       send(attempt_task.pid, {barrier, :start_attempt})
 
-      assert_receive {^barrier, :assignment_share_acquired, blocker_pid}, 5_000
+      assert_receive {^barrier, :assignment_share_acquired, blocker_pid},
+                     @detection_timeout_ms
+
       assert attempt_count(fixture.request.id) == 0
 
       membership_task =
@@ -562,11 +568,12 @@ defmodule CodexPooler.Accounting.LockingContractTest do
           end)
         end)
 
-      assert_receive {^barrier, :membership_update_started, waiter_pid}, 5_000
+      assert_receive {^barrier, :membership_update_started, waiter_pid},
+                     @detection_timeout_ms
 
       observation =
         Task.async(fn -> observe_blocked_membership_update!(waiter_pid, blocker_pid) end)
-        |> Task.await(5_000)
+        |> Task.await(@detection_timeout_ms)
 
       assert blocker_pid in observation.blocking_pids
       assert observation.wait_event_type == "Lock"
@@ -575,8 +582,8 @@ defmodule CodexPooler.Accounting.LockingContractTest do
 
       send(attempt_task.pid, {barrier, :release_attempt})
 
-      assert {:ok, attempt} = Task.await(attempt_task, 5_000)
-      updated_assignment = Task.await(membership_task, 5_000)
+      assert {:ok, attempt} = Task.await(attempt_task, @detection_timeout_ms)
+      updated_assignment = Task.await(membership_task, @detection_timeout_ms)
 
       assert attempt.pool_upstream_assignment_id == fixture.assignment.id
       assert attempt.upstream_identity_id == fixture.identity.id
@@ -888,7 +895,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
 
   defp observe_blocked_membership_update!(waiter_pid, blocker_pid) do
     run_unboxed(fn ->
-      deadline = System.monotonic_time(:millisecond) + 4_000
+      deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
       do_observe_blocked_membership_update!(waiter_pid, blocker_pid, deadline)
     end)
   end

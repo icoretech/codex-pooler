@@ -1,5 +1,7 @@
 native_turn_console_filter = :codex_pooler_test_native_turn_console_filter
 
+# This filter belongs only to Logger's default console handler. ExUnit's
+# separate CaptureLog handler still receives these expected native-turn events.
 :ok =
   :logger.add_handler_filter(
     :default,

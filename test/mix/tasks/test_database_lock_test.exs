@@ -7,6 +7,8 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
   @lock_namespace "codex_pooler_test_runner"
   @lock_database "postgres"
   @lock_wait_attempts 50
+  @scenario_timeout_ms 5_000
+  @detection_timeout_ms 15_000
   @connection_keys [
     :after_connect,
     :connect_timeout,
@@ -39,12 +41,12 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
           receive do
             :release_first -> :first_released
           after
-            5_000 -> raise "timed out waiting to release first lock holder"
+            @scenario_timeout_ms -> raise "timed out waiting to release first lock holder"
           end
         end)
       end)
 
-    assert_receive :first_locked, 5_000
+    assert_receive :first_locked, @detection_timeout_ms
 
     second =
       Task.async(fn ->
@@ -56,14 +58,61 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
         end)
       end)
 
-    assert_receive :second_entering_lock, 5_000
+    assert_receive :second_entering_lock, @detection_timeout_ms
     assert_advisory_lock_waiter!(observer, repo_config)
 
     send(first.pid, :release_first)
 
-    assert Task.await(first) == :first_released
-    assert Task.await(second) == :second_released
-    assert_receive :second_locked
+    assert Task.await(first, @detection_timeout_ms) == :first_released
+    assert Task.await(second, @detection_timeout_ms) == :second_released
+    assert_receive :second_locked, @detection_timeout_ms
+  end
+
+  test "does not serialize callers for different invocation databases" do
+    parent = self()
+
+    first_config =
+      Keyword.put(
+        Repo.config(),
+        :database,
+        configured_partition_database("0123456789abcdef", 1)
+      )
+
+    second_config =
+      Keyword.put(
+        Repo.config(),
+        :database,
+        configured_partition_database("fedcba9876543210", 1)
+      )
+
+    first =
+      Task.async(fn ->
+        TestDatabaseLock.with_lock!(first_config, fn ->
+          send(parent, :first_distinct_lock_acquired)
+
+          receive do
+            :release_first_distinct_lock -> :first_distinct_lock_released
+          after
+            @scenario_timeout_ms -> raise "timed out waiting to release first distinct lock"
+          end
+        end)
+      end)
+
+    assert_receive :first_distinct_lock_acquired, @detection_timeout_ms
+
+    second =
+      Task.async(fn ->
+        TestDatabaseLock.with_lock!(second_config, fn ->
+          send(parent, :second_distinct_lock_acquired)
+          :second_distinct_lock_released
+        end)
+      end)
+
+    assert_receive :second_distinct_lock_acquired, @detection_timeout_ms
+    send(first.pid, :release_first_distinct_lock)
+
+    assert Task.await(first, @detection_timeout_ms) == :first_distinct_lock_released
+    assert Task.await(second, @detection_timeout_ms) == :second_distinct_lock_released
   end
 
   defp assert_advisory_lock_waiter!(conn, repo_config, attempts \\ @lock_wait_attempts)
@@ -131,4 +180,23 @@ defmodule CodexPooler.MixTasks.TestDatabaseLockTest do
   catch
     :exit, _reason -> :ok
   end
+
+  defp configured_partition_database(namespace, partition) do
+    previous_namespace = System.get_env("CODEX_POOLER_TEST_RUN_NAMESPACE")
+    previous_partition = System.get_env("MIX_TEST_PARTITION")
+
+    System.put_env("CODEX_POOLER_TEST_RUN_NAMESPACE", namespace)
+    System.put_env("MIX_TEST_PARTITION", Integer.to_string(partition))
+
+    try do
+      config = Config.Reader.read!("config/test.exs", env: :test)
+      config[:codex_pooler][CodexPooler.Repo][:database]
+    after
+      restore_env("CODEX_POOLER_TEST_RUN_NAMESPACE", previous_namespace)
+      restore_env("MIX_TEST_PARTITION", previous_partition)
+    end
+  end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end

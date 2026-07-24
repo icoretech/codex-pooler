@@ -20,6 +20,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
   @confirmation_key "__quota_cycle_confirmation_v1"
   @old_reset ~U[2026-07-25 03:24:36Z]
   @new_reset ~U[2026-07-28 17:04:16Z]
+  @scenario_timeout_ms 5_000
+  @detection_timeout_ms 15_000
 
   @tag :provider_cycle_confirmation
   test "separate fixed-forward observations durably confirm an anchored provider cycle" do
@@ -498,7 +500,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
             receive do
               {^barrier, :release} -> :ok
             after
-              5_000 -> raise "timed out waiting to release quota evidence lock"
+              @scenario_timeout_ms -> raise "timed out waiting to release quota evidence lock"
             end
 
             record_provider(
@@ -512,7 +514,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
         end)
       end)
 
-    assert_receive {^barrier, :blocker_locked, blocker_backend_pid}, 5_000
+    assert_receive {^barrier, :blocker_locked, blocker_backend_pid}, @detection_timeout_ms
 
     waiter =
       Task.async(fn ->
@@ -527,13 +529,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
         end)
       end)
 
-    assert_receive {^barrier, :waiter_ready, waiter_backend_pid}, 5_000
+    assert_receive {^barrier, :waiter_ready, waiter_backend_pid}, @detection_timeout_ms
     assert blocker_backend_pid != waiter_backend_pid
     assert_advisory_wait!(waiter_backend_pid, blocker_backend_pid)
 
     send(blocker.pid, {barrier, :release})
-    assert {:ok, {:ok, _confirmed}} = Task.await(blocker, 5_000)
-    assert {^waiter_backend_pid, runtime_id} = Task.await(waiter, 5_000)
+    assert {:ok, {:ok, _confirmed}} = Task.await(blocker, @detection_timeout_ms)
+    assert {^waiter_backend_pid, runtime_id} = Task.await(waiter, @detection_timeout_ms)
 
     unboxed(fn ->
       confirmed = provider_row(identity)
@@ -668,7 +670,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
   end
 
   defp assert_advisory_wait!(waiter_pid, blocker_pid) do
-    deadline = System.monotonic_time(:millisecond) + 4_000
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
     assert_advisory_wait!(waiter_pid, blocker_pid, deadline)
   end
 
