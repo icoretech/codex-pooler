@@ -62,4 +62,68 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
 
     assert snapshot.reset_lifecycle == nil
   end
+
+  test "projects a sanitized granted date from current saved-reset expiration rows" do
+    expires_at = "2026-08-20T03:20:00Z"
+    first_seen_at = "2026-07-20T03:20:00Z"
+    granted_at = "2026-07-18T03:20:00-04:00"
+
+    snapshot =
+      SavedResetProjection.snapshot(
+        %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "available_expirations" => [
+              %{
+                "expires_at" => expires_at,
+                "first_seen_at" => first_seen_at,
+                "granted_at" => granted_at
+              }
+            ]
+          }
+        },
+        @prefs
+      )
+
+    assert snapshot.available_expirations == [
+             %{
+               expires_at: expires_at,
+               first_seen_at: first_seen_at,
+               granted_at: "2026-07-18T07:20:00Z"
+             }
+           ]
+  end
+
+  test "keeps missing, nil, and malformed grant dates unavailable without estimating them" do
+    expires_at = "2026-08-20T03:20:00Z"
+    first_seen_at = "2026-07-20T03:20:00Z"
+
+    snapshot =
+      SavedResetProjection.snapshot(
+        %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 3,
+            "available_expirations" => [
+              %{"expires_at" => expires_at, "first_seen_at" => first_seen_at},
+              %{
+                "expires_at" => "2026-08-21T03:20:00Z",
+                "first_seen_at" => first_seen_at,
+                "granted_at" => nil
+              },
+              %{
+                "expires_at" => "2026-08-22T03:20:00Z",
+                "first_seen_at" => first_seen_at,
+                "granted_at" => "not-a-date"
+              }
+            ]
+          }
+        },
+        @prefs
+      )
+
+    assert Enum.map(snapshot.available_expirations, & &1.granted_at) == [nil, nil, nil]
+    refute Enum.any?(snapshot.available_expirations, &(&1.granted_at == "2026-07-21T03:20:00Z"))
+  end
 end

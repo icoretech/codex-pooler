@@ -8,6 +8,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.ProbeLease
@@ -246,7 +247,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
-    test "does not consume when no ChatGPT credit is usable and preserves expiration metadata" do
+    test "authoritative ChatGPT zero clears current expirations and preserves the durable ledger" do
       {:ok, fake} =
         FakeUpstream.start_link(
           {:path_json,
@@ -265,29 +266,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           saved_resets: saved_resets_with_expirations()
         )
 
+      ledger = %{
+        "version" => 1,
+        "entries" => [
+          %{
+            "expires_at" => "2026-07-18T00:40:11.968726Z",
+            "first_seen_at" => "2026-06-21T09:00:00Z"
+          }
+        ]
+      }
+
+      identity =
+        identity
+        |> Ecto.Changeset.change(saved_reset_first_seen_ledger: ledger)
+        |> Repo.update!()
+
+      observed_at = ~U[2026-07-24 03:00:00Z]
+
       assert {:ok, %{status: :noop, applied?: false, code: "no_credit"}} =
-               SavedResetRedemption.redeem(assignment)
+               SavedResetRedemption.redeem(assignment, started_at: observed_at)
 
       assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
                FakeUpstream.requests(fake)
 
-      saved_resets = Repo.reload!(identity).metadata["saved_resets"]
+      persisted = Repo.reload!(identity)
+      saved_resets = persisted.metadata["saved_resets"]
 
       assert saved_resets["available_count"] == 0
-      assert saved_resets["available_expires_at"] == ["2026-07-18T00:40:11.968726Z"]
+      assert saved_resets["available_expires_at"] == []
+      assert saved_resets["available_expirations"] == []
+      assert saved_resets["next_expires_at"] == nil
+      assert saved_resets["observed_at"] == "2026-07-24T03:00:00Z"
+      assert saved_resets["expires_observed_at"] == "2026-07-24T03:00:00Z"
+      assert saved_resets["expires_refresh_attempted_at"] == "2026-07-24T03:00:00Z"
+      assert persisted.saved_reset_first_seen_ledger == ledger
 
-      assert saved_resets["available_expirations"] == [
-               %{
-                 "expires_at" => "2026-07-18T00:40:11.968726Z",
-                 "first_seen_at" => "2026-06-21T09:00:00Z"
-               }
-             ]
-
-      assert saved_resets["next_expires_at"] == "2026-07-18T00:40:11.968726Z"
-      assert saved_resets["expires_observed_at"] == "2026-06-22T10:00:00Z"
-      assert saved_resets["expires_refresh_attempted_at"] == "2026-06-22T10:00:00Z"
-
-      metadata_json = Jason.encode!(Repo.reload!(identity).metadata)
+      metadata_json = Jason.encode!(persisted.metadata)
 
       refute metadata_json =~ "used_credit"
       refute metadata_json =~ "redeem_request_id"
@@ -296,6 +310,355 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute metadata_json =~ "Provider description"
       refute metadata_json =~ "granted_at"
       refute metadata_json =~ "raw_payload"
+    end
+
+    test "an older no-credit observation finalizes lifecycle without overwriting snapshot or ledger" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200, %{"credits" => [], "available_count" => 0}}
+           }}
+        )
+
+      newer_saved_resets =
+        saved_resets_with_expirations()
+        |> Map.put("observed_at", "2026-07-24T04:00:00Z")
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          saved_resets: newer_saved_resets
+        )
+
+      opaque_ledger = %{"version" => 99, "payload" => %{"future" => true}}
+
+      identity =
+        identity
+        |> Ecto.Changeset.change(saved_reset_first_seen_ledger: opaque_ledger)
+        |> Repo.update!()
+
+      assert {:ok, %{status: :noop, code: "no_credit"}} =
+               SavedResetRedemption.redeem(assignment,
+                 started_at: ~U[2026-07-24 03:00:00Z]
+               )
+
+      persisted = Repo.reload!(identity)
+      assert persisted.metadata["saved_resets"] == newer_saved_resets
+      assert persisted.saved_reset_first_seen_ledger == opaque_ledger
+      assert get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "noop"
+    end
+
+    @tag :redemption_atomicity_manual_qa
+    test "a newer no-credit observation replaces the snapshot and preserves the ledger" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200, %{"credits" => [], "available_count" => 0}}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          saved_resets:
+            saved_resets_with_expirations()
+            |> Map.put("observed_at", "2026-07-24T02:00:00Z")
+        )
+
+      ledger = %{
+        "version" => 1,
+        "entries" => [
+          %{
+            "expires_at" => "2026-07-18T00:40:11.968726Z",
+            "first_seen_at" => "2026-06-21T09:00:00Z"
+          }
+        ]
+      }
+
+      identity =
+        identity
+        |> Ecto.Changeset.change(saved_reset_first_seen_ledger: ledger)
+        |> Repo.update!()
+
+      assert {:ok, %{status: :noop, code: "no_credit"}} =
+               SavedResetRedemption.redeem(assignment,
+                 started_at: ~U[2026-07-24 03:00:00Z]
+               )
+
+      persisted = Repo.reload!(identity)
+      assert persisted.metadata["saved_resets"]["observed_at"] == "2026-07-24T03:00:00Z"
+      assert persisted.metadata["saved_resets"]["available_expirations"] == []
+      assert persisted.saved_reset_first_seen_ledger == ledger
+    end
+
+    test "a superseded attempt cannot modify saved-reset state after the provider observation" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          FakeUpstream.barrier_json_response(
+            %{"credits" => [], "available_count" => 0},
+            notify: parent,
+            release_ref: release_ref
+          )
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          saved_resets: saved_resets_with_expirations()
+        )
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          SavedResetRedemption.redeem(assignment,
+            started_at: ~U[2026-07-24 03:00:00Z]
+          )
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      superseded = %{
+        "status" => "redeeming",
+        "attempt_id" => Ecto.UUID.generate(),
+        "generation" => 99,
+        "trigger_kind" => "admin_manual",
+        "started_at" => "2026-07-24T03:30:00Z",
+        "finished_at" => nil,
+        "result" => nil
+      }
+
+      update_redemption!(identity, superseded)
+      before_release = Repo.reload!(identity)
+
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, 5_000)
+
+      persisted = Repo.reload!(identity)
+      assert persisted.metadata["saved_resets"] == before_release.metadata["saved_resets"]
+
+      assert persisted.saved_reset_first_seen_ledger ==
+               before_release.saved_reset_first_seen_ledger
+
+      assert persisted.metadata["saved_reset_redemption"] == superseded
+    end
+
+    @tag :redemption_atomicity_manual_qa
+    test "a newer reconciliation observation committed before finalization wins with one final update" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          FakeUpstream.barrier_json_response(
+            %{"credits" => [], "available_count" => 0},
+            notify: parent,
+            release_ref: release_ref
+          )
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api",
+          saved_resets:
+            saved_resets_with_expirations()
+            |> Map.put("observed_at", "2026-07-24T02:00:00Z")
+        )
+
+      ledger = %{
+        "version" => 1,
+        "entries" => [
+          %{
+            "expires_at" => "2026-07-18T00:40:11.968726Z",
+            "first_seen_at" => "2026-06-21T09:00:00Z"
+          }
+        ]
+      }
+
+      identity =
+        identity
+        |> Ecto.Changeset.change(saved_reset_first_seen_ledger: ledger)
+        |> Repo.update!()
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          SavedResetRedemption.redeem(assignment,
+            started_at: ~U[2026-07-24 03:00:00Z]
+          )
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      newer_saved_resets =
+        saved_resets_with_expirations()
+        |> Map.put("observed_at", "2026-07-24T04:00:00Z")
+        |> Map.put("available_count", 7)
+
+      update_saved_resets!(identity, newer_saved_resets)
+
+      handler_id = "saved-reset-final-update-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if self() == task.pid and identity_update_query?(metadata) do
+              send(parent, {:saved_reset_identity_update, task.pid})
+            end
+          end,
+          nil
+        )
+
+      try do
+        send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+        assert {:ok, %{status: :noop, code: "no_credit"}} = Task.await(task, 5_000)
+
+        assert drain_identity_updates(task.pid) == 1
+
+        persisted = Repo.reload!(identity)
+        assert persisted.metadata["saved_resets"] == newer_saved_resets
+        assert persisted.saved_reset_first_seen_ledger == ledger
+        assert get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "noop"
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    @tag :separate_connection_redemption_reconciliation_order
+    test "an older reconciliation writer waits for redemption and cannot replace its newer snapshot" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200, %{"credits" => [], "available_count" => 0}},
+             "/backend-api/wham/usage" => {200, usage_payload(9)}
+           }}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture =
+        committed_no_credit_fixture!(
+          fake,
+          saved_resets_with_expirations()
+          |> Map.put("observed_at", "2026-07-24T02:00:00Z")
+        )
+
+      on_exit(fn -> cleanup_committed_no_credit_fixture!(fixture) end)
+
+      parent = self()
+      barrier = make_ref()
+
+      redemption_observed_at =
+        DateTime.utc_now()
+        |> DateTime.add(1, :day)
+        |> DateTime.truncate(:microsecond)
+
+      redemption_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            send(parent, {barrier, :redemption_backend, backend_pid!()})
+
+            receive do
+              {^barrier, :start_redemption} -> :ok
+            after
+              5_000 -> raise "timed out waiting to start saved-reset redemption"
+            end
+
+            SavedResetRedemption.redeem(fixture.assignment_id,
+              started_at: redemption_observed_at
+            )
+          end)
+        end)
+
+      assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, 5_000
+
+      handler_id = "saved-reset-finalizer-lock-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if self() == redemption_task.pid and probe_identity_lock_query?(metadata) do
+              lock_count = Process.get({__MODULE__, barrier, :identity_lock_count}, 0) + 1
+              Process.put({__MODULE__, barrier, :identity_lock_count}, lock_count)
+
+              if lock_count == 2 do
+                send(parent, {barrier, :finalizer_locked})
+
+                receive do
+                  {^barrier, :release_finalizer} -> :ok
+                after
+                  5_000 -> raise "timed out waiting to release saved-reset finalizer"
+                end
+              end
+            end
+          end,
+          nil
+        )
+
+      try do
+        send(redemption_task.pid, {barrier, :start_redemption})
+        assert_receive {^barrier, :finalizer_locked}, 5_000
+
+        reconciliation_task =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              send(parent, {barrier, :reconciliation_backend, backend_pid!()})
+
+              result =
+                PoolReconciliation.refresh_quota_from_usage(
+                  Repo.get!(UpstreamIdentity, fixture.identity_id),
+                  Repo.get!(PoolUpstreamAssignment, fixture.assignment_id)
+                )
+
+              send(parent, {barrier, :reconciliation_result, result})
+            end)
+          end)
+
+        assert_receive {^barrier, :reconciliation_backend, reconciliation_backend_pid}, 5_000
+
+        observation =
+          observe_blocked_probe_claim!(reconciliation_backend_pid, redemption_backend_pid)
+
+        assert redemption_backend_pid in observation.blocking_pids
+        assert observation.wait_event_type == "Lock"
+
+        send(redemption_task.pid, {barrier, :release_finalizer})
+
+        assert {:ok, %{status: :noop, code: "no_credit"}} =
+                 Task.await(redemption_task, 5_000)
+
+        assert_receive {^barrier, :reconciliation_result, {:ok, %UpstreamIdentity{}}}, 5_000
+        Task.await(reconciliation_task, 5_000)
+
+        persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
+
+        assert persisted.metadata["saved_resets"]["observed_at"] ==
+                 DateTime.to_iso8601(redemption_observed_at)
+
+        assert persisted.metadata["saved_resets"]["available_count"] == 0
+        assert get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "noop"
+        assert Enum.any?(FakeUpstream.requests(fake), &(&1.path == "/backend-api/wham/usage"))
+      after
+        :telemetry.detach(handler_id)
+        send(redemption_task.pid, {barrier, :start_redemption})
+        send(redemption_task.pid, {barrier, :release_finalizer})
+      end
     end
 
     test "fresh in-progress redemption blocks another attempt" do
@@ -1556,6 +1919,37 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end)
   end
 
+  defp committed_no_credit_fixture!(fake, saved_resets) do
+    run_unboxed(fn ->
+      unique = System.unique_integer([:positive])
+      pool = pool_fixture(%{slug: "saved-reset-redemption-order-#{unique}"})
+
+      %{assignment: assignment, identity: identity} =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "Saved reset redemption order #{unique}",
+          chatgpt_account_id: "acct_redemption_order_#{unique}",
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "usage_path" => "/backend-api/wham/usage",
+            "saved_resets" => saved_resets
+          }
+        })
+
+      %{assignment_id: assignment.id, identity_id: identity.id, pool_id: pool.id}
+    end)
+  end
+
+  defp cleanup_committed_no_credit_fixture!(fixture) do
+    run_unboxed(fn ->
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id == ^fixture.identity_id
+      )
+
+      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+    end)
+  end
+
   defp committed_probe_claim_context!(fixture) do
     run_unboxed(fn ->
       identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
@@ -1664,6 +2058,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp probe_identity_lock_query?(metadata) do
     metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
       is_binary(metadata[:query]) and String.contains?(metadata[:query], "FOR UPDATE")
+  end
+
+  defp identity_update_query?(metadata) do
+    metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
+      is_binary(metadata[:query]) and
+      String.starts_with?(String.trim_leading(metadata[:query]), "UPDATE")
+  end
+
+  defp drain_identity_updates(task_pid, count \\ 0) do
+    receive do
+      {:saved_reset_identity_update, ^task_pid} -> drain_identity_updates(task_pid, count + 1)
+    after
+      0 -> count
+    end
   end
 
   defp observe_blocked_probe_claim!(waiter_pid, blocker_pid) do

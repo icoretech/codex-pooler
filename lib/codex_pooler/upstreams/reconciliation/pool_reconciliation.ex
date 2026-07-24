@@ -12,6 +12,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.Convergence
+  alias CodexPooler.Upstreams.SavedResets.FirstSeenLedger
+  alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -691,23 +693,137 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp maybe_update_saved_reset_snapshot(identity, payload, observed_at, usage_url)
        when is_map(payload) do
-    identity
-    |> UpstreamIdentity.changeset(%{
-      metadata:
-        identity.metadata
-        |> Kernel.||(%{})
-        |> Map.put(
-          "saved_resets",
-          SavedResets.usage_snapshot(payload, observed_at, usage_url, identity)
-        ),
-      updated_at: observed_at
-    })
-    |> Repo.update!()
-    |> Repo.reload!()
+    persisted_observed_at = get_in(identity.metadata || %{}, ["saved_resets", "observed_at"])
+
+    case ObservationOrdering.authorize(observed_at, persisted_observed_at) do
+      {:apply, _canonical_observed_at} ->
+        snapshot = SavedResets.usage_snapshot(payload, observed_at, usage_url, identity)
+        {snapshot, ledger_change} = compose_saved_reset_state(identity, snapshot, observed_at)
+
+        attrs = %{
+          metadata: Map.put(identity.metadata || %{}, "saved_resets", snapshot),
+          updated_at: observed_at
+        }
+
+        attrs =
+          case ledger_change do
+            {:put, ledger} -> Map.put(attrs, :saved_reset_first_seen_ledger, ledger)
+            :omit -> attrs
+          end
+
+        identity
+        |> Ecto.Changeset.change(attrs)
+        |> Repo.update!()
+        |> Repo.reload!()
+
+      :skip ->
+        identity
+    end
   end
 
   defp maybe_update_saved_reset_snapshot(identity, _payload, _observed_at, _usage_url),
     do: identity
+
+  defp compose_saved_reset_state(
+         _identity,
+         %{"expires_detail_status" => "incomplete"} = snapshot,
+         _observed_at
+       ) do
+    {snapshot, :omit}
+  end
+
+  defp compose_saved_reset_state(identity, snapshot, observed_at) do
+    candidate_rows = saved_reset_expiration_rows(snapshot)
+    current_expirations = Enum.map(candidate_rows, &Map.get(&1, "expires_at"))
+    ledger = identity.saved_reset_first_seen_ledger || FirstSeenLedger.empty()
+
+    if oversized_legacy_seed_source?(identity, ledger) do
+      case Map.get(snapshot, "expires_detail_status") do
+        status when status in ["authoritative_zero", "authoritative_rows"] ->
+          merge_saved_reset_state(
+            snapshot,
+            ledger,
+            candidate_rows,
+            current_expirations,
+            observed_at
+          )
+
+        _reused_or_incomplete ->
+          {Map.get(identity.metadata || %{}, "saved_resets", snapshot), :omit}
+      end
+    else
+      merge_saved_reset_state(
+        snapshot,
+        ledger,
+        saved_reset_expiration_rows(identity.metadata) ++ candidate_rows,
+        current_expirations,
+        observed_at
+      )
+    end
+  end
+
+  defp oversized_legacy_seed_source?(identity, ledger) do
+    ledger == FirstSeenLedger.empty() and
+      saved_reset_expiration_rows(identity.metadata) != [] and
+      not persisted_expiration_seed_source_within_bound?(identity.id)
+  end
+
+  defp persisted_expiration_seed_source_within_bound?(identity_id) do
+    Repo.one(
+      from identity in UpstreamIdentity,
+        where: identity.id == ^identity_id,
+        select:
+          fragment(
+            "COALESCE(pg_column_size(?->'saved_resets'->'available_expirations') <= ?, TRUE)",
+            identity.metadata,
+            ^SavedResets.detail_payload_max_bytes()
+          )
+    )
+  end
+
+  defp merge_saved_reset_state(
+         snapshot,
+         ledger,
+         incoming_rows,
+         current_expirations,
+         observed_at
+       ) do
+    case FirstSeenLedger.merge(
+           ledger,
+           incoming_rows,
+           current_expirations,
+           observed_at
+         ) do
+      {:ok, merged_ledger} ->
+        {materialize_first_seen(snapshot, merged_ledger), {:put, merged_ledger}}
+
+      {:opaque, _original} ->
+        {snapshot, :omit}
+    end
+  end
+
+  defp saved_reset_expiration_rows(%{"saved_resets" => saved_resets}),
+    do: saved_reset_expiration_rows(saved_resets)
+
+  defp saved_reset_expiration_rows(%{"available_expirations" => rows}) when is_list(rows),
+    do: rows
+
+  defp saved_reset_expiration_rows(_metadata), do: []
+
+  defp materialize_first_seen(snapshot, ledger) do
+    rows =
+      snapshot
+      |> saved_reset_expiration_rows()
+      |> Enum.map(fn row ->
+        case FirstSeenLedger.lookup(ledger, Map.get(row, "expires_at")) do
+          {:ok, first_seen_at} -> Map.put(row, "first_seen_at", first_seen_at)
+          :error -> row
+          {:opaque, _original} -> row
+        end
+      end)
+
+    Map.put(snapshot, "available_expirations", rows)
+  end
 
   defp metadata_quota_windows(identity, assignment) do
     identity_windows = Quota.Windows.quota_windows_from_metadata(identity.metadata)

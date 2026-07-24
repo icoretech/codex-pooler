@@ -1524,8 +1524,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            ]
 
     assert active_account.saved_resets.available_expirations == [
-             %{expires_at: first_expires_at_iso, first_seen_at: first_seen_at_iso},
-             %{expires_at: second_expires_at_iso, first_seen_at: second_seen_at_iso}
+             %{
+               expires_at: first_expires_at_iso,
+               first_seen_at: first_seen_at_iso,
+               granted_at: nil
+             },
+             %{
+               expires_at: second_expires_at_iso,
+               first_seen_at: second_seen_at_iso,
+               granted_at: nil
+             }
            ]
 
     assert inactive_account.saved_resets.label == "1 saved reset"
@@ -1890,13 +1898,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#saved-reset-expiration-first-seen-0[title='#{first_seen_label}']",
-             "banked #{first_seen_date}"
+             "seen #{first_seen_date}"
            )
 
     assert has_element?(
              view,
              "#saved-reset-expiration-first-seen-1[title='#{second_seen_label}']",
-             "banked #{second_seen_date}"
+             "seen #{second_seen_date}"
            )
 
     assert has_element?(

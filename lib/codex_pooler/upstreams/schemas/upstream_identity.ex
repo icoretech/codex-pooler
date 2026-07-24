@@ -42,6 +42,8 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     field :saved_reset_auto_redeem_keep_credits, :integer, default: 0
     field :saved_reset_auto_redeem_trigger_mode, :string, default: "blocked"
     field :saved_reset_auto_redeem_quota_threshold_percent, :integer, default: 95
+    field :saved_reset_first_seen_ledger, :map, default: %{"version" => 1, "entries" => []}
+
     field :disabled_at, :utc_datetime_usec
     field :created_by_user_id, :binary_id
     field :created_at, :utc_datetime_usec

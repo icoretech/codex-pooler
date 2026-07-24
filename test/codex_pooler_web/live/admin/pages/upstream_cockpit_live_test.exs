@@ -1436,9 +1436,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     first_expires_at = DateTime.add(now, 30, :day)
     second_expires_at = DateTime.add(first_expires_at, 1, :day)
     first_seen_at = DateTime.add(now, -2, :day)
+    granted_at = DateTime.add(now, -8, :day)
     first_expires_at_iso = DateTime.to_iso8601(first_expires_at)
     second_expires_at_iso = DateTime.to_iso8601(second_expires_at)
     first_seen_at_iso = DateTime.to_iso8601(first_seen_at)
+    granted_at_iso = DateTime.to_iso8601(granted_at)
 
     first_expiration_label =
       DateTimeDisplay.format_datetime(
@@ -1451,6 +1453,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         second_expires_at,
         DateTimeDisplay.preferences_for_user(scope.user)
       )
+
+    granted_label =
+      DateTimeDisplay.format_datetime(
+        granted_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      )
+
+    granted_date =
+      DateTimeDisplay.format_datetime_parts(
+        granted_at,
+        DateTimeDisplay.preferences_for_user(scope.user)
+      ).date
 
     first_seen_label =
       DateTimeDisplay.format_datetime(
@@ -1482,8 +1496,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
             "observed_at" => DateTime.to_iso8601(now),
             "available_expires_at" => [first_expires_at_iso, second_expires_at_iso],
             "available_expirations" => [
-              %{"expires_at" => first_expires_at_iso, "first_seen_at" => first_seen_at_iso},
-              %{"expires_at" => second_expires_at_iso, "first_seen_at" => "invalid"}
+              %{
+                "expires_at" => first_expires_at_iso,
+                "first_seen_at" => first_seen_at_iso,
+                "granted_at" => granted_at_iso
+              },
+              %{
+                "expires_at" => second_expires_at_iso,
+                "first_seen_at" => first_seen_at_iso,
+                "granted_at" => nil
+              }
             ],
             "next_expires_at" => first_expires_at_iso
           }
@@ -1501,8 +1523,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert cockpit.saved_resets.available? == true
 
     assert cockpit.saved_resets.available_expirations == [
-             %{expires_at: first_expires_at_iso, first_seen_at: first_seen_at_iso},
-             %{expires_at: second_expires_at_iso, first_seen_at: nil}
+             %{
+               expires_at: first_expires_at_iso,
+               first_seen_at: first_seen_at_iso,
+               granted_at: granted_at_iso
+             },
+             %{
+               expires_at: second_expires_at_iso,
+               first_seen_at: first_seen_at_iso,
+               granted_at: nil
+             }
            ]
 
     assert cockpit.saved_reset_policy.enabled? == false
@@ -1543,14 +1573,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#cockpit-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen'][title='#{first_seen_label}']",
-             "banked #{first_seen_date}"
+             "#cockpit-saved-reset-expiration-first-seen-0[data-role='saved-reset-expiration-first-seen'][title='#{granted_label}']",
+             "banked #{granted_date}"
            )
 
     assert has_element?(
              view,
-             "#cockpit-saved-reset-expiration-first-seen-1[data-role='saved-reset-expiration-first-seen']",
-             "banked not recorded"
+             "#cockpit-saved-reset-expiration-first-seen-1[data-role='saved-reset-expiration-first-seen'][title='#{first_seen_label}']",
+             "seen #{first_seen_date}"
            )
 
     assert has_element?(
@@ -1558,9 +1588,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              "#cockpit-saved-reset-expiration-life-0[data-role='saved-reset-expiration-life'] .saved-reset-life-fill"
            )
 
-    refute has_element?(view, "#cockpit-saved-reset-expiration-life-1")
-    assert has_element?(view, "#cockpit-saved-reset-expiration-held-0", "held 2d")
-    refute has_element?(view, "#cockpit-saved-reset-expiration-held-1")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-life-1")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-held-0", "held 8d")
+    assert has_element?(view, "#cockpit-saved-reset-expiration-held-1", "held 2d")
 
     assert has_element?(
              view,

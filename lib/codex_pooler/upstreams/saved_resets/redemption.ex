@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -42,6 +43,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           optional(:available_count_after) => non_neg_integer(),
           optional(:http_status) => non_neg_integer(),
           optional(:reason) => String.t()
+        }
+
+  @type saved_reset_observation_intent :: %{
+          required(:available_count) => non_neg_integer(),
+          required(:authoritative_zero?) => boolean(),
+          required(:observed_at) => DateTime.t(),
+          required(:path_style) => String.t() | nil,
+          required(:status) => String.t(),
+          required(:usage_path) => String.t() | nil
         }
 
   @spec ensure_manual_available(PoolUpstreamAssignment.t() | Ecto.UUID.t(), keyword()) ::
@@ -438,15 +448,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            list_chatgpt_credits(list_url, identity, access_token, claim.receive_timeout) do
       case list_result do
         %{credit_id: nil, available_count: available_count, http_status: http_status} ->
-          update_saved_reset_count!(identity, snapshot, available_count, claim.started_at)
-
           %{
             status: :noop,
             applied?: false,
             code: "no_credit",
             available_count_before: available_count,
             available_count_after: 0,
-            http_status: http_status
+            http_status: http_status,
+            saved_reset_observation:
+              no_credit_observation_intent(snapshot, available_count, claim.started_at)
           }
 
         %{credit_id: credit_id, available_count: available_count} ->
@@ -757,12 +767,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
         base = put_carried_applied_consume(base, redemption)
 
-        updated_identity =
-          update_redemption_metadata!(
+        redemption = Map.merge(base, redemption_lifecycle_fields(result))
+
+        {metadata, ledger} =
+          apply_saved_reset_observation(
             identity,
             metadata,
-            Map.merge(base, redemption_lifecycle_fields(result))
+            result[:saved_reset_observation]
           )
+
+        updated_identity =
+          persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at)
 
         updated_identity
       else
@@ -775,6 +790,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
         {:ok,
          result
+         |> Map.delete(:saved_reset_observation)
          |> Map.put(:identity, updated_identity)
          |> Map.put(:assignment, claim.assignment)}
 
@@ -842,25 +858,73 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     }
   end
 
-  defp update_saved_reset_count!(identity, snapshot, available_count, observed_at) do
-    metadata = identity.metadata || %{}
+  @spec no_credit_observation_intent(
+          SavedResets.snapshot_projection(),
+          non_neg_integer(),
+          DateTime.t()
+        ) :: saved_reset_observation_intent()
+  defp no_credit_observation_intent(snapshot, available_count, observed_at) do
+    %{
+      available_count: available_count,
+      authoritative_zero?: available_count == 0,
+      observed_at: observed_at,
+      path_style: snapshot.path_style,
+      status: "reported",
+      usage_path: snapshot.usage_path
+    }
+  end
 
-    saved_reset_metadata =
-      %{
-        "status" => "reported",
-        "available_count" => available_count,
-        "source" => "codex_reset_credits_api",
-        "path_style" => snapshot.path_style,
-        "observed_at" => DateTime.to_iso8601(observed_at),
-        "usage_path" => snapshot.usage_path,
-        "reason" => nil
-      }
-      |> Map.merge(expiration_metadata_from_snapshot(snapshot))
+  defp apply_saved_reset_observation(identity, metadata, nil) do
+    {metadata, identity.saved_reset_first_seen_ledger}
+  end
 
+  defp apply_saved_reset_observation(identity, metadata, intent) do
+    persisted_observed_at = get_in(metadata, ["saved_resets", "observed_at"])
+
+    case ObservationOrdering.authorize(intent.observed_at, persisted_observed_at) do
+      {:apply, observed_at} ->
+        snapshot = SavedResets.snapshot(identity)
+
+        saved_reset_metadata =
+          %{
+            "status" => intent.status,
+            "available_count" => intent.available_count,
+            "source" => "codex_reset_credits_api",
+            "path_style" => intent.path_style,
+            "observed_at" => observed_at,
+            "usage_path" => intent.usage_path,
+            "reason" => nil
+          }
+          |> Map.merge(expiration_metadata(snapshot, intent.authoritative_zero?, observed_at))
+
+        {Map.put(metadata, "saved_resets", saved_reset_metadata),
+         identity.saved_reset_first_seen_ledger}
+
+      :skip ->
+        {metadata, identity.saved_reset_first_seen_ledger}
+    end
+  end
+
+  defp expiration_metadata(_snapshot, true, observed_at) do
+    %{
+      "available_expires_at" => [],
+      "available_expirations" => [],
+      "next_expires_at" => nil,
+      "expires_observed_at" => observed_at,
+      "expires_refresh_attempted_at" => observed_at
+    }
+  end
+
+  defp expiration_metadata(snapshot, false, _observed_at) do
+    expiration_metadata_from_snapshot(snapshot)
+  end
+
+  defp persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at) do
     identity
-    |> UpstreamIdentity.changeset(%{
-      metadata: Map.put(metadata, "saved_resets", saved_reset_metadata),
-      updated_at: observed_at
+    |> Ecto.Changeset.change(%{
+      metadata: Map.put(metadata, "saved_reset_redemption", redemption),
+      saved_reset_first_seen_ledger: ledger,
+      updated_at: finished_at
     })
     |> Repo.update!()
   end
@@ -880,14 +944,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp stored_available_expiration_rows(rows) when is_list(rows) do
     rows
     |> Enum.map(fn
-      %{expires_at: expires_at, first_seen_at: first_seen_at}
+      %{expires_at: expires_at, first_seen_at: first_seen_at} = row
       when is_binary(expires_at) and is_binary(first_seen_at) ->
         %{"expires_at" => expires_at, "first_seen_at" => first_seen_at}
+        |> maybe_put_granted_at(row)
 
       _row ->
         nil
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp maybe_put_granted_at(stored_row, source_row) do
+    if Map.has_key?(source_row, :granted_at) do
+      Map.put(stored_row, "granted_at", Map.get(source_row, :granted_at))
+    else
+      stored_row
+    end
   end
 
   defp mark_stale_redemption_failed!(identity, redemption, finished_at) do

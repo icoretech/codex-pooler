@@ -4,6 +4,65 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
   alias CodexPooler.Upstreams.SavedResets
 
   describe "count_from_usage_payload/1" do
+    test "baseline characterization preserves count coercion and current detail freshness" do
+      observed_at = ~U[2026-06-23 10:00:00Z]
+
+      metadata =
+        SavedResets.usage_snapshot(
+          %{
+            "rate_limit_reset_credits" => %{
+              "available_count" => "2.9",
+              "credits" => [
+                %{
+                  "status" => "available",
+                  "expires_at" => "2026-07-20T02:40:11.968726+02:00"
+                },
+                %{
+                  "status" => "available",
+                  "expires_at" => "2026-07-18T00:40:11.968726Z"
+                }
+              ]
+            }
+          },
+          observed_at,
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["available_count"] == 2
+
+      assert metadata["available_expires_at"] == [
+               "2026-07-18T00:40:11.968726Z",
+               "2026-07-20T00:40:11.968726Z"
+             ]
+
+      assert metadata["expires_observed_at"] == "2026-06-23T10:00:00Z"
+      assert metadata["expires_refresh_attempted_at"] == "2026-06-23T10:00:00Z"
+    end
+
+    test "forces detail within the refresh TTL when a current expiration lacks granted_at" do
+      timestamp = ~U[2026-07-24 10:00:00Z]
+      observed_at = timestamp |> DateTime.add(-5, :minute) |> DateTime.to_iso8601()
+
+      metadata = %{
+        "saved_resets" => %{
+          "status" => "reported",
+          "available_count" => 1,
+          "available_expires_at" => ["2026-08-20T00:40:11.968726Z"],
+          "available_expirations" => [
+            %{
+              "expires_at" => "2026-08-20T00:40:11.968726Z",
+              "first_seen_at" => "2026-07-23T10:00:00Z"
+            }
+          ],
+          "next_expires_at" => "2026-08-20T00:40:11.968726Z",
+          "expires_observed_at" => observed_at,
+          "expires_refresh_attempted_at" => observed_at
+        }
+      }
+
+      assert SavedResets.reset_credit_list_refresh_due?(metadata, 1, timestamp)
+    end
+
     test "parses reported saved reset counts" do
       assert {:reported, 2} =
                SavedResets.count_from_usage_payload(%{
@@ -119,7 +178,8 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       refute encoded =~ "Provider Title"
       refute encoded =~ "Provider description"
       refute encoded =~ "provider-request"
-      refute encoded =~ "granted_at"
+      assert encoded =~ "\"granted_at\":null"
+      refute encoded =~ "2026-06-20T00:00:00Z"
     end
 
     test "stores sanitized available expiration rows with first seen timestamps" do
@@ -176,11 +236,13 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       assert metadata["available_expirations"] == [
                %{
                  "expires_at" => "2026-07-18T00:40:11.968726Z",
-                 "first_seen_at" => "2026-06-23T10:00:00Z"
+                 "first_seen_at" => "2026-06-23T10:00:00Z",
+                 "granted_at" => nil
                },
                %{
                  "expires_at" => "2026-07-20T00:40:11.968726Z",
-                 "first_seen_at" => "2026-06-23T10:00:00Z"
+                 "first_seen_at" => "2026-06-23T10:00:00Z",
+                 "granted_at" => nil
                }
              ]
 
@@ -191,8 +253,204 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       refute encoded =~ "Provider description"
       refute encoded =~ "provider-request"
       refute encoded =~ "raw_payload"
-      refute encoded =~ "granted_at"
       refute encoded =~ "2026-06-20T00:00:00Z"
+    end
+
+    test "classifies an empty detail with a normalized zero count as authoritative" do
+      observed_at = ~U[2026-06-23 10:00:00Z]
+
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{"available_count" => "-1.2", "credits" => []},
+          observed_at,
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["expires_detail_status"] == "authoritative_zero"
+      assert metadata["available_expires_at"] == []
+      assert metadata["available_expirations"] == []
+      assert metadata["expires_observed_at"] == "2026-06-23T10:00:00Z"
+    end
+
+    test "classifies a positive detail with usable rows as authoritative" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "available_count" => "2.9",
+            "credits" => [
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z"),
+              available_credit("2026-07-18T00:40:11.968726Z", "2026-06-18T00:00:00Z")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["expires_detail_status"] == "authoritative_rows"
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-18T00:40:11.968726Z", "2026-06-18T00:00:00Z"),
+               expiration_row("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+             ]
+    end
+
+    test "classifies a detail without count and with usable rows as authoritative" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "credits" => [
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["expires_detail_status"] == "authoritative_rows"
+      assert metadata["available_count"] == 1
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+             ]
+    end
+
+    test "keeps authoritative expirations but clears every grant when the declared count mismatches" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "available_count" => 3,
+            "credits" => [
+              available_credit("2026-07-18T00:40:11.968726Z", "2026-06-18T00:00:00Z"),
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["expires_detail_status"] == "authoritative_rows"
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-18T00:40:11.968726Z", nil),
+               expiration_row("2026-07-20T00:40:11.968726Z", nil)
+             ]
+    end
+
+    test "keeps one grant only when every equivalent-expiration credit agrees" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "available_count" => 2,
+            "credits" => [
+              available_credit("2026-07-20T02:40:11.968726+02:00", "2026-06-20T02:00:00+02:00"),
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+             ]
+    end
+
+    test "clears a grouped grant when it is ambiguous, missing, or malformed" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "available_count" => 4,
+            "credits" => [
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z"),
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-19T00:00:00Z"),
+              available_credit("2026-07-18T00:40:11.968726Z", nil),
+              available_credit("2026-07-18T00:40:11.968726Z", "not-a-date")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-18T00:40:11.968726Z", nil),
+               expiration_row("2026-07-20T00:40:11.968726Z", nil)
+             ]
+
+      assert Enum.all?(metadata["available_expirations"], &Map.has_key?(&1, "granted_at"))
+    end
+
+    test "marks missing, non-list, and contradictory detail payloads incomplete" do
+      previous_metadata = existing_expiration_metadata()
+      observed_at = ~U[2026-06-23 10:00:00Z]
+
+      for payload <- [
+            %{"available_count" => 1},
+            %{"available_count" => 1, "credits" => %{}},
+            %{
+              "available_count" => 0,
+              "credits" => [
+                available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+              ]
+            },
+            %{
+              "available_count" => 1,
+              "credits" => [available_credit("not-a-date", "2026-06-20T00:00:00Z")]
+            },
+            %{"available_count" => "not-a-number", "credits" => []}
+          ] do
+        metadata =
+          SavedResets.credit_list_snapshot(
+            payload,
+            observed_at,
+            "https://chatgpt.com/backend-api/wham/usage",
+            previous_metadata
+          )
+
+        assert metadata["expires_detail_status"] == "incomplete"
+
+        assert metadata["available_expirations"] ==
+                 previous_metadata["saved_resets"]["available_expirations"]
+
+        assert metadata["expires_observed_at"] == "2026-06-22T10:00:00Z"
+        assert metadata["expires_refresh_attempted_at"] == "2026-06-23T10:00:00Z"
+      end
+    end
+
+    test "does not treat a provider detail-status string as an internal classification marker" do
+      metadata =
+        SavedResets.usage_snapshot(
+          %{
+            "rate_limit_reset_credits" => %{
+              "available_count" => 1,
+              "expires_detail_status" => "incomplete",
+              "available_expires_at" => ["2026-07-20T00:40:11.968726Z"]
+            }
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage"
+        )
+
+      assert metadata["available_expires_at"] == ["2026-07-20T00:40:11.968726Z"]
+      refute Map.has_key?(metadata, "expires_detail_status")
+    end
+
+    test "authoritative details replace prior expiration rows instead of merging departed grants" do
+      metadata =
+        SavedResets.credit_list_snapshot(
+          %{
+            "available_count" => 1,
+            "credits" => [
+              available_credit("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+            ]
+          },
+          ~U[2026-06-23 10:00:00Z],
+          "https://chatgpt.com/backend-api/wham/usage",
+          existing_expiration_metadata()
+        )
+
+      assert metadata["available_expirations"] == [
+               expiration_row("2026-07-20T00:40:11.968726Z", "2026-06-20T00:00:00Z")
+             ]
     end
 
     test "projects available expiration rows and keeps legacy expiration metadata" do
@@ -283,11 +541,13 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       assert metadata["available_expirations"] == [
                %{
                  "expires_at" => "2026-07-18T00:40:11.968726Z",
-                 "first_seen_at" => "2026-06-20T09:00:00Z"
+                 "first_seen_at" => "2026-06-20T09:00:00Z",
+                 "granted_at" => nil
                },
                %{
                  "expires_at" => "2026-07-20T00:40:11.968726Z",
-                 "first_seen_at" => "2026-06-23T10:00:00Z"
+                 "first_seen_at" => "2026-06-23T10:00:00Z",
+                 "granted_at" => nil
                }
              ]
     end
@@ -429,6 +689,43 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
         "started_at" => DateTime.to_iso8601(started_at),
         "finished_at" => nil,
         "result" => nil
+      }
+    }
+  end
+
+  defp available_credit(expires_at, granted_at) do
+    %{
+      "status" => "available",
+      "expires_at" => expires_at,
+      "granted_at" => granted_at,
+      "id" => "provider-credit",
+      "title" => "provider title",
+      "raw_payload" => %{"ignored" => true}
+    }
+  end
+
+  defp expiration_row(expires_at, granted_at) do
+    %{
+      "expires_at" => expires_at,
+      "first_seen_at" => "2026-06-23T10:00:00Z",
+      "granted_at" => granted_at
+    }
+  end
+
+  defp existing_expiration_metadata do
+    %{
+      "saved_resets" => %{
+        "available_expires_at" => ["2026-07-18T00:40:11.968726Z"],
+        "available_expirations" => [
+          %{
+            "expires_at" => "2026-07-18T00:40:11.968726Z",
+            "first_seen_at" => "2026-06-22T10:00:00Z",
+            "granted_at" => "2026-06-18T00:00:00Z"
+          }
+        ],
+        "next_expires_at" => "2026-07-18T00:40:11.968726Z",
+        "expires_observed_at" => "2026-06-22T10:00:00Z",
+        "expires_refresh_attempted_at" => "2026-06-22T10:00:00Z"
       }
     }
   end

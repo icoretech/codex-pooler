@@ -157,6 +157,65 @@ defmodule CodexPooler.Alerts.Evaluation.SavedResetFirstSeenEvaluatorTest do
   end
 
   @tag :saved_reset_banked_first_seen
+  test "rematerialized saved resets use the original first-seen time regardless of grant time" do
+    timestamp = ~U[2026-01-02 03:04:05Z]
+    original_first_seen_at = ~U[2026-01-02 02:04:05Z]
+    pool = pool_fixture()
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        identity_metadata:
+          saved_reset_metadata([
+            saved_reset_expiration(
+              ~U[2026-01-09 00:00:00Z],
+              original_first_seen_at,
+              granted_at: ~U[2025-12-10 02:04:05Z]
+            )
+          ])
+      })
+
+    rule =
+      alert_rule_fixture(pool,
+        scope_type: "upstream_identity",
+        rule_kind: "upstream_saved_reset_banked_first_seen",
+        severity: "info",
+        created_at: ~U[2026-01-02 01:00:00Z],
+        updated_at: ~U[2026-01-02 01:00:00Z]
+      )
+
+    assert [%{action: :match, match_attrs: first_match}] =
+             Alerts.evaluate_rule(rule, at: timestamp)
+
+    assert {:ok, first_result} = Alerts.record_incident_once(first_match)
+
+    refreshed_metadata =
+      saved_reset_metadata([
+        saved_reset_expiration(
+          ~U[2026-01-09 00:00:00Z],
+          original_first_seen_at,
+          granted_at: ~U[2026-01-02 03:00:00Z]
+        )
+      ])
+
+    identity
+    |> Ecto.Changeset.change(metadata: refreshed_metadata)
+    |> Repo.update!()
+
+    assert [%{action: :match, match_attrs: rematerialized_match}] =
+             Alerts.evaluate_rule(rule, at: timestamp)
+
+    assert rematerialized_match == first_match
+
+    assert {:ok, rematerialized_result} = Alerts.record_incident_once(rematerialized_match)
+    assert rematerialized_result.incident.id == first_result.incident.id
+
+    assert rematerialized_match.safe_evidence_snapshot["earliest_reset_first_seen_at"] ==
+             DateTime.to_iso8601(original_first_seen_at)
+
+    refute Map.has_key?(rematerialized_match.safe_evidence_snapshot, "granted_at")
+  end
+
+  @tag :saved_reset_banked_first_seen
   test "delivery allowlist keeps every evidence field the evaluator emits" do
     timestamp = ~U[2026-01-02 03:04:05Z]
     baseline = ~U[2026-01-02 01:00:00Z]
@@ -248,10 +307,18 @@ defmodule CodexPooler.Alerts.Evaluation.SavedResetFirstSeenEvaluatorTest do
     }
   end
 
-  defp saved_reset_expiration(expires_at, first_seen_at) do
-    %{
+  defp saved_reset_expiration(expires_at, first_seen_at, opts \\ []) do
+    expiration = %{
       "expires_at" => DateTime.to_iso8601(expires_at),
       "first_seen_at" => DateTime.to_iso8601(first_seen_at)
     }
+
+    case Keyword.fetch(opts, :granted_at) do
+      {:ok, %DateTime{} = granted_at} ->
+        Map.put(expiration, "granted_at", DateTime.to_iso8601(granted_at))
+
+      :error ->
+        expiration
+    end
   end
 end

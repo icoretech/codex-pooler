@@ -25,7 +25,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
         }
   @type available_expiration :: %{
           required(:expires_at) => String.t(),
-          required(:first_seen_at) => String.t() | nil
+          required(:first_seen_at) => String.t() | nil,
+          required(:granted_at) => String.t() | nil
         }
   @type snapshot :: %{
           required(:status) => String.t(),
@@ -60,7 +61,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
 
   @spec snapshot(UpstreamIdentity.t() | map() | nil, DateTimeDisplay.preferences()) :: snapshot()
   def snapshot(identity, datetime_preferences) do
-    snapshot = SavedResets.snapshot(identity)
+    snapshot =
+      identity
+      |> SavedResets.snapshot()
+      |> Map.update!(:available_expirations, &sanitize_available_expirations/1)
 
     Map.merge(snapshot, %{
       next_expires_label: next_expires_label(snapshot, datetime_preferences),
@@ -97,6 +101,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
 
   defp string_or_nil(value) when is_binary(value), do: value
   defp string_or_nil(_value), do: nil
+
+  defp sanitize_available_expirations(rows) when is_list(rows) do
+    Enum.map(rows, fn %{expires_at: expires_at, first_seen_at: first_seen_at} = row ->
+      %{
+        expires_at: expires_at,
+        first_seen_at: first_seen_at,
+        granted_at: sanitize_granted_at(Map.get(row, :granted_at))
+      }
+    end)
+  end
+
+  defp sanitize_available_expirations(_rows), do: []
+
+  defp sanitize_granted_at(value) do
+    case Formatting.parse_datetime(value) do
+      %DateTime{} = granted_at -> DateTime.to_iso8601(granted_at)
+      nil -> nil
+    end
+  end
 
   @spec policy(map()) :: SavedResets.auto_policy_projection()
   def policy(identity), do: SavedResets.auto_policy(identity)

@@ -85,9 +85,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             id={"#{@id}-first-seen-#{row.index}"}
             data-role="saved-reset-expiration-first-seen"
             class="min-w-0 truncate"
-            title={row.banked_title}
+            title={row.source_title}
           >
-            banked {row.banked_label}
+            {row.source_label} {row.source_date_label}
           </span>
           <span
             :if={row.held_label}
@@ -282,25 +282,35 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   end
 
   defp available_expiration_row(
-         %{expires_at: value, first_seen_at: first_seen_at},
+         %{expires_at: value, first_seen_at: first_seen_at} = source,
          index,
          datetime_preferences,
          now
        ) do
     value
     |> expiration_row(index, datetime_preferences, now)
-    |> merge_first_seen(first_seen_at, datetime_preferences, now)
+    |> merge_expiration_source(
+      Map.get(source, :granted_at),
+      first_seen_at,
+      datetime_preferences,
+      now
+    )
   end
 
   defp available_expiration_row(
-         %{"expires_at" => value, "first_seen_at" => first_seen_at},
+         %{"expires_at" => value, "first_seen_at" => first_seen_at} = source,
          index,
          datetime_preferences,
          now
        ) do
     value
     |> expiration_row(index, datetime_preferences, now)
-    |> merge_first_seen(first_seen_at, datetime_preferences, now)
+    |> merge_expiration_source(
+      Map.get(source, "granted_at"),
+      first_seen_at,
+      datetime_preferences,
+      now
+    )
   end
 
   defp available_expiration_row(_row, _index, _datetime_preferences, _now), do: nil
@@ -319,8 +329,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           title: DateTimeDisplay.format_datetime(expires_at, datetime_preferences),
           expired?: seconds_until_expiration <= 0,
           time_left_label: time_left_label(seconds_until_expiration),
-          banked_label: "not recorded",
-          banked_title: nil,
+          source_label: "seen",
+          source_date_label: "not recorded",
+          source_title: nil,
           held_label: nil,
           life_percent: nil,
           shine_delay: shine_delay(index)
@@ -335,8 +346,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           title: to_string(value),
           expired?: false,
           time_left_label: "unknown",
-          banked_label: "not recorded",
-          banked_title: nil,
+          source_label: "seen",
+          source_date_label: "not recorded",
+          source_title: nil,
           held_label: nil,
           life_percent: nil,
           shine_delay: shine_delay(index)
@@ -344,27 +356,44 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     end
   end
 
-  defp merge_first_seen(row, first_seen_value, datetime_preferences, now) do
-    case ResetFormatting.parse_datetime(first_seen_value) do
-      %DateTime{} = first_seen_at ->
-        parts = DateTimeDisplay.format_datetime_parts(first_seen_at, datetime_preferences)
-        fraction = life_fraction(first_seen_at, row.expires_at, now)
-
-        %{
-          row
-          | banked_label: parts.date,
-            banked_title: DateTimeDisplay.format_datetime(first_seen_at, datetime_preferences),
-            held_label: held_label(DateTime.diff(now, first_seen_at, :second)),
-            life_percent: fraction && Float.round(fraction * 100, 1)
-        }
+  defp merge_expiration_source(
+         row,
+         granted_at_value,
+         first_seen_at_value,
+         datetime_preferences,
+         now
+       ) do
+    case ResetFormatting.parse_datetime(granted_at_value) do
+      %DateTime{} = granted_at ->
+        merge_source(row, granted_at, "banked", datetime_preferences, now)
 
       nil ->
-        row
+        case ResetFormatting.parse_datetime(first_seen_at_value) do
+          %DateTime{} = first_seen_at ->
+            merge_source(row, first_seen_at, "seen", datetime_preferences, now)
+
+          nil ->
+            row
+        end
     end
   end
 
-  defp life_fraction(%DateTime{} = first_seen_at, %DateTime{} = expires_at, now) do
-    total_seconds = DateTime.diff(expires_at, first_seen_at, :second)
+  defp merge_source(row, source_at, source_label, datetime_preferences, now) do
+    parts = DateTimeDisplay.format_datetime_parts(source_at, datetime_preferences)
+    fraction = life_fraction(source_at, row.expires_at, now)
+
+    %{
+      row
+      | source_label: source_label,
+        source_date_label: parts.date,
+        source_title: DateTimeDisplay.format_datetime(source_at, datetime_preferences),
+        held_label: held_label(DateTime.diff(now, source_at, :second)),
+        life_percent: fraction && Float.round(fraction * 100, 1)
+    }
+  end
+
+  defp life_fraction(%DateTime{} = source_at, %DateTime{} = expires_at, now) do
+    total_seconds = DateTime.diff(expires_at, source_at, :second)
 
     if total_seconds > 0 do
       (DateTime.diff(expires_at, now, :second) / total_seconds)
@@ -373,7 +402,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     end
   end
 
-  defp life_fraction(_first_seen_at, _expires_at, _now), do: nil
+  defp life_fraction(_source_at, _expires_at, _now), do: nil
 
   defp time_left_label(seconds) when seconds > 0 do
     precise_duration_label(seconds)

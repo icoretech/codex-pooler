@@ -16,6 +16,7 @@ defmodule CodexPooler.FakeUpstream do
           {:json, non_neg_integer(), map()}
           | {:json_headers, non_neg_integer(), map(), [{String.t(), String.t()}]}
           | {:raw_body, non_neg_integer(), binary(), [{String.t(), String.t()}]}
+          | {:chunked_body, non_neg_integer(), [binary()], [{String.t(), String.t()}]}
           | {:barrier_json, non_neg_integer(), map(), pid(), reference()}
           | {:path_json, map()}
           | {:file_protocol, map()}
@@ -134,6 +135,10 @@ defmodule CodexPooler.FakeUpstream do
 
   def raw_response(body, opts \\ []) when is_binary(body) and is_list(opts) do
     {:raw_body, Keyword.get(opts, :status, 200), body, Keyword.get(opts, :headers, [])}
+  end
+
+  def chunked_response(chunks, opts \\ []) when is_list(chunks) and is_list(opts) do
+    {:chunked_body, Keyword.get(opts, :status, 200), chunks, Keyword.get(opts, :headers, [])}
   end
 
   def barrier_json_response(payload, opts) when is_map(payload) and is_list(opts) do
@@ -468,6 +473,20 @@ defmodule CodexPooler.FakeUpstream do
       end)
 
     Plug.Conn.send_resp(conn, status, body)
+  end
+
+  defp respond(_pid, conn, {:chunked_body, status, chunks, headers}, _request) do
+    conn =
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        Plug.Conn.put_resp_header(conn, key, value)
+      end)
+
+    conn = Plug.Conn.send_chunked(conn, status)
+
+    Enum.reduce(chunks, conn, fn chunk, conn ->
+      {:ok, conn} = Plug.Conn.chunk(conn, chunk)
+      conn
+    end)
   end
 
   defp respond(_pid, conn, {:barrier_json, status, payload, notify, release_ref}, _request) do
