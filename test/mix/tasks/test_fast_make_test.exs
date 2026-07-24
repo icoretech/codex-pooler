@@ -131,21 +131,15 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
   end
 
   defp open_make_port(fixture, partitions, "INT") do
+    make = System.find_executable("make")
+
     Port.open(
       {:spawn_executable, "/usr/bin/script"},
       [
         :binary,
         :exit_status,
         :stderr_to_stdout,
-        args: [
-          "-q",
-          "-e",
-          "/dev/null",
-          System.find_executable("make"),
-          "--no-print-directory",
-          "test-fast",
-          "N=#{partitions}"
-        ],
+        args: script_args(make, partitions),
         cd: File.cwd!(),
         env:
           Enum.map(make_env(fixture, []), fn {key, value} ->
@@ -170,6 +164,18 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
           end)
       ]
     )
+  end
+
+  defp script_args(make, partitions) do
+    make_args = ["--no-print-directory", "test-fast", "N=#{partitions}"]
+
+    case :os.type() do
+      {:unix, :darwin} ->
+        ["-q", "-e", "/dev/null", make | make_args]
+
+      {:unix, _name} ->
+        ["-q", "-e", "-c", Enum.join(["exec", make | make_args], " "), "/dev/null"]
+    end
   end
 
   defp interrupt_port(port, "INT") do
