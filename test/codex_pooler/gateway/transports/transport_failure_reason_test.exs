@@ -190,6 +190,50 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
     refute inspect(metadata) =~ sentinel
   end
 
+  test "keeps only finite websocket termination and connection diagnostics" do
+    metadata =
+      TransportFailureReason.sanitize_transport_failure_metadata(%{
+        "termination_source" => "peer_close_frame",
+        "transport_signal" => "ssl_data",
+        "connection_use" => "reused",
+        "connection_request_bucket" => "requests_6_20",
+        "connection_age_bucket" => "minutes_15_30",
+        "connection_idle_bucket" => "under_5s",
+        "websocket_buffer_bucket" => "bytes_1_125",
+        "websocket_fragment_open" => true
+      })
+
+    assert metadata == %{
+             "termination_source" => "peer_close_frame",
+             "transport_signal" => "ssl_data",
+             "connection_use" => "reused",
+             "connection_request_bucket" => "requests_6_20",
+             "connection_age_bucket" => "minutes_15_30",
+             "connection_idle_bucket" => "under_5s",
+             "websocket_buffer_bucket" => "bytes_1_125",
+             "websocket_fragment_open" => true
+           }
+  end
+
+  test "drops free-form websocket termination and connection diagnostics" do
+    sentinel = "private-diagnostic-sentinel-deadbeef"
+
+    metadata =
+      TransportFailureReason.sanitize_transport_failure_metadata(%{
+        "termination_source" => sentinel,
+        "transport_signal" => sentinel,
+        "connection_use" => sentinel,
+        "connection_request_bucket" => sentinel,
+        "connection_age_bucket" => sentinel,
+        "connection_idle_bucket" => sentinel,
+        "websocket_buffer_bucket" => sentinel,
+        "websocket_fragment_open" => sentinel
+      })
+
+    assert metadata == %{}
+    refute inspect(metadata) =~ sentinel
+  end
+
   test "sanitizes peer close diagnostics before transport failure metadata is built" do
     cases = [
       {1000, "short",

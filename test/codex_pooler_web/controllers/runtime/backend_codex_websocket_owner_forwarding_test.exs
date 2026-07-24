@@ -615,6 +615,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              }
 
       assert attempt.response_metadata["transport_failure"] == %{
+               "connection_age_bucket" => "under_1m",
+               "connection_idle_bucket" => "first_request",
+               "connection_request_bucket" => "first",
+               "connection_use" => "fresh",
                "last_upstream_event_class" => "response_unknown_event",
                "last_upstream_event_type" => "response.unknown",
                "peer_close_code" => 1001,
@@ -626,8 +630,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                "reason_class" => "upstream_websocket_closed_before_terminal",
                "terminal_candidate_seen" => false,
                "terminal_seen" => false,
+               "termination_source" => "peer_close_frame",
                "text_frame_count" => 1,
-               "upstream_committed" => true
+               "transport_signal" => "tcp_data",
+               "upstream_committed" => true,
+               "websocket_buffer_bucket" => "empty",
+               "websocket_fragment_open" => false
              }
 
       metadata_text = inspect(attempt.response_metadata)

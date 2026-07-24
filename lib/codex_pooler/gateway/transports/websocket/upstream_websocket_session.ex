@@ -16,6 +16,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   @default_keepalive_interval_ms 25_000
   @connection_lifecycle_keys [:lifecycle_id, :generation]
+  @five_seconds_ms :timer.seconds(5)
+  @thirty_seconds_ms :timer.seconds(30)
+  @one_minute_ms :timer.minutes(1)
+  @two_minutes_ms :timer.minutes(2)
+  @five_minutes_ms :timer.minutes(5)
+  @ten_minutes_ms :timer.minutes(10)
+  @fifteen_minutes_ms :timer.minutes(15)
+  @thirty_minutes_ms :timer.minutes(30)
   @type response_headers :: [{binary(), binary()}]
   @type message_mapper :: (binary() -> binary()) | nil
   @type connection_lifecycle_state :: %{
@@ -315,18 +323,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         send_request_payload(state, payload, receive_state, connection_usage)
 
       {:error, reason, state} ->
-        {:error, reason, Map.put(state, :transport_failure_phase, :connect)}
+        state =
+          state
+          |> Map.put(:transport_failure_phase, :connect)
+          |> Map.put(:transport_failure_source, :connection_establish_error)
+
+        {:error, reason, state}
     end
   end
 
   defp send_request_payload(state, payload, receive_state, connection_usage) do
+    {state, receive_state} =
+      begin_connection_request(state, receive_state, connection_usage)
+
     case send_text(state, payload) do
       {:ok, state} ->
         {:ok, result, state} = await_sent_request(state, receive_state)
+        state = complete_connection_request(state)
         {:ok, put_result_connection_metadata(result, state, connection_usage), state}
 
       {:error, reason, state} ->
-        {:error, reason, Map.put(state, :transport_failure_phase, :send_payload)}
+        state =
+          state
+          |> Map.put(:transport_failure_phase, :send_payload)
+          |> Map.put(:transport_failure_source, :payload_send_error)
+
+        {:error, reason, state}
     end
   end
 
@@ -382,12 +404,94 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp request_error_transport_failure(reason, state) do
-    TransportFailureReason.transport_failure_metadata(reason, %{
-      phase: Map.get(state, :transport_failure_phase, :request),
-      pre_visible_output: true,
-      terminal_seen: false,
-      text_frame_count: 0
-    })
+    attrs =
+      %{
+        phase: Map.get(state, :transport_failure_phase, :request),
+        termination_source:
+          Map.get(state, :transport_failure_source) || request_failure_source(reason),
+        pre_visible_output: true,
+        terminal_seen: false,
+        text_frame_count: 0
+      }
+      |> Map.merge(Map.get(state, :current_request_diagnostics, %{}))
+
+    TransportFailureReason.transport_failure_metadata(reason, attrs)
+  end
+
+  defp request_failure_source(:upstream_websocket_session_unavailable), do: :session_unavailable
+  defp request_failure_source(_reason), do: nil
+
+  defp begin_connection_request(state, %ReceiveState{} = receive_state, connection_usage) do
+    now = System.monotonic_time(:millisecond)
+    request_ordinal = Map.get(state, :connection_request_count, 0) + 1
+    connection_started_at = Map.get(state, :connection_started_at_monotonic_ms, now)
+    last_request_completed_at = Map.get(state, :last_request_completed_at_monotonic_ms)
+
+    diagnostics = %{
+      connection_use: connection_use(connection_usage),
+      connection_request_bucket: connection_request_bucket(request_ordinal),
+      connection_age_bucket: connection_age_bucket(now - connection_started_at),
+      connection_idle_bucket: connection_idle_bucket(last_request_completed_at, now)
+    }
+
+    state =
+      state
+      |> Map.put(:connection_request_count, request_ordinal)
+      |> Map.put(:current_request_diagnostics, diagnostics)
+
+    receive_state =
+      struct!(receive_state, %{
+        connection_use: diagnostics.connection_use,
+        connection_request_bucket: diagnostics.connection_request_bucket,
+        connection_age_bucket: diagnostics.connection_age_bucket,
+        connection_idle_bucket: diagnostics.connection_idle_bucket
+      })
+
+    {state, receive_state}
+  end
+
+  defp complete_connection_request(%{conn: _conn} = state) do
+    state
+    |> Map.put(:last_request_completed_at_monotonic_ms, System.monotonic_time(:millisecond))
+    |> clear_current_request_diagnostics()
+  end
+
+  defp complete_connection_request(state), do: clear_current_request_diagnostics(state)
+
+  defp clear_current_request_diagnostics(state) do
+    state
+    |> Map.delete(:current_request_diagnostics)
+    |> Map.delete(:transport_failure_phase)
+    |> Map.delete(:transport_failure_source)
+  end
+
+  defp connection_use(%{reconnected: true}), do: :reconnected
+  defp connection_use(%{reused: true}), do: :reused
+  defp connection_use(_connection_usage), do: :fresh
+
+  defp connection_request_bucket(1), do: :first
+  defp connection_request_bucket(value) when value in 2..5, do: :requests_2_5
+  defp connection_request_bucket(value) when value in 6..20, do: :requests_6_20
+  defp connection_request_bucket(value) when value in 21..50, do: :requests_21_50
+  defp connection_request_bucket(_value), do: :requests_51_plus
+
+  defp connection_age_bucket(value) when value < @one_minute_ms, do: :under_1m
+  defp connection_age_bucket(value) when value < @five_minutes_ms, do: :minutes_1_5
+  defp connection_age_bucket(value) when value < @fifteen_minutes_ms, do: :minutes_5_15
+  defp connection_age_bucket(value) when value < @thirty_minutes_ms, do: :minutes_15_30
+  defp connection_age_bucket(_value), do: :minutes_30_plus
+
+  defp connection_idle_bucket(nil, _now), do: :first_request
+
+  defp connection_idle_bucket(last_request_completed_at, now) do
+    case max(now - last_request_completed_at, 0) do
+      value when value < @five_seconds_ms -> :under_5s
+      value when value < @thirty_seconds_ms -> :seconds_5_30
+      value when value < @two_minutes_ms -> :seconds_30_to_2m
+      value when value < @ten_minutes_ms -> :minutes_2_10
+      value when value < @thirty_minutes_ms -> :minutes_10_30
+      _value -> :minutes_30_plus
+    end
   end
 
   defp pre_response_reconnectable?({:error, %{body: "", reason: reason}}),
@@ -453,8 +557,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers,
             transport_failure:
-              transport_failure_metadata(:upstream_websocket_receive_timeout, receive_state,
-                phase: :receive_timeout
+              transport_failure_metadata(
+                :upstream_websocket_receive_timeout,
+                state,
+                receive_state,
+                phase: :receive_timeout,
+                termination_source: :pooler_receive_timeout
               )
           }}, state}
     end
@@ -465,6 +573,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          %ReceiveState{} = receive_state,
          message
        ) do
+    receive_state = %{receive_state | transport_signal: transport_signal(message)}
+
     case Mint.WebSocket.stream(conn, message) do
       {:ok, conn, responses} ->
         state = %{state | conn: conn}
@@ -474,7 +584,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         handle_transport_error_parts(%{state | conn: conn}, responses, receive_state, reason)
 
       :unknown ->
-        receive_events(state, receive_state)
+        receive_events(state, %{receive_state | transport_signal: nil})
     end
   end
 
@@ -504,7 +614,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
        headers: state.headers,
        upstream_error_param: receive_state.terminal_upstream_error_param,
        websocket_frame_headers: receive_state.websocket_frame_headers,
-       transport_failure: transport_failure_metadata(reason, receive_state, phase: :receive)
+       transport_failure:
+         transport_failure_metadata(reason, state, receive_state,
+           phase: :receive,
+           termination_source: :mint_transport_error
+         )
      }}
   end
 
@@ -522,8 +636,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          upstream_error_param: receive_state.terminal_upstream_error_param,
          websocket_frame_headers: receive_state.websocket_frame_headers,
          transport_failure:
-           transport_failure_metadata(:upstream_websocket_pong_deadline, receive_state,
-             phase: :receive
+           transport_failure_metadata(
+             :upstream_websocket_pong_deadline,
+             state,
+             receive_state,
+             phase: :receive,
+             termination_source: :pooler_pong_deadline
            )
        }}
 
@@ -547,6 +665,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp handle_part({:done, _ref}, {:continue, state, receive_state}) do
+    receive_state = %{receive_state | termination_source: :mint_stream_done}
     {:halt, {:failure, state, receive_state, :upstream_websocket_closed_before_terminal}}
   end
 
@@ -555,7 +674,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp finish_receive_result(result) do
     case result do
       {:continue, state, receive_state} ->
-        receive_events(state, receive_state)
+        receive_events(state, %{receive_state | transport_signal: nil})
 
       {:terminal, state, receive_state, terminal} ->
         {{:ok,
@@ -578,7 +697,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers,
             transport_failure:
-              transport_failure_metadata(reason, receive_state, phase: failure_phase(reason))
+              transport_failure_metadata(reason, state, receive_state,
+                phase: failure_phase(reason)
+              )
           }}, state}
     end
   end
@@ -599,6 +720,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
       {:error, websocket, reason} ->
         state = %{state | websocket: websocket}
+
+        receive_state = %{receive_state | termination_source: :websocket_decode_error}
         {:failure, state, receive_state, {:websocket_decode_failed, reason}}
     end
   end
@@ -661,6 +784,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             {:cont, {:continue, state, receive_state}}
 
           {:error, reason, state} ->
+            receive_state = %{
+              receive_state
+              | termination_source: :websocket_control_send_error
+            }
+
             {:halt, {:failure, state, receive_state, {:websocket_control_send_failed, reason}}}
         end
 
@@ -670,12 +798,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:close, code, reason}, {:continue, state, receive_state} ->
         receive_state = %{
           receive_state
-          | peer_close_metadata: TransportFailureReason.peer_close_metadata(code, reason)
+          | peer_close_metadata: TransportFailureReason.peer_close_metadata(code, reason),
+            termination_source: :peer_close_frame
         }
 
         {:halt, {:failure, state, receive_state, :upstream_websocket_closed_before_terminal}}
 
       {:binary, _data}, {:continue, state, receive_state} ->
+        receive_state = %{receive_state | termination_source: :unexpected_binary_frame}
         {:halt, {:failure, state, receive_state, :unexpected_upstream_websocket_binary}}
     end)
   end
@@ -697,6 +827,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     case retryable_first_text_frame(raw_text, receive_state) do
       {:ok, reason} ->
+        receive_state = %{receive_state | termination_source: :upstream_terminal_event}
         {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
@@ -712,11 +843,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp transport_failure_metadata(reason, %ReceiveState{} = receive_state, attrs) do
+  defp transport_failure_metadata(
+         reason,
+         state,
+         %ReceiveState{} = receive_state,
+         attrs
+       ) do
     TransportFailureReason.transport_failure_metadata(
       reason,
       Map.merge(
         %{
+          termination_source: receive_state.termination_source,
+          transport_signal: receive_state.transport_signal,
+          connection_use: receive_state.connection_use,
+          connection_request_bucket: receive_state.connection_request_bucket,
+          connection_age_bucket: receive_state.connection_age_bucket,
+          connection_idle_bucket: receive_state.connection_idle_bucket,
           pre_visible_output: not receive_state.downstream_output_started?,
           upstream_committed: true,
           terminal_seen: receive_state.terminal_seen?,
@@ -728,7 +870,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           terminal_candidate_rejection: receive_state.terminal_candidate_rejection,
           text_frame_count: receive_state.text_frame_count
         },
-        receive_state.peer_close_metadata
+        state
+        |> websocket_decoder_metadata()
+        |> Map.merge(receive_state.peer_close_metadata)
         |> Map.merge(Map.new(attrs))
       )
     )
@@ -739,6 +883,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp failure_phase(:upstream_websocket_closed_before_terminal), do: :upstream_close
   defp failure_phase(:unexpected_upstream_websocket_binary), do: :unexpected_frame
   defp failure_phase(_reason), do: :receive
+
+  defp transport_signal({:tcp, _socket, _data}), do: :tcp_data
+  defp transport_signal({:ssl, _socket, _data}), do: :ssl_data
+  defp transport_signal({:tcp_closed, _socket}), do: :tcp_closed
+  defp transport_signal({:ssl_closed, _socket}), do: :ssl_closed
+  defp transport_signal({:tcp_error, _socket, _reason}), do: :tcp_error
+  defp transport_signal({:ssl_error, _socket, _reason}), do: :ssl_error
+
+  defp websocket_decoder_metadata(%{websocket: websocket}) when is_map(websocket) do
+    # Mint.WebSocket.t/0 is opaque. These defensive projections retain only
+    # bounded state and disappear safely if a future dependency removes a field.
+    %{
+      websocket_buffer_bucket: websocket_buffer_bucket(Map.get(websocket, :buffer)),
+      websocket_fragment_open:
+        if(Map.has_key?(websocket, :fragment),
+          do: not is_nil(Map.get(websocket, :fragment)),
+          else: nil
+        )
+    }
+  end
+
+  defp websocket_decoder_metadata(_state), do: %{}
+
+  defp websocket_buffer_bucket(buffer) when is_binary(buffer) do
+    case byte_size(buffer) do
+      0 -> :empty
+      value when value <= 125 -> :bytes_1_125
+      value when value <= 1_024 -> :bytes_126_1024
+      _value -> :bytes_1025_plus
+    end
+  end
+
+  defp websocket_buffer_bucket(_buffer), do: nil
 
   defp retryable_first_text_frame(
          raw_text,

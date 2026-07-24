@@ -292,6 +292,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               reason: :upstream_websocket_closed_before_terminal,
               transport_failure: %{
                 "phase" => "upstream_close",
+                "termination_source" => "peer_close_frame",
+                "transport_signal" => "tcp_data",
+                "connection_use" => "fresh",
+                "connection_request_bucket" => "first",
+                "connection_age_bucket" => "under_1m",
+                "connection_idle_bucket" => "first_request",
+                "websocket_buffer_bucket" => "empty",
+                "websocket_fragment_open" => false,
                 "last_upstream_event_type" => "none",
                 "last_upstream_event_class" => "none",
                 "terminal_candidate_seen" => false
@@ -505,11 +513,94 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
             }} = Task.await(request_task, 1_000)
 
     assert body =~ "coalesced partial output"
+    assert failure["termination_source"] == "mint_transport_error"
+    assert failure["transport_signal"] == "tcp_data"
+    assert failure["websocket_buffer_bucket"] == "empty"
+    assert failure["websocket_fragment_open"] == false
     assert failure["text_frame_count"] == 1
     assert_receive {:coalesced_delta_frame, delta_frame}, 1_000
     assert delta_frame =~ "coalesced partial output"
 
     send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+  end
+
+  test "transport close during a fragmented websocket message records bounded decoder state" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_close_without_terminal_barrier(
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request_task =
+      Task.async(fn ->
+        UpstreamWebsocketSession.request(session, websocket_request(FakeUpstream.url(upstream)))
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, barrier_pid, ^release_ref},
+                   1_000
+
+    socket = session_socket(session)
+    send(session, {:tcp, socket, <<0x01, 3, "abc", 0x80, 10, "def">>})
+    send(session, {:tcp_closed, socket})
+
+    assert {:error,
+            %{
+              reason: %Mint.TransportError{reason: :closed},
+              transport_failure: %{
+                "termination_source" => "mint_transport_error",
+                "transport_signal" => "tcp_closed",
+                "websocket_buffer_bucket" => "bytes_1_125",
+                "websocket_fragment_open" => true
+              }
+            }} = Task.await(request_task, 1_000)
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+  end
+
+  test "reused failure records finite connection age ordinal and idle buckets" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success("resp_ws_before_reused_close"),
+           FakeUpstream.websocket_sse_then_close([
+             %{"type" => "response.created", "response" => %{"id" => "resp_ws_reused_close"}}
+           ])
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert {:error, %{transport_failure: failure}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert Map.take(failure, [
+             "termination_source",
+             "transport_signal",
+             "connection_use",
+             "connection_request_bucket",
+             "connection_age_bucket",
+             "connection_idle_bucket"
+           ]) == %{
+             "termination_source" => "peer_close_frame",
+             "transport_signal" => "tcp_data",
+             "connection_use" => "reused",
+             "connection_request_bucket" => "requests_2_5",
+             "connection_age_bucket" => "under_1m",
+             "connection_idle_bucket" => "under_5s"
+           }
   end
 
   test "invalidation closes only the current connection and reconnects on the next explicit request" do
@@ -1320,6 +1411,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
               body: body,
               reason: :upstream_websocket_pong_deadline,
               transport_failure: %{
+                "termination_source" => "pooler_pong_deadline",
                 "pre_visible_output" => false,
                 "terminal_seen" => false,
                 "text_frame_count" => 1

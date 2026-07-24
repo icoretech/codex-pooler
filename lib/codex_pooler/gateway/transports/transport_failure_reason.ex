@@ -33,6 +33,58 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     invalid_legacy_id
     parser_rejected
   )
+  @allowed_termination_sources ~w(
+    connection_establish_error
+    mint_stream_done
+    mint_transport_error
+    payload_send_error
+    peer_close_frame
+    pooler_pong_deadline
+    pooler_receive_timeout
+    session_unavailable
+    unexpected_binary_frame
+    upstream_terminal_event
+    websocket_control_send_error
+    websocket_decode_error
+  )
+  @allowed_transport_signals ~w(
+    ssl_closed
+    ssl_data
+    ssl_error
+    tcp_closed
+    tcp_data
+    tcp_error
+  )
+  @allowed_connection_uses ~w(fresh reconnected reused)
+  @allowed_connection_request_buckets ~w(
+    first
+    requests_2_5
+    requests_6_20
+    requests_21_50
+    requests_51_plus
+  )
+  @allowed_connection_age_buckets ~w(
+    under_1m
+    minutes_1_5
+    minutes_5_15
+    minutes_15_30
+    minutes_30_plus
+  )
+  @allowed_connection_idle_buckets ~w(
+    first_request
+    under_5s
+    seconds_5_30
+    seconds_30_to_2m
+    minutes_2_10
+    minutes_10_30
+    minutes_30_plus
+  )
+  @allowed_websocket_buffer_buckets ~w(
+    empty
+    bytes_1_125
+    bytes_126_1024
+    bytes_1025_plus
+  )
 
   @type transport_failure_metadata :: %{String.t() => String.t() | non_neg_integer() | boolean()}
   @type upstream_transport_error :: %{
@@ -56,6 +108,30 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
       "reason_class" => safe_reason_class(reason),
       "reason" => safe_metadata_reason(reason),
       "phase" => safe_phase(Map.get(attrs, :phase) || Map.get(attrs, "phase")),
+      "termination_source" =>
+        safe_termination_source(metadata_attr(attrs, "termination_source", :termination_source)),
+      "transport_signal" =>
+        safe_transport_signal(metadata_attr(attrs, "transport_signal", :transport_signal)),
+      "connection_use" =>
+        safe_connection_use(metadata_attr(attrs, "connection_use", :connection_use)),
+      "connection_request_bucket" =>
+        safe_connection_request_bucket(
+          metadata_attr(attrs, "connection_request_bucket", :connection_request_bucket)
+        ),
+      "connection_age_bucket" =>
+        safe_connection_age_bucket(
+          metadata_attr(attrs, "connection_age_bucket", :connection_age_bucket)
+        ),
+      "connection_idle_bucket" =>
+        safe_connection_idle_bucket(
+          metadata_attr(attrs, "connection_idle_bucket", :connection_idle_bucket)
+        ),
+      "websocket_buffer_bucket" =>
+        safe_websocket_buffer_bucket(
+          metadata_attr(attrs, "websocket_buffer_bucket", :websocket_buffer_bucket)
+        ),
+      "websocket_fragment_open" =>
+        safe_boolean(metadata_attr(attrs, "websocket_fragment_open", :websocket_fragment_open)),
       "pre_visible_output" => safe_boolean(Map.get(attrs, :pre_visible_output)),
       "upstream_committed" =>
         safe_boolean(metadata_attr(attrs, "upstream_committed", :upstream_committed)),
@@ -111,6 +187,32 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
         safe_reason_class_name(metadata_attr(metadata, "reason_class", :reason_class)),
       "reason" => safe_metadata_identifier(metadata_attr(metadata, "reason", :reason)),
       "phase" => safe_phase(metadata_attr(metadata, "phase", :phase)),
+      "termination_source" =>
+        safe_termination_source(
+          metadata_attr(metadata, "termination_source", :termination_source)
+        ),
+      "transport_signal" =>
+        safe_transport_signal(metadata_attr(metadata, "transport_signal", :transport_signal)),
+      "connection_use" =>
+        safe_connection_use(metadata_attr(metadata, "connection_use", :connection_use)),
+      "connection_request_bucket" =>
+        safe_connection_request_bucket(
+          metadata_attr(metadata, "connection_request_bucket", :connection_request_bucket)
+        ),
+      "connection_age_bucket" =>
+        safe_connection_age_bucket(
+          metadata_attr(metadata, "connection_age_bucket", :connection_age_bucket)
+        ),
+      "connection_idle_bucket" =>
+        safe_connection_idle_bucket(
+          metadata_attr(metadata, "connection_idle_bucket", :connection_idle_bucket)
+        ),
+      "websocket_buffer_bucket" =>
+        safe_websocket_buffer_bucket(
+          metadata_attr(metadata, "websocket_buffer_bucket", :websocket_buffer_bucket)
+        ),
+      "websocket_fragment_open" =>
+        safe_boolean(metadata_attr(metadata, "websocket_fragment_open", :websocket_fragment_open)),
       "pre_visible_output" =>
         safe_boolean(metadata_attr(metadata, "pre_visible_output", :pre_visible_output)),
       "upstream_committed" =>
@@ -288,6 +390,36 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
 
   defp allow_phase(phase) when phase in @allowed_phases, do: phase
   defp allow_phase(_phase), do: nil
+
+  defp safe_termination_source(value),
+    do: safe_allowed_value(value, @allowed_termination_sources)
+
+  defp safe_transport_signal(value),
+    do: safe_allowed_value(value, @allowed_transport_signals)
+
+  defp safe_connection_use(value),
+    do: safe_allowed_value(value, @allowed_connection_uses)
+
+  defp safe_connection_request_bucket(value),
+    do: safe_allowed_value(value, @allowed_connection_request_buckets)
+
+  defp safe_connection_age_bucket(value),
+    do: safe_allowed_value(value, @allowed_connection_age_buckets)
+
+  defp safe_connection_idle_bucket(value),
+    do: safe_allowed_value(value, @allowed_connection_idle_buckets)
+
+  defp safe_websocket_buffer_bucket(value),
+    do: safe_allowed_value(value, @allowed_websocket_buffer_buckets)
+
+  defp safe_allowed_value(value, allowed) when is_atom(value),
+    do: value |> Atom.to_string() |> safe_allowed_value(allowed)
+
+  defp safe_allowed_value(value, allowed) when is_binary(value) do
+    if value in allowed, do: value
+  end
+
+  defp safe_allowed_value(_value, _allowed), do: nil
 
   defp safe_boolean(value) when is_boolean(value), do: value
   defp safe_boolean(_value), do: nil

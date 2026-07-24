@@ -3585,6 +3585,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert second_attempt.status == "failed"
 
       assert second_attempt.response_metadata["transport_failure"] == %{
+               "connection_age_bucket" => "under_1m",
+               "connection_idle_bucket" => "under_5s",
+               "connection_request_bucket" => "requests_2_5",
+               "connection_use" => "reused",
                "last_upstream_event_class" => "response_event",
                "last_upstream_event_type" => "response.output_text",
                "peer_close_code" => 1001,
@@ -3596,8 +3600,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                "reason_class" => "upstream_websocket_closed_before_terminal",
                "terminal_candidate_seen" => false,
                "terminal_seen" => false,
+               "termination_source" => "peer_close_frame",
                "text_frame_count" => 1,
-               "upstream_committed" => true
+               "transport_signal" => "tcp_data",
+               "upstream_committed" => true,
+               "websocket_buffer_bucket" => "empty",
+               "websocket_fragment_open" => false
              }
 
       metadata_text = inspect(second_attempt.response_metadata)
@@ -6786,6 +6794,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert first_attempt.network_error_code == "upstream_stream_error"
 
     assert first_attempt.response_metadata["transport_failure"] == %{
+             "connection_age_bucket" => "under_1m",
+             "connection_idle_bucket" => "first_request",
+             "connection_request_bucket" => "first",
+             "connection_use" => "fresh",
              "last_upstream_event_class" => "none",
              "last_upstream_event_type" => "none",
              "peer_close_code" => 1001,
@@ -6797,8 +6809,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "reason_class" => "upstream_websocket_closed_before_terminal",
              "terminal_candidate_seen" => false,
              "terminal_seen" => false,
+             "termination_source" => "peer_close_frame",
              "text_frame_count" => 0,
-             "upstream_committed" => true
+             "transport_signal" => "tcp_data",
+             "upstream_committed" => true,
+             "websocket_buffer_bucket" => "empty",
+             "websocket_fragment_open" => false
            }
 
     assert second_attempt.pool_upstream_assignment_id == setup.assignment.id

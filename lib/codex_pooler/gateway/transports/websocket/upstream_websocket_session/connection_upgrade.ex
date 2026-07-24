@@ -56,7 +56,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Conn
           conn: conn,
           ref: ref,
           websocket: websocket,
-          headers: response_headers
+          headers: response_headers,
+          connection_started_at_monotonic_ms: System.monotonic_time(:millisecond),
+          connection_request_count: 0,
+          last_request_completed_at_monotonic_ms: nil
         }
 
         state =
