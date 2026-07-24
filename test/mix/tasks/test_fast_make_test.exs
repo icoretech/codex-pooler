@@ -3,6 +3,8 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
 
   @moduletag :test_infrastructure
   @timeout_ms 15_000
+  @receipt_detection_timeout_ms 15_000
+  @receipt_poll_interval_ms 20
 
   test "two simultaneous N=4 invocations overlap with distinct namespaces and clean exact databases" do
     unless partitioned_child?() do
@@ -176,7 +178,7 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
 
   defp interrupt_port(port, "TERM") do
     {:os_pid, os_pid} = Port.info(port, :os_pid)
-    {_output, 0} = System.cmd("kill", ["-TERM", Integer.to_string(os_pid)])
+    {_output, 0} = signal_term(os_pid)
   end
 
   defp make_env(fixture, extra_env) do
@@ -188,9 +190,16 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     ]
   end
 
-  defp await_receipts!(directory, prefix, expected, attempts \\ 300)
+  defp signal_term(pid) when is_integer(pid) do
+    System.cmd("/bin/sh", ["-c", "kill -TERM \"$1\"", "test-fast", Integer.to_string(pid)])
+  end
 
-  defp await_receipts!(directory, prefix, expected, attempts) when attempts > 0 do
+  defp await_receipts!(directory, prefix, expected, timeout_ms \\ @receipt_detection_timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    await_receipts_until!(directory, prefix, expected, deadline)
+  end
+
+  defp await_receipts_until!(directory, prefix, expected, deadline) do
     receipts =
       directory
       |> File.ls!()
@@ -200,15 +209,18 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     if length(receipts) == expected do
       receipts
     else
-      receive do
-      after
-        20 -> await_receipts!(directory, prefix, expected, attempts - 1)
+      remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+      if remaining_ms > 0 do
+        receive do
+        after
+          min(@receipt_poll_interval_ms, remaining_ms) ->
+            await_receipts_until!(directory, prefix, expected, deadline)
+        end
+      else
+        flunk("expected #{expected} #{prefix} receipts in #{directory}")
       end
     end
-  end
-
-  defp await_receipts!(directory, prefix, expected, 0) do
-    flunk("expected #{expected} #{prefix} receipts in #{directory}")
   end
 
   defp assert_namespace_partitions(receipts, namespace_count, partitions) do
@@ -255,7 +267,8 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
   defp terminate_port(port) do
     case Port.info(port, :os_pid) do
       {:os_pid, os_pid} ->
-        System.cmd("kill", ["-TERM", Integer.to_string(os_pid)])
+        {_output, 0} = signal_term(os_pid)
+        :ok
 
       nil ->
         :ok
