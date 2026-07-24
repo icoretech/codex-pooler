@@ -14,10 +14,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   @default_timeout_ms 50_000
   @drain_poll_interval_ms 200
   @owner_call_timeout_ms WebsocketOwnerContract.default_owner_call_timeout_ms()
-  @owner_post_deadline_call_budget_ms @owner_call_timeout_ms * 2
+  @default_owner_post_deadline_call_budget_ms @owner_call_timeout_ms * 2
   @owner_task_finish_margin_ms 500
-  @drain_deadline_margin_ms @owner_post_deadline_call_budget_ms + @drain_poll_interval_ms +
-                              @owner_task_finish_margin_ms
   @drain_deadline_floor_ms 10
 
   @type summary :: %{
@@ -45,6 +43,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           | {:deadline, deadline()}
           | {:deadline_margin_ms, non_neg_integer()}
           | {:deadline_floor_ms, non_neg_integer()}
+          | {:owner_post_deadline_call_budget_ms, pos_integer()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -432,18 +431,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         cancel_wait: &cancel_timer/2
       })
 
+    owner_post_deadline_call_budget_ms =
+      positive_option(
+        opts,
+        :owner_post_deadline_call_budget_ms,
+        @default_owner_post_deadline_call_budget_ms
+      )
+
+    default_margin_ms =
+      owner_post_deadline_call_budget_ms + @drain_poll_interval_ms +
+        @owner_task_finish_margin_ms
+
     %{
       now_ms: Map.fetch!(deadline, :now_ms),
       schedule_wait: Map.fetch!(deadline, :schedule_wait),
       cancel_wait: Map.fetch!(deadline, :cancel_wait),
-      margin_ms: non_negative_option(opts, :deadline_margin_ms, @drain_deadline_margin_ms),
-      floor_ms: non_negative_option(opts, :deadline_floor_ms, @drain_deadline_floor_ms)
+      margin_ms: non_negative_option(opts, :deadline_margin_ms, default_margin_ms),
+      floor_ms: non_negative_option(opts, :deadline_floor_ms, @drain_deadline_floor_ms),
+      owner_post_deadline_call_budget_ms: owner_post_deadline_call_budget_ms
     }
   end
 
   defp non_negative_option(opts, key, default) do
     case Keyword.get(opts, key, default) do
       value when is_integer(value) and value >= 0 -> value
+      _invalid -> default
+    end
+  end
+
+  defp positive_option(opts, key, default) do
+    case Keyword.get(opts, key, default) do
+      value when is_integer(value) and value > 0 -> value
       _invalid -> default
     end
   end
@@ -460,7 +478,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
     max(
       timeout_ms,
-      poll_budget_ms + @owner_post_deadline_call_budget_ms + @owner_task_finish_margin_ms
+      poll_budget_ms + drain_policy.owner_post_deadline_call_budget_ms +
+        @owner_task_finish_margin_ms
     )
   end
 
@@ -469,7 +488,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   end
 
   defp conservative_call_timeout_ms(timeout_ms) do
-    timeout_ms + @owner_post_deadline_call_budget_ms + @owner_task_finish_margin_ms + 1_000
+    timeout_ms + @default_owner_post_deadline_call_budget_ms + @owner_task_finish_margin_ms +
+      1_000
   end
 
   defp cancel_timer(timer_ref, wait_token) do

@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   import CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
 
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport.{
@@ -257,6 +258,66 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
            } = RolloutDrain.drain_for_shutdown()
   end
 
+  test "owner post-deadline call budget defaults to two owner calls and stays per server",
+       %{drain_name: drain_name} do
+    harness = start_rollout_drain_harness(self())
+    default_budget_ms = WebsocketOwnerContract.default_owner_call_timeout_ms() * 2
+
+    assert %{
+             owner_post_deadline_call_budget_ms: ^default_budget_ms,
+             margin_ms: 10_700
+           } = :sys.get_state(drain_name).drain_policy
+
+    assert %{
+             owner_post_deadline_call_budget_ms: 1_000,
+             margin_ms: 1_700
+           } = :sys.get_state(harness.name).drain_policy
+  end
+
+  test "budget-only policy derives a consistent default deadline margin" do
+    drain_name = :"rollout-drain-budget-only-#{System.unique_integer([:positive])}"
+
+    {RolloutDrain, name: drain_name, owner_post_deadline_call_budget_ms: 100}
+    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
+    |> start_supervised!()
+
+    assert %{
+             owner_post_deadline_call_budget_ms: 100,
+             margin_ms: 800
+           } = :sys.get_state(drain_name).drain_policy
+  end
+
+  test "explicit deadline margin overrides the budget-derived default" do
+    drain_name = :"rollout-drain-explicit-margin-#{System.unique_integer([:positive])}"
+
+    {RolloutDrain,
+     name: drain_name, owner_post_deadline_call_budget_ms: 100, deadline_margin_ms: 20}
+    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
+    |> start_supervised!()
+
+    assert %{
+             owner_post_deadline_call_budget_ms: 100,
+             margin_ms: 20
+           } = :sys.get_state(drain_name).drain_policy
+  end
+
+  test "invalid owner post-deadline call budgets fall back to the production default" do
+    default_budget_ms = WebsocketOwnerContract.default_owner_call_timeout_ms() * 2
+
+    for invalid_budget <- [0, "100"] do
+      drain_name = :"rollout-drain-invalid-budget-#{System.unique_integer([:positive])}"
+
+      {RolloutDrain, name: drain_name, owner_post_deadline_call_budget_ms: invalid_budget}
+      |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
+      |> start_supervised!()
+
+      assert %{
+               owner_post_deadline_call_budget_ms: ^default_budget_ms,
+               margin_ms: 10_700
+             } = :sys.get_state(drain_name).drain_policy
+    end
+  end
+
   test "application prep_stop drains through the release-callable coordinator before shutdown",
        %{drain_name: drain_name} do
     configure_rollout_drain_server(drain_name)
@@ -470,9 +531,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert_receive {:rollout_drain_deadline_wait, deadline, 10}
     assert :ok = VirtualDeadline.advance(deadline, 10)
     assert_receive {:slow_final_owner_status_started, ^owner_key}
-    Process.send_after(owner, {:release_slow_final_owner_status, owner_key}, 600)
+    Process.send_after(owner, {:release_slow_final_owner_status, owner_key}, 10)
     assert_receive {:slow_final_owner_drain_started, ^owner_key}, 1_000
-    Process.send_after(owner, {:release_slow_final_owner_drain, owner_key}, 4_950)
+    Process.send_after(owner, {:release_slow_final_owner_drain, owner_key}, 80)
 
     assert %{
              result: :ok,
@@ -483,21 +544,79 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
            } = Task.await(drain_task, 11_000)
   end
 
+  @tag :rollout_drain_cleanup_budget
+  test "harness budget leaves room for a normal post-deadline owner shutdown" do
+    harness = start_rollout_drain_harness(self())
+    owner_key = owner_key()
+    owner = start_supervised!({DrainProbeOwner, key: owner_key, parent: self()})
+    started_at = System.monotonic_time(:millisecond)
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [
+            name: harness.name,
+            timeout_ms: 25,
+            deadline_margin_ms: 20,
+            deadline_floor_ms: 10
+          ] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_probe_started, ^owner_key}
+    Process.send_after(owner, {:release_rollout_drain_probe, owner_key}, 1_100)
+
+    assert %{
+             result: :ok,
+             owners_seen: 1,
+             owners_drained: 1,
+             owners_idle: 1,
+             owners_failed: 0,
+             turns_completed: 0,
+             turns_aborted: 0
+           } = Task.await(drain_task, @await_timeout_ms)
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+    assert elapsed_ms >= 1_100
+    assert elapsed_ms < 2_000
+  end
+
   test "task timeout leaves no hung deadline waiter process" do
     harness = start_rollout_drain_harness(self())
     owner_key = owner_key()
     _owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
 
-    assert %{owners_failed: 1} =
-             RolloutDrain.start_drain(
-               [
-                 name: harness.name,
-                 timeout_ms: 25,
-                 deadline_margin_ms: 20,
-                 deadline_floor_ms: 10
-               ] ++ deadline_options(harness.deadline)
-             )
+    started_at = System.monotonic_time(:millisecond)
 
+    summary =
+      RolloutDrain.start_drain(
+        [
+          name: harness.name,
+          timeout_ms: 25,
+          deadline_margin_ms: 20,
+          deadline_floor_ms: 10
+        ] ++ deadline_options(harness.deadline)
+      )
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+    assert %{
+             result: :error,
+             owners_seen: 1,
+             owners_drained: 0,
+             owners_idle: 0,
+             owners_failed: 1,
+             turns_completed: 0,
+             turns_aborted: 0,
+             timeout_ms: 25,
+             elapsed_ms: summary_elapsed_ms,
+             already_draining?: false
+           } = summary
+
+    assert summary_elapsed_ms >= 1_000
+    assert summary_elapsed_ms < 2_000
+    assert elapsed_ms >= 1_000
+    assert elapsed_ms < 2_000
     assert VirtualDeadline.waiter_pids(harness.deadline) == []
   end
 

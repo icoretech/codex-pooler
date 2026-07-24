@@ -4,6 +4,11 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
+  # The real owner shutdown path can spend the transport's one-second close
+  # boundary before its drain call returns. Keep the injected budget small
+  # while leaving that boundary inside the coordinator's finish margin.
+  @owner_post_deadline_call_budget_ms 1_000
+
   @type owner_context :: %{
           required(:codex_session_id) => String.t(),
           required(:owner_lease_token) => String.t(),
@@ -447,6 +452,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   @spec deadline_options(pid()) :: keyword()
   def deadline_options(deadline) when is_pid(deadline) do
     [
+      owner_post_deadline_call_budget_ms: @owner_post_deadline_call_budget_ms,
       deadline: %{
         now_ms: fn -> VirtualDeadline.now_ms(deadline) end,
         schedule_wait: fn recipient, wait_token, wait_ms ->
