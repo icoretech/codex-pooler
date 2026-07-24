@@ -15,7 +15,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
     error
     response.created
     response.in_progress
-    response.other
+    response.queued
+    response.output_text
+    response.output_item
+    response.content_part
+    response.reasoning
+    response.refusal
+    response.audio
+    response.function_call
+    response.custom_tool_call
+    response.code_interpreter
+    response.file_search
+    response.web_search
+    response.image_generation
+    response.mcp_call
+    response.mcp_list_tools
+    response.metadata
+    response.moderation
+    response.unknown
     codex.rate_limits
     codex.other
     other
@@ -27,6 +44,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
     legacy_success_candidate
     response_lifecycle
     response_event
+    response_unknown_event
     rate_limit_event
     codex_event
     untyped_event
@@ -53,14 +71,81 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
     "response.incomplete",
     "error"
   ]
+  @known_response_event_families [
+    {"response.output_text", ~w(
+       response.output_text.delta
+       response.output_text.done
+       response.output_text.annotation.added
+     )},
+    {"response.output_item", ~w(response.output_item.added response.output_item.done)},
+    {"response.content_part", ~w(response.content_part.added response.content_part.done)},
+    {"response.reasoning", ~w(
+       response.reasoning_text.delta
+       response.reasoning_text.done
+       response.reasoning_summary.delta
+       response.reasoning_summary.done
+       response.reasoning_summary_text.delta
+       response.reasoning_summary_text.done
+       response.reasoning_summary_part.added
+       response.reasoning_summary_part.done
+     )},
+    {"response.refusal", ~w(response.refusal.delta response.refusal.done)},
+    {"response.audio", ~w(
+       response.audio.delta
+       response.audio.done
+       response.audio.transcript.delta
+       response.audio.transcript.done
+     )},
+    {"response.function_call",
+     ~w(response.function_call_arguments.delta response.function_call_arguments.done)},
+    {"response.custom_tool_call",
+     ~w(response.custom_tool_call_input.delta response.custom_tool_call_input.done)},
+    {"response.code_interpreter", ~w(
+       response.code_interpreter_call.in_progress
+       response.code_interpreter_call.interpreting
+       response.code_interpreter_call.completed
+       response.code_interpreter_call_code.delta
+       response.code_interpreter_call_code.done
+     )},
+    {"response.file_search", ~w(
+       response.file_search_call.in_progress
+       response.file_search_call.searching
+       response.file_search_call.completed
+     )},
+    {"response.web_search", ~w(
+       response.web_search_call.in_progress
+       response.web_search_call.searching
+       response.web_search_call.completed
+     )},
+    {"response.image_generation", ~w(
+       response.image_generation_call.in_progress
+       response.image_generation_call.generating
+       response.image_generation_call.partial_image
+       response.image_generation_call.completed
+     )},
+    {"response.mcp_call", ~w(
+       response.mcp_call.in_progress
+       response.mcp_call_arguments.delta
+       response.mcp_call_arguments.done
+       response.mcp_call.completed
+       response.mcp_call.failed
+     )},
+    {"response.mcp_list_tools", ~w(
+       response.mcp_list_tools.in_progress
+       response.mcp_list_tools.completed
+       response.mcp_list_tools.failed
+     )},
+    {"response.metadata", ~w(response.metadata)},
+    {"response.moderation", ~w(response.moderation.started response.moderation.completed)}
+  ]
 
   test "classifies upstream response websocket event families without treating sibling events as terminals" do
     cases = [
       {%{"type" => "response.created"}, "response.created", "response_lifecycle"},
       {%{"type" => "response.in_progress"}, "response.in_progress", "response_lifecycle"},
-      {%{"type" => "response.queued"}, "response.other", "response_event"},
-      {%{"type" => "response.output_text.delta"}, "response.other", "response_event"},
-      {%{"type" => "response.mcp_call.failed"}, "response.other", "response_event"},
+      {%{"type" => "response.queued"}, "response.queued", "response_lifecycle"},
+      {%{"type" => "response.create"}, "response.unknown", "response_unknown_event"},
+      {%{"type" => "response.private_event"}, "response.unknown", "response_unknown_event"},
       {%{"type" => "codex.rate_limits"}, "codex.rate_limits", "rate_limit_event"},
       {%{"type" => "codex.keepalive"}, "codex.other", "codex_event"},
       {%{"type" => "provider.private"}, "other", "other_event"}
@@ -92,6 +177,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.TerminalDiscriminatorTest do
     for discriminator <- [completed, done, failed, incomplete, error] do
       assert discriminator.terminal_candidate?
       assert discriminator.terminal_candidate_rejection == nil
+    end
+  end
+
+  test "maps every allowlisted nonterminal response event to its finite family" do
+    for {family, event_types} <- @known_response_event_families,
+        event_type <- event_types do
+      discriminator = classify(%{"type" => event_type})
+
+      assert discriminator.last_upstream_event_type == family
+      assert discriminator.last_upstream_event_class == "response_event"
+      refute discriminator.terminal_candidate?
+      assert discriminator.terminal == nil
     end
   end
 

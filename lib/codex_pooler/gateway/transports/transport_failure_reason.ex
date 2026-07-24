@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.EventTaxonomy
   alias CodexPooler.TransportFailureReason, as: SharedTransportFailureReason
 
   @max_reason_length 96
@@ -16,37 +17,6 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     terminal_delivery
     unexpected_frame
     upstream_close
-  )
-  @allowed_last_upstream_event_types ~w(
-    none
-    invalid_json
-    non_object_json
-    invalid_type
-    missing_type
-    response.completed
-    response.done
-    response.failed
-    response.incomplete
-    error
-    response.created
-    response.in_progress
-    response.other
-    codex.rate_limits
-    codex.other
-    other
-  )
-  @allowed_last_upstream_event_classes ~w(
-    none
-    invalid_frame
-    terminal_success_candidate
-    terminal_failure_candidate
-    legacy_success_candidate
-    response_lifecycle
-    response_event
-    rate_limit_event
-    codex_event
-    untyped_event
-    other_event
   )
   @allowed_terminal_candidate_types [
     "response.completed",
@@ -325,17 +295,13 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
   defp safe_non_negative_integer(value) when is_integer(value) and value >= 0, do: value
   defp safe_non_negative_integer(_value), do: nil
 
-  defp safe_last_upstream_event_type(value)
-       when value in @allowed_last_upstream_event_types,
-       do: value
+  defp safe_last_upstream_event_type(value) do
+    if EventTaxonomy.allowed_event_type?(value), do: value
+  end
 
-  defp safe_last_upstream_event_type(_value), do: nil
-
-  defp safe_last_upstream_event_class(value)
-       when value in @allowed_last_upstream_event_classes,
-       do: value
-
-  defp safe_last_upstream_event_class(_value), do: nil
+  defp safe_last_upstream_event_class(value) do
+    if EventTaxonomy.allowed_event_class?(value), do: value
+  end
 
   defp safe_terminal_candidate_type(value)
        when value in @allowed_terminal_candidate_types,

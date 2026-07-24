@@ -3586,7 +3586,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       assert second_attempt.response_metadata["transport_failure"] == %{
                "last_upstream_event_class" => "response_event",
-               "last_upstream_event_type" => "response.other",
+               "last_upstream_event_type" => "response.output_text",
                "peer_close_code" => 1001,
                "peer_close_reason_bytes" => 40,
                "peer_close_reason_present" => true,

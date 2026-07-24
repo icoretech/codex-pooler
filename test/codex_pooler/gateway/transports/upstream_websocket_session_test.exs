@@ -340,8 +340,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              "last_upstream_event_class",
              "terminal_candidate_seen"
            ]) == %{
-             "last_upstream_event_type" => "response.other",
-             "last_upstream_event_class" => "response_event",
+             "last_upstream_event_type" => "response.unknown",
+             "last_upstream_event_class" => "response_unknown_event",
              "terminal_candidate_seen" => false
            }
 

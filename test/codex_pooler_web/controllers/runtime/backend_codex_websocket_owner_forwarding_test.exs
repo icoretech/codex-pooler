@@ -553,13 +553,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "owner-forwarded upstream close before terminal persists safe transport metadata" do
+    raw_event_type = "response.private_event_sentinel_deadbeef"
+
     upstream =
       start_upstream(
         FakeUpstream.websocket_sse_then_close(
           [
-            {"response.output_text.delta",
+            {raw_event_type,
              %{
-               "type" => "response.output_text.delta",
+               "type" => raw_event_type,
                "response_id" => "resp_owner_transport_failure",
                "output_index" => 0,
                "content_index" => 0,
@@ -584,7 +586,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
 
-      assert %{"type" => "response.output_text.delta", "delta" => @sentinel} =
+      assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
                Jason.decode!(partial_frame)
 
       assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
@@ -613,8 +615,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              }
 
       assert attempt.response_metadata["transport_failure"] == %{
-               "last_upstream_event_class" => "response_event",
-               "last_upstream_event_type" => "response.other",
+               "last_upstream_event_class" => "response_unknown_event",
+               "last_upstream_event_type" => "response.unknown",
                "peer_close_code" => 1001,
                "peer_close_reason_bytes" => 36,
                "peer_close_reason_present" => true,
@@ -629,6 +631,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              }
 
       metadata_text = inspect(attempt.response_metadata)
+      refute metadata_text =~ raw_event_type
       refute metadata_text =~ @sentinel
       refute metadata_text =~ "owner upstream close reason sentinel"
       refute metadata_text =~ setup.authorization

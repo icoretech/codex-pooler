@@ -2,10 +2,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.EventTaxonomy
 
   @terminal_success_event_types ["response.completed", "response.done"]
   @terminal_failure_event_types ["response.failed", "response.incomplete", "error"]
-  @terminal_event_types @terminal_success_event_types ++ @terminal_failure_event_types
 
   defstruct terminal: nil,
             last_upstream_event_type: "none",
@@ -47,14 +47,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
 
   defp classify_decoded(decoded) do
     outcome = StreamProtocol.terminal_outcome(nil, decoded)
+    {last_upstream_event_type, last_upstream_event_class} = last_upstream_event(decoded)
 
     {terminal_candidate?, terminal_candidate_type, terminal_candidate_class,
      terminal_candidate_rejection} = terminal_candidate(decoded, outcome)
 
     %__MODULE__{
       terminal: terminal_type(outcome),
-      last_upstream_event_type: last_upstream_event_type(decoded),
-      last_upstream_event_class: last_upstream_event_class(decoded),
+      last_upstream_event_type: last_upstream_event_type,
+      last_upstream_event_class: last_upstream_event_class,
       terminal_candidate?: terminal_candidate?,
       terminal_candidate_type: terminal_candidate_type,
       terminal_candidate_class: terminal_candidate_class,
@@ -112,60 +113,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
 
   defp terminal_type(_outcome), do: nil
 
-  defp last_upstream_event_type(decoded) do
+  defp last_upstream_event(decoded) do
     case Map.fetch(decoded, "type") do
-      {:ok, type} -> bounded_event_type(type)
-      :error -> "missing_type"
-    end
-  end
-
-  defp bounded_event_type(type) when type in @terminal_event_types, do: type
-
-  defp bounded_event_type(type) when type in ["response.created", "response.in_progress"],
-    do: type
-
-  defp bounded_event_type("codex.rate_limits"), do: "codex.rate_limits"
-
-  defp bounded_event_type(type) when is_binary(type) do
-    cond do
-      String.starts_with?(type, "response.") -> "response.other"
-      String.starts_with?(type, "codex.") -> "codex.other"
-      true -> "other"
-    end
-  end
-
-  defp bounded_event_type(_type), do: "invalid_type"
-
-  defp last_upstream_event_class(decoded) do
-    case Map.fetch(decoded, "type") do
-      {:ok, type} when type in @terminal_success_event_types ->
-        "terminal_success_candidate"
-
-      {:ok, type} when type in @terminal_failure_event_types ->
-        "terminal_failure_candidate"
-
-      {:ok, type} when type in ["response.created", "response.in_progress"] ->
-        "response_lifecycle"
-
-      {:ok, "codex.rate_limits"} ->
-        "rate_limit_event"
-
-      {:ok, type} when is_binary(type) ->
-        bounded_event_class(type)
-
-      {:ok, _type} ->
-        "invalid_frame"
+      {:ok, type} ->
+        EventTaxonomy.classify(type)
 
       :error ->
-        if Map.has_key?(decoded, "id"), do: "legacy_success_candidate", else: "untyped_event"
-    end
-  end
+        event_class =
+          if Map.has_key?(decoded, "id"),
+            do: "legacy_success_candidate",
+            else: "untyped_event"
 
-  defp bounded_event_class(type) do
-    cond do
-      String.starts_with?(type, "response.") -> "response_event"
-      String.starts_with?(type, "codex.") -> "codex_event"
-      true -> "other_event"
+        {"missing_type", event_class}
     end
   end
 end
