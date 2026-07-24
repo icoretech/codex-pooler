@@ -176,37 +176,43 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
           :for={{row, index} <- Enum.with_index(@podium)}
           id={"stats-api-key-podium-#{index + 1}"}
           data-role="leaderboard-podium-place"
-          class={podium_cell_class(index + 1)}
+          class={podium_place_class(index + 1)}
         >
-          <div class="flex justify-center">
-            <span class={podium_medallion_class(index + 1)} aria-label={"Rank #{index + 1}"}>
-              <.icon :if={index == 0} name="hero-trophy" class="size-4" />
-              <span :if={index > 0} class="font-mono text-sm font-bold">{index + 1}</span>
-            </span>
-          </div>
-          <div class="min-w-0">
-            <p class="truncate text-sm font-semibold text-base-content" title={row.display_name}>
-              {row.display_name || "API key not recorded"}
+          <div class="grid min-w-0 gap-2 p-3">
+            <div class="flex justify-center">
+              <span class={podium_medallion_class(index + 1)} aria-label={"Rank #{index + 1}"}>
+                <.icon :if={index == 0} name="hero-trophy" class="size-4" />
+                <span :if={index > 0} class="text-sm font-bold">{index + 1}</span>
+              </span>
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-sm font-semibold text-base-content" title={row.display_name}>
+                {row.display_name || "API key not recorded"}
+              </p>
+              <p class="truncate text-xs text-base-content/55">
+                {row.pool_name || "Pool not available"}
+              </p>
+            </div>
+            <p class="text-lg font-bold tabular-nums leading-tight text-base-content">
+              <%= if @sort == :cost do %>
+                {format_micros(row.settled_cost_micros)}
+              <% else %>
+                {Format.token_count(row.total_tokens)}
+                <span class="text-xs font-medium text-base-content/50">tokens</span>
+              <% end %>
             </p>
-            <p class="truncate text-xs text-base-content/55">
-              {row.pool_name || "Pool not available"}
+            <p class="text-[11px] leading-4 text-base-content/55">
+              <%= if @sort == :cost do %>
+                {format_integer(row.requests)} req · {Format.token_count(row.total_tokens)} tokens
+              <% else %>
+                {format_integer(row.requests)} req · {format_micros(row.settled_cost_micros)}
+              <% end %>
             </p>
           </div>
-          <p class="font-mono text-lg font-semibold tabular-nums leading-tight text-base-content">
-            <%= if @sort == :cost do %>
-              {format_micros(row.settled_cost_micros)}
-            <% else %>
-              {Format.token_count(row.total_tokens)}
-              <span class="text-xs font-medium text-base-content/50">tokens</span>
-            <% end %>
-          </p>
-          <p class="text-[11px] leading-4 text-base-content/55">
-            <%= if @sort == :cost do %>
-              {format_integer(row.requests)} req · {Format.token_count(row.total_tokens)} tokens
-            <% else %>
-              {format_integer(row.requests)} req · {format_micros(row.settled_cost_micros)}
-            <% end %>
-          </p>
+          <div class={podium_step_class(index + 1)} aria-hidden="true">
+            <span class="text-2xl font-extrabold opacity-25">{index + 1}</span>
+          </div>
+          <div class="h-1.5 rounded-b-sm bg-base-300" aria-hidden="true"></div>
         </li>
       </ol>
 
@@ -292,20 +298,28 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     ]
   end
 
-  @podium_cell_base "grid h-full min-w-0 content-start gap-2 rounded-box border p-3 text-center"
+  @podium_place_base "grid min-w-0 text-center"
 
-  defp podium_cell_class(1),
+  defp podium_place_class(1), do: [@podium_place_base, "sm:order-2"]
+  defp podium_place_class(2), do: [@podium_place_base, "sm:order-1"]
+  defp podium_place_class(3), do: [@podium_place_base, "sm:order-3"]
+
+  @podium_step_base "grid place-items-center rounded-t-lg border border-b-0"
+
+  defp podium_step_class(1),
     do: [
-      @podium_cell_base,
-      "sm:order-2 sm:py-5",
-      "border-(--codex-rank-gold)/45 bg-(--codex-rank-gold)/7"
+      @podium_step_base,
+      "h-21 border-(--codex-rank-gold)/45 bg-(--codex-rank-gold)/10 text-(--codex-rank-gold-ink)"
     ]
 
-  defp podium_cell_class(2),
-    do: [@podium_cell_base, "sm:order-1", "border-base-300 bg-base-200/30"]
+  defp podium_step_class(2),
+    do: [@podium_step_base, "h-14 border-base-300 bg-base-content/4 text-base-content"]
 
-  defp podium_cell_class(3),
-    do: [@podium_cell_base, "sm:order-3", "border-base-300 bg-base-200/30"]
+  defp podium_step_class(3),
+    do: [
+      @podium_step_base,
+      "h-9 border-(--codex-rank-bronze)/45 bg-(--codex-rank-bronze)/8 text-(--codex-rank-bronze-ink)"
+    ]
 
   @podium_medallion_base "grid size-9 shrink-0 place-items-center rounded-full border"
 
