@@ -18,6 +18,52 @@ test_postgres_database =
   System.get_env("CODEX_POOLER_TEST_POSTGRES_DB") ||
     System.get_env("POSTGRES_TEST_DB", "codex_pooler_test")
 
+# Only positive integer ids activate partitioning. Missing, blank, malformed,
+# zero, and negative values fail safe to the serial test configuration.
+test_partition =
+  case Integer.parse(System.get_env("MIX_TEST_PARTITION") || "") do
+    {partition, ""} when partition > 0 -> Integer.to_string(partition)
+    _invalid -> nil
+  end
+
+test_run_namespace =
+  if test_partition do
+    case System.get_env("CODEX_POOLER_TEST_RUN_NAMESPACE") do
+      nil ->
+        nil
+
+      namespace when byte_size(namespace) == 16 ->
+        if Regex.match?(~r/\A[0-9a-f]{16}\z/, namespace) do
+          namespace
+        else
+          raise "CODEX_POOLER_TEST_RUN_NAMESPACE must be exactly 16 lowercase hex characters"
+        end
+
+      _invalid ->
+        raise "CODEX_POOLER_TEST_RUN_NAMESPACE must be exactly 16 lowercase hex characters"
+    end
+  end
+
+test_database =
+  if test_partition && test_run_namespace do
+    base_fingerprint =
+      :sha256
+      |> :crypto.hash(test_postgres_database)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 8)
+
+    "codex_pooler_test_#{base_fingerprint}_#{test_run_namespace}_p#{test_partition}"
+  else
+    "#{test_postgres_database}#{test_partition}"
+  end
+
+test_repo_pool_size =
+  if test_partition do
+    8
+  else
+    System.schedulers_online() * 2
+  end
+
 # The MIX_TEST_PARTITION environment variable can be used
 # to fan out isolated test databases in CI.
 config :codex_pooler, CodexPooler.Repo,
@@ -25,11 +71,12 @@ config :codex_pooler, CodexPooler.Repo,
   password: test_postgres_password,
   hostname: test_postgres_host,
   port: String.to_integer(test_postgres_port),
-  database: "#{test_postgres_database}#{System.get_env("MIX_TEST_PARTITION")}",
+  database: test_database,
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2
+  pool_size: test_repo_pool_size
 
 config :codex_pooler, Oban,
+  notifier: if(test_partition, do: Oban.Notifiers.PG, else: Oban.Notifiers.Postgres),
   testing: :manual,
   queues: false,
   shutdown_grace_period: :timer.seconds(55),
