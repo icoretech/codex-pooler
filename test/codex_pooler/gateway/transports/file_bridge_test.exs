@@ -50,8 +50,10 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     request_id = Ecto.UUID.generate()
     assignment_id = Ecto.UUID.generate()
     identity_id = Ecto.UUID.generate()
-    path = upload_tempfile!("")
-    %{url: upload_url, served_ref: served_ref} = start_invalid_content_length_server!()
+    path = upload_tempfile!(String.duplicate("x", 32_768))
+
+    %{url: upload_url, served_ref: served_ref, server_pid: server_pid} =
+      start_invalid_content_length_server!()
 
     request_options =
       %{request_id: request_id}
@@ -87,6 +89,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assert log =~ "exception=Req.HTTPError"
     assert log =~ "reason=invalid_content_length_header"
     refute log =~ "authorization"
+    send(server_pid, :close)
   end
 
   defp upload_tempfile!(contents) do
@@ -122,9 +125,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
             "connection: close\r\n\r\n"
           ])
 
+        send(parent, {served_ref, :served})
+
+        receive do
+          :close -> :ok
+        end
+
         :gen_tcp.close(socket)
         :gen_tcp.close(listen_socket)
-        send(parent, {served_ref, :served})
       end)
 
     ExUnit.Callbacks.on_exit(fn ->
@@ -132,7 +140,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
       :gen_tcp.close(listen_socket)
     end)
 
-    %{url: "http://127.0.0.1:#{port}/upload", served_ref: served_ref}
+    %{
+      url: "http://127.0.0.1:#{port}/upload",
+      served_ref: served_ref,
+      server_pid: pid
+    }
   end
 
   defp read_raw_http_request(socket, acc \\ "") do
