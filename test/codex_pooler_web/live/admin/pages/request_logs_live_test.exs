@@ -357,8 +357,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-row-#{request.id} [data-role='route'] + [data-role='latency']",
-             "87ms"
+             "#request-log-row-#{request.id} [data-role='status-label'] [data-role='latency']",
+             "in 87ms"
            )
 
     assert has_element?(view, "#request-log-row-#{request.id}", "(2k cached)")
@@ -1632,8 +1632,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#request-log-#{ws_request.id}-route + #request-log-#{ws_request.id}-latency",
-             "4.2s"
+             "#request-log-#{ws_request.id}-latency",
+             "in 4.2s"
            )
 
     assert has_element?(
@@ -1938,10 +1938,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "/backend-api/codex/responses/compact"
            )
 
+    # The duration reads with the outcome now — "Succeeded in 142ms" — not
+    # alongside the route.
     assert has_element?(
              view,
-             "#{row_selector} [data-role='route'] + [data-role='latency']",
-             "142ms"
+             "#{row_selector} [data-role='status-label'] [data-role='latency']",
+             "in 142ms"
            )
 
     assert has_element?(

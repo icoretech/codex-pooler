@@ -286,6 +286,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           class="size-3 shrink-0"
         />
         {status_label(@request_log.status || "unknown")}
+        <%!-- The duration reads as part of the outcome — "Succeeded in 3.2s" —
+        rather than as a figure hanging off the route. Quiet and unbolded so the
+        status keeps the line. --%>
+        <span
+          :if={latency = format_route_latency(@request_log.latency_ms)}
+          id={"#{@prefix}-#{@request_log.id}-latency"}
+          data-role="latency"
+          class="shrink-0 font-normal text-base-content/45"
+          title={format_latency_title(@request_log.latency_ms)}
+        >
+          in {latency}
+        </span>
       </span>
     </button>
     """
@@ -371,15 +383,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           title={format_transport_route(@request_log)}
         >
           {format_transport_route(@request_log)}
-        </span>
-        <span
-          :if={latency = format_route_latency(@request_log.latency_ms)}
-          id={"#{@prefix}-#{@request_log.id}-latency"}
-          data-role="latency"
-          class="inline-flex shrink-0 whitespace-nowrap text-base-content/45"
-          title={format_latency_title(@request_log.latency_ms)}
-        >
-          {latency}
         </span>
       </span>
       <span class="flex h-5 min-w-0 items-center gap-2">
