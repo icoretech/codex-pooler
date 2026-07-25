@@ -4,7 +4,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.State do
   @default_job_state_presentation %{
     icon: "hero-question-mark-circle",
     icon_class: "mx-auto size-5 text-base-content/60",
-    badge_class: "border-base-300 bg-base-200 text-base-content/70",
+    tone: :neutral,
     label: nil
   }
 
@@ -12,67 +12,67 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.State do
     "completed" => %{
       icon: "hero-check-circle",
       icon_class: "mx-auto size-5 text-success",
-      badge_class: "border-success/40 bg-success/10 text-success",
+      tone: :success,
       label: nil
     },
     "discarded" => %{
       icon: "hero-x-circle",
       icon_class: "mx-auto size-5 text-error",
-      badge_class: "border-error/40 bg-error/10 text-error",
+      tone: :error,
       label: nil
     },
     "cancelled" => %{
       icon: "hero-no-symbol",
       icon_class: "mx-auto size-5 text-warning",
-      badge_class: "border-warning/40 bg-warning/10 text-warning",
+      tone: :warning,
       label: nil
     },
     "executing" => %{
       icon: "hero-clock",
       icon_class: "mx-auto size-5 text-info",
-      badge_class: "border-info/40 bg-info/10 text-info",
+      tone: :info,
       label: nil
     },
     "retryable" => %{
       icon: "hero-exclamation-triangle",
       icon_class: "mx-auto size-5 text-warning",
-      badge_class: "border-warning/40 bg-warning/10 text-warning",
+      tone: :warning,
       label: nil
     },
     "available" => %{
       icon: "hero-clock",
       icon_class: "mx-auto size-5 text-info",
-      badge_class: "border-info/40 bg-info/10 text-info",
+      tone: :info,
       label: nil
     },
     "scheduled" => %{
       icon: "hero-clock",
       icon_class: "mx-auto size-5 text-info",
-      badge_class: "border-info/40 bg-info/10 text-info",
+      tone: :info,
       label: nil
     },
     "awaiting_first_run" => %{
       icon: "hero-clock",
       icon_class: "mx-auto size-5 text-info",
-      badge_class: "border-info/40 bg-info/10 text-info",
+      tone: :info,
       label: "Awaiting first run"
     },
     "idle" => %{
       icon: "hero-minus-circle",
       icon_class: "mx-auto size-5 text-base-content/40",
-      badge_class: "border-base-300 bg-base-200 text-base-content/70",
+      tone: :neutral,
       label: "No observed run"
     }
   }
+
+  @spec tone(String.t() | nil) :: atom()
+  def tone(state), do: presentation(state).tone
 
   @spec icon(String.t() | nil) :: String.t()
   def icon(state), do: presentation(state).icon
 
   @spec icon_class(String.t() | nil) :: String.t()
   def icon_class(state), do: presentation(state).icon_class
-
-  @spec badge_class(String.t() | nil) :: String.t()
-  def badge_class(state), do: presentation(state).badge_class
 
   @spec label(String.t() | nil) :: String.t()
   def label(nil), do: "Unknown"

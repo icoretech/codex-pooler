@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
       format_attempts: 1,
       format_job_timestamp: 2,
       job_failure_summary: 1,
-      job_state_badge_class: 1,
+      job_state_chip_class: 1,
       job_state_label: 1,
       job_target: 1
     ]
@@ -226,7 +226,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.DetailDrawer do
   defp job_status(%{state: state}), do: job_state_label(state)
   defp job_status(_job), do: nil
 
-  defp job_status_class(%{state: state}), do: job_state_badge_class(state)
+  defp job_status_class(%{state: state}), do: job_state_chip_class(state)
   defp job_status_class(_job), do: nil
 
   defp safe_text(value, fallback \\ "-")

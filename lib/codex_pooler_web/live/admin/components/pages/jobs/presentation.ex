@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.Schedule
   alias CodexPoolerWeb.Admin.AvatarComponents
+  alias CodexPoolerWeb.Admin.BadgeComponents
   alias CodexPoolerWeb.Admin.JobsPresentation.{State, Targets}
   alias CodexPoolerWeb.DateTimeDisplay
   alias Oban.Cron.Expression
@@ -94,11 +95,60 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   @spec job_state_icon_class(String.t() | nil) :: String.t()
   defdelegate job_state_icon_class(state), to: State, as: :icon_class
 
-  @spec job_state_badge_class(String.t() | nil) :: String.t()
-  defdelegate job_state_badge_class(state), to: State, as: :badge_class
+  @doc """
+  Chip classes for a job state, from the shared badge vocabulary.
+
+  Always a complete chip; a tone on its own has no shape and paints a band
+  across whatever box it lands in.
+  """
+  @spec job_state_chip_class(String.t() | nil) :: String.t()
+  def job_state_chip_class(state), do: BadgeComponents.metadata_chip_class(State.tone(state))
+
+  @doc """
+  Text-only variant of the state, for rows that name the state inline.
+  """
+  @spec job_state_text_class(String.t() | nil) :: String.t()
+  def job_state_text_class(state), do: "font-semibold #{state_text_tone(State.tone(state))}"
+
+  defp state_text_tone(:success), do: "text-success"
+  defp state_text_tone(:warning), do: "text-warning"
+  defp state_text_tone(:error), do: "text-error"
+  defp state_text_tone(:info), do: "text-info"
+  defp state_text_tone(_tone), do: "text-base-content/70"
 
   @spec job_state_label(String.t() | nil) :: String.t()
   defdelegate job_state_label(state), to: State, as: :label
+
+  @spec job_state_tone(String.t() | nil) :: atom()
+  defdelegate job_state_tone(state), to: State, as: :tone
+
+  @doc """
+  Operator-facing name for a worker module.
+
+  `CodexPooler.Jobs.AccountReconciliationWorker` reads as
+  "Account reconciliation". The module itself stays available for the title
+  attribute and the drawer, which is where the exact value matters.
+  """
+  @spec job_worker_label(term()) :: String.t()
+  def job_worker_label(worker) when is_binary(worker) and worker != "" do
+    worker
+    |> String.split(".")
+    |> List.last()
+    |> String.replace_suffix("Worker", "")
+    |> humanize_module_segment()
+  end
+
+  def job_worker_label(_worker), do: "Unnamed job"
+
+  defp humanize_module_segment(segment) do
+    case Regex.scan(~r/[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+/, segment) do
+      [] ->
+        segment
+
+      [[first] | rest] ->
+        Enum.map_join([first | Enum.map(rest, fn [word] -> String.downcase(word) end)], " ", & &1)
+    end
+  end
 
   defp worker_groups, do: Schedule.worker_groups()
 

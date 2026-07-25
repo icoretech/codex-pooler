@@ -292,18 +292,17 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     assert has_element?(view, "#admin-jobs-explorer-total", "1 job")
     assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-1 of 1")
     assert has_element?(view, "#admin-jobs-explorer-table")
-    assert has_element?(view, "#admin-jobs-explorer-mobile #job-card-#{job.id}")
-    assert has_element?(view, "#job-#{job.id}", "RuntimeStateCleanupWorker")
+    assert has_element?(view, "#admin-jobs-explorer-rows #job-#{job.id}")
+    assert has_element?(view, "#job-#{job.id}", "Runtime state cleanup")
     assert has_element?(view, state_label_selector(job), "Completed")
     refute has_element?(view, "#job-#{job.id} [data-role='state-icon']")
     refute has_element?(view, "#job-#{job.id} [data-role='state-chip']")
-    assert has_element?(view, "#job-#{job.id} [data-role='queue']", "Queue jobs")
     assert has_element?(view, "#job-#{job.id} [data-role='job-target-empty']", "-")
 
     assert has_element?(
              view,
              "#job-#{job.id} [data-role='worker']",
-             "RuntimeStateCleanupWorker"
+             "Runtime state cleanup"
            )
 
     assert has_element?(view, "#job-#{job.id} [data-role='job-event-label']", "Completed")

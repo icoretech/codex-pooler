@@ -293,7 +293,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
 
     {_result, events} =
       capture_repo_queries(fn ->
-        render_click(element(view, "#admin-jobs-explorer-desktop #job-#{job.id}"))
+        render_click(element(view, "#admin-jobs-explorer-rows #job-#{job.id}"))
         assert_patch(view, ~p"/admin/jobs?job_id=#{job.id}")
       end)
 
@@ -329,7 +329,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
     assert has_element?(view, "[data-role='job-detail-drawer-side'] > #job-detail-sidebar")
     refute has_element?(view, "#job-detail-sidebar #job-detail-metadata")
 
-    render_click(element(view, "#admin-jobs-explorer-desktop #job-#{job.id}"))
+    render_click(element(view, "#admin-jobs-explorer-rows #job-#{job.id}"))
     assert_patch(view, ~p"/admin/jobs?job_id=#{job.id}")
 
     assert has_element?(view, "#job-detail-drawer[checked]")
@@ -524,7 +524,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveWorkerCardsTest do
 
     assert has_element?(
              view,
-             "#admin-jobs-explorer-desktop #job-#{job.id} [data-role='failure-title']",
+             "#admin-jobs-explorer-rows #job-#{job.id} [data-role='failure-title']",
              "Attempt 3 · Invalid catalog sync trigger"
            )
 

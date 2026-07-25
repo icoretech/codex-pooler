@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.JobFilterForm
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :explorer, :map, required: true
   attr :current_params, :map, required: true
@@ -45,13 +46,13 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
 
       <div
         :if={@explorer.items != []}
-        id="admin-jobs-explorer-desktop"
-        data-role="explorer-desktop"
-        class="hidden overflow-x-auto rounded-box border border-base-300 bg-base-100 lg:block"
+        id="admin-jobs-explorer-rows"
+        data-role="explorer-rows"
+        class="rounded-box border border-base-300 bg-base-100 lg:overflow-x-auto"
       >
         <table
           id="admin-jobs-explorer-table"
-          class="table table-sm admin-log-table min-w-[72rem]"
+          class="admin-ledger-table admin-status-tick table table-sm admin-log-table lg:min-w-[72rem]"
         >
           <colgroup>
             <col style="width: 24rem;" />
@@ -80,19 +81,6 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
             />
           </tbody>
         </table>
-      </div>
-
-      <div
-        :if={@explorer.items != []}
-        id="admin-jobs-explorer-mobile"
-        data-role="explorer-mobile"
-        class="grid gap-3 lg:hidden"
-      >
-        <.job_card
-          :for={job <- @explorer.items}
-          job={job}
-          datetime_preferences={@datetime_preferences}
-        />
       </div>
 
       <footer class="border-t border-base-300/70 py-3">
@@ -143,54 +131,35 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
       data-role="job-row"
       data-density="compact"
       data-job-id={@job.id}
+      data-tone={job_state_tone(@job.state)}
       phx-click="open_job"
       phx-value-job-id={@job.id}
-      class="cursor-pointer transition-colors hover:bg-base-200/80"
+      class="group/job cursor-pointer transition-colors hover:bg-base-200/80"
     >
-      <td class="min-w-0 align-middle">
+      <td class="min-w-0 align-middle max-lg:col-start-2 max-lg:row-start-1 max-lg:self-baseline">
         <.job_compact_identity job={@job} />
       </td>
-      <td class="min-w-0 align-middle">
+      <td class="min-w-0 align-middle max-lg:col-span-2 max-lg:col-start-2 max-lg:row-start-2">
         <.job_target_summary job={@job} />
       </td>
-      <td class="whitespace-nowrap align-middle text-base-content/70">
+      <td class="whitespace-nowrap align-middle text-base-content/70 max-lg:col-start-3 max-lg:row-start-1 max-lg:self-baseline max-lg:text-right">
         <.job_event job={@job} datetime_preferences={@datetime_preferences} />
       </td>
       <td
-        class="align-middle tabular-nums text-base-content/75"
+        class={[
+          "align-middle tabular-nums text-base-content/75",
+          "max-lg:col-start-3 max-lg:row-start-2 max-lg:row-end-4 max-lg:self-end",
+          "max-lg:text-right max-lg:text-xs max-lg:leading-tight",
+          !attempted?(@job) && "max-lg:hidden"
+        ]}
         data-role="attempts"
       >
         {format_attempts(@job)}
       </td>
-      <td class="min-w-0 align-middle">
+      <td class="min-w-0 align-middle max-lg:col-span-2 max-lg:col-start-2 max-lg:row-start-3 max-lg:mt-1 max-lg:has-[.job-failure-empty]:hidden">
         <.job_failure job={@job} />
       </td>
     </tr>
-    """
-  end
-
-  attr :job, :map, required: true
-  attr :datetime_preferences, :map, required: true
-
-  defp job_card(assigns) do
-    ~H"""
-    <article
-      id={"job-card-#{@job.id}"}
-      data-role="job-card"
-      data-job-id={@job.id}
-      phx-click="open_job"
-      phx-value-job-id={@job.id}
-      class="grid cursor-pointer gap-3 rounded-box border border-base-300 bg-base-100 p-4 text-sm transition-colors hover:bg-base-200/60"
-    >
-      <.job_identity job={@job} />
-      <.job_target_summary job={@job} />
-      <div class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
-        <span class="font-semibold text-base-content/80">Attempts</span>
-        <span data-role="attempts" class="tabular-nums">{format_attempts(@job)}</span>
-      </div>
-      <.job_timeline job={@job} datetime_preferences={@datetime_preferences} />
-      <.job_failure job={@job} />
-    </article>
     """
   end
 
@@ -199,21 +168,23 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
   defp job_compact_identity(assigns) do
     ~H"""
     <div class="grid min-w-0 gap-0.5">
-      <span
+      <button
+        id={"job-#{@job.id}-open-details"}
+        type="button"
         data-role="worker"
-        class="truncate text-[0.82rem] font-semibold leading-tight text-base-content"
+        phx-click="open_job"
+        phx-value-job-id={@job.id}
         title={safe_text(@job.worker)}
+        class="block w-full truncate text-left text-[0.82rem] font-semibold leading-tight text-base-content transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-hover/job:text-primary"
       >
-        {safe_text(@job.worker)}
-      </span>
+        {job_worker_label(@job.worker)}
+      </button>
       <span
         data-role="job-meta"
-        class="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-tight text-base-content/50"
-        title={"Job ##{@job.id} · Queue #{safe_text(@job.queue)} · #{job_state_label(@job.state)}"}
+        class="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-tight text-base-content/50 max-lg:hidden"
+        title={"Job ##{@job.id} · #{job_state_label(@job.state)}"}
       >
         <span class="shrink-0">#{@job.id}</span>
-        <span aria-hidden="true">·</span>
-        <span data-role="queue" class="shrink-0">Queue {safe_text(@job.queue)}</span>
         <span aria-hidden="true">·</span>
         <span data-role="state-label" class={job_state_text_class(@job.state)}>
           {job_state_label(@job.state)}
@@ -225,70 +196,59 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
 
   attr :job, :map, required: true
 
-  defp job_identity(assigns) do
-    ~H"""
-    <div class="flex min-w-0 items-start gap-3">
-      <span
-        data-role="state-icon"
-        title={job_state_label(@job.state)}
-        aria-label={"State: #{job_state_label(@job.state)}"}
-        class="mt-0.5 shrink-0"
-      >
-        <.icon name={job_state_icon(@job.state)} class={job_state_icon_class(@job.state)} />
-      </span>
-      <div class="grid min-w-0 gap-1">
-        <span data-role="state-label" class={job_state_badge_class(@job.state)}>
-          {job_state_label(@job.state)}
-        </span>
-        <span
-          data-role="worker"
-          class="truncate text-xs font-semibold text-base-content/80"
-          title={safe_text(@job.worker)}
-        >
-          {safe_text(@job.worker)}
-        </span>
-        <span
-          data-role="queue"
-          class="truncate text-xs text-base-content/55"
-          title={safe_text(@job.queue)}
-        >
-          Queue {safe_text(@job.queue)}
-        </span>
-      </div>
-    </div>
-    """
-  end
-
-  attr :job, :map, required: true
-
   defp job_target_summary(assigns) do
+    assigns = assign(assigns, target: job_target(assigns.job))
+
     ~H"""
     <div class="min-w-0 text-base-content/70">
-      <div
-        :if={target = job_target(@job)}
+      <p
         data-role="job-target"
-        class="grid min-w-0 gap-0.5 leading-tight"
+        class="flex min-w-0 items-baseline gap-x-1.5 leading-tight max-lg:text-xs"
       >
+        <span class={["shrink-0 lg:hidden", job_state_text_class(@job.state)]}>
+          {job_state_label(@job.state)}
+        </span>
+        <span :if={@target} aria-hidden="true" class="shrink-0 text-base-content/30 lg:hidden">
+          ·
+        </span>
         <span
+          :if={@target}
           data-role="target-primary"
           class="min-w-0 truncate font-medium text-base-content/80"
-          title={target.primary_title}
+          title={target_title(@target)}
         >
-          {target.primary}
+          {target_primary(@target)}
         </span>
-        <span
-          :if={target.secondary}
-          data-role="target-secondary"
-          class="min-w-0 truncate text-base-content/55"
-          title={target.secondary_title}
-        >
-          {target.secondary}
+        <span :if={is_nil(@target)} data-role="job-target-empty" class="shrink-0 max-lg:hidden">
+          -
         </span>
-      </div>
-      <span :if={!job_target(@job)} data-role="job-target-empty">-</span>
+      </p>
+      <span
+        :if={target_secondary(@target)}
+        data-role="target-secondary"
+        class="block min-w-0 truncate leading-tight text-base-content/55 max-lg:hidden"
+        title={target_secondary_title(@target)}
+      >
+        {target_secondary(@target)}
+      </span>
     </div>
     """
   end
+
+  defp target_primary(%{primary: primary}), do: primary
+  defp target_primary(_target), do: nil
+
+  defp target_title(%{primary_title: title}), do: title
+  defp target_title(_target), do: nil
+
+  defp target_secondary(%{secondary: secondary}), do: secondary
+  defp target_secondary(_target), do: nil
+
+  defp target_secondary_title(%{secondary_title: title}), do: title
+  defp target_secondary_title(_target), do: nil
+
+  defp attempted?(%{attempt: attempt}) when is_integer(attempt) and attempt > 0, do: true
+  defp attempted?(_job), do: false
 
   attr :job, :map, required: true
   attr :datetime_preferences, :map, required: true
@@ -300,44 +260,24 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
     <div data-role="job-event" class="grid min-w-0 gap-0.5">
       <span
         data-role="job-event-label"
-        class="font-semibold uppercase leading-tight text-base-content/45"
+        class="font-semibold uppercase leading-tight text-base-content/45 max-lg:hidden"
       >
         {@event.label}
       </span>
       <span
         data-role="job-event-time"
-        class="truncate leading-tight tabular-nums text-base-content/70"
+        class="truncate leading-tight tabular-nums text-base-content/70 max-lg:hidden"
         title={@event.timestamp}
       >
         {@event.timestamp}
       </span>
-    </div>
-    """
-  end
-
-  attr :job, :map, required: true
-  attr :datetime_preferences, :map, required: true
-
-  defp job_timeline(assigns) do
-    ~H"""
-    <div class="grid gap-1 text-xs text-base-content/60">
-      <span data-role="inserted-at">
-        {timestamp_line("Inserted", @job.inserted_at, @datetime_preferences)}
-      </span>
-      <span data-role="scheduled-at">
-        {timestamp_line("Scheduled", @job.scheduled_at, @datetime_preferences)}
-      </span>
-      <span data-role="attempted-at">
-        {timestamp_line("Attempted", @job.attempted_at, @datetime_preferences)}
-      </span>
-      <span data-role="completed-at">
-        {timestamp_line("Completed", @job.completed_at, @datetime_preferences)}
-      </span>
-      <span data-role="discarded-at">
-        {timestamp_line("Discarded", @job.discarded_at, @datetime_preferences)}
-      </span>
-      <span data-role="cancelled-at">
-        {timestamp_line("Cancelled", @job.cancelled_at, @datetime_preferences)}
+      <span
+        :if={@event.clock}
+        data-role="job-event-clock"
+        class="hidden truncate text-xs leading-tight tabular-nums text-base-content/50 max-lg:block"
+        title={@event.timestamp}
+      >
+        {@event.clock}
       </span>
     </div>
     """
@@ -362,7 +302,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
     <span
       :if={!job_failure_summary(@job)}
       data-role="failure-empty"
-      class="text-[0.72rem] text-base-content/45"
+      class="job-failure-empty text-[0.72rem] text-base-content/45"
     >
       -
     </span>
@@ -421,25 +361,29 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
     "Showing #{first}-#{last} of #{total}"
   end
 
-  defp job_state_text_class(state) do
-    state
-    |> job_state_badge_class()
-    |> String.split()
-    |> Enum.filter(&String.starts_with?(&1, "text-"))
-    |> Enum.concat(["font-semibold"])
-    |> Enum.join(" ")
-  end
-
   defp job_event_summary(job, datetime_preferences) do
     job
     |> job_event_candidates()
     |> Enum.find(fn {_label, value} -> match?(%DateTime{}, value) end)
     |> case do
       {label, %DateTime{} = datetime} ->
-        %{label: label, timestamp: format_job_timestamp(datetime, datetime_preferences)}
+        %{
+          label: label,
+          timestamp: format_job_timestamp(datetime, datetime_preferences),
+          clock: event_clock(datetime, datetime_preferences)
+        }
 
       nil ->
-        %{label: "Observed", timestamp: "-"}
+        %{label: "Observed", timestamp: "-", clock: nil}
+    end
+  end
+
+  # The ledger line has room for the clock only; the full stamp stays in the
+  # title and in the drawer. Honors the operator's format and timezone.
+  defp event_clock(datetime, datetime_preferences) do
+    case DateTimeDisplay.format_datetime_parts(datetime, datetime_preferences) do
+      %{time: time} when is_binary(time) and time != "" -> time
+      _no_parts -> nil
     end
   end
 

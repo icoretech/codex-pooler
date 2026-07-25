@@ -72,7 +72,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveRefreshTest do
     rendered = render(view)
 
     assert count_occurrences(rendered, ~s(<tr id="job-)) == 20
-    assert count_occurrences(rendered, ~s(<article id="job-card-)) == 20
     assert has_element?(view, "#admin-jobs-explorer-total", "51 jobs")
     assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-20 of 51")
     assert has_element?(view, "#job-#{List.last(jobs).id}")
