@@ -45,7 +45,14 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
              },
              "safe_evidence_summary" => %{
                "assignment_count" => 0,
+               "circuit_blocked_assignment_count" => 2,
+               "circuit_blocked_lane_count" => 3,
+               "circuit_blocked_reasons" => ["open_cooldown", "probe_saturated"],
+               "circuit_blocked_route_classes" => ["proxy_stream", "proxy_websocket"],
+               "circuit_recency_seconds" => 900,
                "model" => "gpt-5.5",
+               "model_membership_resolved" => true,
+               "non_serving_assignment_count" => 1,
                "quota_state" => "exhausted",
                "reason_code" => "no_usable_assignments",
                "route_class_scope" => "proxy_stream",
@@ -83,7 +90,14 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
 
     assert summary == %{
              "assignment_count" => 0,
+             "circuit_blocked_assignment_count" => 2,
+             "circuit_blocked_lane_count" => 3,
+             "circuit_blocked_reasons" => ["open_cooldown", "probe_saturated"],
+             "circuit_blocked_route_classes" => ["proxy_stream", "proxy_websocket"],
+             "circuit_recency_seconds" => 900,
              "model" => "gpt-5.5",
+             "model_membership_resolved" => true,
+             "non_serving_assignment_count" => 1,
              "quota_state" => "exhausted",
              "reason_code" => "no_usable_assignments",
              "route_class_scope" => "proxy_stream",
@@ -174,7 +188,24 @@ defmodule CodexPooler.Alerts.Delivery.WebhookPayloadTest do
     %{
       "reason_code" => "no_usable_assignments",
       "assignment_count" => 0,
+      "circuit_blocked_assignment_count" => 2,
+      "circuit_blocked_lane_count" => 3,
+      "circuit_blocked_reasons" => [
+        "probe_saturated",
+        "unbounded-provider-reason",
+        "open_cooldown",
+        "probe_saturated"
+      ],
+      "circuit_blocked_route_classes" => [
+        "proxy_websocket",
+        "unknown_route",
+        "proxy_stream",
+        "proxy_websocket"
+      ],
+      "circuit_recency_seconds" => 900,
       "model" => "gpt-5.5",
+      "model_membership_resolved" => true,
+      "non_serving_assignment_count" => 1,
       "quota_state" => "exhausted",
       "route_class_scope" => "proxy_stream",
       "status" => "active",

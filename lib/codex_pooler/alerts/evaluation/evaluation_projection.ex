@@ -5,6 +5,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
 
   import Ecto.Query
 
+  alias CodexPooler.Alerts.Evaluation.CircuitTerm
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -14,35 +15,59 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
   @auth_target_states ~w(reauth_required refresh_failed)
 
   @type projection_cache :: %{
-          optional({Ecto.UUID.t() | nil, String.t() | nil}) => [map()]
+          optional(tuple()) => term()
         }
 
-  @spec pool_from_cache(Ecto.UUID.t() | nil, String.t() | nil, DateTime.t(), projection_cache()) ::
+  @spec pool_from_cache(
+          Ecto.UUID.t() | nil,
+          String.t() | nil,
+          map(),
+          boolean(),
+          projection_cache()
+        ) ::
           {map(), projection_cache()}
-  def pool_from_cache(pool_id, model, timestamp, projection_cache) do
+  def pool_from_cache(pool_id, model, context, circuit_term?, projection_cache) do
     {assignments, projection_cache} =
-      assigned_identities_from_cache(pool_id, model, timestamp, projection_cache)
+      assigned_identities_from_cache(pool_id, model, context, circuit_term?, projection_cache)
 
-    {pool_from_assignments(pool_id, model, assignments), projection_cache}
+    evidence =
+      Map.get(
+        projection_cache,
+        CircuitTerm.evidence_cache_key(pool_id, model, context, circuit_term?),
+        CircuitTerm.default_evidence()
+      )
+
+    {pool_from_assignments(pool_id, model, assignments, evidence), projection_cache}
   end
 
   @spec assigned_identities_from_cache(
           Ecto.UUID.t() | nil,
           String.t() | nil,
-          DateTime.t(),
+          map(),
+          boolean(),
           projection_cache()
         ) :: {[map()], projection_cache()}
-  def assigned_identities_from_cache(pool_id, model, timestamp, projection_cache) do
-    cache_key = {pool_id, model}
+  def assigned_identities_from_cache(pool_id, model, context, circuit_term?, projection_cache) do
+    cache_key = {pool_id, model, circuit_term?}
 
-    case Map.fetch(projection_cache, cache_key) do
-      {:ok, assignments} ->
-        {assignments, projection_cache}
+    {assignments, projection_cache} =
+      case Map.fetch(projection_cache, cache_key) do
+        {:ok, assignments} ->
+          {assignments, projection_cache}
 
-      :error ->
-        assignments = assigned_identities(pool_id, model, timestamp)
-        {assignments, Map.put(projection_cache, cache_key, assignments)}
-    end
+        :error ->
+          assignments = assigned_identities(pool_id, model, context.at)
+          {assignments, Map.put(projection_cache, cache_key, assignments)}
+      end
+
+    maybe_apply_circuit_term(
+      assignments,
+      pool_id,
+      model,
+      context,
+      circuit_term?,
+      projection_cache
+    )
   end
 
   @spec enabled_assignment?(map()) :: boolean()
@@ -57,7 +82,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
     |> Enum.all?(&(&1.state == target_state))
   end
 
-  defp pool_from_assignments(pool_id, model, assignments) do
+  defp pool_from_assignments(pool_id, model, assignments, circuit_evidence) do
     enabled = Enum.filter(assignments, &enabled_assignment?/1)
     usable = Enum.filter(enabled, & &1.usable_assignment?)
 
@@ -68,6 +93,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
       enabled_assignment_count: length(enabled),
       usable_assignment_count: length(usable),
       state_counts: Enum.frequencies_by(enabled, & &1.state),
+      circuit_evidence: circuit_evidence,
       assignments: assignments
     }
   end
@@ -89,9 +115,68 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
         quota_windows: windows,
         quota: quota_projection,
         state: assignment_state(row, quota_projection),
-        usable_assignment?: usable_assignment?(row, quota_projection)
+        enabled_assignment?: enabled_assignment?(row),
+        serves_model?: true,
+        circuit_blocked?: false,
+        blocked_lanes: [],
+        usable_assignment?:
+          usable_assignment?(row, quota_projection, %{
+            serves_model?: true,
+            circuit_blocked?: false
+          })
       })
     end)
+  end
+
+  defp maybe_apply_circuit_term(
+         assignments,
+         pool_id,
+         model,
+         context,
+         false,
+         projection_cache
+       ) do
+    projection_cache =
+      Map.put(
+        projection_cache,
+        CircuitTerm.evidence_cache_key(pool_id, model, context, false),
+        CircuitTerm.default_evidence()
+      )
+
+    {assignments, projection_cache}
+  end
+
+  defp maybe_apply_circuit_term(
+         assignments,
+         pool_id,
+         model,
+         context,
+         true,
+         projection_cache
+       ) do
+    {assignments, evidence, projection_cache} =
+      CircuitTerm.apply(assignments, pool_id, model, context, projection_cache)
+
+    assignments =
+      Enum.map(assignments, fn assignment ->
+        Map.put(
+          assignment,
+          :usable_assignment?,
+          usable_assignment?(assignment, assignment.quota, %{
+            serves_model?: assignment.serves_model?,
+            circuit_blocked?: assignment.circuit_blocked?
+          })
+        )
+      end)
+
+    projection_cache =
+      Map.put(
+        projection_cache,
+        CircuitTerm.evidence_cache_key(pool_id, model, context, true),
+        evidence
+      )
+
+    {assignments, projection_cache}
   end
 
   defp assignment_rows(pool_id) do
@@ -204,10 +289,10 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationProjection do
 
   defp assignment_state(_row, %{state: state}), do: state
 
-  defp usable_assignment?(row, quota) do
+  defp usable_assignment?(row, quota, term) do
     row.assignment_status == @active and row.health_status == @active and
       row.eligibility_status == "eligible" and row.identity_status == @active and
-      quota.routing_usable?
+      quota.routing_usable? and term.serves_model? and not term.circuit_blocked?
   end
 
   defp model_opts(nil), do: []

@@ -3,6 +3,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
   Builds generic alert evaluation match/clear candidates and stable dedupe keys.
   """
 
+  alias CodexPooler.Alerts.Evaluation.CircuitTerm
   alias CodexPooler.Alerts.Incidents.IncidentLifecycle
   alias CodexPooler.Alerts.Schemas.AlertRule
   alias CodexPooler.Upstreams.Quota
@@ -20,6 +21,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
   @spec pool_match(AlertRule.t(), map(), String.t(), DateTime.t()) :: candidate()
   def pool_match(%AlertRule{} = rule, projection, reason_code, %DateTime{} = timestamp) do
     dedupe_key = dedupe_key_for_rule(rule, nil)
+    circuit_evidence = Map.get(projection, :circuit_evidence, CircuitTerm.default_evidence())
 
     match(rule, dedupe_key, timestamp, %{
       pool_id: rule.pool_id,
@@ -33,7 +35,14 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
         "usable_assignment_count" => projection.usable_assignment_count,
         "state_counts" => stringify_count_keys(projection.state_counts),
         "min_usable_assignments" => rule.min_usable_assignments,
-        "target_state" => rule.target_state
+        "target_state" => rule.target_state,
+        "circuit_blocked_assignment_count" => circuit_evidence.circuit_blocked_assignment_count,
+        "circuit_blocked_route_classes" => circuit_evidence.circuit_blocked_route_classes,
+        "circuit_blocked_reasons" => circuit_evidence.circuit_blocked_reasons,
+        "circuit_blocked_lane_count" => circuit_evidence.circuit_blocked_lane_count,
+        "circuit_recency_seconds" => circuit_evidence.circuit_recency_seconds,
+        "model_membership_resolved" => circuit_evidence.model_membership_resolved,
+        "non_serving_assignment_count" => circuit_evidence.non_serving_assignment_count
       },
       targets: [target(rule, rule.pool_id, %{reason_code: reason_code})]
     })

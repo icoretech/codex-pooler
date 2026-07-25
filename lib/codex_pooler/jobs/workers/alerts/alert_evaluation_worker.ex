@@ -34,11 +34,12 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
         args: %{
           "alert_rule_id" => rule_id,
           "evaluation_window_started_at" => evaluation_window_started_at
-        }
+        },
+        attempted_at: %DateTime{} = attempted_at
       }) do
     with {:ok, timestamp} <- parse_evaluation_window(evaluation_window_started_at),
          {:ok, rule} <- Alerts.fetch_rule_for_evaluation(rule_id),
-         :ok <- evaluate_and_record(rule, timestamp) do
+         :ok <- evaluate_and_record(rule, timestamp, attempted_at) do
       :ok
     else
       {:error, reason}
@@ -52,10 +53,11 @@ defmodule CodexPooler.Jobs.AlertEvaluationWorker do
 
   def perform(%Oban.Job{}), do: {:cancel, :invalid_alert_evaluation_args}
 
-  @spec evaluate_and_record(term(), DateTime.t()) :: :ok | {:error, evaluation_error()}
-  defp evaluate_and_record(rule, timestamp) do
+  @spec evaluate_and_record(term(), DateTime.t(), DateTime.t()) ::
+          :ok | {:error, evaluation_error()}
+  defp evaluate_and_record(rule, timestamp, attempted_at) do
     rule
-    |> Alerts.evaluate_rule(at: timestamp)
+    |> Alerts.evaluate_rule(at: timestamp, circuit_observed_at: attempted_at)
     |> Enum.reduce_while(:ok, fn candidate, :ok ->
       case record_candidate(candidate) do
         :ok -> {:cont, :ok}

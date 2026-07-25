@@ -5,6 +5,7 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
   import Swoosh.TestAssertions
 
   alias CodexPooler.Alerts.Delivery.EmailDelivery
+  alias CodexPooler.Alerts.Delivery.WebhookPayload
 
   alias CodexPooler.Alerts.Schemas.{
     AlertChannel,
@@ -75,6 +76,11 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     refute_forbidden_values(email.text_body)
     assert email.text_body =~ "Reason code: no_usable_assignments"
     assert email.text_body =~ "- assignment_count: 0"
+    assert email.text_body =~ "- circuit_blocked_assignment_count: 2"
+    assert email.text_body =~ "- circuit_blocked_lane_count: 3"
+    assert email.text_body =~ "- circuit_recency_seconds: 900"
+    assert email.text_body =~ "- model_membership_resolved: true"
+    assert email.text_body =~ "- non_serving_assignment_count: 1"
     assert email.text_body =~ "- route_class_scope: proxy_stream"
     refute email.text_body =~ "safe_to_ignore"
 
@@ -103,9 +109,19 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
 
     assert attempt.response_metadata["safe_evidence_summary"] == %{
              "assignment_count" => 0,
+             "circuit_blocked_assignment_count" => 2,
+             "circuit_blocked_lane_count" => 3,
+             "circuit_blocked_reasons" => ["open_cooldown", "probe_saturated"],
+             "circuit_blocked_route_classes" => ["proxy_stream", "proxy_websocket"],
+             "circuit_recency_seconds" => 900,
+             "model_membership_resolved" => true,
+             "non_serving_assignment_count" => 1,
              "reason_code" => "no_usable_assignments",
              "route_class_scope" => "proxy_stream"
            }
+
+    assert attempt.response_metadata["safe_evidence_summary"] ==
+             WebhookPayload.safe_evidence_summary(incident.safe_evidence_snapshot)
   end
 
   @tag :saved_reset_banked_first_seen
@@ -186,6 +202,23 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     %{
       "reason_code" => "no_usable_assignments",
       "assignment_count" => 0,
+      "circuit_blocked_assignment_count" => 2,
+      "circuit_blocked_lane_count" => 3,
+      "circuit_blocked_reasons" => [
+        "probe_saturated",
+        "unbounded-provider-reason",
+        "open_cooldown",
+        "probe_saturated"
+      ],
+      "circuit_blocked_route_classes" => [
+        "proxy_websocket",
+        "unknown_route",
+        "proxy_stream",
+        "proxy_websocket"
+      ],
+      "circuit_recency_seconds" => 900,
+      "model_membership_resolved" => true,
+      "non_serving_assignment_count" => 1,
       "route_class_scope" => "proxy_stream",
       "prompt" => "raw prompt sentinel",
       "request_body" => "raw request body sentinel",

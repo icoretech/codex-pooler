@@ -19,10 +19,15 @@ defmodule CodexPooler.Jobs.AlertEvaluationEnqueueWorker do
   def timeout(%Oban.Job{}), do: :timer.seconds(30)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{}) do
-    case Jobs.enqueue_alert_evaluations_for_active_rules(trigger_kind: "scheduled") do
+  def perform(%Oban.Job{scheduled_at: %DateTime{} = scheduled_at}) do
+    case Jobs.enqueue_alert_evaluations_for_active_rules(
+           trigger_kind: "scheduled",
+           now: scheduled_at
+         ) do
       {:ok, %{errors: []}} -> :ok
       {:ok, %{errors: errors}} -> {:error, {:enqueue_failed, length(errors)}}
     end
   end
+
+  def perform(%Oban.Job{}), do: {:cancel, :invalid_alert_evaluation_args}
 end

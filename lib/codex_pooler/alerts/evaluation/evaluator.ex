@@ -36,15 +36,15 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   @spec evaluate_rule(AlertRule.t(), evaluation_opts()) :: [candidate()]
   def evaluate_rule(%AlertRule{} = rule, opts \\ []) do
-    timestamp = evaluation_timestamp(opts)
-    {candidates, _projection_cache} = evaluate_rule_with_projection_cache(rule, timestamp, %{})
+    context = evaluation_context(opts)
+    {candidates, _projection_cache} = evaluate_rule_with_projection_cache(rule, context, %{})
 
     candidates
   end
 
   @spec evaluate_active_rules(evaluation_opts()) :: [candidate()]
   def evaluate_active_rules(opts \\ []) do
-    timestamp = evaluation_timestamp(opts)
+    context = evaluation_context(opts)
 
     {candidate_groups, _projection_cache} =
       AlertRule
@@ -52,7 +52,7 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
       |> order_by([rule], asc: rule.created_at, asc: rule.id)
       |> Repo.all()
       |> Enum.map_reduce(%{}, fn rule, projection_cache ->
-        evaluate_rule_with_projection_cache(rule, timestamp, projection_cache)
+        evaluate_rule_with_projection_cache(rule, context, projection_cache)
       end)
 
     List.flatten(candidate_groups)
@@ -60,9 +60,11 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   defp evaluate_rule_with_projection_cache(
          %AlertRule{state: "disabled"} = rule,
-         timestamp,
+         context,
          projection_cache
        ) do
+    timestamp = candidate_timestamp(rule, context)
+
     candidate =
       rule
       |> EvaluationCandidate.dedupe_key_for_rule(nil)
@@ -73,17 +75,30 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   defp evaluate_rule_with_projection_cache(
          %AlertRule{rule_kind: "pool_no_usable_assignments"} = rule,
-         timestamp,
+         context,
          projection_cache
        ) do
     {projection, projection_cache} =
-      EvaluationProjection.pool_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+      EvaluationProjection.pool_from_cache(
+        rule.pool_id,
+        rule.model,
+        projection_context(rule, context),
+        true,
+        projection_cache
+      )
 
     candidates =
       if projection.usable_assignment_count == 0 do
-        [EvaluationCandidate.pool_match(rule, projection, "no_usable_assignments", timestamp)]
+        [
+          EvaluationCandidate.pool_match(
+            rule,
+            projection,
+            "no_usable_assignments",
+            context.circuit_observed_at
+          )
+        ]
       else
-        [clear_rule(rule, timestamp)]
+        [clear_rule(rule, context.circuit_observed_at)]
       end
 
     {candidates, projection_cache}
@@ -91,20 +106,33 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   defp evaluate_rule_with_projection_cache(
          %AlertRule{rule_kind: "pool_low_usable_assignments"} = rule,
-         timestamp,
+         context,
          projection_cache
        ) do
     min_usable = rule.min_usable_assignments || 1
 
     {projection, projection_cache} =
-      EvaluationProjection.pool_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+      EvaluationProjection.pool_from_cache(
+        rule.pool_id,
+        rule.model,
+        projection_context(rule, context),
+        true,
+        projection_cache
+      )
 
     candidates =
       if projection.usable_assignment_count > 0 and
            projection.usable_assignment_count < min_usable do
-        [EvaluationCandidate.pool_match(rule, projection, "low_usable_assignments", timestamp)]
+        [
+          EvaluationCandidate.pool_match(
+            rule,
+            projection,
+            "low_usable_assignments",
+            context.circuit_observed_at
+          )
+        ]
       else
-        [clear_rule(rule, timestamp)]
+        [clear_rule(rule, context.circuit_observed_at)]
       end
 
     {candidates, projection_cache}
@@ -112,18 +140,24 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   defp evaluate_rule_with_projection_cache(
          %AlertRule{rule_kind: "pool_all_assignments_in_state"} = rule,
-         timestamp,
+         context,
          projection_cache
        ) do
     {projection, projection_cache} =
-      EvaluationProjection.pool_from_cache(rule.pool_id, rule.model, timestamp, projection_cache)
+      EvaluationProjection.pool_from_cache(
+        rule.pool_id,
+        rule.model,
+        projection_context(rule, context),
+        true,
+        projection_cache
+      )
 
     candidates =
       if (rule.target_state && projection.enabled_assignment_count > 0) and
            EvaluationProjection.all_in_state?(projection, rule.target_state) do
-        [EvaluationCandidate.pool_match(rule, projection, rule.target_state, timestamp)]
+        [EvaluationCandidate.pool_match(rule, projection, rule.target_state, context.at)]
       else
-        [clear_rule(rule, timestamp)]
+        [clear_rule(rule, context.at)]
       end
 
     {candidates, projection_cache}
@@ -131,7 +165,7 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
 
   defp evaluate_rule_with_projection_cache(
          %AlertRule{rule_kind: rule_kind} = rule,
-         timestamp,
+         context,
          projection_cache
        )
        when rule_kind in @upstream_rule_kinds do
@@ -139,14 +173,15 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
       EvaluationProjection.assigned_identities_from_cache(
         rule.pool_id,
         rule.model,
-        timestamp,
+        projection_context(rule, context),
+        false,
         projection_cache
       )
 
     candidates =
       assignments
       |> Enum.filter(&EvaluationProjection.enabled_assignment?/1)
-      |> Enum.flat_map(&upstream_candidates(rule, &1, timestamp))
+      |> Enum.flat_map(&upstream_candidates(rule, &1, context.at))
 
     {candidates, projection_cache}
   end
@@ -180,10 +215,27 @@ defmodule CodexPooler.Alerts.Evaluation.Evaluator do
     EvaluationCandidate.clear(rule, dedupe_key, timestamp)
   end
 
-  defp evaluation_timestamp(opts) do
+  defp evaluation_context(opts) do
     opts = Map.new(opts)
-    Map.get(opts, :at) || Map.get(opts, "at") || now()
+    at = Map.get(opts, :at) || Map.get(opts, "at") || now()
+
+    %{
+      at: at,
+      circuit_observed_at:
+        Map.get(opts, :circuit_observed_at) || Map.get(opts, "circuit_observed_at") || at
+    }
   end
+
+  defp projection_context(rule, context), do: Map.put(context, :route_class, rule.route_class)
+
+  defp candidate_timestamp(
+         %AlertRule{rule_kind: rule_kind},
+         context
+       )
+       when rule_kind in ["pool_no_usable_assignments", "pool_low_usable_assignments"],
+       do: context.circuit_observed_at
+
+  defp candidate_timestamp(_rule, context), do: context.at
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

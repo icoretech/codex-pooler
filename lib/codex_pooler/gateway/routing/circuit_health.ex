@@ -1,7 +1,11 @@
 defmodule CodexPooler.Gateway.Routing.CircuitHealth do
   @moduledoc false
 
+  import Ecto.Query
+
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Repo
 
   @circuit_probe_in_flight_key "probe_in_flight_count"
   @open_status RoutingCircuitState.open_status()
@@ -28,6 +32,46 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
   end
 
   def blocked?(_state, _settings, _now), do: false
+
+  @spec blocked_reason(
+          RoutingCircuitState.t() | nil,
+          OperationalSettings.t(),
+          DateTime.t()
+        ) :: String.t() | nil
+  def blocked_reason(
+        %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at},
+        _settings,
+        now
+      ) do
+    if DateTime.compare(next_probe_at, now) == :gt, do: "open_cooldown"
+  end
+
+  def blocked_reason(%RoutingCircuitState{status: @open_status}, _settings, _now),
+    do: "open_no_probe"
+
+  def blocked_reason(%RoutingCircuitState{status: @half_open_status} = state, settings, now) do
+    if blocked?(state, settings, now), do: "probe_saturated"
+  end
+
+  def blocked_reason(_state, _settings, _now), do: nil
+
+  @spec active_circuits(Ecto.UUID.t() | nil) :: [RoutingCircuitState.t()]
+  def active_circuits(pool_id) do
+    Repo.all(
+      from state in RoutingCircuitState,
+        where:
+          state.pool_id == ^pool_id and is_nil(state.api_key_id) and
+            state.status in [@open_status, @half_open_status],
+        order_by: [
+          asc: state.pool_upstream_assignment_id,
+          asc: state.model_identifier,
+          asc: state.route_class
+        ]
+    )
+  end
+
+  @spec settings() :: OperationalSettings.t()
+  def settings, do: OperationalSettings.current()
 
   def probe_stale?(
         %RoutingCircuitState{status: @half_open_status, updated_at: %DateTime{} = updated_at},
