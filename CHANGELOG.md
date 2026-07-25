@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.6...codex-pooler-v0.5.7) (2026-07-25)
+
+
+### Features
+
+* **admin:** lead the request-log row with its date and status ([a126883](https://github.com/icoretech/codex-pooler/commit/a1268832df019fd56986102c05eb71cafa25a7a8))
+* **admin:** read the request duration with its outcome ([1c2dd6d](https://github.com/icoretech/codex-pooler/commit/1c2dd6de3406d487c7bbbaa6194299b585c8d2c3))
+* **admin:** rebuild the jobs explorer row as a single ledger ([195af99](https://github.com/icoretech/codex-pooler/commit/195af997555c50226aeb796e9dad73608c0b12df))
+* **admin:** regroup the request-log row and let it fit the screen ([d29dae5](https://github.com/icoretech/codex-pooler/commit/d29dae57c079da0d636f93f60abe39eab216d60b))
+* **responses:** support programmatic tool calling ([cd97650](https://github.com/icoretech/codex-pooler/commit/cd97650e561afd11f3b57be11fc98f91e2f41054))
+
+
+### Bug Fixes
+
+* **admin:** make the whole request-log row open its drawer ([b7198ac](https://github.com/icoretech/codex-pooler/commit/b7198ac885cca8f825bb5907004401c5e8445193))
+* **deps:** update plug_crypto to 2.2.0 ([ba779e7](https://github.com/icoretech/codex-pooler/commit/ba779e720240bba2791bb075bc6d0bff07ad2e52))
+* **quota:** anchor started zero-percent model windows ([69494a2](https://github.com/icoretech/codex-pooler/commit/69494a2fec8b3bcb16f4139c0198ad4ac6b727a6))
+
 ## [0.5.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.5...codex-pooler-v0.5.6) (2026-07-24)
 
 
