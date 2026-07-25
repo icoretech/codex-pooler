@@ -224,26 +224,47 @@ body {
   border-left-color: var(--color-error);
 }
 
-#request-logs-table tr > td:first-child {
-  border-left: 1px solid var(--color-base-300);
+/* Status tick. A record table opts in with .admin-status-tick and each row
+   declares its tone with data-tone; the tone is painted once, as a rounded 4px
+   bar set inside the row's leading padding, and is never the only channel —
+   the row still names its state in text. Shared by the jobs explorer and the
+   request-log table. */
+.admin-status-tick thead > tr > th:first-child,
+.admin-status-tick tbody > tr > td:first-child {
+  padding-left: 1.625rem;
 }
 
-#request-logs-table tr[data-status="succeeded"] > td:first-child {
-  border-left-color: var(--color-success);
+.admin-status-tick tbody > tr > td:first-child {
+  position: relative;
 }
 
-#request-logs-table tr[data-status="failed"] > td:first-child,
-#request-logs-table tr[data-status="rejected"] > td:first-child {
-  border-left-color: var(--color-error);
+.admin-status-tick tbody > tr > td:first-child::before {
+  content: "";
+  position: absolute;
+  top: 0.3125rem;
+  bottom: 0.3125rem;
+  left: 0.75rem;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--admin-status-tick, var(--color-base-300));
 }
 
-#request-logs-table tr[data-status="cancelled"] > td:first-child {
-  border-left-color: var(--color-warning);
+.admin-status-tick tbody > tr[data-tone="success"] {
+  --admin-status-tick: var(--color-success);
 }
 
-#request-logs-table tr[data-status="in_progress"] > td:first-child {
-  border-left-color: var(--color-info);
+.admin-status-tick tbody > tr[data-tone="warning"] {
+  --admin-status-tick: var(--color-warning);
 }
+
+.admin-status-tick tbody > tr[data-tone="error"] {
+  --admin-status-tick: var(--color-error);
+}
+
+.admin-status-tick tbody > tr[data-tone="info"] {
+  --admin-status-tick: var(--color-info);
+}
+
 
 .policy-editor-tabs > li {
   flex: 1 1 0;

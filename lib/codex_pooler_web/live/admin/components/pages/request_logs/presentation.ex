@@ -55,7 +55,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       />
 
       <div :if={@request_logs.items != []} class="overflow-x-auto">
-        <table class="table table-sm admin-log-table min-w-[70rem]">
+        <table class="admin-status-tick table table-sm admin-log-table min-w-[70rem]">
           <colgroup>
             <col style="width: 11rem;" />
             <col style="width: 11rem;" />
@@ -66,7 +66,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           </colgroup>
           <thead>
             <tr>
-              <th class="whitespace-nowrap pl-4">Request</th>
+              <th class="whitespace-nowrap">Request</th>
               <th class="whitespace-nowrap">Upstream</th>
               <th class="whitespace-nowrap">Model / API key</th>
               <th class="whitespace-nowrap">Route</th>
@@ -79,9 +79,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
               :for={request_log <- @request_logs.items}
               id={"request-log-row-#{request_log.id}"}
               data-status={request_log.status}
+              data-tone={request_log_tone(request_log.status)}
               class="transition-colors hover:bg-base-200/80"
             >
-              <td class="whitespace-nowrap pl-4 align-middle text-base-content/70">
+              <td class="whitespace-nowrap align-middle text-base-content/70">
                 <.request_log_timestamp_cell
                   request_log={request_log}
                   datetime_preferences={@datetime_preferences}
@@ -373,4 +374,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     </div>
     """
   end
+
+  # Tone for the shared status tick (see .admin-status-tick in app.css). The
+  # row still spells its status out; the rail only reinforces it.
+  defp request_log_tone("succeeded"), do: "success"
+  defp request_log_tone(status) when status in ["failed", "rejected"], do: "error"
+  defp request_log_tone("cancelled"), do: "warning"
+  defp request_log_tone("in_progress"), do: "info"
+  defp request_log_tone(_status), do: nil
 end
