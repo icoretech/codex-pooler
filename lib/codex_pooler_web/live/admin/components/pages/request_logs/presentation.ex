@@ -80,7 +80,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
               id={"request-log-row-#{request_log.id}"}
               data-status={request_log.status}
               data-tone={request_log_tone(request_log.status)}
-              class="transition-colors hover:bg-base-200/80"
+              phx-click="open_request_log"
+              phx-value-request-id={request_log.id}
+              class="group/request-log cursor-pointer transition-colors hover:bg-base-200/80"
             >
               <td class="whitespace-nowrap align-middle text-base-content/70">
                 <.request_log_timestamp_cell
@@ -207,7 +209,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       data-role="open-request-log-details"
       phx-click="open_request_log"
       phx-value-request-id={@request_log.id}
-      class="group grid max-w-full gap-0.5 rounded-field text-left transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      class="group grid max-w-full gap-0.5 rounded-field text-left transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-hover/request-log:text-primary"
       aria-label={"Inspect request #{format_record_id(@request_log.id) || @request_log.id}"}
     >
       <span data-role="status-label" class="sr-only">
@@ -216,7 +218,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       <span data-role="timestamp-datetime" class="flex h-5 items-center whitespace-nowrap">
         {format_datetime(@request_log.admitted_at, @datetime_preferences)}
       </span>
-      <span class="flex h-5 min-w-0 items-center gap-1 text-base-content/45 group-hover:text-primary/80">
+      <span class="flex h-5 min-w-0 items-center gap-1 text-base-content/45 group-hover:text-primary/80 group-hover/request-log:text-primary/80">
         <span
           :if={record_id = format_record_id(@request_log.id)}
           data-role="record-id"
