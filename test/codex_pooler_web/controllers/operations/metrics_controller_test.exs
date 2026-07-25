@@ -2,9 +2,20 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPooler.AccountsFixtures, only: [bootstrap_owner_fixture: 1]
-  import CodexPooler.PoolerFixtures, only: [pool_fixture: 1]
+
+  import CodexPooler.PoolerFixtures,
+    only: [
+      active_api_key_fixture: 1,
+      model_fixture: 2,
+      pool_fixture: 0,
+      pool_fixture: 1,
+      upstream_assignment_fixture: 1
+    ]
+
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
@@ -195,6 +206,70 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       refute line =~ "upstream_identity_id"
       refute line =~ "must-not-be-a-label"
     end
+  end
+
+  test "exports bounded circuit transitions without circuit identity or raw reasons", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "metrics-model-#{System.unique_integer([:positive])}"
+      })
+
+    raw_reason = "provider-" <> String.duplicate("x", 71)
+    auth = %{pool: pool, api_key: api_key}
+
+    for _failure <- 1..2 do
+      assert {:ok, %RoutingCircuitState{status: "closed"}} =
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_stream",
+                 raw_reason
+               )
+    end
+
+    assert {:ok, %RoutingCircuitState{status: "open"}} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_stream",
+               raw_reason
+             )
+
+    conn = get(conn, ~p"/metrics")
+
+    assert conn.status == 200
+
+    metric_lines =
+      conn.resp_body
+      |> String.split("\n", trim: true)
+      |> Enum.filter(
+        &String.contains?(&1, "codex_pooler_gateway_routing_circuit_transition_count")
+      )
+
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(transition="closed_to_open")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(route_class="proxy_stream")))
+    assert Enum.any?(metric_lines, &String.contains?(&1, ~s(reason_class="unknown")))
+
+    for line <- metric_lines do
+      refute line =~ "from_status"
+      refute line =~ "to_status"
+      refute line =~ "reason_code"
+      refute line =~ "failure_count"
+    end
+
+    refute conn.resp_body =~ pool.id
+    refute conn.resp_body =~ assignment.id
+    refute conn.resp_body =~ assignment.upstream_identity_id
+    refute conn.resp_body =~ model.exposed_model_id
+    refute conn.resp_body =~ raw_reason
   end
 
   test "rotating the metrics bearer token invalidates the old bearer", %{conn: conn} do

@@ -2,6 +2,9 @@ defmodule CodexPoolerWeb.Telemetry do
   use Supervisor
   import Telemetry.Metrics
 
+  alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.RouteClass
+
   @type metric :: Telemetry.Metrics.t()
   @type repo_query_tags :: %{source: String.t(), command: String.t()}
   @type http_tags :: %{method: String.t(), status_class: String.t()}
@@ -20,6 +23,11 @@ defmodule CodexPoolerWeb.Telemetry do
           scope: String.t(),
           decision: String.t(),
           source: String.t()
+        }
+  @type circuit_transition_tags :: %{
+          transition: String.t(),
+          route_class: String.t(),
+          reason_class: String.t()
         }
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -426,6 +434,13 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:scope, :decision, :source],
         tag_values: &quota_cycle_decision_tag_values/1,
         description: "Quota cycle decisions by bounded scope, decision, and source class."
+      ),
+      counter("codex_pooler.gateway.routing.circuit.transition.count",
+        event_name: [:codex_pooler, :gateway, :routing, :circuit, :transition],
+        measurement: :count,
+        tags: [:transition, :route_class, :reason_class],
+        tag_values: &circuit_transition_tag_values/1,
+        description: "Routing circuit status transitions by bounded route and reason class."
       )
     ]
   end
@@ -614,6 +629,16 @@ defmodule CodexPoolerWeb.Telemetry do
       scope: admin_stats_enum_value(metadata[:scope], @quota_cycle_scopes),
       decision: admin_stats_enum_value(metadata[:decision], @quota_cycle_decisions),
       source: admin_stats_enum_value(metadata[:source], @quota_cycle_sources)
+    }
+  end
+
+  @spec circuit_transition_tag_values(map()) :: circuit_transition_tags()
+  defp circuit_transition_tag_values(metadata) do
+    %{
+      transition: admin_stats_enum_value(metadata[:transition], CircuitTelemetry.transitions()),
+      route_class: admin_stats_enum_value(metadata[:route_class], RouteClass.all()),
+      reason_class:
+        admin_stats_enum_value(metadata[:reason_class], CircuitTelemetry.reason_classes())
     }
   end
 

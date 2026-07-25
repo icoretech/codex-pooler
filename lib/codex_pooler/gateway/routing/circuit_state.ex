@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -166,15 +167,19 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     Repo.transaction(fn ->
       case latest_for_update(auth, model, assignment, route_class) do
         %RoutingCircuitState{} = state ->
-          state
-          |> RoutingCircuitState.changeset(success_attrs(state, settings, now))
-          |> persist_or_rollback(:update)
+          updated =
+            state
+            |> RoutingCircuitState.changeset(success_attrs(state, settings, now))
+            |> persist_or_rollback(:update)
+
+          {updated, transition(state, updated, reason_code: nil)}
 
         nil ->
-          :ok
+          {:ok, nil}
       end
     end)
     |> unwrap_transaction()
+    |> emit_committed_transition()
   end
 
   def record_success(
@@ -251,7 +256,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
       case state do
         %RoutingCircuitState{} = state ->
-          state |> RoutingCircuitState.changeset(attrs) |> persist_or_rollback(:update)
+          updated =
+            state
+            |> RoutingCircuitState.changeset(attrs)
+            |> persist_or_rollback(:update)
+
+          {updated, transition(state, updated, reason_code: reason_code)}
 
         nil ->
           # The first-failure insert references the assignment and identity
@@ -260,13 +270,17 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           # the canonical reference locks before inserting.
           ReferenceLocks.lock_and_validate!(assignment.upstream_identity_id, assignment.id)
 
-          %RoutingCircuitState{}
-          |> RoutingCircuitState.changeset(Map.put(attrs, :created_at, now))
-          |> persist_or_rollback(:insert)
+          updated =
+            %RoutingCircuitState{}
+            |> RoutingCircuitState.changeset(Map.put(attrs, :created_at, now))
+            |> persist_or_rollback(:insert)
+
+          {updated, transition(nil, updated, reason_code: reason_code)}
       end
     end)
     |> unwrap_transaction()
     |> degrade_reference_skip(assignment)
+    |> emit_committed_transition()
   rescue
     error in Postgrex.Error ->
       cond do
@@ -328,21 +342,25 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     Repo.transaction(fn ->
       case latest_for_update(auth, model, assignment, route_class) do
         %RoutingCircuitState{status: @half_open_status} = state ->
-          state
-          |> RoutingCircuitState.changeset(%{
-            metadata: probe_metadata(state, max(probe_in_flight_count(state) - 1, 0)),
-            updated_at: now
-          })
-          |> persist_or_rollback(:update)
+          updated =
+            state
+            |> RoutingCircuitState.changeset(%{
+              metadata: probe_metadata(state, max(probe_in_flight_count(state) - 1, 0)),
+              updated_at: now
+            })
+            |> persist_or_rollback(:update)
+
+          {updated, transition(state, updated, reason_code: nil)}
 
         %RoutingCircuitState{} = state ->
-          state
+          {state, nil}
 
         nil ->
-          :ok
+          {:ok, nil}
       end
     end)
     |> unwrap_transaction()
+    |> emit_committed_transition()
   end
 
   def record_neutral_completion(
@@ -368,12 +386,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
     Repo.transaction(fn ->
       state = latest_for_update(auth, model, assignment, route_class)
-      begin_state(state, settings, now)
+      updated = begin_state(state, settings, now)
+      {updated, transition(state, updated, reason_code: nil)}
     end)
-    |> case do
-      {:ok, state} -> {:ok, state}
-      {:error, reason} -> {:error, reason}
-    end
+    |> unwrap_transaction()
+    |> emit_committed_transition()
   end
 
   defp begin_state(
@@ -620,6 +637,32 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   defp sanitize_reason_code(code) when is_binary(code), do: String.slice(code, 0, 80)
   defp sanitize_reason_code(code), do: code |> to_string() |> String.slice(0, 80)
+
+  defp transition(previous, %RoutingCircuitState{} = current, opts) do
+    from_status = previous_status(previous)
+
+    if current.status == from_status do
+      nil
+    else
+      {from_status, current.status, current, opts}
+    end
+  end
+
+  defp transition(_previous, _current, _opts), do: nil
+
+  defp previous_status(%RoutingCircuitState{status: status}), do: status
+  defp previous_status(_state), do: @closed_status
+
+  defp emit_committed_transition({:ok, {value, nil}}), do: {:ok, value}
+
+  defp emit_committed_transition(
+         {:ok, {value, {from_status, to_status, %RoutingCircuitState{} = state, opts}}}
+       ) do
+    CircuitTelemetry.emit_transition(from_status, to_status, state, opts)
+    {:ok, value}
+  end
+
+  defp emit_committed_transition(result), do: result
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

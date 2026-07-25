@@ -1,6 +1,9 @@
 defmodule CodexPoolerWeb.TelemetryTest do
   use ExUnit.Case, async: false
 
+  alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.RouteClass
+
   setup do
     original_oban_mode = System.get_env("OBAN_MODE")
 
@@ -257,6 +260,94 @@ defmodule CodexPoolerWeb.TelemetryTest do
                decision: "candidate-123",
                source: "provider-url"
              })
+  end
+
+  test "exports routing circuit transitions with exact bounded tags" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.routing.circuit.transition.count")
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :routing, :circuit, :transition],
+             measurement: :count,
+             tags: [:transition, :route_class, :reason_class]
+           } = metric
+
+    assert %{
+             transition: "half_open_to_open",
+             route_class: "proxy_stream",
+             reason_class: "upstream_network_error"
+           } =
+             metric.tag_values.(%{
+               transition: :half_open_to_open,
+               route_class: :proxy_stream,
+               reason_class: :upstream_network_error,
+               pool_id: "must-not-be-a-label",
+               pool_upstream_assignment_id: "must-not-be-a-label",
+               upstream_identity_id: "must-not-be-a-label",
+               model_identifier: "must-not-be-a-label",
+               reason_code: "must-not-be-a-label",
+               failure_count: 3
+             })
+
+    assert %{transition: "unknown", route_class: "unknown", reason_class: "unknown"} =
+             metric.tag_values.(%{
+               transition: "open_to_deleted",
+               route_class: "provider-specific-route",
+               reason_class: "provider free text"
+             })
+
+    assert %{transition: "open_to_closed", route_class: "unknown", reason_class: "none"} =
+             metric.tag_values.(%{
+               transition: "open_to_closed",
+               route_class: nil,
+               reason_class: "none"
+             })
+
+    assert %{route_class: "unknown"} =
+             metric.tag_values.(%{
+               transition: "closed_to_open",
+               route_class: "well_formed_but_unrecognised",
+               reason_class: "upstream_network_error"
+             })
+  end
+
+  test "keeps routing circuit vocabularies aligned within the 660 series ceiling" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.routing.circuit.transition.count")
+
+    transition_values =
+      CircuitTelemetry.transitions()
+      |> Enum.map(&metric.tag_values.(%{transition: &1}).transition)
+      |> Kernel.++([metric.tag_values.(%{transition: "not_a_transition"}).transition])
+      |> MapSet.new()
+
+    route_class_values =
+      RouteClass.all()
+      |> Enum.map(&metric.tag_values.(%{route_class: &1}).route_class)
+      |> Kernel.++([
+        metric.tag_values.(%{route_class: nil}).route_class,
+        metric.tag_values.(%{route_class: "not_a_route_class"}).route_class
+      ])
+      |> MapSet.new()
+
+    reason_class_values =
+      CircuitTelemetry.reason_classes()
+      |> Enum.map(&metric.tag_values.(%{reason_class: &1}).reason_class)
+      |> Kernel.++([metric.tag_values.(%{reason_class: "provider free text"}).reason_class])
+      |> MapSet.new()
+
+    assert transition_values ==
+             MapSet.new(CircuitTelemetry.transitions() ++ ["unknown"])
+
+    assert route_class_values == MapSet.new(RouteClass.all() ++ ["unknown"])
+    assert reason_class_values == MapSet.new(CircuitTelemetry.reason_classes())
+    assert "open_to_closed" in transition_values
+    assert "retryable_upstream_status" in reason_class_values
+
+    assert MapSet.size(transition_values) * MapSet.size(route_class_values) *
+             MapSet.size(reason_class_values) == 660
   end
 
   test "exports admin request-log reload metrics with bounded tags" do

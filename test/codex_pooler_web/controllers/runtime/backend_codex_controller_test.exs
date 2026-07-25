@@ -9073,6 +9073,95 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert ["release", "reservation"] == ledger_entry_kinds(request)
   end
 
+  test "POST /backend-api/codex/responses keeps an all-open pool untried", %{conn: conn} do
+    first_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_open_first_should_not_run"}))
+
+    second_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_open_second_should_not_run"}))
+
+    setup = gateway_setup(first_upstream)
+
+    second =
+      gateway_upstream(setup.pool, second_upstream, "upstream-token-open-second", compact?: false)
+
+    prime_routing_quota!(second.identity)
+
+    setup = %{
+      setup
+      | model: put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
+    }
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for {assignment, identity} <- [
+          {setup.assignment, setup.identity},
+          {second.assignment, second.identity}
+        ] do
+      %RoutingCircuitState{
+        pool_id: setup.pool.id,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        model_identifier: setup.model.exposed_model_id,
+        route_class: "proxy_http",
+        status: "open",
+        reason_code: "upstream_network_error",
+        failure_count: 3,
+        success_count: 0,
+        opened_at: now,
+        next_probe_at: DateTime.add(now, 60, :second),
+        metadata: %{"probe_in_flight_count" => 0},
+        created_at: now,
+        updated_at: now
+      }
+      |> Repo.insert!()
+    end
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic all-open pool characterization"
+      })
+
+    assert response.status == 503
+
+    assert response.resp_body ==
+             Jason.encode!(%{
+               "error" => %{
+                 "code" => "no_eligible_backend",
+                 "message" => "no healthy eligible backend is currently available",
+                 "param" => "model",
+                 "type" => "invalid_request_error"
+               }
+             })
+
+    assert FakeUpstream.count(first_upstream) == 0
+    assert FakeUpstream.count(second_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "no_eligible_backend"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    exclusions = request.request_metadata["candidate_exclusions"]
+
+    assert MapSet.new(exclusions, fn exclusion ->
+             {exclusion["pool_upstream_assignment_id"], exclusion["upstream_identity_id"]}
+           end) ==
+             MapSet.new([
+               {setup.assignment.id, setup.identity.id},
+               {second.assignment.id, second.identity.id}
+             ])
+
+    assert Enum.all?(exclusions, fn exclusion ->
+             exclusion["reasons"] == [
+               %{"code" => "routing_circuit_open", "route_class" => "proxy_http"}
+             ]
+           end)
+  end
+
   test "GET models keeps a degraded-only source visible while inference has no eligible backend",
        %{conn: conn} do
     upstream =
