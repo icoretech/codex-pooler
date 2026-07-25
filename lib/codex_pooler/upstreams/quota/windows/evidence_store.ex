@@ -434,29 +434,50 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp floating_model_weekly_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
 
-    case floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
-      :accept ->
-        log_cycle_decision(:floating_confirmed, "confirmation", existing, evidence, metadata)
+    if started_model_weekly_countdown?(evidence) do
+      log_cycle_decision(:anchored_confirmed, "relative_countdown", existing, evidence, metadata)
 
-        existing
-        |> accepted_snapshot_attrs(attrs, timestamp)
-        |> RelativeLiveness.put_metadata(evidence, timestamp)
-        |> mark_floating_reset()
+      existing
+      |> accepted_snapshot_attrs(attrs, timestamp)
+      |> RelativeLiveness.put_metadata(evidence, timestamp)
+    else
+      case floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
+        :accept ->
+          log_cycle_decision(:floating_confirmed, "confirmation", existing, evidence, metadata)
 
-      :keep ->
-        log_cycle_decision(:rejected, "candidate_not_ready", existing, evidence, metadata)
-        candidate_snapshot_attrs(existing, metadata, timestamp)
+          existing
+          |> accepted_snapshot_attrs(attrs, timestamp)
+          |> RelativeLiveness.put_metadata(evidence, timestamp)
+          |> mark_floating_reset()
 
-      :restart ->
-        log_cycle_decision(:candidate, "candidate_restarted", existing, evidence, metadata)
+        :keep ->
+          log_cycle_decision(:rejected, "candidate_not_ready", existing, evidence, metadata)
+          candidate_snapshot_attrs(existing, metadata, timestamp)
 
-        candidate_snapshot_attrs(
-          existing,
-          put_relative_candidate(clear_candidate(metadata), evidence, timestamp),
-          timestamp
-        )
+        :restart ->
+          log_cycle_decision(:candidate, "candidate_restarted", existing, evidence, metadata)
+
+          candidate_snapshot_attrs(
+            existing,
+            put_relative_candidate(clear_candidate(metadata), evidence, timestamp),
+            timestamp
+          )
+      end
     end
   end
+
+  defp started_model_weekly_countdown?(%Evidence{
+         window_minutes: window_minutes,
+         metadata: metadata
+       })
+       when is_integer(window_minutes) and window_minutes > 0 and is_map(metadata) do
+    case Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds) do
+      seconds when is_integer(seconds) and seconds >= 0 -> seconds < window_minutes * 60
+      _missing_or_invalid -> false
+    end
+  end
+
+  defp started_model_weekly_countdown?(_evidence), do: false
 
   defp floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
     cond do

@@ -73,7 +73,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     |> Repo.insert!()
   end
 
-  defp spark_weekly_payload(used_percent, reset_at) do
+  defp spark_weekly_payload(
+         used_percent,
+         reset_at,
+         reset_after_seconds \\ @window_seconds
+       ) do
     %{
       "additional_rate_limits" => [
         %{
@@ -84,7 +88,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
             "primary_window" => %{
               "used_percent" => used_percent,
               "limit_window_seconds" => @window_seconds,
-              "reset_after_seconds" => @window_seconds,
+              "reset_after_seconds" => reset_after_seconds,
               "reset_at" => DateTime.to_iso8601(reset_at)
             }
           }
@@ -94,6 +98,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   end
 
   defp record_spark_payload!(identity, payload, observed_at) do
+    [
+      %{
+        "rate_limit" => %{
+          "primary_window" => %{"reset_after_seconds" => expected_reset_after_seconds}
+        }
+      }
+    ] = payload["additional_rate_limits"]
+
     assert {:ok, windows} = Windows.codex_usage_quota_windows_from_payload(payload, observed_at)
 
     assert [spark_weekly] =
@@ -103,7 +115,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
              )
 
     assert spark_weekly.quota_scope == "model"
-    assert spark_weekly.metadata["reset_after_seconds"] == @window_seconds
+    assert spark_weekly.metadata["reset_after_seconds"] == expected_reset_after_seconds
 
     assert {:ok, row} =
              EvidenceStore.record_evidence(identity, spark_weekly, observed_at, observed_at)
@@ -735,6 +747,42 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     refute Map.has_key?(row.metadata, "reset_state")
     assert Decimal.equal?(row.used_percent, Decimal.new("2"))
     assert DateTime.compare(row.reset_at, anchored_reset) == :eq
+  end
+
+  test "a sub-window zero-percent countdown anchors a previously floating weekly window" do
+    t0 = ~U[2026-07-25 04:00:00Z]
+    identity = identity!()
+
+    for offset <- [0, 60, 300] do
+      observed_at = DateTime.add(t0, offset, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, DateTime.add(observed_at, @window_seconds, :second)),
+        observed_at
+      )
+    end
+
+    floating = model_weekly_row(identity)
+    assert floating.metadata["reset_state"] == "floating"
+    request_completed_at = DateTime.add(floating.observed_at, 38, :second)
+    observed_at = DateTime.add(floating.observed_at, 60, :second)
+    anchored_reset = DateTime.add(request_completed_at, @window_seconds, :second)
+    reset_after_seconds = DateTime.diff(anchored_reset, observed_at, :second)
+
+    assert reset_after_seconds < @window_seconds
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, anchored_reset, reset_after_seconds),
+      observed_at
+    )
+
+    row = model_weekly_row(identity)
+    refute Map.has_key?(row.metadata, "reset_state")
+    assert Decimal.equal?(row.used_percent, Decimal.new("0"))
+    assert DateTime.compare(row.reset_at, anchored_reset) == :eq
+    assert DateTime.compare(row.observed_at, observed_at) == :eq
   end
 
   test "a fixed replay cannot keep an accepted floating model weekly zero fresh" do
