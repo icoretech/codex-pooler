@@ -255,34 +255,73 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   test "renders anchored and floating Spark reset semantics from the shared quota projection", %{
-    conn: conn
+    conn: conn,
+    scope: scope
   } do
     pool = pool_fixture(%{name: "Spark reset semantics Pool"})
     %{identity: anchored} = upstream_assignment_fixture(pool, %{account_label: "Anchored Spark"})
     %{identity: floating} = upstream_assignment_fixture(pool, %{account_label: "Floating Spark"})
 
-    observed_at =
-      DateTime.utc_now()
-      |> DateTime.add(-5, :minute)
-      |> DateTime.truncate(:microsecond)
+    initial_observed_at = ~U[2026-07-25 10:00:00Z]
 
-    anchored_window = spark_weekly_quota_window(observed_at, %{"reset_state" => "anchored"})
+    for identity <- [anchored, floating] do
+      for offset <- [0, 60, 300] do
+        observed_at = DateTime.add(initial_observed_at, offset, :second)
 
-    assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(anchored, [anchored_window])
-
-    for offset <- [0, 60, 300] do
-      floating_observed_at = DateTime.add(observed_at, offset, :second)
-
-      assert {:ok, _window} =
-               EvidenceStore.record_evidence(
-                 floating,
-                 spark_weekly_quota_window(floating_observed_at, %{
-                   "reset_after_seconds" => 604_800
-                 }),
-                 floating_observed_at,
-                 floating_observed_at
-               )
+        record_spark_usage_payload!(
+          identity,
+          spark_weekly_usage_payload(
+            0,
+            DateTime.add(observed_at, 604_800, :second),
+            604_800
+          ),
+          observed_at
+        )
+      end
     end
+
+    anchored_floating = spark_weekly_row!(anchored)
+    floating_control = spark_weekly_row!(floating)
+
+    assert anchored_floating.metadata["reset_state"] == "floating"
+    assert floating_control.metadata["reset_state"] == "floating"
+
+    anchored_observed_at = DateTime.add(anchored_floating.observed_at, 104, :second)
+
+    record_spark_usage_payload!(
+      anchored,
+      spark_weekly_usage_payload(
+        0,
+        anchored_floating.reset_at,
+        604_800 - 104
+      ),
+      anchored_observed_at
+    )
+
+    anchored_row = spark_weekly_row!(anchored)
+    floating_row = spark_weekly_row!(floating)
+
+    assert anchored_row.metadata["reset_state"] == "anchored"
+    assert Decimal.equal?(anchored_row.used_percent, Decimal.new("0"))
+    assert DateTime.compare(anchored_row.reset_at, anchored_floating.reset_at) == :eq
+    assert DateTime.compare(anchored_row.observed_at, anchored_observed_at) == :eq
+    assert floating_row.metadata["reset_state"] == "floating"
+
+    accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    anchored_account = Enum.find(accounts, &(&1.identity.id == anchored.id))
+    floating_account = Enum.find(accounts, &(&1.identity.id == floating.id))
+
+    assert Enum.find(
+             anchored_account.quota_limits,
+             &(&1.key == "model-codex_spark-secondary-10080")
+           ).reset_semantics ==
+             :anchored
+
+    assert Enum.find(
+             floating_account.quota_limits,
+             &(&1.key == "model-codex_spark-secondary-10080")
+           ).reset_semantics ==
+             :floating
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
@@ -309,6 +348,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     refute has_element?(view, "##{floating_reset_id}[phx-hook]")
+    refute has_element?(view, "##{floating_reset_id}[data-countdown-at]")
 
     assert has_element?(
              view,
@@ -6647,6 +6687,54 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       observed_at: observed_at,
       metadata: metadata
     }
+  end
+
+  defp spark_weekly_usage_payload(used_percent, reset_at, reset_after_seconds) do
+    %{
+      "additional_rate_limits" => [
+        %{
+          "limit_name" => "GPT-5.3-Codex-Spark",
+          "metered_feature" => "codex_bengalfox",
+          "model" => "gpt-5.3-codex-spark",
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => used_percent,
+              "limit_window_seconds" => 604_800,
+              "reset_after_seconds" => reset_after_seconds,
+              "reset_at" => DateTime.to_iso8601(reset_at)
+            }
+          }
+        }
+      ]
+    }
+  end
+
+  defp record_spark_usage_payload!(identity, payload, observed_at) do
+    assert {:ok, windows} =
+             QuotaWindows.codex_usage_quota_windows_from_payload(payload, observed_at)
+
+    assert [spark_weekly] =
+             Enum.filter(
+               windows,
+               &(&1.quota_key == "codex_spark" and &1.window_kind == "secondary")
+             )
+
+    assert spark_weekly.metadata["limit_window_seconds"] == 604_800
+
+    assert {:ok, row} =
+             EvidenceStore.record_evidence(identity, spark_weekly, observed_at, observed_at)
+
+    Repo.get!(AccountQuotaWindow, row.id)
+  end
+
+  defp spark_weekly_row!(identity) do
+    Repo.one!(
+      from(window in AccountQuotaWindow,
+        where:
+          window.upstream_identity_id == ^identity.id and window.quota_key == "codex_spark" and
+            window.window_kind == "secondary" and window.source == "codex_usage_api"
+      )
+    )
   end
 
   defp insert_account_quota_window!(

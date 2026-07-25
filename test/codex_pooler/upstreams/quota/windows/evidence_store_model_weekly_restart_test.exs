@@ -2,12 +2,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
 
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.Quota.Windows.Routing
 
   @window_seconds 10_080 * 60
 
@@ -44,6 +47,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
         where:
           w.upstream_identity_id == ^identity.id and w.quota_key == "codex_spark" and
             w.window_kind == "secondary" and w.source == "codex_usage_api"
+    )
+  end
+
+  defp identity_rows(identity) do
+    Repo.all(
+      from w in AccountQuotaWindow,
+        where: w.upstream_identity_id == ^identity.id,
+        order_by: [asc: w.id]
     )
   end
 
@@ -100,11 +111,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   defp record_spark_payload!(identity, payload, observed_at) do
     [
       %{
-        "rate_limit" => %{
-          "primary_window" => %{"reset_after_seconds" => expected_reset_after_seconds}
-        }
+        "rate_limit" => rate_limit
       }
     ] = payload["additional_rate_limits"]
+
+    provider_window = rate_limit["primary_window"] || rate_limit["secondary_window"]
+    expected_reset_after_seconds = provider_window["reset_after_seconds"]
+
+    expected_limit_window_seconds =
+      case provider_window["limit_window_seconds"] do
+        seconds when is_integer(seconds) -> seconds
+        _absent_or_invalid -> nil
+      end
 
     assert {:ok, windows} = Windows.codex_usage_quota_windows_from_payload(payload, observed_at)
 
@@ -117,10 +135,165 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert spark_weekly.quota_scope == "model"
     assert spark_weekly.metadata["reset_after_seconds"] == expected_reset_after_seconds
 
+    assert spark_weekly.metadata["limit_window_seconds"] ==
+             expected_limit_window_seconds
+
     assert {:ok, row} =
              EvidenceStore.record_evidence(identity, spark_weekly, observed_at, observed_at)
 
     row
+  end
+
+  defp spark_secondary_payload(used_percent, reset_at, reset_after_seconds, opts \\ []) do
+    secondary_window = %{
+      "used_percent" => used_percent,
+      "reset_after_seconds" => reset_after_seconds,
+      "reset_at" => DateTime.to_iso8601(reset_at)
+    }
+
+    secondary_window =
+      case Keyword.fetch(opts, :limit_window_seconds) do
+        {:ok, limit_window_seconds} ->
+          Map.put(secondary_window, "limit_window_seconds", limit_window_seconds)
+
+        :error ->
+          secondary_window
+      end
+
+    %{
+      "additional_rate_limits" => [
+        %{
+          "limit_name" => "GPT-5.3-Codex-Spark",
+          "metered_feature" => "codex_bengalfox",
+          "model" => "gpt-5.3-codex-spark",
+          "rate_limit" => %{"secondary_window" => secondary_window}
+        }
+      ]
+    }
+  end
+
+  defp generic_weekly_payload(limit_name, metered_feature, used_percent, reset_at) do
+    %{
+      "additional_rate_limits" => [
+        %{
+          "limit_name" => limit_name,
+          "metered_feature" => metered_feature,
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => used_percent,
+              "limit_window_seconds" => @window_seconds,
+              "reset_after_seconds" => @window_seconds,
+              "reset_at" => DateTime.to_iso8601(reset_at)
+            }
+          }
+        }
+      ]
+    }
+  end
+
+  defp parsed_additional_weekly!(payload, observed_at) do
+    assert {:ok, windows} = Windows.codex_usage_quota_windows_from_payload(payload, observed_at)
+
+    assert [weekly] =
+             Enum.filter(
+               windows,
+               &(&1.window_kind == "secondary" and &1.window_minutes == 10_080 and
+                   &1.quota_scope == "model")
+             )
+
+    weekly
+  end
+
+  defp upstream_model_evidence!(parsed, upstream_model, observed_at) when is_map(parsed) do
+    parsed
+    |> Map.merge(%{
+      quota_scope: "upstream_model",
+      model: nil,
+      upstream_model: upstream_model
+    })
+    |> Evidence.new(observed_at)
+    |> then(fn {:ok, evidence} -> evidence end)
+  end
+
+  defp historical_alias_row!(identity, parsed, observed_at) when is_map(parsed) do
+    attrs =
+      parsed
+      |> Map.merge(%{
+        upstream_identity_id: identity.id,
+        quota_key: "gpt_5_3_codex_spark",
+        created_at: observed_at,
+        updated_at: observed_at
+      })
+
+    %AccountQuotaWindow{}
+    |> AccountQuotaWindow.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp assert_markerless_anchor(row, as_of) do
+    assert row.metadata["reset_state"] == "anchored"
+    refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(row) == :none
+    refute CycleConfirmation.selector_valid?(row, as_of)
+  end
+
+  defp capture_quota_cycle_events(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = "model-weekly-anchor-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :quota, :cycle, :decision],
+        &__MODULE__.handle_quota_cycle_event/4,
+        {parent, handler_id}
+      )
+
+    try do
+      result = fun.()
+      {result, drain_quota_cycle_events(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_quota_cycle_events(handler_id, events) do
+    receive do
+      {^handler_id, measurements, metadata} ->
+        drain_quota_cycle_events(handler_id, [{measurements, metadata} | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  def handle_quota_cycle_event(_event, measurements, metadata, {parent, handler_id}) do
+    send(parent, {handler_id, measurements, metadata})
+  end
+
+  defp parsed_floating_model!(identity, t0) do
+    for offset <- [0, 60, 300] do
+      observed_at = DateTime.add(t0, offset, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, DateTime.add(observed_at, @window_seconds, :second)),
+        observed_at
+      )
+    end
+
+    row = model_weekly_row(identity)
+    assert row.metadata["reset_state"] == "floating"
+    row
+  end
+
+  defp fixed_countdown_payload(reset_at, observed_at, opts \\ []) do
+    reset_after_seconds = DateTime.diff(reset_at, observed_at, :second)
+
+    spark_weekly_payload(
+      Keyword.get(opts, :used_percent, 0),
+      reset_at,
+      reset_after_seconds
+    )
   end
 
   defp accepted_floating_model!(identity, t0) do
@@ -161,6 +334,121 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
       raw_limit_name: nil,
       raw_metered_feature: nil
     })
+  end
+
+  defp account_weekly(observed_at, used_percent) do
+    observed_at
+    |> model_weekly(used_percent)
+    |> Map.merge(%{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      model: nil
+    })
+  end
+
+  test "initial positive account evidence keeps the existing markerless reset-state behavior" do
+    observed_at = ~U[2026-07-25 03:00:00Z]
+    identity = identity!()
+
+    assert {:ok, row} =
+             EvidenceStore.record_evidence(
+               identity,
+               account_weekly(observed_at, "64"),
+               observed_at,
+               observed_at
+             )
+
+    refute Map.has_key?(row.metadata, "reset_state")
+    refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(row) == :none
+    refute CycleConfirmation.selector_valid?(row, observed_at)
+  end
+
+  test "parser evidence resolves each model weekly identity to one canonical anchored row" do
+    observed_at = ~U[2026-07-25 03:10:00Z]
+    reset_at = DateTime.add(observed_at, @window_seconds, :second)
+
+    spark =
+      parsed_additional_weekly!(spark_weekly_payload(64, reset_at), observed_at)
+
+    generic =
+      parsed_additional_weekly!(
+        generic_weekly_payload(
+          "Example Weekly Model",
+          "example_weekly_meter",
+          100,
+          reset_at
+        ),
+        observed_at
+      )
+
+    upstream_model =
+      generic
+      |> upstream_model_evidence!("provider-example-weekly-model", observed_at)
+
+    for {evidence, expected} <- [
+          {spark,
+           %{
+             quota_key: "codex_spark",
+             quota_scope: "model",
+             model: "gpt-5.3-codex-spark",
+             upstream_model: nil
+           }},
+          {generic,
+           %{
+             quota_key: "example_weekly_model",
+             quota_scope: "model",
+             model: "Example Weekly Model",
+             upstream_model: nil
+           }},
+          {upstream_model,
+           %{
+             quota_key: "example_weekly_model",
+             quota_scope: "upstream_model",
+             model: nil,
+             upstream_model: "provider-example-weekly-model"
+           }}
+        ] do
+      identity = identity!()
+
+      assert {:ok, row} =
+               EvidenceStore.record_evidence(identity, evidence, observed_at, observed_at)
+
+      assert [persisted] = identity_rows(identity)
+      assert persisted.id == row.id
+      assert persisted.quota_key == expected.quota_key
+      assert persisted.quota_scope == expected.quota_scope
+      assert persisted.model == expected.model
+      assert persisted.upstream_model == expected.upstream_model
+      assert_markerless_anchor(persisted, observed_at)
+    end
+
+    alias_identity = identity!()
+    historical_alias = historical_alias_row!(alias_identity, spark, observed_at)
+    canonical_at = DateTime.add(observed_at, 60, :second)
+
+    canonical_spark =
+      parsed_additional_weekly!(
+        spark_weekly_payload(70, reset_at, @window_seconds - 60),
+        canonical_at
+      )
+
+    assert {:ok, canonical_row} =
+             EvidenceStore.record_evidence(
+               alias_identity,
+               canonical_spark,
+               canonical_at,
+               canonical_at
+             )
+
+    assert canonical_row.id == historical_alias.id
+    assert [persisted_alias] = identity_rows(alias_identity)
+    assert persisted_alias.id == canonical_row.id
+    assert persisted_alias.quota_key == "codex_spark"
+    assert persisted_alias.quota_scope == "model"
+    assert persisted_alias.model == "gpt-5.3-codex-spark"
+    assert_markerless_anchor(persisted_alias, canonical_at)
   end
 
   test "an accepted floating Spark row rebases only after a persisted moving candidate confirms" do
@@ -304,9 +592,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert Decimal.equal?(anchored.used_percent, Decimal.new("2"))
     assert DateTime.compare(anchored.reset_at, candidate_reset) == :eq
     assert DateTime.compare(anchored.observed_at, positive_at) == :eq
-    refute Map.has_key?(anchored.metadata, "reset_state")
+    assert anchored.metadata["reset_state"] == "anchored"
     assert :none = EvidenceStore.parse_candidate(anchored.metadata)
     refute Map.has_key?(anchored.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(anchored) == :none
+    refute CycleConfirmation.selector_valid?(anchored, positive_at)
   end
 
   test "cached, older, future, and malformed timing cannot rebase a floating Spark row" do
@@ -744,9 +1034,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
              )
 
     row = model_weekly_row(identity)
-    refute Map.has_key?(row.metadata, "reset_state")
+    assert row.metadata["reset_state"] == "anchored"
     assert Decimal.equal?(row.used_percent, Decimal.new("2"))
     assert DateTime.compare(row.reset_at, anchored_reset) == :eq
+    refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(row) == :none
+    refute CycleConfirmation.selector_valid?(row, t3)
   end
 
   test "a sub-window zero-percent countdown anchors a previously floating weekly window" do
@@ -765,9 +1058,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
 
     floating = model_weekly_row(identity)
     assert floating.metadata["reset_state"] == "floating"
-    request_completed_at = DateTime.add(floating.observed_at, 38, :second)
-    observed_at = DateTime.add(floating.observed_at, 60, :second)
-    anchored_reset = DateTime.add(request_completed_at, @window_seconds, :second)
+    observed_at = DateTime.add(floating.observed_at, 104, :second)
+    anchored_reset = floating.reset_at
     reset_after_seconds = DateTime.diff(anchored_reset, observed_at, :second)
 
     assert reset_after_seconds < @window_seconds
@@ -779,10 +1071,587 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     )
 
     row = model_weekly_row(identity)
-    refute Map.has_key?(row.metadata, "reset_state")
+    assert row.metadata["reset_state"] == "anchored"
     assert Decimal.equal?(row.used_percent, Decimal.new("0"))
     assert DateTime.compare(row.reset_at, anchored_reset) == :eq
     assert DateTime.compare(row.observed_at, observed_at) == :eq
+    assert DateTime.compare(row.last_sync_at, observed_at) == :eq
+    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+    assert :none = EvidenceStore.parse_candidate(row.metadata)
+    refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+    refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(row) == :none
+    refute CycleConfirmation.selector_valid?(row, observed_at)
+  end
+
+  test "a parsed 104-second elapsed countdown replaces the floating snapshot" do
+    t0 = ~U[2026-07-25 05:00:00Z]
+    identity = identity!()
+
+    for offset <- [0, 60, 300] do
+      observed_at = DateTime.add(t0, offset, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, DateTime.add(observed_at, @window_seconds, :second)),
+        observed_at
+      )
+    end
+
+    floating = model_weekly_row(identity)
+    assert floating.metadata["reset_state"] == "floating"
+
+    observed_at = DateTime.add(floating.observed_at, 104, :second)
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    {log, events} =
+      capture_quota_cycle_events(fn ->
+        try do
+          capture_log([level: :info], fn ->
+            record_spark_payload!(
+              identity,
+              spark_weekly_payload(0, floating.reset_at, @window_seconds - 104),
+              observed_at
+            )
+          end)
+        after
+          Logger.configure(level: previous_level)
+        end
+      end)
+
+    assert log =~ "decision=anchored_confirmed reason=relative_countdown_immediate"
+    assert log =~ "scope=model source=provider_usage"
+
+    assert events == [
+             {%{count: 1},
+              %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
+           ]
+
+    row = model_weekly_row(identity)
+    assert row.metadata["reset_state"] == "anchored"
+    assert Decimal.equal?(row.used_percent, Decimal.new("0"))
+    assert DateTime.compare(row.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(row.observed_at, observed_at) == :eq
+    assert DateTime.compare(row.last_sync_at, observed_at) == :eq
+    assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+    assert :none = EvidenceStore.parse_candidate(row.metadata)
+    refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+    refute Map.has_key?(row.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(row) == :none
+    refute CycleConfirmation.selector_valid?(row, observed_at)
+  end
+
+  test "bounded elapsed countdowns anchor only from 61 through 120 seconds" do
+    t0 = ~U[2026-07-25 06:00:00Z]
+
+    for {elapsed_seconds, expected_state} <- [
+          {60, "floating"},
+          {61, "anchored"},
+          {120, "anchored"},
+          {121, "floating"}
+        ] do
+      identity = identity!()
+      floating = parsed_floating_model!(identity, t0)
+      observed_at = DateTime.add(floating.observed_at, elapsed_seconds, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(
+          0,
+          floating.reset_at,
+          @window_seconds - elapsed_seconds
+        ),
+        observed_at
+      )
+
+      row = model_weekly_row(identity)
+      assert row.metadata["reset_state"] == expected_state
+      assert Decimal.equal?(row.used_percent, Decimal.new("0"))
+      assert DateTime.compare(row.reset_at, floating.reset_at) == :eq
+
+      if expected_state == "anchored" do
+        assert DateTime.compare(row.observed_at, observed_at) == :eq
+        assert DateTime.compare(row.last_sync_at, observed_at) == :eq
+        assert :none = EvidenceStore.parse_candidate(row.metadata)
+        refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+        assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(observed_at)
+      end
+    end
+  end
+
+  test "a full-minus-one countdown remains floating" do
+    t0 = ~U[2026-07-25 07:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    observed_at = DateTime.add(floating.observed_at, 1, :second)
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, floating.reset_at, @window_seconds - 1),
+      observed_at
+    )
+
+    row = model_weekly_row(identity)
+    assert row.metadata["reset_state"] == "floating"
+    assert Decimal.equal?(row.used_percent, Decimal.new("0"))
+    assert DateTime.compare(row.reset_at, floating.reset_at) == :eq
+  end
+
+  test "missing malformed and derived-only exact duration cannot immediately anchor" do
+    t0 = ~U[2026-07-25 08:00:00Z]
+
+    for {case_name, invalid_payload} <- [
+          {:missing, spark_secondary_payload(0, DateTime.add(t0, @window_seconds, :second), nil)},
+          {:malformed,
+           spark_secondary_payload(
+             0,
+             DateTime.add(t0, @window_seconds, :second),
+             @window_seconds - 104,
+             limit_window_seconds: "invalid"
+           )},
+          {:derived_only,
+           spark_secondary_payload(
+             0,
+             DateTime.add(t0, @window_seconds, :second),
+             @window_seconds - 104
+           )}
+        ] do
+      identity = identity!()
+
+      initial =
+        record_spark_payload!(
+          identity,
+          spark_weekly_payload(0, DateTime.add(t0, @window_seconds, :second)),
+          t0
+        )
+
+      observed_at = DateTime.add(t0, 104, :second)
+
+      invalid_payload =
+        put_in(
+          invalid_payload,
+          ["additional_rate_limits", Access.at(0), "rate_limit", "secondary_window", "reset_at"],
+          DateTime.to_iso8601(initial.reset_at)
+        )
+
+      record_spark_payload!(identity, invalid_payload, observed_at)
+
+      row = model_weekly_row(identity)
+
+      assert row.metadata["reset_state"] == initial.metadata["reset_state"],
+             "case=#{case_name}"
+
+      assert DateTime.compare(row.reset_at, initial.reset_at) == :eq
+      assert DateTime.compare(row.observed_at, initial.observed_at) == :eq
+      assert DateTime.compare(row.last_sync_at, initial.last_sync_at) == :eq
+
+      assert row.metadata["__quota_relative_liveness_v1"] ==
+               initial.metadata["__quota_relative_liveness_v1"]
+    end
+  end
+
+  test "a bounded future provider instant cannot immediately anchor" do
+    t0 = ~U[2026-07-25 09:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    observed_at = DateTime.add(floating.observed_at, 61, :second)
+    future_reset = DateTime.add(floating.reset_at, 300, :second)
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, future_reset, @window_seconds - 61),
+      observed_at
+    )
+
+    row = model_weekly_row(identity)
+    assert row.metadata["reset_state"] == "floating"
+    assert DateTime.compare(row.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(row.observed_at, floating.observed_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             floating.metadata["__quota_relative_liveness_v1"]
+  end
+
+  test "replayed and older provider instants cannot refresh or rewind an immediate anchor" do
+    t0 = ~U[2026-07-25 10:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    anchored_at = DateTime.add(floating.observed_at, 61, :second)
+    anchored_payload = spark_weekly_payload(0, floating.reset_at, @window_seconds - 61)
+
+    record_spark_payload!(identity, anchored_payload, anchored_at)
+    anchored = model_weekly_row(identity)
+    assert anchored.metadata["reset_state"] == "anchored"
+    assert :none = EvidenceStore.parse_candidate(anchored.metadata)
+    refute Map.has_key?(anchored.metadata, "__quota_relative_candidate_liveness_v1")
+
+    assert anchored.metadata["__quota_relative_liveness_v1"] ==
+             DateTime.to_iso8601(anchored_at)
+
+    replayed_at = DateTime.add(anchored_at, 60, :second)
+    record_spark_payload!(identity, anchored_payload, replayed_at)
+
+    replayed = model_weekly_row(identity)
+    assert DateTime.compare(replayed.reset_at, anchored.reset_at) == :eq
+    assert DateTime.compare(replayed.observed_at, anchored.observed_at) == :eq
+
+    assert replayed.metadata["__quota_relative_liveness_v1"] ==
+             anchored.metadata["__quota_relative_liveness_v1"]
+
+    older_at = DateTime.add(anchored_at, 2, :minute)
+    older_provider_at = DateTime.add(anchored_at, -1, :second)
+    older_reset = DateTime.add(older_provider_at, @window_seconds - 120, :second)
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, older_reset, @window_seconds - 120),
+      older_at
+    )
+
+    older = model_weekly_row(identity)
+    assert DateTime.compare(older.reset_at, anchored.reset_at) == :eq
+    assert DateTime.compare(older.observed_at, anchored.observed_at) == :eq
+
+    assert older.metadata["__quota_relative_liveness_v1"] ==
+             anchored.metadata["__quota_relative_liveness_v1"]
+  end
+
+  test "reset displacement over 300 seconds cannot use the immediate route" do
+    t0 = ~U[2026-07-25 11:00:00Z]
+    identity = identity!()
+
+    initial =
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, DateTime.add(t0, @window_seconds, :second)),
+        t0
+      )
+
+    observed_at = DateTime.add(t0, 400, :second)
+    displaced_reset = DateTime.add(initial.reset_at, 339, :second)
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, displaced_reset, @window_seconds - 61),
+      observed_at
+    )
+
+    row = model_weekly_row(identity)
+    assert row.metadata["reset_state"] == initial.metadata["reset_state"]
+    assert DateTime.compare(row.reset_at, initial.reset_at) == :eq
+    assert DateTime.compare(row.observed_at, initial.observed_at) == :eq
+    assert DateTime.compare(row.last_sync_at, initial.last_sync_at) == :eq
+
+    assert row.metadata["__quota_relative_liveness_v1"] ==
+             initial.metadata["__quota_relative_liveness_v1"]
+  end
+
+  test "one bounded zero preserves positive and exhausted canonical pressure" do
+    t0 = ~U[2026-07-25 12:00:00Z]
+
+    for used_percent <- ["64", "100"] do
+      identity = identity!()
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(
+          String.to_integer(used_percent),
+          DateTime.add(t0, @window_seconds, :second)
+        ),
+        t0
+      )
+
+      canonical = model_weekly_row(identity)
+      routing_usable = Routing.usable_window?(canonical, t0)
+      observed_at = DateTime.add(t0, 104, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, canonical.reset_at, @window_seconds - 104),
+        observed_at
+      )
+
+      row = model_weekly_row(identity)
+      assert Decimal.equal?(row.used_percent, Decimal.new(used_percent))
+      assert DateTime.compare(row.reset_at, canonical.reset_at) == :eq
+      assert DateTime.compare(row.observed_at, canonical.observed_at) == :eq
+      assert DateTime.compare(row.last_sync_at, canonical.last_sync_at) == :eq
+
+      assert row.metadata["__quota_relative_liveness_v1"] ==
+               canonical.metadata["__quota_relative_liveness_v1"]
+
+      assert Routing.usable_window?(row, observed_at) == routing_usable
+    end
+  end
+
+  test "a stable far-back countdown retains its candidate and anchors after 180 seconds" do
+    t0 = ~U[2026-07-25 13:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    canonical_provider_watermark = floating.metadata["__quota_relative_liveness_v1"]
+    candidate_at = DateTime.add(floating.observed_at, 5, :minute)
+    fixed_reset = DateTime.add(candidate_at, @window_seconds - 24 * 60 * 60, :second)
+
+    assert DateTime.compare(fixed_reset, floating.reset_at) == :lt
+
+    record_spark_payload!(
+      identity,
+      fixed_countdown_payload(fixed_reset, candidate_at),
+      candidate_at
+    )
+
+    pending = model_weekly_row(identity)
+    assert {:ok, candidate} = EvidenceStore.parse_candidate(pending.metadata)
+    assert DateTime.compare(candidate.observed_at, candidate_at) == :eq
+    assert DateTime.compare(candidate.reset_at, fixed_reset) == :eq
+    assert DateTime.compare(pending.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(pending.observed_at, floating.observed_at) == :eq
+    assert pending.metadata["__quota_relative_liveness_v1"] == canonical_provider_watermark
+
+    assert pending.metadata["__quota_relative_candidate_liveness_v1"] ==
+             DateTime.to_iso8601(candidate_at)
+
+    before_confirmation_at = DateTime.add(candidate_at, 2, :minute)
+    equivalent_reset = DateTime.add(fixed_reset, 5, :second)
+
+    record_spark_payload!(
+      identity,
+      fixed_countdown_payload(equivalent_reset, before_confirmation_at),
+      before_confirmation_at
+    )
+
+    retained = model_weekly_row(identity)
+    assert {:ok, retained_candidate} = EvidenceStore.parse_candidate(retained.metadata)
+    assert DateTime.compare(retained_candidate.observed_at, candidate_at) == :eq
+    assert DateTime.compare(retained_candidate.reset_at, fixed_reset) == :eq
+    assert DateTime.compare(retained.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(retained.observed_at, floating.observed_at) == :eq
+
+    assert retained.metadata["__quota_relative_candidate_liveness_v1"] ==
+             DateTime.to_iso8601(candidate_at)
+
+    confirmed_at = DateTime.add(candidate_at, 3, :minute)
+
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    {log, events} =
+      capture_quota_cycle_events(fn ->
+        try do
+          capture_log([level: :info], fn ->
+            record_spark_payload!(
+              identity,
+              fixed_countdown_payload(equivalent_reset, confirmed_at),
+              confirmed_at
+            )
+          end)
+        after
+          Logger.configure(level: previous_level)
+        end
+      end)
+
+    assert log =~ "decision=anchored_confirmed reason=relative_countdown_confirmed"
+
+    assert events == [
+             {%{count: 1},
+              %{scope: "model", decision: :anchored_confirmed, source: "provider_usage"}}
+           ]
+
+    anchored = model_weekly_row(identity)
+    assert anchored.metadata["reset_state"] == "anchored"
+    assert Decimal.equal?(anchored.used_percent, Decimal.new("0"))
+    assert DateTime.compare(anchored.reset_at, equivalent_reset) == :eq
+    assert DateTime.compare(anchored.reset_at, floating.reset_at) == :lt
+    assert DateTime.compare(anchored.observed_at, confirmed_at) == :eq
+    assert DateTime.compare(anchored.last_sync_at, confirmed_at) == :eq
+    assert anchored.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(confirmed_at)
+    assert :none = EvidenceStore.parse_candidate(anchored.metadata)
+    refute Map.has_key?(anchored.metadata, "__quota_relative_candidate_liveness_v1")
+    refute Map.has_key?(anchored.metadata, "__quota_cycle_confirmation_v1")
+    assert CycleConfirmation.valid_marker(anchored) == :none
+    refute CycleConfirmation.selector_valid?(anchored, confirmed_at)
+  end
+
+  test "a confirmed far-back countdown replaces positive and exhausted pressure only after proof" do
+    t0 = ~U[2026-07-25 14:00:00Z]
+
+    for used_percent <- [64, 100] do
+      identity = identity!()
+
+      canonical =
+        record_spark_payload!(
+          identity,
+          spark_weekly_payload(used_percent, DateTime.add(t0, @window_seconds, :second)),
+          t0
+        )
+
+      candidate_at = DateTime.add(t0, 10, :minute)
+      fixed_reset = DateTime.add(candidate_at, @window_seconds - 24 * 60 * 60, :second)
+
+      record_spark_payload!(
+        identity,
+        fixed_countdown_payload(fixed_reset, candidate_at),
+        candidate_at
+      )
+
+      pending = model_weekly_row(identity)
+      assert Decimal.equal?(pending.used_percent, Decimal.new(used_percent))
+      assert DateTime.compare(pending.reset_at, canonical.reset_at) == :eq
+      assert DateTime.compare(pending.observed_at, canonical.observed_at) == :eq
+      assert DateTime.compare(pending.last_sync_at, canonical.last_sync_at) == :eq
+      assert {:ok, candidate} = EvidenceStore.parse_candidate(pending.metadata)
+      assert DateTime.compare(candidate.observed_at, candidate_at) == :eq
+
+      confirmed_at = DateTime.add(candidate_at, 3, :minute)
+
+      record_spark_payload!(
+        identity,
+        fixed_countdown_payload(fixed_reset, confirmed_at),
+        confirmed_at
+      )
+
+      anchored = model_weekly_row(identity)
+      assert anchored.metadata["reset_state"] == "anchored"
+      assert Decimal.equal?(anchored.used_percent, Decimal.new("0"))
+      assert DateTime.compare(anchored.reset_at, fixed_reset) == :eq
+      assert DateTime.compare(anchored.observed_at, confirmed_at) == :eq
+      assert :none = EvidenceStore.parse_candidate(anchored.metadata)
+    end
+  end
+
+  test "fixed countdown replay cannot advance a candidate and reset mismatch restarts it" do
+    t0 = ~U[2026-07-25 15:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    candidate_at = DateTime.add(floating.observed_at, 5, :minute)
+    fixed_reset = DateTime.add(candidate_at, @window_seconds - 24 * 60 * 60, :second)
+    candidate_payload = fixed_countdown_payload(fixed_reset, candidate_at)
+
+    record_spark_payload!(identity, candidate_payload, candidate_at)
+    seeded = model_weekly_row(identity)
+    assert {:ok, seeded_candidate} = EvidenceStore.parse_candidate(seeded.metadata)
+    seeded_candidate_watermark = seeded.metadata["__quota_relative_candidate_liveness_v1"]
+
+    replayed_at = DateTime.add(candidate_at, 60, :second)
+    record_spark_payload!(identity, candidate_payload, replayed_at)
+
+    replayed = model_weekly_row(identity)
+    assert {:ok, replayed_candidate} = EvidenceStore.parse_candidate(replayed.metadata)
+    assert replayed_candidate == seeded_candidate
+
+    assert replayed.metadata["__quota_relative_candidate_liveness_v1"] ==
+             seeded_candidate_watermark
+
+    assert DateTime.compare(replayed.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(replayed.observed_at, floating.observed_at) == :eq
+
+    restarted_at = DateTime.add(candidate_at, 2, :minute)
+    mismatched_reset = DateTime.add(fixed_reset, 6, :second)
+
+    record_spark_payload!(
+      identity,
+      fixed_countdown_payload(mismatched_reset, restarted_at),
+      restarted_at
+    )
+
+    restarted = model_weekly_row(identity)
+    assert {:ok, restarted_candidate} = EvidenceStore.parse_candidate(restarted.metadata)
+    assert DateTime.compare(restarted_candidate.observed_at, restarted_at) == :eq
+    assert DateTime.compare(restarted_candidate.reset_at, mismatched_reset) == :eq
+
+    assert restarted.metadata["__quota_relative_candidate_liveness_v1"] ==
+             DateTime.to_iso8601(restarted_at)
+
+    assert DateTime.compare(restarted.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(restarted.observed_at, floating.observed_at) == :eq
+  end
+
+  test "an invalid fixed countdown candidate pairing restarts from newer parser evidence" do
+    t0 = ~U[2026-07-25 16:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    candidate_at = DateTime.add(floating.observed_at, 5, :minute)
+    fixed_reset = DateTime.add(candidate_at, @window_seconds - 24 * 60 * 60, :second)
+
+    record_spark_payload!(
+      identity,
+      fixed_countdown_payload(fixed_reset, candidate_at),
+      candidate_at
+    )
+
+    pending = model_weekly_row(identity)
+
+    pending
+    |> Ecto.Changeset.change(
+      metadata: Map.delete(pending.metadata, "__quota_relative_candidate_liveness_v1")
+    )
+    |> Repo.update!()
+
+    restarted_at = DateTime.add(candidate_at, 2, :minute)
+
+    record_spark_payload!(
+      identity,
+      fixed_countdown_payload(fixed_reset, restarted_at),
+      restarted_at
+    )
+
+    restarted = model_weekly_row(identity)
+    assert {:ok, restarted_candidate} = EvidenceStore.parse_candidate(restarted.metadata)
+    assert DateTime.compare(restarted_candidate.observed_at, restarted_at) == :eq
+    assert DateTime.compare(restarted_candidate.reset_at, fixed_reset) == :eq
+
+    assert restarted.metadata["__quota_relative_candidate_liveness_v1"] ==
+             DateTime.to_iso8601(restarted_at)
+
+    assert DateTime.compare(restarted.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(restarted.observed_at, floating.observed_at) == :eq
+  end
+
+  test "full full-minus-one and first-minute countdowns never seed the fixed fallback" do
+    t0 = ~U[2026-07-25 17:00:00Z]
+
+    for elapsed_seconds <- [0, 1, 60] do
+      identity = identity!()
+      floating = parsed_floating_model!(identity, t0)
+      observed_at = DateTime.add(floating.observed_at, 5, :minute)
+      reset_at = DateTime.add(observed_at, @window_seconds - elapsed_seconds, :second)
+
+      record_spark_payload!(
+        identity,
+        spark_weekly_payload(0, reset_at, @window_seconds - elapsed_seconds),
+        observed_at
+      )
+
+      row = model_weekly_row(identity)
+      assert row.metadata["reset_state"] == "floating"
+      assert :none = EvidenceStore.parse_candidate(row.metadata)
+      refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+    end
+  end
+
+  test "a future provider instant cannot seed the confirmed fixed fallback" do
+    t0 = ~U[2026-07-25 18:00:00Z]
+    identity = identity!()
+    floating = parsed_floating_model!(identity, t0)
+    observed_at = DateTime.add(floating.observed_at, 5, :minute)
+    elapsed_seconds = 24 * 60 * 60
+    reset_after_seconds = @window_seconds - elapsed_seconds
+    future_reset = DateTime.add(observed_at, reset_after_seconds + 300, :second)
+
+    record_spark_payload!(
+      identity,
+      spark_weekly_payload(0, future_reset, reset_after_seconds),
+      observed_at
+    )
+
+    unchanged = model_weekly_row(identity)
+    assert unchanged.metadata["reset_state"] == "floating"
+    assert DateTime.compare(unchanged.reset_at, floating.reset_at) == :eq
+    assert DateTime.compare(unchanged.observed_at, floating.observed_at) == :eq
+    assert :none = EvidenceStore.parse_candidate(unchanged.metadata)
+    refute Map.has_key?(unchanged.metadata, "__quota_relative_candidate_liveness_v1")
   end
 
   test "a fixed replay cannot keep an accepted floating model weekly zero fresh" do
@@ -891,14 +1760,15 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   end
 
   test "positive model refresh advances the canonical provider watermark" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    t0 = ~U[2026-07-24 19:00:00Z]
     identity = identity!()
     canonical_reset = DateTime.add(t0, @window_seconds, :second)
 
     assert {:ok, _row} =
-             Windows.record_evidence(
+             EvidenceStore.record_evidence(
                identity,
                model_weekly(t0, "64", reset_at: canonical_reset),
+               t0,
                t0
              )
 
@@ -949,17 +1819,19 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
              DateTime.to_iso8601(canonical_provider_at)
 
     refute Map.has_key?(row.metadata, "__quota_relative_candidate_liveness_v1")
+    assert_markerless_anchor(row, second_observed_at)
   end
 
   test "positive model evidence without usable timing installs a conservative barrier" do
-    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    t0 = ~U[2026-07-24 20:00:00Z]
     identity = identity!()
     canonical_reset = DateTime.add(t0, @window_seconds, :second)
 
     assert {:ok, _row} =
-             Windows.record_evidence(
+             EvidenceStore.record_evidence(
                identity,
                model_weekly(t0, "64", reset_at: canonical_reset),
+               t0,
                t0
              )
 
@@ -981,6 +1853,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     accepted = model_weekly_row(identity)
     assert Decimal.equal?(accepted.used_percent, Decimal.new("70"))
     assert DateTime.compare(accepted.observed_at, positive_at) == :eq
+    assert_markerless_anchor(accepted, positive_at)
 
     assert accepted.metadata["__quota_relative_liveness_v1"] ==
              DateTime.to_iso8601(positive_at)
@@ -1013,6 +1886,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert Decimal.equal?(row.used_percent, Decimal.new("70"))
     assert DateTime.compare(row.observed_at, positive_at) == :eq
     assert row.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(positive_at)
+    assert_markerless_anchor(row, second_observed_at)
   end
 
   test "missing timing cannot replace an expired historical model alias" do

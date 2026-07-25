@@ -7,6 +7,12 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
   @metadata_key "__quota_relative_liveness_v1"
   @candidate_metadata_key "__quota_relative_candidate_liveness_v1"
 
+  @type countdown_timing :: %{
+          required(:limit_window_seconds) => pos_integer(),
+          required(:reset_after_seconds) => non_neg_integer(),
+          required(:elapsed_seconds) => integer()
+        }
+
   @spec valid?(Evidence.t(), DateTime.t()) :: boolean()
   def valid?(%Evidence{} = evidence, timestamp) do
     case provider_observed_at(evidence) do
@@ -194,21 +200,60 @@ defmodule CodexPooler.Upstreams.Quota.Windows.RelativeLiveness do
 
   def provider_observed_at(_evidence), do: :none
 
-  defp provider_observed_at(reset_at, metadata) do
-    case reset_after_seconds(metadata) do
-      {:ok, seconds} -> {:ok, DateTime.add(reset_at, -seconds, :second)}
-      :absent_or_invalid -> :none
+  @doc """
+  Reads the provider's exact positive window duration from quota metadata.
+
+  The value is not inferred from a normalized minute-based window.
+  """
+  @spec limit_window_seconds(map()) :: {:ok, pos_integer()} | :absent_or_invalid
+  def limit_window_seconds(%{} = metadata) do
+    case Map.get(metadata, "limit_window_seconds") ||
+           Map.get(metadata, :limit_window_seconds) do
+      seconds when is_integer(seconds) and seconds > 0 -> {:ok, seconds}
+      _absent_or_invalid -> :absent_or_invalid
     end
   end
 
-  defp reset_after_seconds(%{} = metadata) do
+  def limit_window_seconds(_metadata), do: :absent_or_invalid
+
+  @doc """
+  Reads a strict non-negative provider countdown from quota metadata.
+  """
+  @spec reset_after_seconds(map()) :: {:ok, non_neg_integer()} | :absent_or_invalid
+  def reset_after_seconds(%{} = metadata) do
     case Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds) do
       seconds when is_integer(seconds) and seconds >= 0 -> {:ok, seconds}
       _absent_or_invalid -> :absent_or_invalid
     end
   end
 
-  defp reset_after_seconds(_metadata), do: :absent_or_invalid
+  def reset_after_seconds(_metadata), do: :absent_or_invalid
+
+  @doc """
+  Returns exact countdown timing and the signed elapsed duration.
+
+  `elapsed_seconds` is `limit_window_seconds - reset_after_seconds`, so a
+  countdown larger than the exact window remains visible as a negative value.
+  """
+  @spec countdown_timing(map()) :: {:ok, countdown_timing()} | :absent_or_invalid
+  def countdown_timing(metadata) do
+    with {:ok, limit_seconds} <- limit_window_seconds(metadata),
+         {:ok, reset_seconds} <- reset_after_seconds(metadata) do
+      {:ok,
+       %{
+         limit_window_seconds: limit_seconds,
+         reset_after_seconds: reset_seconds,
+         elapsed_seconds: limit_seconds - reset_seconds
+       }}
+    end
+  end
+
+  defp provider_observed_at(reset_at, metadata) do
+    case reset_after_seconds(metadata) do
+      {:ok, seconds} -> {:ok, DateTime.add(reset_at, -seconds, :second)}
+      :absent_or_invalid -> :none
+    end
+  end
 
   defp skew_valid_at?(provider_at, timestamp) do
     DateTime.diff(timestamp, provider_at, :second) <= Evidence.freshness_ttl_seconds() and

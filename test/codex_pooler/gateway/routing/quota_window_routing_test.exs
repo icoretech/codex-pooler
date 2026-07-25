@@ -4,15 +4,18 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
 
   import CodexPooler.PoolerFixtures
 
   @observed_at ~U[2026-05-22 12:00:00Z]
+  @spark_weekly_seconds 604_800
 
   describe "lifecycle routing eligibility" do
     test "definitive provider rejection excludes retained high-percent quota immediately" do
@@ -67,6 +70,130 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                  requested_model: model.exposed_model_id,
                  upstream_model: model.upstream_model_id
                )
+    end
+  end
+
+  describe "parser-to-Postgres model routing" do
+    test "one qualifying-looking zero preserves exhausted Spark routing pressure" do
+      %{identity: identity, model: model} = parser_routing_fixture()
+      observed_at = ~U[2026-07-25 12:00:00Z]
+      reset_at = DateTime.add(observed_at, @spark_weekly_seconds, :second)
+
+      exhausted =
+        identity
+        |> record_usage_payload!(spark_usage_payload(100, observed_at, reset_at), observed_at)
+        |> spark_weekly_row!()
+        |> reload_window!()
+
+      assert Decimal.equal?(exhausted.used_percent, Decimal.new("100"))
+      assert DateTime.compare(exhausted.reset_at, reset_at) == :eq
+      assert exhausted.metadata["reset_state"] == "anchored"
+
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [%{reason_codes: ["exhausted"]}],
+               selection: %{blocked_windows: [%AccountQuotaWindow{id: exhausted_id}]}
+             } = routing_eligibility(identity, model, observed_at)
+
+      assert exhausted_id == exhausted.id
+
+      zero_at = DateTime.add(observed_at, 104, :second)
+
+      returned_zero =
+        identity
+        |> record_usage_payload!(
+          spark_usage_payload(
+            0,
+            zero_at,
+            reset_at,
+            @spark_weekly_seconds - 104
+          ),
+          zero_at
+        )
+        |> spark_weekly_row!()
+
+      persisted = reload_window!(returned_zero)
+
+      assert persisted.id == exhausted.id
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("100"))
+      assert DateTime.compare(persisted.reset_at, exhausted.reset_at) == :eq
+      assert DateTime.compare(persisted.observed_at, exhausted.observed_at) == :eq
+      assert persisted.metadata["reset_state"] == "anchored"
+
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [%{reason_codes: ["exhausted"]}],
+               selection: %{blocked_windows: [%AccountQuotaWindow{id: persisted_id}]}
+             } = routing_eligibility(identity, model, zero_at)
+
+      assert persisted_id == persisted.id
+    end
+
+    test "a bounded immediate Spark anchor is selected for its model and restores eligibility" do
+      %{identity: identity, model: model} = parser_routing_fixture()
+      started_at = ~U[2026-07-25 13:00:00Z]
+
+      floating =
+        Enum.reduce([0, 60, 300], nil, fn offset, _previous ->
+          observed_at = DateTime.add(started_at, offset, :second)
+          reset_at = DateTime.add(observed_at, @spark_weekly_seconds, :second)
+
+          identity
+          |> record_usage_payload!(spark_usage_payload(0, observed_at, reset_at), observed_at)
+          |> spark_weekly_row!()
+        end)
+        |> reload_window!()
+
+      assert floating.metadata["reset_state"] == "floating"
+
+      anchored_at = DateTime.add(floating.observed_at, 104, :second)
+
+      returned_anchor =
+        identity
+        |> record_usage_payload!(
+          spark_usage_payload(
+            0,
+            anchored_at,
+            floating.reset_at,
+            @spark_weekly_seconds - 104
+          ),
+          anchored_at
+        )
+        |> spark_weekly_row!()
+
+      persisted = reload_window!(returned_anchor)
+
+      assert persisted.id == floating.id
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("0"))
+      assert persisted.freshness_state == "fresh"
+      assert persisted.metadata["reset_state"] == "anchored"
+      assert DateTime.compare(persisted.reset_at, floating.reset_at) == :eq
+      assert DateTime.compare(persisted.observed_at, anchored_at) == :eq
+
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{routing_windows: routing_windows, blocked_windows: []}
+             } = routing_eligibility(identity, model, anchored_at)
+
+      assert Enum.any?(routing_windows, &(&1.id == persisted.id))
+
+      assert %{
+               eligible?: true,
+               exclusions: [],
+               selection: %{routing_windows: wrong_model_windows}
+             } =
+               QuotaWindows.routing_quota_eligibility(identity,
+                 at: anchored_at,
+                 model: "sample-codex-other",
+                 requested_model: "sample-codex-other",
+                 upstream_model: "sample-codex-other-upstream"
+               )
+
+      refute Enum.any?(wrong_model_windows, &(&1.id == persisted.id))
     end
   end
 
@@ -866,6 +993,91 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
     windows
     |> Enum.map(&{&1.quota_key, &1.window_kind, &1.window_minutes})
     |> Enum.sort()
+  end
+
+  defp parser_routing_fixture do
+    pool = pool_fixture()
+    %{identity: identity, assignment: assignment} = active_upstream_assignment_fixture(pool)
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-5.3-codex-spark",
+        upstream_model_id: "gpt-5.3-codex-spark",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    %{identity: identity, assignment: assignment, model: model}
+  end
+
+  defp record_usage_payload!(identity, payload, observed_at) do
+    assert {:ok, parsed_windows} =
+             Windows.codex_usage_quota_windows_from_payload(payload, observed_at)
+
+    Enum.map(parsed_windows, fn parsed_window ->
+      assert {:ok, row} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 parsed_window,
+                 observed_at,
+                 observed_at
+               )
+
+      row
+    end)
+  end
+
+  defp spark_weekly_row!(windows) do
+    assert [spark_weekly] =
+             Enum.filter(
+               windows,
+               &(&1.quota_key == "codex_spark" and &1.window_kind == "secondary" and
+                   &1.window_minutes == 10_080)
+             )
+
+    spark_weekly
+  end
+
+  defp reload_window!(%AccountQuotaWindow{id: id}), do: Repo.get!(AccountQuotaWindow, id)
+
+  defp routing_eligibility(identity, model, observed_at) do
+    QuotaWindows.routing_quota_eligibility(identity,
+      at: observed_at,
+      model: model.exposed_model_id,
+      requested_model: model.exposed_model_id,
+      upstream_model: model.upstream_model_id
+    )
+  end
+
+  defp spark_usage_payload(used_percent, observed_at, reset_at) do
+    spark_usage_payload(used_percent, observed_at, reset_at, @spark_weekly_seconds)
+  end
+
+  defp spark_usage_payload(used_percent, observed_at, reset_at, reset_after_seconds) do
+    %{
+      "rate_limit" => %{
+        "primary_window" => %{
+          "used_percent" => 12,
+          "limit_window_seconds" => 18_000,
+          "reset_after_seconds" => 900,
+          "reset_at" => DateTime.to_iso8601(DateTime.add(observed_at, 900, :second))
+        }
+      },
+      "additional_rate_limits" => [
+        %{
+          "limit_name" => "GPT-5.3-Codex-Spark",
+          "metered_feature" => "codex_bengalfox",
+          "model" => "gpt-5.3-codex-spark",
+          "rate_limit" => %{
+            "primary_window" => %{
+              "used_percent" => used_percent,
+              "limit_window_seconds" => @spark_weekly_seconds,
+              "reset_after_seconds" => reset_after_seconds,
+              "reset_at" => DateTime.to_iso8601(reset_at)
+            }
+          }
+        }
+      ]
+    }
   end
 
   defp routing_fixture(upstream) do

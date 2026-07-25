@@ -17,6 +17,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @historical_spark_quota_keys ~w(gpt_5_3_codex_spark codex_bengalfox codex_other)
   @spark_quota_keys ["codex_spark" | @historical_spark_quota_keys]
   @usage_reset_forward_tolerance_seconds 5 * 60
+  @model_weekly_window_seconds 604_800
+  @model_weekly_immediate_elapsed_floor_seconds 60
+  @model_weekly_immediate_elapsed_ceiling_seconds 120
   @weekly_restart_anchor_margin_seconds 60 * 60
   @weekly_restart_confirmation_span_seconds 3 * 60
   @weekly_restart_sliding_tolerance_seconds 2 * 60
@@ -339,10 +342,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       attrs
       |> clear_candidate_attrs()
       |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+      |> put_model_weekly_anchored_state(evidence)
     else
       attrs
     end
   end
+
+  # Model and upstream-model anchors are presentation/routing vocabulary only.
+  # Positive and countdown observations persist reset_state = "anchored" but
+  # deliberately do not mint __quota_cycle_confirmation_v1, so account-cycle
+  # selectors remain invalid for these model rows.
+  defp put_model_weekly_anchored_state(attrs, %Evidence{quota_scope: scope})
+       when scope in ["model", "upstream_model"],
+       do: mark_anchored_reset(attrs)
+
+  defp put_model_weekly_anchored_state(attrs, _evidence), do: attrs
 
   defp validate_initial_relative_weekly_observation(
          %Quota.AccountQuotaWindow{id: nil},
@@ -407,8 +421,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   # A zero-use model weekly window can be unanchored: the provider reports a
   # full relative reset on every live observation until first use starts the
   # actual cycle. Preserve the routing-required reset-bearing shape, but only
-  # label it floating after two observations prove that reset_at advances with
-  # observed_at. Replayed bodies keep a fixed reset and cannot pass this proof.
+  # label it floating after the sliding proof shows reset_at advancing with
+  # observed_at for the full confirmation span. A replay keeps its provider
+  # instant fixed and cannot pass RelativeLiveness.advances?/3; an older event
+  # cannot rewind the canonical row, and one qualifying-looking zero cannot
+  # erase positive or exhausted model pressure.
   defp floating_model_weekly_attempt?(
          %Evidence{
            source: "codex_usage_api",
@@ -434,61 +451,165 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp floating_model_weekly_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
 
-    if started_model_weekly_countdown?(evidence) do
-      log_cycle_decision(:anchored_confirmed, "relative_countdown", existing, evidence, metadata)
+    case floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
+      {:anchor, reason} ->
+        log_cycle_decision(
+          :anchored_confirmed,
+          reason,
+          existing,
+          evidence,
+          metadata
+        )
 
-      existing
-      |> accepted_snapshot_attrs(attrs, timestamp)
-      |> RelativeLiveness.put_metadata(evidence, timestamp)
-    else
-      case floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
-        :accept ->
-          log_cycle_decision(:floating_confirmed, "confirmation", existing, evidence, metadata)
+        existing
+        |> accepted_snapshot_attrs(attrs, timestamp)
+        |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+        |> mark_anchored_reset()
 
-          existing
-          |> accepted_snapshot_attrs(attrs, timestamp)
-          |> RelativeLiveness.put_metadata(evidence, timestamp)
-          |> mark_floating_reset()
+      :accept ->
+        log_cycle_decision(:floating_confirmed, "confirmation", existing, evidence, metadata)
 
-        :keep ->
-          log_cycle_decision(:rejected, "candidate_not_ready", existing, evidence, metadata)
-          candidate_snapshot_attrs(existing, metadata, timestamp)
+        existing
+        |> accepted_snapshot_attrs(attrs, timestamp)
+        |> RelativeLiveness.put_metadata(evidence, timestamp)
+        |> mark_floating_reset()
 
-        :restart ->
-          log_cycle_decision(:candidate, "candidate_restarted", existing, evidence, metadata)
+      :keep ->
+        log_cycle_decision(:rejected, "candidate_not_ready", existing, evidence, metadata)
+        candidate_snapshot_attrs(existing, metadata, timestamp)
 
-          candidate_snapshot_attrs(
-            existing,
-            put_relative_candidate(clear_candidate(metadata), evidence, timestamp),
-            timestamp
-          )
-      end
+      :restart ->
+        log_cycle_decision(:candidate, "candidate_restarted", existing, evidence, metadata)
+
+        candidate_snapshot_attrs(
+          existing,
+          put_relative_candidate(clear_candidate(metadata), evidence, timestamp),
+          timestamp
+        )
     end
   end
-
-  defp started_model_weekly_countdown?(%Evidence{
-         window_minutes: window_minutes,
-         metadata: metadata
-       })
-       when is_integer(window_minutes) and window_minutes > 0 and is_map(metadata) do
-    case Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds) do
-      seconds when is_integer(seconds) and seconds >= 0 -> seconds < window_minutes * 60
-      _missing_or_invalid -> false
-    end
-  end
-
-  defp started_model_weekly_countdown?(_evidence), do: false
 
   defp floating_model_weekly_decision(metadata, existing, evidence, timestamp) do
     cond do
       not RelativeLiveness.advances?(evidence, existing, timestamp) ->
         :keep
 
+      bounded_immediate_model_weekly_anchor?(evidence, existing) ->
+        {:anchor, "relative_countdown_immediate"}
+
+      started_model_weekly_countdown?(evidence) ->
+        confirmed_fixed_anchor_candidate_decision(metadata, existing, evidence, timestamp)
+
       floating_reset?(metadata) ->
         floating_rebase_candidate_decision(metadata, existing, evidence, timestamp)
 
       true ->
         floating_model_candidate_decision(metadata, existing, evidence, timestamp)
+    end
+  end
+
+  # The bounded proof is intentionally narrow: zero over zero, an exact
+  # 604_800-second provider window, elapsed 61..120 seconds, proven non-future
+  # provider advancement, and no more than 300 seconds of reset displacement.
+  # This captures the first live anchored countdown without treating every
+  # reset_after_seconds value below one week as proof.
+  defp bounded_immediate_model_weekly_anchor?(
+         %Evidence{
+           used_percent: %Decimal{} = incoming_percent,
+           reset_at: %DateTime{} = incoming_reset,
+           metadata: metadata
+         },
+         %Quota.AccountQuotaWindow{
+           used_percent: %Decimal{} = existing_percent,
+           reset_at: %DateTime{} = existing_reset
+         }
+       ) do
+    zero_percent?(incoming_percent) and
+      zero_percent?(existing_percent) and
+      bounded_immediate_countdown?(RelativeLiveness.countdown_timing(metadata)) and
+      abs(DateTime.diff(incoming_reset, existing_reset, :second)) <=
+        @usage_reset_forward_tolerance_seconds
+  end
+
+  defp bounded_immediate_model_weekly_anchor?(_evidence, _existing), do: false
+
+  defp bounded_immediate_countdown?(
+         {:ok,
+          %{
+            limit_window_seconds: @model_weekly_window_seconds,
+            elapsed_seconds: elapsed_seconds
+          }}
+       ) do
+    elapsed_seconds > @model_weekly_immediate_elapsed_floor_seconds and
+      elapsed_seconds <= @model_weekly_immediate_elapsed_ceiling_seconds
+  end
+
+  defp bounded_immediate_countdown?(_timing), do: false
+
+  defp started_model_weekly_countdown?(%Evidence{
+         used_percent: %Decimal{} = used_percent,
+         metadata: metadata
+       }) do
+    zero_percent?(used_percent) and
+      started_model_weekly_countdown_timing?(RelativeLiveness.countdown_timing(metadata))
+  end
+
+  defp started_model_weekly_countdown?(_evidence), do: false
+
+  defp started_model_weekly_countdown_timing?(
+         {:ok,
+          %{
+            limit_window_seconds: @model_weekly_window_seconds,
+            elapsed_seconds: elapsed_seconds
+          }}
+       ),
+       do: elapsed_seconds > @model_weekly_immediate_elapsed_floor_seconds
+
+  defp started_model_weekly_countdown_timing?(_timing), do: false
+
+  # A fixed far-back countdown cannot satisfy the sliding proof because its
+  # reset is supposed to remain stable. Keep that proof in a separate candidate
+  # lane: equivalent zero/reset evidence plus advancing provider time must hold
+  # for at least 180 seconds. An equal-or-older incoming replay is kept without
+  # refreshing the row; a candidate behind the canonical, invalid pairing, or
+  # reset/percent mismatch restarts the candidate. Confirmation may accept a
+  # reset behind the floating canonical; before confirmation the canonical
+  # percent/reset remains untouched.
+  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
+  defp confirmed_fixed_anchor_candidate_decision(metadata, existing, evidence, timestamp) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        cond do
+          not candidate_valid?(candidate, timestamp) ->
+            :restart
+
+          not zero_candidate?(candidate) ->
+            :restart
+
+          not newer_observation?(candidate.observed_at, existing.observed_at) ->
+            :restart
+
+          not newer_observation?(evidence.observed_at, candidate.observed_at) ->
+            :keep
+
+          not RelativeLiveness.candidate_pair_valid?(metadata, evidence, timestamp) ->
+            :restart
+
+          not candidate_equivalent?(candidate, evidence) ->
+            :restart
+
+          not RelativeLiveness.candidate_advances?(metadata, evidence, timestamp) ->
+            :keep
+
+          confirmation_span_reached?(candidate, evidence) ->
+            {:anchor, "relative_countdown_confirmed"}
+
+          true ->
+            :keep
+        end
+
+      :none ->
+        :restart
     end
   end
 
@@ -522,6 +643,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp mark_floating_reset(attrs) do
     Map.update!(attrs, :metadata, &Map.put(&1, "reset_state", "floating"))
+  end
+
+  defp mark_anchored_reset(attrs) do
+    Map.update!(attrs, :metadata, &Map.put(&1, "reset_state", "anchored"))
   end
 
   # While the provider's anchored 5h windows are suspended (announced as
