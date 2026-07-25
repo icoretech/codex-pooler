@@ -69,9 +69,10 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation.Targets do
     Map.put(target, :kind, :direct_identity)
   end
 
+  # The slug restates the Pool name it is derived from, so it stays out of the
+  # row and the card; the drawer still carries the identifying detail.
   defp pool_job_target(target) do
-    slug = target_status("Slug", target.pool_slug)
-    target = labeled_target("Pool", target.pool_name, target.pool_id, slug, slug)
+    target = labeled_target("Pool", target.pool_name, target.pool_id, nil, nil)
     Map.put(target, :kind, :pool)
   end
 
