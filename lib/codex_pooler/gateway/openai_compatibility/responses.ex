@@ -393,16 +393,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_tool(%{"deferred" => _deferred}),
     do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
 
-  defp validate_tool(%{"type" => "function", "name" => name, "parameters" => parameters})
-       when is_binary(name) and is_map(parameters) do
-    if String.trim(name) == "",
-      do: {:error, Error.invalid_request("function tool requires a non-empty name", "tools")},
-      else: :ok
-  end
+  defp validate_tool(%{"type" => "function"} = tool), do: validate_function_tool(tool)
 
-  defp validate_tool(%{"type" => "function"}),
-    do:
-      {:error, Error.invalid_request("function tool requires flat name and parameters", "tools")}
+  defp validate_tool(%{"type" => "programmatic_tool_calling"} = tool),
+    do: validate_exact_builtin_tool(tool, ["type"])
 
   defp validate_tool(%{"type" => "web_search_preview"} = tool),
     do: validate_exact_builtin_tool(tool, ["type"])
@@ -458,6 +452,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          %{"type" => "function", "name" => name, "parameters" => parameters} = tool
        )
        when is_binary(name) and is_map(parameters) do
+    validate_function_tool(tool)
+  end
+
+  defp validate_namespace_function_tool(_tool),
+    do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
+
+  defp validate_function_tool(
+         %{"type" => "function", "name" => name, "parameters" => parameters} = tool
+       )
+       when is_binary(name) and is_map(parameters) do
     with :ok <-
            validate_exact_tool_keys(tool, [
              "type",
@@ -465,17 +469,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
              "description",
              "parameters",
              "strict",
-             "defer_loading"
+             "defer_loading",
+             "allowed_callers",
+             "output_schema"
            ]),
          :ok <-
            validate_nonblank_tool_field(tool, "name", "function tool requires a non-empty name"),
-         :ok <- validate_optional_boolean_tool_field(tool, "strict") do
-      validate_optional_boolean_tool_field(tool, "defer_loading")
+         :ok <- validate_optional_boolean_tool_field(tool, "strict"),
+         :ok <- validate_optional_boolean_tool_field(tool, "defer_loading"),
+         :ok <- validate_optional_allowed_callers(tool) do
+      validate_optional_output_schema(tool)
     end
   end
 
-  defp validate_namespace_function_tool(_tool),
-    do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
+  defp validate_function_tool(_tool),
+    do:
+      {:error, Error.invalid_request("function tool requires flat name and parameters", "tools")}
 
   defp validate_nonblank_tool_field(tool, field, message) do
     case Map.get(tool, field) do
@@ -504,6 +513,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       :error -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
     end
   end
+
+  defp validate_optional_allowed_callers(%{"allowed_callers" => allowed_callers})
+       when is_list(allowed_callers) do
+    if Enum.all?(allowed_callers, &(&1 in ["direct", "programmatic"])),
+      do: :ok,
+      else: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+  end
+
+  defp validate_optional_allowed_callers(%{"allowed_callers" => _allowed_callers}),
+    do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+  defp validate_optional_allowed_callers(_tool), do: :ok
+
+  defp validate_optional_output_schema(%{"output_schema" => output_schema})
+       when is_map(output_schema),
+       do: :ok
+
+  defp validate_optional_output_schema(%{"output_schema" => _output_schema}),
+    do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+  defp validate_optional_output_schema(_tool), do: :ok
 
   defp validate_index_gated_web_access(%{"index_gated_web_access" => false}) do
     {:error, Error.invalid_request("tool shape is not translatable", "tools")}
@@ -535,10 +565,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_tool_choice(%{"tool_choice" => %{"type" => "function", "name" => name}} = payload)
        when is_binary(name) do
-    validate_named_tool_choice(payload, name)
+    with :ok <- validate_exact_tool_choice_keys(Map.get(payload, "tool_choice"), ["type", "name"]) do
+      validate_named_tool_choice(payload, name)
+    end
   end
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "image_generation"}}), do: :ok
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "image_generation"} = choice}),
+    do: validate_exact_tool_choice_keys(choice, ["type"])
+
+  defp validate_tool_choice(%{
+         "tool_choice" => %{"type" => "programmatic_tool_calling"} = choice
+       }),
+       do: validate_exact_tool_choice_keys(choice, ["type"])
 
   defp validate_tool_choice(%{"tool_choice" => %{"type" => "function"}}),
     do:
@@ -549,6 +587,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
 
   defp validate_tool_choice(_payload), do: :ok
+
+  defp validate_exact_tool_choice_keys(choice, allowed_keys) do
+    case choice |> Map.keys() |> Enum.reject(&(&1 in allowed_keys)) do
+      [] ->
+        :ok
+
+      [_key | _rest] ->
+        {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
+    end
+  end
 
   defp validate_named_tool_choice(payload, name) do
     cond do

@@ -1365,6 +1365,102 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end)
     end
 
+    test "function call replay baseline accepts and preserves supported items" do
+      input = [
+        %{
+          "type" => "function_call",
+          "id" => "fc_fixture_baseline",
+          "call_id" => "call_fixture_baseline",
+          "name" => "lookup_fixture",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco_fixture_baseline",
+          "call_id" => "call_fixture_baseline",
+          "output" => "synthetic tool output"
+        }
+      ]
+
+      payload = %{"model" => "gpt-fixture-text", "input" => input}
+
+      assert {:ok, _validated} = Responses.validate(payload)
+      assert {:ok, %{payload: %{"input" => ^input}}} = Responses.coerce(payload)
+    end
+
+    for input_case <- [
+          :program,
+          :program_output,
+          :program_output_incomplete,
+          :function_call,
+          :function_call_direct_caller,
+          :function_call_program_caller,
+          :function_call_output,
+          :function_call_output_direct_caller,
+          :function_call_output_program_caller
+        ] do
+      test "programmatic replay validates #{input_case} as a closed input item" do
+        item = programmatic_input_item(unquote(input_case))
+
+        assert {:ok, _validated} =
+                 Responses.validate(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [item]
+                 })
+
+        assert {:ok, %{payload: %{"input" => [^item]}}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [item]
+                 })
+      end
+    end
+
+    test "programmatic replay coercion preserves the full stateless order and values" do
+      input = [
+        programmatic_input_item(:program),
+        programmatic_input_item(:function_call_program_caller),
+        programmatic_input_item(:function_call_output_program_caller),
+        programmatic_input_item(:program_output)
+      ]
+
+      assert {:ok, %{payload: %{"input" => ^input}}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => input
+               })
+    end
+
+    test "programmatic replay rejects malformed items and unrelated input types" do
+      invalid_items =
+        for item <- [programmatic_input_item(:program), programmatic_input_item(:program_output)],
+            malformed_item <- malformed_programmatic_item_variants(item),
+            do: malformed_item
+
+      invalid_callers = [
+        %{"type" => "direct", "caller_id" => "unexpected"},
+        %{"type" => "program"},
+        %{"type" => "program", "caller_id" => 1},
+        %{"type" => "unknown"},
+        %{"type" => 1}
+      ]
+
+      invalid_items =
+        invalid_items ++
+          for caller <- invalid_callers,
+              item_type <- [:function_call, :function_call_output] do
+            programmatic_input_item(item_type, caller: caller)
+          end
+
+      Enum.each(invalid_items ++ [%{"type" => "unknown_programmatic_item"}], fn item ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.validate(%{"model" => "gpt-fixture-text", "input" => [item]})
+
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end)
+    end
+
     test "opencode replay continuations accept only the supported replay item shapes" do
       payload = %{
         "model" => "gpt-fixture-text",
@@ -2515,6 +2611,191 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                  |> Map.put("tool_choice", choice)
                  |> Responses.coerce()
       end)
+    end
+
+    test "Responses accepts only the exact programmatic hosted tool and tool choice" do
+      hosted_tool = %{"type" => "programmatic_tool_calling"}
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [hosted_tool],
+        "tool_choice" => hosted_tool
+      }
+
+      assert {:ok, result} = Responses.coerce(payload)
+      assert result.payload["tools"] == [hosted_tool]
+      assert result.payload["tool_choice"] == hosted_tool
+
+      for invalid_tool <- [
+            %{"type" => "programmatic_tool_calling", "unexpected" => true},
+            %{"type" => "programmatic_tool_calling", "name" => "program"}
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 payload
+                 |> Map.put("tools", [invalid_tool])
+                 |> Responses.coerce()
+      end
+
+      for invalid_choice <- [
+            %{"type" => "programmatic_tool_calling", "unexpected" => true},
+            %{"type" => "programmatic_tool_calling", "name" => "program"}
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "tool_choice"}} =
+                 payload
+                 |> Map.put("tool_choice", invalid_choice)
+                 |> Responses.coerce()
+      end
+    end
+
+    test "Responses preserves flat and namespace function options through non-strict lowering" do
+      output_schema = %{
+        "x-opaque-keyword" => [nil, true, 7, %{"nested" => ["value"]}],
+        "$defs" => %{"opaque" => %{"unknown" => "preserved"}}
+      }
+
+      flat_tool =
+        flat_function_tool("lookup_flat_fixture", non_strict_tool_schema(), false)
+        |> Map.merge(%{
+          "description" => "Lookup flat fixture",
+          "defer_loading" => true,
+          "allowed_callers" => ["direct", "programmatic", "programmatic"],
+          "output_schema" => output_schema
+        })
+
+      namespace_function =
+        flat_function_tool("lookup_namespaced_fixture", non_strict_tool_schema(), false)
+        |> Map.merge(%{
+          "description" => "Lookup namespaced fixture",
+          "defer_loading" => false,
+          "allowed_callers" => [],
+          "output_schema" => output_schema
+        })
+
+      namespace_tool = %{
+        "type" => "namespace",
+        "name" => "fixture_namespace",
+        "description" => "Synthetic namespace tools",
+        "tools" => [namespace_function]
+      }
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [flat_tool, namespace_tool]
+               })
+
+      coerced_flat = get_in(result.payload, ["tools", Access.at(0)])
+      coerced_namespaced = get_in(result.payload, ["tools", Access.at(1), "tools", Access.at(0)])
+
+      assert coerced_flat["parameters"] == lowered_tool_schema()
+      assert coerced_namespaced["parameters"] == lowered_tool_schema()
+
+      assert Map.drop(coerced_flat, ["parameters"]) == Map.drop(flat_tool, ["parameters"])
+
+      assert Map.drop(coerced_namespaced, ["parameters"]) ==
+               Map.drop(namespace_function, ["parameters"])
+
+      assert coerced_flat["allowed_callers"] == ["direct", "programmatic", "programmatic"]
+      assert coerced_namespaced["allowed_callers"] == []
+      assert coerced_flat["output_schema"] == output_schema
+      assert coerced_namespaced["output_schema"] == output_schema
+    end
+
+    test "Responses rejects unknown and malformed flat and namespace function options" do
+      invalid_options = [
+        %{"strict" => "true"},
+        %{"defer_loading" => "true"},
+        %{"allowed_callers" => "direct"},
+        %{"allowed_callers" => ["direct", "unknown"]},
+        %{"allowed_callers" => [nil]},
+        %{"allowed_callers" => nil},
+        %{"output_schema" => []},
+        %{"output_schema" => "object"},
+        %{"output_schema" => 1},
+        %{"output_schema" => true},
+        %{"output_schema" => nil},
+        %{"unexpected" => true}
+      ]
+
+      Enum.each(invalid_options, fn invalid_option ->
+        function_tool =
+          flat_function_tool("lookup_fixture", %{}, nil)
+          |> Map.merge(invalid_option)
+
+        namespace_tool = %{
+          "type" => "namespace",
+          "name" => "fixture_namespace",
+          "description" => "Synthetic namespace tools",
+          "tools" => [function_tool]
+        }
+
+        for tool <- [function_tool, namespace_tool] do
+          assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                   Responses.coerce(%{
+                     "model" => "gpt-fixture-text",
+                     "input" => "synthetic input",
+                     "tools" => [tool]
+                   })
+        end
+      end)
+    end
+
+    test "Responses keeps object tool choices exact and namespace names ineligible" do
+      function_tool = flat_function_tool("lookup_fixture", %{}, nil)
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [
+          function_tool,
+          %{
+            "type" => "namespace",
+            "name" => "fixture_namespace",
+            "description" => "Synthetic namespace tools",
+            "tools" => [flat_function_tool("nested_fixture", %{}, nil)]
+          }
+        ]
+      }
+
+      for invalid_choice <- [
+            %{"type" => "function", "name" => "lookup_fixture", "unexpected" => true},
+            %{"type" => "image_generation", "unexpected" => true},
+            %{"type" => "function", "name" => "fixture_namespace"}
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "tool_choice"}} =
+                 payload
+                 |> Map.put("tool_choice", invalid_choice)
+                 |> Responses.coerce()
+      end
+    end
+
+    test "namespace strict function options retain the nested parameter error path" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [
+          %{
+            "type" => "namespace",
+            "name" => "fixture_namespace",
+            "description" => "Synthetic namespace tools",
+            "tools" => [
+              flat_function_tool("lookup_namespaced_fixture", non_strict_tool_schema(), true)
+              |> Map.merge(%{
+                "allowed_callers" => ["programmatic"],
+                "output_schema" => %{"unknown" => [nil, true]}
+              })
+            ]
+          }
+        ]
+      }
+
+      assert {:error,
+              %{
+                code: "invalid_function_parameters",
+                param: "tools.0.tools.0.parameters.type"
+              }} = Responses.coerce(payload)
     end
 
     test "parallel_tool_calls true and false are preserved for Responses and Chat" do
@@ -4447,6 +4728,97 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         "ok" => true
       }
     }
+  end
+
+  defp programmatic_input_item(:program) do
+    %{
+      "type" => "program",
+      "id" => "",
+      "call_id" => "",
+      "code" => "",
+      "fingerprint" => ""
+    }
+  end
+
+  defp programmatic_input_item(:program_output) do
+    %{
+      "type" => "program_output",
+      "id" => "",
+      "call_id" => "",
+      "result" => "",
+      "status" => "completed"
+    }
+  end
+
+  defp programmatic_input_item(:program_output_incomplete) do
+    programmatic_input_item(:program_output)
+    |> Map.put("status", "incomplete")
+  end
+
+  defp programmatic_input_item(:function_call_direct_caller),
+    do: programmatic_input_item(:function_call, caller: %{"type" => "direct"})
+
+  defp programmatic_input_item(:function_call_program_caller),
+    do:
+      programmatic_input_item(:function_call,
+        caller: %{"type" => "program", "caller_id" => "program_call_fixture"}
+      )
+
+  defp programmatic_input_item(:function_call_output_direct_caller),
+    do: programmatic_input_item(:function_call_output, caller: %{"type" => "direct"})
+
+  defp programmatic_input_item(:function_call_output_program_caller),
+    do:
+      programmatic_input_item(:function_call_output,
+        caller: %{"type" => "program", "caller_id" => "program_call_fixture"}
+      )
+
+  defp programmatic_input_item(type, opts \\ [])
+
+  defp programmatic_input_item(:function_call, opts) do
+    %{
+      "type" => "function_call",
+      "id" => "function_call_item_fixture",
+      "call_id" => "function_call_fixture",
+      "name" => "lookup_fixture",
+      "arguments" => "{}"
+    }
+    |> maybe_put_caller(opts)
+  end
+
+  defp programmatic_input_item(:function_call_output, opts) do
+    %{
+      "type" => "function_call_output",
+      "id" => "function_call_output_item_fixture",
+      "call_id" => "function_call_fixture",
+      "output" => "synthetic tool output"
+    }
+    |> maybe_put_caller(opts)
+  end
+
+  defp malformed_programmatic_item_variants(item) do
+    item
+    |> Map.keys()
+    |> Enum.map(&Map.delete(item, &1))
+    |> Kernel.++([Map.put(item, "unexpected", true)])
+    |> Kernel.++(
+      Enum.map(item, fn {key, _value} ->
+        Map.put(item, key, 1)
+      end)
+    )
+    |> Kernel.++(malformed_programmatic_status_variants(item))
+  end
+
+  defp malformed_programmatic_status_variants(%{"type" => "program_output"} = item),
+    do: [Map.put(item, "status", "unknown")]
+
+  defp malformed_programmatic_status_variants(_item), do: []
+
+  defp maybe_put_caller(item, opts) do
+    case Keyword.fetch(opts, :caller) do
+      {:ok, caller} -> Map.put(item, "caller", caller)
+      :error -> item
+    end
   end
 
   defp assert_payload_equal_no_echo!(actual, expected, message) do

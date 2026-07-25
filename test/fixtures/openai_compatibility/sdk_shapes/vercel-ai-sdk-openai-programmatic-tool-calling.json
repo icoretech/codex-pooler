@@ -1,0 +1,56 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "vercel-ai-sdk-openai.responses.programmatic_tool_calling.v1",
+  "sdk_name": "Vercel AI SDK OpenAI provider",
+  "sdk_package": "@ai-sdk/openai",
+  "sdk_version": "3.0.65",
+  "version_provenance": "Pinned to the registry version recorded in the SDK shape manifest on 2026-05-24; structural inventory records only the narrow programmatic-tool calling vocabulary.",
+  "endpoint": "/v1/responses",
+  "http_method": "POST",
+  "scenario": "Stateless Responses programmatic-tool calling with program replay, function caller attribution, and program output completion.",
+  "top_level_keys": ["model", "store", "input", "tools", "tool_choice"],
+  "input_item_types": ["program", "function_call", "function_call_output", "program_output"],
+  "content_part_types": [],
+  "tool_shape_keys": ["type", "name", "description", "parameters", "strict", "defer_loading", "allowed_callers", "output_schema"],
+  "expected_decision": {
+    "status": "accept",
+    "allowed_values": ["accept", "translate", "reject", "passthrough"]
+  },
+  "owner_placeholder": "CodexPooler.Gateway.OpenAICompatibility.Responses",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "program_placeholder": "sample-program",
+    "tool_call_placeholder": "sample-tool-call",
+    "output_placeholder": "sample-program-output",
+    "schema_placeholder": "opaque-schema-map"
+  },
+  "structural_summary": {
+    "payload_kind": "responses_programmatic_tool_calling",
+    "store_value": false,
+    "program_keys": ["type", "id", "call_id", "code", "fingerprint"],
+    "program_output_keys": ["type", "id", "call_id", "result", "status"],
+    "program_output_statuses": ["completed", "incomplete"],
+    "caller_shapes": ["direct", "programmatic_with_caller_id"],
+    "hosted_tool_shape": "type_only_programmatic_tool_calling",
+    "tool_choice_shape": "type_only_programmatic_tool_calling",
+    "function_option_keys": ["strict", "defer_loading", "allowed_callers", "output_schema"],
+    "allowed_callers": ["direct", "programmatic"],
+    "output_schema_shape": "opaque_json_map",
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "The inventory is closed-world and does not claim full OpenAI tool compatibility.",
+      "Remote MCP and unrelated hosted tools are outside this scenario."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false,
+    "contains_program_code": false,
+    "contains_program_output": false,
+    "contains_schema_values": false
+  }
+}

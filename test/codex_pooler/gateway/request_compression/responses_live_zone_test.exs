@@ -55,6 +55,73 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
       end)
     end
 
+    test "plans only function output in mixed programmatic replay shapes" do
+      program = %{
+        "type" => "program",
+        "id" => "program-id-preserved",
+        "call_id" => "program-call-id-preserved",
+        "code" => "synthetic program code",
+        "fingerprint" => "synthetic-program-fingerprint"
+      }
+
+      caller = %{"type" => "program", "caller_id" => "program-caller-id-preserved"}
+
+      program_output = %{
+        "type" => "program_output",
+        "id" => "program-output-id-preserved",
+        "call_id" => "program-call-id-preserved",
+        "result" => large_output("program result preserved"),
+        "status" => "completed"
+      }
+
+      unknown_program_output = %{
+        "type" => "program_output_variant",
+        "call_id" => "unknown-program-output-call",
+        "output" => large_output("unknown program output")
+      }
+
+      malformed_program_output = %{
+        "type" => "program_output",
+        "result" => %{"value" => large_output("malformed program output")}
+      }
+
+      input = [
+        program,
+        %{
+          "type" => "function_call",
+          "call_id" => "call_mixed_function_output",
+          "name" => "run_command",
+          "caller" => caller
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_mixed_function_output",
+          "output" => large_output("eligible function output"),
+          "caller" => caller
+        },
+        program_output,
+        unknown_program_output,
+        malformed_program_output
+      ]
+
+      json = encode_request(input)
+
+      assert {:ok, [candidate]} =
+               ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
+
+      assert candidate.item_type == "function_call_output"
+      assert candidate.output_path == ["input", 2, "output"]
+
+      assert {:ok,
+              %{
+                candidate_count: 1,
+                protected_tool_output_skipped_count: 0,
+                candidates: [^candidate]
+              }} = ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
+
+      assert Jason.decode!(json)["input"] == input
+    end
+
     test "handles item key order differences" do
       output = large_output("order")
 

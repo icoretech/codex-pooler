@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.RequestCompression
+  alias CodexPooler.Gateway.RequestCompression.ResponsesLiveZone
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools.RoutingSettings
@@ -12,6 +13,118 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
   @supported_model "gpt-4o"
 
   describe "maybe_compress/3" do
+    test "rewrites only function output in a mixed programmatic replay" do
+      function_output_sentinel = "eligible function output omitted sentinel"
+      program_result_sentinel = "program result preserved sentinel"
+      program_id_sentinel = "program id preserved sentinel"
+      program_call_id_sentinel = "program call id preserved sentinel"
+      caller_id_sentinel = "caller id preserved sentinel"
+      unknown_output_sentinel = "unknown program output preserved sentinel"
+      malformed_output_sentinel = "malformed program output preserved sentinel"
+
+      function_output = oversized_log_fixture("function", function_output_sentinel)
+
+      program = %{
+        "type" => "program",
+        "id" => program_id_sentinel,
+        "call_id" => program_call_id_sentinel,
+        "code" => "synthetic program code",
+        "fingerprint" => "synthetic-program-fingerprint"
+      }
+
+      caller = %{"type" => "program", "caller_id" => caller_id_sentinel}
+
+      function_call = %{
+        "type" => "function_call",
+        "call_id" => "call_mixed_function_output",
+        "name" => "run_command",
+        "arguments" => "{}",
+        "caller" => caller
+      }
+
+      function_call_output = %{
+        "type" => "function_call_output",
+        "call_id" => "call_mixed_function_output",
+        "output" => function_output,
+        "caller" => caller
+      }
+
+      program_output = %{
+        "type" => "program_output",
+        "id" => "program-output-id-preserved",
+        "call_id" => program_call_id_sentinel,
+        "result" => String.duplicate("#{program_result_sentinel}\n", 96),
+        "status" => "completed"
+      }
+
+      unknown_program_output = %{
+        "type" => "program_output_variant",
+        "call_id" => "unknown-program-output-call",
+        "output" => String.duplicate("#{unknown_output_sentinel}\n", 96)
+      }
+
+      malformed_program_output = %{
+        "type" => "program_output",
+        "result" => %{"value" => String.duplicate("#{malformed_output_sentinel}\n", 96)}
+      }
+
+      input = [
+        program,
+        function_call,
+        function_call_output,
+        program_output,
+        unknown_program_output,
+        malformed_program_output
+      ]
+
+      body = Jason.encode!(%{"model" => @supported_model, "input" => input})
+
+      assert {:ok, [candidate]} =
+               body
+               |> ResponsesLiveZone.plan_candidates(min_bytes: 512)
+
+      assert candidate.item_type == "function_call_output"
+      assert candidate.output_path == ["input", 2, "output"]
+
+      {context, request_options} = request_context(body)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert compressed_body != body
+
+      compressed_input = compressed_body |> Jason.decode!() |> Map.fetch!("input")
+
+      assert Enum.at(compressed_input, 0) == program
+      assert Enum.at(compressed_input, 1) == function_call
+      assert Enum.at(compressed_input, 3) == program_output
+      assert Enum.at(compressed_input, 4) == unknown_program_output
+      assert Enum.at(compressed_input, 5) == malformed_program_output
+
+      compressed_function_output = Enum.at(compressed_input, 2)
+
+      assert compressed_function_output["caller"] == caller
+      assert compressed_function_output["call_id"] == function_call_output["call_id"]
+      assert compressed_function_output["type"] == "function_call_output"
+      assert compressed_function_output["output"] =~ "[compressed log output: omitted"
+      refute compressed_function_output["output"] =~ function_output_sentinel
+
+      assert %{
+               "status" => "compressed",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0
+             } = metadata = compressed_options.runtime.payload_compression
+
+      refute inspect(metadata) =~ function_output_sentinel
+      refute inspect(metadata) =~ program_result_sentinel
+      refute inspect(metadata) =~ program_id_sentinel
+      refute inspect(metadata) =~ program_call_id_sentinel
+      refute inspect(metadata) =~ caller_id_sentinel
+      refute inspect(metadata) =~ unknown_output_sentinel
+      refute inspect(metadata) =~ malformed_output_sentinel
+    end
+
     test "preserves lossy local shell output with explicit skip reason" do
       omitted_sentinel = "lossy local shell omitted sentinel"
       original_output = compression_log_fixture(omitted_sentinel)

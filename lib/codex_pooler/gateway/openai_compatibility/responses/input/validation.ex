@@ -36,6 +36,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_input_item(%{"type" => "compaction"} = item, _payload),
     do: validate_compaction_replay_item(item)
 
+  defp validate_input_item(%{"type" => "program"} = item, _payload),
+    do: validate_program_replay_item(item)
+
+  defp validate_input_item(%{"type" => "program_output"} = item, _payload),
+    do: validate_program_output_replay_item(item)
+
   defp validate_input_item(%{"type" => "function_call"} = item, _payload),
     do: validate_function_call_replay_item(item)
 
@@ -301,6 +307,37 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_compaction_replay_item(_item),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
+  defp validate_program_replay_item(
+         %{
+           "id" => id,
+           "call_id" => call_id,
+           "code" => code,
+           "fingerprint" => fingerprint
+         } = item
+       )
+       when is_binary(id) and is_binary(call_id) and is_binary(code) and is_binary(fingerprint) do
+    validate_exact_item_keys(item, ["type", "id", "call_id", "code", "fingerprint"])
+  end
+
+  defp validate_program_replay_item(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_program_output_replay_item(
+         %{
+           "id" => id,
+           "call_id" => call_id,
+           "result" => result,
+           "status" => status
+         } = item
+       )
+       when is_binary(id) and is_binary(call_id) and is_binary(result) and
+              status in ["completed", "incomplete"] do
+    validate_exact_item_keys(item, ["type", "id", "call_id", "result", "status"])
+  end
+
+  defp validate_program_output_replay_item(_item),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
   defp validate_function_call_replay_item(
          %{"call_id" => call_id, "name" => name, "arguments" => arguments} = item
        )
@@ -313,13 +350,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
              "arguments",
              "id",
              "namespace",
+             "caller",
              "metadata",
              @metadata_passthrough_key
            ]),
          :ok <- validate_nonblank(call_id),
          :ok <- validate_nonblank(name),
          :ok <- validate_optional_item_metadata(item),
-         :ok <- validate_optional_namespace(item) do
+         :ok <- validate_optional_namespace(item),
+         :ok <- validate_optional_caller(item) do
       validate_optional_id(item)
     end
   end
@@ -390,12 +429,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
                  "call_id",
                  "output",
                  "id",
+                 "caller",
                  "metadata",
                  @metadata_passthrough_key
                ]),
              :ok <- validate_nonblank(Map.get(item, "call_id")),
              :ok <- validate_optional_item_metadata(item),
-             :ok <- validate_optional_id(item) do
+             :ok <- validate_optional_id(item),
+             :ok <- validate_optional_caller(item) do
           validate_function_call_output(Map.get(item, "output"))
         end
 
@@ -406,11 +447,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
                  "call_id",
                  "result",
                  "id",
+                 "caller",
                  "metadata",
                  @metadata_passthrough_key
                ]),
              :ok <- validate_optional_item_metadata(item),
-             :ok <- validate_nonblank(Map.get(item, "call_id")) do
+             :ok <- validate_nonblank(Map.get(item, "call_id")),
+             :ok <- validate_optional_caller(item) do
           validate_optional_id(item)
         end
 
@@ -497,6 +540,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_name(_item), do: :ok
+
+  defp validate_optional_caller(%{"caller" => %{"type" => "direct"} = caller}),
+    do: validate_exact_item_keys(caller, ["type"])
+
+  defp validate_optional_caller(%{
+         "caller" => %{"type" => "program", "caller_id" => caller_id} = caller
+       })
+       when is_binary(caller_id),
+       do: validate_exact_item_keys(caller, ["type", "caller_id"])
+
+  defp validate_optional_caller(%{"caller" => _caller}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_caller(_item), do: :ok
 
   defp validate_optional_custom_tool_call_status(%{"status" => status})
        when status in ["completed", "incomplete"],

@@ -1024,31 +1024,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def public_websocket_receive_text!(conn, websocket, ref) do
-    receive do
-      message ->
-        case Mint.WebSocket.stream(conn, message) do
-          {:ok, conn, responses} ->
-            case decode_public_websocket_text(websocket, ref, responses) do
-              {:ok, websocket, text} -> {conn, websocket, text}
-              {:cont, websocket} -> public_websocket_receive_text!(conn, websocket, ref)
+    case dequeue_public_websocket_text(ref) do
+      {:ok, text} ->
+        {conn, websocket, text}
+
+      :empty ->
+        receive do
+          message ->
+            case Mint.WebSocket.stream(conn, message) do
+              {:ok, conn, responses} ->
+                case decode_public_websocket_text(websocket, ref, responses) do
+                  {:ok, websocket, text} -> {conn, websocket, text}
+                  {:cont, websocket} -> public_websocket_receive_text!(conn, websocket, ref)
+                end
+
+              {:error, conn, reason, _responses} ->
+                Mint.HTTP.close(conn)
+                flunk("websocket receive failed: #{inspect(reason)}")
+
+              :unknown ->
+                public_websocket_receive_text!(conn, websocket, ref)
             end
-
-          {:error, conn, reason, _responses} ->
-            Mint.HTTP.close(conn)
-            flunk("websocket receive failed: #{inspect(reason)}")
-
-          :unknown ->
-            public_websocket_receive_text!(conn, websocket, ref)
+        after
+          @websocket_frame_timeout -> flunk("timed out waiting for websocket frame")
         end
-    after
-      @websocket_frame_timeout -> flunk("timed out waiting for websocket frame")
     end
   end
 
   def decode_public_websocket_text(websocket, ref, responses) do
     Enum.reduce_while(responses, {:cont, websocket}, fn
       {:data, ^ref, data}, {:cont, websocket} ->
-        decode_public_websocket_data!(websocket, data)
+        case decode_public_websocket_data!(websocket, data) do
+          {:ok, websocket, [text | queued_texts]} ->
+            enqueue_public_websocket_texts(ref, queued_texts)
+            {:halt, {:ok, websocket, text}}
+
+          {:cont, websocket} ->
+            {:cont, {:cont, websocket}}
+        end
 
       {:done, ^ref}, _acc ->
         flunk("websocket closed before a response frame")
@@ -1062,7 +1075,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     case Mint.WebSocket.decode(websocket, data) do
       {:ok, websocket, frames} ->
         case decoded_public_websocket_text(websocket, frames) do
-          {:ok, websocket, text} -> {:halt, {:ok, websocket, text}}
+          {:ok, websocket, texts} -> {:ok, websocket, texts}
           {:cont, websocket} -> {:cont, {:cont, websocket}}
         end
 
@@ -1072,12 +1085,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   end
 
   def decoded_public_websocket_text(websocket, frames) do
-    Enum.reduce_while(frames, {:cont, websocket}, fn
-      {:text, text}, _acc -> {:halt, {:ok, websocket, text}}
-      {:close, code, reason}, _acc -> flunk("websocket closed: #{inspect({code, reason})}")
-      _frame, acc -> {:cont, acc}
-    end)
+    texts =
+      Enum.reduce(frames, [], fn
+        {:text, text}, texts -> [text | texts]
+        {:close, code, reason}, _texts -> flunk("websocket closed: #{inspect({code, reason})}")
+        _frame, texts -> texts
+      end)
+
+    case Enum.reverse(texts) do
+      [] -> {:cont, websocket}
+      texts -> {:ok, websocket, texts}
+    end
   end
+
+  defp dequeue_public_websocket_text(ref) do
+    case Process.get(public_websocket_text_queue_key(ref), []) do
+      [] ->
+        :empty
+
+      [text] ->
+        Process.delete(public_websocket_text_queue_key(ref))
+        {:ok, text}
+
+      [text | queued_texts] ->
+        Process.put(public_websocket_text_queue_key(ref), queued_texts)
+        {:ok, text}
+    end
+  end
+
+  defp enqueue_public_websocket_texts(_ref, []), do: :ok
+
+  defp enqueue_public_websocket_texts(ref, texts) do
+    key = public_websocket_text_queue_key(ref)
+    Process.put(key, Process.get(key, []) ++ texts)
+  end
+
+  defp public_websocket_text_queue_key(ref), do: {__MODULE__, :public_websocket_text_queue, ref}
 
   def decode_public_websocket_close(websocket, ref, responses) do
     Enum.reduce_while(responses, {:cont, websocket}, fn

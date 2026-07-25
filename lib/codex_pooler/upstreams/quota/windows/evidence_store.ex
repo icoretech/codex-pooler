@@ -2288,6 +2288,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     do: Decimal.compare(incoming, existing) == :gt
 
   defp higher_used_percent?(%Decimal{} = incoming, _existing), do: positive_percent?(incoming)
+  defp higher_used_percent?(_incoming, _existing), do: false
 
   defp highest_used_percent(%Decimal{} = existing, %Decimal{} = incoming) do
     if higher_used_percent?(incoming, existing), do: incoming, else: existing

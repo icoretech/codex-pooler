@@ -211,6 +211,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :responses_chat,
+      programmatic_tool_calling_contract:
+        "closed-world Responses programmatic-tool calling rejects remote MCP and unrelated hosted tools and makes no full OpenAI parity claim",
       contract:
         "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; /v1/responses and translated /v1/chat/completions validate and preserve prompt_cache_options plus explicit supported content-part prompt_cache_breakpoint controls, while Pool affinity remains exclusively keyed by prompt_cache_key; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; OpenAI Responses remote MCP tool definitions are rejected before dispatch in both top-level tools and nested additional_tools.tools locations; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output, while malformed trigger placement is rejected before dispatch; public /v1 Responses accepts encrypted compaction output replay items from prior remote compaction turns; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay, no server-side memory tool injection, no client store=false-to-true override policy, and no stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; public /v1/responses and /v1/chat/completions accept exactly five lowercase input_audio labels (wav=>audio/wav, mp3=>audio/mpeg, m4a=>audio/mp4, webm=>audio/webm, ogg=>audio/ogg), apply a 52,428,800 decoded-byte maximum and a 69,905,068 non-whitespace encoded-byte precheck, canonicalize backend input_audio to an audio_url data URL after accepted ASCII whitespace normalization, reject malformed/empty/unsupported/oversized input as sanitized invalid_request without dispatch or accounting, honor configured request-envelope rejection before adapter checks, and keep audio metadata-only outside dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
@@ -790,6 +792,65 @@ defmodule CodexPooler.CompatibilityMatrix do
         nested_tool_types: ["function"],
         nested_optional: ["strict", "defer_loading"],
         satisfies_tool_choice: true
+      },
+      programmatic_tool_calling: %{
+        input_items: %{
+          program: %{
+            required: ["type", "id", "call_id", "code", "fingerprint"],
+            exact_keys: true
+          },
+          program_output: %{
+            required: ["type", "id", "call_id", "result", "status"],
+            exact_keys: true,
+            statuses: ["completed", "incomplete"]
+          },
+          function_call: %{
+            caller: %{
+              types: ["direct", "program"],
+              program_requires: ["caller_id"],
+              direct_forbids: ["caller_id"]
+            }
+          },
+          function_call_output: %{
+            caller: %{
+              types: ["direct", "program"],
+              program_requires: ["caller_id"],
+              direct_forbids: ["caller_id"]
+            }
+          }
+        },
+        hosted_tool: %{type: "programmatic_tool_calling", exact_keys: ["type"]},
+        tool_choice: %{type: "programmatic_tool_calling", exact_keys: ["type"]},
+        function_options: %{
+          scopes: ["flat", "namespace"],
+          optional_boolean_keys: ["strict", "defer_loading"],
+          allowed_callers: ["direct", "programmatic"],
+          output_schema: %{shape: "opaque_json_map", strict: false}
+        },
+        stateless_policy: %{
+          vercel_store: false,
+          upstream_stream: true,
+          upstream_store: false,
+          reference_only_continuation: "reject",
+          ordinary_continuation: "reject",
+          semantic_tool_result_continuation: "accept"
+        },
+        relay_surfaces: ["collected_json", "public_sse", "public_responses_websocket"],
+        compression: %{program_output_candidate: false, program_output_rewrite: false},
+        privacy: %{
+          mode: "metadata_only",
+          stored_program_code: false,
+          stored_program_results: false,
+          stored_schema_values: false,
+          stored_identifiers: false,
+          stored_prompts: false,
+          stored_frames: false
+        },
+        exclusions: %{
+          remote_mcp: false,
+          unrelated_hosted_tools: false,
+          full_openai_parity: false
+        }
       },
       responses_truncation: %{
         accepted_values: ["auto", "disabled"],

@@ -1349,6 +1349,294 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
+  @tag :programmatic_tool_calling
+  test "POST /v1/responses collects programmatic tool output with one metadata-only settlement",
+       %{
+         conn: conn
+       } do
+    sentinels = programmatic_tool_sentinels()
+    output_items = programmatic_tool_items(sentinels)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_programmatic_collected",
+               "object" => "response",
+               "status" => "completed",
+               "output" => output_items,
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    payload = programmatic_tool_payload(setup.model.exposed_model_id, sentinels)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", payload)
+
+    assert %{
+             "id" => "resp_v1_programmatic_collected",
+             "object" => "response",
+             "status" => "completed",
+             "output" => ^output_items
+           } = json_response(response, 200)
+
+    response_body = json_response(response, 200)
+
+    refute Map.has_key?(response_body, "request_id")
+    refute Map.has_key?(response_body, "attempt_id")
+    refute Map.has_key?(response_body, "pool_id")
+    refute Map.has_key?(response_body, "gateway_metadata")
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+    assert_programmatic_input_forwarded!(captured.json["input"], sentinels)
+    assert captured.json["tools"] == payload["tools"]
+    assert captured.json["tool_choice"] == payload["tool_choice"]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    assert Repo.aggregate(
+             from(l in LedgerEntry,
+               where:
+                 l.request_id == ^request.id and l.entry_kind == "settlement" and
+                   l.amount_status == "recorded"
+             ),
+             :count
+           ) == 1
+
+    assert_programmatic_metadata_only!(request, attempt, sentinels)
+  end
+
+  @tag :programmatic_tool_calling
+  test "POST /v1/responses streams ordered programmatic tool events through EOF", %{conn: _conn} do
+    sentinels = programmatic_tool_sentinels()
+    output_items = programmatic_tool_items(sentinels)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{
+               "id" => "resp_v1_programmatic_streamed",
+               "object" => "response",
+               "status" => "in_progress"
+             }
+           }},
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 0,
+             "item" => Enum.at(output_items, 0)
+           }},
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 0,
+             "item" => Enum.at(output_items, 0)
+           }},
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 1,
+             "item" => Enum.at(output_items, 1)
+           }},
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 1,
+             "item" => Enum.at(output_items, 1)
+           }},
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 2,
+             "item" => Enum.at(output_items, 2)
+           }},
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 2,
+             "item" => Enum.at(output_items, 2)
+           }},
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 3,
+             "item" => Enum.at(output_items, 3)
+           }},
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 3,
+             "item" => Enum.at(output_items, 3)
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_programmatic_streamed",
+               "object" => "response",
+               "status" => "completed",
+               "output" => output_items,
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    payload =
+      programmatic_tool_payload(setup.model.exposed_model_id, sentinels)
+      |> Map.put("stream", true)
+
+    {:ok, http_conn, ref, started} = start_public_v1_responses_request(port, setup, payload)
+
+    try do
+      {http_conn, status, response_headers, _elapsed_ms, chunks, done?} =
+        await_public_response_headers!(http_conn, ref, started, @timing_observation_timeout_ms)
+
+      assert status == 200
+      assert header_value(response_headers, "content-type") =~ "text/event-stream"
+
+      {body, :eof} =
+        await_public_response_eof!(
+          http_conn,
+          ref,
+          chunks,
+          done?,
+          @timing_observation_timeout_ms
+        )
+
+      refute body =~ "[DONE]"
+
+      events = public_sse_events(body)
+
+      assert Enum.map(events, & &1["event"]) == [
+               "response.created",
+               "response.output_item.added",
+               "response.output_item.done",
+               "response.output_item.added",
+               "response.output_item.done",
+               "response.output_item.added",
+               "response.output_item.done",
+               "response.output_item.added",
+               "response.output_item.done",
+               "response.completed"
+             ]
+
+      assert Enum.map(
+               Enum.filter(events, &(&1["event"] == "response.output_item.added")),
+               &get_in(&1, ["data", "item"])
+             ) == output_items
+
+      assert Enum.map(
+               Enum.filter(events, &(&1["event"] == "response.output_item.done")),
+               &get_in(&1, ["data", "item"])
+             ) == output_items
+
+      assert %{
+               "data" => %{
+                 "response" => %{
+                   "id" => "resp_v1_programmatic_streamed",
+                   "object" => "response",
+                   "status" => "completed",
+                   "output" => ^output_items
+                 }
+               }
+             } = List.last(events)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+      assert_programmatic_input_forwarded!(captured.json["input"], sentinels)
+      assert captured.json["tools"] == payload["tools"]
+      assert captured.json["tool_choice"] == payload["tool_choice"]
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.transport == "http_sse"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      assert Repo.aggregate(
+               from(l in LedgerEntry,
+                 where:
+                   l.request_id == ^request.id and l.entry_kind == "settlement" and
+                     l.amount_status == "recorded"
+               ),
+               :count
+             ) == 1
+
+      assert_programmatic_metadata_only!(request, attempt, sentinels)
+    after
+      Mint.HTTP.close(http_conn)
+    end
+  end
+
+  @tag :programmatic_tool_calling
+  test "POST /v1/responses rejects malformed programmatic vocabulary before admission", %{
+    conn: conn
+  } do
+    sentinels = programmatic_tool_sentinels()
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    payload = programmatic_tool_payload(setup.model.exposed_model_id, sentinels)
+
+    invalid_cases = [
+      {"input", put_programmatic_payload_item(payload, 0, "unexpected", true)},
+      {"input", put_programmatic_payload_item(payload, 1, "caller", %{"type" => "program"})},
+      {"tools", put_programmatic_payload_tool(payload, 0, "unexpected", true)},
+      {"tools", put_programmatic_payload_tool(payload, 1, "output_schema", [])}
+    ]
+
+    counts = durable_accounting_counts()
+
+    Enum.each(invalid_cases, fn {expected_param, invalid_payload} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", invalid_payload)
+
+      assert %{"error" => error} = json_response(response, 400)
+      assert error["type"] == "invalid_request_error"
+      assert error["code"] == "invalid_request"
+      assert error["param"] == expected_param
+      refute response.resp_body =~ sentinels.code
+      refute response.resp_body =~ sentinels.result
+      refute response.resp_body =~ sentinels.fingerprint
+      refute response.resp_body =~ sentinels.schema
+      refute response.resp_body =~ sentinels.item
+      refute response.resp_body =~ sentinels.call
+      refute response.resp_body =~ sentinels.caller
+    end)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert durable_accounting_counts() == counts
+  end
+
   @tag :prompt_cache_controls
   test "POST /v1/responses preserves prompt cache controls without metadata leakage", %{
     conn: conn
@@ -6713,6 +7001,37 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end
   end
 
+  defp await_public_response_eof!(conn, ref, chunks, done?, timeout_ms) do
+    {body, done?} = await_public_response_eof(conn, ref, chunks, done?, timeout_ms)
+    {body, if(done?, do: :eof, else: flunk("expected public /v1 response stream EOF"))}
+  end
+
+  defp await_public_response_eof(_conn, _ref, chunks, true, _timeout_ms) do
+    {chunks |> Enum.reverse() |> IO.iodata_to_binary(), true}
+  end
+
+  defp await_public_response_eof(conn, ref, chunks, false, timeout_ms) do
+    receive do
+      message ->
+        case Mint.HTTP.stream(conn, message) do
+          {:ok, conn, responses} ->
+            {_status, _headers, chunks, done?} =
+              merge_public_response_parts(responses, ref, nil, nil, chunks, false)
+
+            await_public_response_eof(conn, ref, chunks, done?, timeout_ms)
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("public /v1 response stream failed before EOF: #{inspect(reason)}")
+
+          :unknown ->
+            await_public_response_eof(conn, ref, chunks, false, timeout_ms)
+        end
+    after
+      timeout_ms -> flunk("timed out waiting for public /v1 response stream EOF")
+    end
+  end
+
   defp merge_public_response_parts(responses, ref, status, headers, chunks, done?) do
     Enum.reduce(responses, {status, headers, chunks, done?}, fn
       {:status, ^ref, status}, {_status, headers, chunks, done?} ->
@@ -6857,6 +7176,131 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     Enum.each(sentinels, fn sentinel ->
       if text =~ sentinel, do: flunk("projection leaked structured tool-result sentinel")
     end)
+  end
+
+  defp programmatic_tool_sentinels do
+    suffix = System.unique_integer([:positive])
+
+    %{
+      code: "program-code-#{suffix}",
+      result: "program-result-#{suffix}",
+      fingerprint: "program-fingerprint-#{suffix}",
+      schema: "program-schema-#{suffix}",
+      item: "program-item-#{suffix}",
+      call: "program-call-#{suffix}",
+      caller: "program-caller-#{suffix}"
+    }
+  end
+
+  defp programmatic_tool_payload(model, sentinels) do
+    %{
+      "model" => model,
+      "store" => true,
+      "input" => programmatic_tool_items(sentinels),
+      "tools" => [
+        %{"type" => "programmatic_tool_calling"},
+        %{
+          "type" => "function",
+          "name" => "lookup_programmatic_fixture",
+          "parameters" => %{"type" => "object", "properties" => %{}},
+          "allowed_callers" => ["direct", "programmatic"],
+          "output_schema" => %{
+            "type" => "object",
+            "x-opaque-programmatic-schema" => sentinels.schema
+          }
+        }
+      ],
+      "tool_choice" => %{"type" => "programmatic_tool_calling"}
+    }
+  end
+
+  defp programmatic_tool_items(sentinels) do
+    [
+      %{
+        "type" => "program",
+        "id" => sentinels.item,
+        "call_id" => sentinels.call,
+        "code" => sentinels.code,
+        "fingerprint" => sentinels.fingerprint
+      },
+      %{
+        "type" => "function_call",
+        "id" => "#{sentinels.item}-function-call",
+        "call_id" => "#{sentinels.call}-function",
+        "name" => "lookup_programmatic_fixture",
+        "arguments" => "{}",
+        "caller" => %{"type" => "program", "caller_id" => sentinels.caller}
+      },
+      %{
+        "type" => "function_call_output",
+        "id" => "#{sentinels.item}-function-output",
+        "call_id" => "#{sentinels.call}-function",
+        "output" => sentinels.result,
+        "caller" => %{"type" => "program", "caller_id" => sentinels.caller}
+      },
+      %{
+        "type" => "program_output",
+        "id" => "#{sentinels.item}-output",
+        "call_id" => sentinels.call,
+        "result" => sentinels.result,
+        "status" => "completed"
+      }
+    ]
+  end
+
+  defp assert_programmatic_input_forwarded!(input, sentinels) do
+    assert Enum.map(input, & &1["type"]) == [
+             "program",
+             "function_call",
+             "function_call_output",
+             "program_output"
+           ]
+
+    assert [program, function_call, function_output, program_output] = input
+    refute Map.has_key?(program, "id")
+    assert program["call_id"] == sentinels.call
+    assert program["code"] == sentinels.code
+    assert program["fingerprint"] == sentinels.fingerprint
+
+    refute Map.has_key?(function_call, "id")
+    assert function_call["call_id"] == "#{sentinels.call}-function"
+    assert function_call["caller"] == %{"type" => "program", "caller_id" => sentinels.caller}
+
+    refute Map.has_key?(function_output, "id")
+    assert function_output["call_id"] == "#{sentinels.call}-function"
+    assert function_output["output"] == sentinels.result
+    assert function_output["caller"] == %{"type" => "program", "caller_id" => sentinels.caller}
+
+    refute Map.has_key?(program_output, "id")
+    assert program_output["call_id"] == sentinels.call
+    assert program_output["result"] == sentinels.result
+    assert program_output["status"] == "completed"
+  end
+
+  defp put_programmatic_payload_item(payload, index, key, value) do
+    input = List.update_at(payload["input"], index, &Map.put(&1, key, value))
+    Map.put(payload, "input", input)
+  end
+
+  defp put_programmatic_payload_tool(payload, index, key, value) do
+    tools = List.update_at(payload["tools"], index, &Map.put(&1, key, value))
+    Map.put(payload, "tools", tools)
+  end
+
+  defp assert_programmatic_metadata_only!(request, attempt, sentinels) do
+    metadata = inspect({request.request_metadata, attempt.response_metadata})
+
+    for sentinel <- Map.values(sentinels) do
+      refute metadata =~ sentinel
+    end
+  end
+
+  defp durable_accounting_counts do
+    %{
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      ledger_entries: Repo.aggregate(LedgerEntry, :count)
+    }
   end
 
   defp public_sse_events(body) do

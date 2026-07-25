@@ -555,6 +555,83 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert v1_fixture.responses_builtin_tools == expected_responses_builtin_tools
     end
 
+    test "documents closed-world Responses programmatic-tool calling" do
+      feature = CompatibilityMatrix.by_slug!(:responses_chat)
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert feature.programmatic_tool_calling_contract =~ "closed-world"
+      assert feature.programmatic_tool_calling_contract =~ "remote MCP"
+      assert feature.programmatic_tool_calling_contract =~ "unrelated hosted tools"
+      assert feature.programmatic_tool_calling_contract =~ "no full OpenAI parity claim"
+
+      programmatic = fixture.programmatic_tool_calling
+
+      assert programmatic.input_items.program.required == [
+               "type",
+               "id",
+               "call_id",
+               "code",
+               "fingerprint"
+             ]
+
+      assert programmatic.input_items.program.exact_keys == true
+
+      assert programmatic.input_items.program_output.required == [
+               "type",
+               "id",
+               "call_id",
+               "result",
+               "status"
+             ]
+
+      assert programmatic.input_items.program_output.exact_keys == true
+      assert programmatic.input_items.program_output.statuses == ["completed", "incomplete"]
+
+      for caller <- [
+            programmatic.input_items.function_call.caller,
+            programmatic.input_items.function_call_output.caller
+          ] do
+        assert caller.types == ["direct", "program"]
+        assert caller.program_requires == ["caller_id"]
+        assert caller.direct_forbids == ["caller_id"]
+      end
+
+      assert programmatic.hosted_tool.type == "programmatic_tool_calling"
+      assert programmatic.hosted_tool.exact_keys == ["type"]
+      assert programmatic.tool_choice.type == "programmatic_tool_calling"
+      assert programmatic.tool_choice.exact_keys == ["type"]
+      assert programmatic.function_options.scopes == ["flat", "namespace"]
+      assert programmatic.function_options.optional_boolean_keys == ["strict", "defer_loading"]
+      assert programmatic.function_options.allowed_callers == ["direct", "programmatic"]
+      assert programmatic.function_options.output_schema.shape == "opaque_json_map"
+      assert programmatic.function_options.output_schema.strict == false
+      assert programmatic.stateless_policy.vercel_store == false
+      assert programmatic.stateless_policy.upstream_stream == true
+      assert programmatic.stateless_policy.upstream_store == false
+      assert programmatic.stateless_policy.reference_only_continuation == "reject"
+      assert programmatic.stateless_policy.ordinary_continuation == "reject"
+      assert programmatic.stateless_policy.semantic_tool_result_continuation == "accept"
+
+      assert programmatic.relay_surfaces == [
+               "collected_json",
+               "public_sse",
+               "public_responses_websocket"
+             ]
+
+      assert programmatic.compression.program_output_candidate == false
+      assert programmatic.compression.program_output_rewrite == false
+      assert programmatic.privacy.mode == "metadata_only"
+      assert programmatic.privacy.stored_program_code == false
+      assert programmatic.privacy.stored_program_results == false
+      assert programmatic.privacy.stored_schema_values == false
+      assert programmatic.privacy.stored_identifiers == false
+      assert programmatic.privacy.stored_prompts == false
+      assert programmatic.privacy.stored_frames == false
+      assert programmatic.exclusions.remote_mcp == false
+      assert programmatic.exclusions.unrelated_hosted_tools == false
+      assert programmatic.exclusions.full_openai_parity == false
+    end
+
     @tag :input_audio_backport
     test "documents bounded five-format input audio compatibility" do
       feature = CompatibilityMatrix.by_slug!(:responses_chat)

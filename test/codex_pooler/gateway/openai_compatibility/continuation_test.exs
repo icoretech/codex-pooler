@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
+  alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
@@ -37,6 +38,153 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   end
 
   describe "Task 4 Responses continuation and input-reference behavior" do
+    test "v1 Responses forwards stateless programmatic replay in order for collected responses",
+         %{
+           conn: conn
+         } do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_programmatic_collected",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+      input = programmatic_replay_input()
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "store" => true,
+          "input" => input
+        })
+
+      assert %{"id" => "resp_v1_programmatic_collected"} = json_response(response_conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+      refute Map.has_key?(captured.json, "previous_response_id")
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "program",
+               "function_call",
+               "function_call_output",
+               "program_output"
+             ]
+
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+    end
+
+    test "v1 Responses streaming forces upstream stream and store policy for stateless replay", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_programmatic_streamed",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+      input = programmatic_replay_input()
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "stream" => true,
+          "store" => true,
+          "input" => input
+        })
+
+      assert [content_type] = get_resp_header(response_conn, "content-type")
+      assert content_type =~ "text/event-stream"
+      assert response_conn.status == 200
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+      refute Map.has_key?(captured.json, "previous_response_id")
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "program",
+               "function_call",
+               "function_call_output",
+               "program_output"
+             ]
+
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+    end
+
+    test "program output remains semantic tool-result context only when structurally valid" do
+      for status <- ["completed", "incomplete"] do
+        assert ToolResultShape.tool_result?(%{
+                 "type" => "program_output",
+                 "call_id" => "call_programmatic_context",
+                 "result" => "",
+                 "status" => status
+               })
+      end
+
+      refute ToolResultShape.tool_result?(%{
+               "type" => "program_output",
+               "result" => "",
+               "status" => "completed"
+             })
+
+      refute ToolResultShape.tool_result?(%{
+               "type" => "message",
+               "call_id" => "call_misleading_context"
+             })
+    end
+
+    @tag :tool_result_previous_response
+    test "v1 Responses preserves a referenced program-output continuation", %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.require_json_field(
+            "previous_response_id",
+            %{
+              "id" => "resp_v1_program_output_reference",
+              "object" => "response",
+              "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+            },
+            %{"error" => %{"code" => "missing_tool_context"}}
+          )
+        )
+
+      setup = gateway_setup(upstream)
+      program_output = programmatic_replay_input() |> List.last()
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_program_output_previous",
+          "input" => [
+            %{"type" => "item_reference", "id" => "msg_program_output_reference"},
+            program_output
+          ]
+        })
+
+      assert %{"id" => "resp_v1_program_output_reference"} = json_response(response_conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["previous_response_id"] == "resp_v1_program_output_previous"
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "item_reference",
+               "program_output"
+             ]
+    end
+
     @tag :tool_result_previous_response
     test "v1 Responses forwards the observed Vercel tool-output continuation shape", %{conn: conn} do
       upstream =
@@ -872,7 +1020,44 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
            "input" => [
              %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
            ]
-         }, "previous_response_id"}
+         }, "previous_response_id"},
+        {%{
+           "previous_response_id" => "",
+           "input" => [
+             %{
+               "type" => "function_call_output",
+               "call_id" => "call_blank_previous",
+               "output" => "bad"
+             }
+           ]
+         }, "previous_response_id"},
+        {%{
+           "input" => [
+             %{
+               "type" => "program_output",
+               "id" => "program_output_missing_result",
+               "call_id" => "call_program_output_invalid",
+               "status" => "completed"
+             }
+           ]
+         }, "input"},
+        {%{
+           "input" => [
+             %{
+               "type" => "program_output",
+               "id" => "program_output_wrong_status",
+               "call_id" => "call_program_output_wrong_status",
+               "result" => "",
+               "status" => "unknown"
+             }
+           ]
+         }, "input"},
+        {%{
+           "previous_response_id" => "resp_v1_misleading_non_result",
+           "input" => [
+             %{"type" => "message", "call_id" => "call_misleading_non_result"}
+           ]
+         }, "input"}
       ]
 
       Enum.each(invalid_payloads, fn {payload, expected_param} ->
@@ -1095,6 +1280,38 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     File.write!(path, contents)
     on_exit(fn -> File.rm(path) end)
     %Plug.Upload{path: path, filename: filename, content_type: content_type}
+  end
+
+  defp programmatic_replay_input do
+    [
+      %{
+        "type" => "program",
+        "id" => "program_item_fixture",
+        "call_id" => "program_call_fixture",
+        "code" => "",
+        "fingerprint" => ""
+      },
+      %{
+        "type" => "function_call",
+        "call_id" => "function_call_fixture",
+        "name" => "lookup_fixture",
+        "arguments" => "{}",
+        "caller" => %{"type" => "program", "caller_id" => "program_call_fixture"}
+      },
+      %{
+        "type" => "function_call_output",
+        "call_id" => "function_call_fixture",
+        "output" => "",
+        "caller" => %{"type" => "program", "caller_id" => "program_call_fixture"}
+      },
+      %{
+        "type" => "program_output",
+        "id" => "program_output_item_fixture",
+        "call_id" => "program_call_fixture",
+        "result" => "",
+        "status" => "completed"
+      }
+    ]
   end
 
   defp stub_upload_put(file_id) do
