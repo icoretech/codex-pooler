@@ -1843,16 +1843,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(
              view,
-             "#{row_selector} [data-role='record-id'][title='#{request.id}']",
-             expected_record_id
+             "#{row_selector} [data-role='status-label']",
+             "Status: Succeeded"
            )
 
-    refute has_element?(view, "#{row_selector} [data-role='record-id'].font-mono")
+    # The record id and its magnifying glass left the row; the drawer, its
+    # heading and the trigger's accessible name still carry them.
+    refute has_element?(view, "#{row_selector} [data-role='record-id']")
+    refute has_element?(view, "#{row_selector} .hero-magnifying-glass")
 
-    refute has_element?(
+    assert has_element?(
              view,
-             "#{row_selector} [data-role='record-id']",
-             "id #{expected_record_id}"
+             "#{row_selector} [data-role='open-request-log-details'][aria-label*='#{expected_record_id}']"
            )
 
     refute has_element?(view, "#{row_selector} [data-role='timestamp-date']")
@@ -2529,6 +2531,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "#{in_progress_row} [data-role='status-label']",
              "Status: In progress"
            )
+
+    # A request still running is the one status that carries the clock, painted
+    # in the label's own tone because heroicons fill with currentColor.
+    assert has_element?(view, "#{in_progress_row} [data-role='status-label'] .hero-clock")
+    refute has_element?(view, "#{failed_row} [data-role='status-label'] .hero-clock")
 
     assert has_element?(view, "#{in_progress_row} [data-role='errors']", "owner_drained")
     refute has_element?(view, "#{in_progress_row} [data-role='errors']", in_progress_secret)

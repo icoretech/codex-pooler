@@ -29,6 +29,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       protocol_badge_class: 1,
       protocol_label: 1,
       protocol_title: 1,
+      request_status_icon: 1,
       status_label: 1,
       user_agent_display: 1
     ]
@@ -212,22 +213,26 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       class="group grid max-w-full gap-0.5 rounded-field text-left transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-hover/request-log:text-primary"
       aria-label={"Inspect request #{format_record_id(@request_log.id) || @request_log.id}"}
     >
-      <span data-role="status-label" class="sr-only">
-        Status: {status_label(@request_log.status || "unknown")}
-      </span>
-      <span data-role="timestamp-datetime" class="flex h-5 items-center whitespace-nowrap">
+      <span
+        data-role="timestamp-datetime"
+        class="flex h-5 items-center whitespace-nowrap font-semibold tabular-nums"
+      >
         {format_datetime(@request_log.admitted_at, @datetime_preferences)}
       </span>
-      <span class="flex h-5 min-w-0 items-center gap-1 text-base-content/45 group-hover:text-primary/80 group-hover/request-log:text-primary/80">
-        <span
-          :if={record_id = format_record_id(@request_log.id)}
-          data-role="record-id"
-          class="block truncate"
-          title={@request_log.id}
-        >
-          {record_id}
-        </span>
-        <.icon name="hero-magnifying-glass" class="size-3 shrink-0" />
+      <span
+        data-role="status-label"
+        class={[
+          "flex h-5 min-w-0 items-center gap-1 whitespace-nowrap font-semibold",
+          status_text_class(@request_log.status)
+        ]}
+      >
+        <span class="sr-only">{"Status: "}</span>
+        <.icon
+          :if={@request_log.status == "in_progress"}
+          name={request_status_icon(@request_log.status)}
+          class="size-3 shrink-0"
+        />
+        {status_label(@request_log.status || "unknown")}
       </span>
     </button>
     """
@@ -375,6 +380,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       </span>
     </div>
     """
+  end
+
+  # The status is written under the timestamp, in the tone the tick reinforces.
+  defp status_text_class(status) do
+    case request_log_tone(status) do
+      "success" -> "text-success"
+      "error" -> "text-error"
+      "warning" -> "text-warning"
+      "info" -> "text-info"
+      _neutral -> "text-base-content/55"
+    end
   end
 
   # Tone for the shared status tick (see .admin-status-tick in app.css). The
