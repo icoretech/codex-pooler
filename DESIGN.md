@@ -502,7 +502,8 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 - **Hairline tables** — long homogeneous records (request logs, jobs, audit)
   use daisyUI `table` with its default row hairlines and
   `hover:bg-base-200/80`; request logs and the jobs explorer additionally
-  compact cell padding through `admin-log-table.table-sm` in `app.css`. There
+  compact cell padding through `admin-log-table.table-sm` in `app.css` and
+  follow the record-row contract in §5.18 for widths, tone, and reflow. There
   is no `table-zebra` in the app — the only striping is the Observatory
   outcomes table (`nth-child(odd)` in `app.css`) and the pool serving-modes
   grid (`even:`). Row detail lives in the drawer, not in ever-wider columns.
@@ -807,6 +808,50 @@ verified live as the orange "Pro" / green "Free" pills.
 - **Rules:** never re-declare the band, grid, divider padding, or micro-label
   classes at a call site; add a fact rather than a second strip; numeric values
   carry `tabular-nums`.
+
+### 5.18 Record row — the ledger contract
+
+The jobs explorer and the request-log table are the two record tables. They
+share one contract, and a third record table should join it rather than invent
+a fourth shape.
+
+**One markup tree, two readings.** A record table is a real `<table>` that
+reflows below its breakpoint instead of being duplicated as a card list. Add
+`admin-ledger-table` for a collapse at `lg`, or `admin-ledger-table-md` when the
+columns still fit a tablet (the request-log table, six narrow columns); the CSS
+in `app.css` switches `display` and the template places cells with `max-lg:` /
+`max-md:` grid utilities. The `thead` becomes `sr-only`, never absent. Never
+render a second tree for small screens: the explorer used to print twenty
+articles beside twenty rows on every update.
+
+**Column widths belong to the `colgroup`.** Give every column a floor and leave
+exactly one elastic — the one whose content already truncates with the full
+value in a `title`. A blanket `min-w-[Nrem]` on the table is what pushes columns
+off the screen on a laptop while the content itself would have fitted.
+
+**Status tick.** Opt in with `admin-status-tick` and put `data-tone` on the row
+(`success` / `warning` / `error` / `info`). A rounded 4px bar is painted inside
+the leading cell's padding, and in ledger mode it becomes a grid item measuring
+the record — the identity and its figures — and stopping before anything that
+follows. Tone is never the only channel: the row spells its status out.
+
+**The title is the trigger.** A row that opens a drawer makes its headline a
+`<button>` — the worker name in jobs, the timestamp in request logs and audit
+logs — and gives the row the same `phx-click`, so the whole row is clickable and
+keyboards get a real target. No chevron column: it costs width on every row to
+say what the cursor already says.
+
+**Failures belong to their record.** A record table has no "Outcome" column,
+which is empty on every healthy row and too narrow on the ones that matter. A
+failed record emits a second `<tr>` carrying its reasons along one line, bound
+to the record above by a continuing tone bar and by the suppressed rule between
+them. It renders only when something actually failed.
+
+**Figures.** Measures live in right-aligned `tabular-nums` columns, with the
+qualifier under its figure — cached tokens under the total, compression under
+the cost. Units and currency marks are notation, not figure: same weight as the
+number, stepped back to `text-base-content/60`. Never repeat the column heading
+in the cell (`235.3k`, not `235.3k tokens`).
 
 ## 6. Components — API Key Observatory extension
 
