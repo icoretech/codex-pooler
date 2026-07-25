@@ -4,8 +4,11 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
 
   import Ecto.Changeset
 
+  alias CodexPooler.RouteClass
+
   @scope_types ~w(pool upstream_identity)
   @rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments pool_all_assignments_in_state upstream_quota_threshold upstream_auth_state upstream_saved_reset_banked_first_seen)
+  @route_class_rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments)
   @severities ~w(info warning critical)
   @states ~w(active disabled)
   @target_states ~w(missing_evidence stale weekly_only exhausted reauth_required refresh_failed)
@@ -34,6 +37,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
     field :cooldown_minutes, :integer, default: @default_cooldown_minutes
     field :state, :string, default: "active"
     field :model, :string
+    field :route_class, :string
     field :min_usable_assignments, :integer
     field :target_state, :string
     field :window_selector, :string
@@ -57,6 +61,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
       :cooldown_minutes,
       :state,
       :model,
+      :route_class,
       :min_usable_assignments,
       :target_state,
       :window_selector,
@@ -69,6 +74,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
     ])
     |> update_change(:display_name, &String.trim/1)
     |> update_change(:model, &trim_optional_string/1)
+    |> update_change(:route_class, &trim_optional_string/1)
     |> validate_required([
       :pool_id,
       :scope_type,
@@ -86,6 +92,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
     |> validate_inclusion(:rule_kind, @rule_kinds)
     |> validate_inclusion(:severity, @severities)
     |> validate_inclusion(:state, @states)
+    |> validate_inclusion(:route_class, RouteClass.all())
     |> validate_inclusion(:target_state, @target_states)
     |> validate_inclusion(:window_selector, @window_selectors)
     |> validate_number(:cooldown_minutes,
@@ -97,11 +104,13 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
       greater_than_or_equal_to: 0,
       less_than_or_equal_to: 100
     )
+    |> validate_route_class_rule_kind()
     |> check_constraint(:scope_type, name: :alert_rules_scope_type_check)
     |> check_constraint(:rule_kind, name: :alert_rules_rule_kind_check)
     |> check_constraint(:severity, name: :alert_rules_severity_check)
     |> check_constraint(:cooldown_minutes, name: :alert_rules_cooldown_minutes_check)
     |> check_constraint(:state, name: :alert_rules_state_check)
+    |> check_constraint(:route_class, name: :alert_rules_route_class_check)
     |> check_constraint(:min_usable_assignments, name: :alert_rules_min_usable_assignments_check)
     |> check_constraint(:target_state, name: :alert_rules_target_state_check)
     |> check_constraint(:window_selector, name: :alert_rules_window_selector_check)
@@ -114,6 +123,12 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
 
   @spec rule_kinds() :: [rule_kind()]
   def rule_kinds, do: @rule_kinds
+
+  @spec route_classes() :: [RouteClass.t()]
+  def route_classes, do: RouteClass.all()
+
+  @spec route_class_rule_kinds() :: [rule_kind()]
+  def route_class_rule_kinds, do: @route_class_rule_kinds
 
   @spec severities() :: [severity()]
   def severities, do: @severities
@@ -160,6 +175,17 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   end
 
   defp trim_optional_string(value), do: value
+
+  defp validate_route_class_rule_kind(changeset) do
+    case {get_field(changeset, :route_class), get_field(changeset, :rule_kind)} do
+      {route_class, rule_kind}
+      when is_binary(route_class) and rule_kind not in @route_class_rule_kinds ->
+        add_error(changeset, :route_class, "is not supported for this rule kind")
+
+      _route_class_and_rule_kind ->
+        changeset
+    end
+  end
 
   defp metadata_baseline_at(metadata) when is_map(metadata) do
     case Map.get(metadata, @saved_reset_first_seen_baseline_key) ||

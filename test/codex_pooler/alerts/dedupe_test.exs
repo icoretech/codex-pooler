@@ -6,10 +6,12 @@ defmodule CodexPooler.Alerts.DedupeTest do
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Alerts
+  alias CodexPooler.Alerts.Evaluation.EvaluationCandidate
 
   alias CodexPooler.Alerts.Schemas.{
     AlertIncident,
-    AlertIncidentTarget
+    AlertIncidentTarget,
+    AlertRule
   }
 
   alias CodexPooler.Repo
@@ -120,6 +122,116 @@ defmodule CodexPooler.Alerts.DedupeTest do
 
     assert projection.impacted_pools |> Enum.map(& &1.id) |> MapSet.new() ==
              MapSet.new([pool_alpha.id, pool_beta.id])
+  end
+
+  test "usability dedupe keys separate route classes while pool-all stays byte-identical" do
+    pool_id = Ecto.UUID.generate()
+
+    for rule_kind <- ["pool_no_usable_assignments", "pool_low_usable_assignments"] do
+      base_rule = %AlertRule{
+        id: Ecto.UUID.generate(),
+        pool_id: pool_id,
+        scope_type: "pool",
+        rule_kind: rule_kind,
+        model: "gpt-5.5",
+        min_usable_assignments: if(rule_kind == "pool_low_usable_assignments", do: 2),
+        target_state: nil
+      }
+
+      stream_key =
+        base_rule
+        |> Map.put(:route_class, "proxy_stream")
+        |> EvaluationCandidate.dedupe_key_for_rule(nil)
+
+      compact_key =
+        base_rule
+        |> Map.put(:route_class, "proxy_compact")
+        |> EvaluationCandidate.dedupe_key_for_rule(nil)
+
+      assert stream_key != compact_key
+      assert String.ends_with?(stream_key, ":route_class:proxy_stream")
+      assert String.ends_with?(compact_key, ":route_class:proxy_compact")
+    end
+
+    pool_all_rule = %AlertRule{
+      id: Ecto.UUID.generate(),
+      pool_id: pool_id,
+      scope_type: "pool",
+      rule_kind: "pool_all_assignments_in_state",
+      model: "gpt-5.5",
+      min_usable_assignments: nil,
+      target_state: "exhausted"
+    }
+
+    assert EvaluationCandidate.dedupe_key_for_rule(
+             Map.put(pool_all_rule, :route_class, "proxy_stream"),
+             nil
+           ) ==
+             "alerts:v1:pool_all_assignments_in_state:pool:#{pool_id}:model:gpt-5.5:min:none:state:exhausted"
+  end
+
+  test "pool evidence records the selected route class scope" do
+    rule =
+      %AlertRule{
+        id: Ecto.UUID.generate(),
+        pool_id: Ecto.UUID.generate(),
+        scope_type: "pool",
+        rule_kind: "pool_no_usable_assignments",
+        severity: "critical"
+      }
+      |> Map.put(:route_class, "proxy_stream")
+
+    projection = %{
+      assignment_count: 2,
+      enabled_assignment_count: 2,
+      usable_assignment_count: 0,
+      state_counts: %{}
+    }
+
+    candidate =
+      EvaluationCandidate.pool_match(
+        rule,
+        projection,
+        "no_usable_assignments",
+        ~U[2026-07-25 12:00:00Z]
+      )
+
+    assert candidate.match_attrs.safe_evidence_snapshot["route_class_scope"] == "proxy_stream"
+  end
+
+  test "route-class scoped usability candidates open separate unresolved incidents" do
+    pool = pool_fixture()
+
+    projection = %{
+      assignment_count: 2,
+      enabled_assignment_count: 2,
+      usable_assignment_count: 0,
+      state_counts: %{}
+    }
+
+    incidents =
+      for route_class <- ["proxy_stream", "proxy_compact"] do
+        rule = alert_rule_fixture(pool, route_class: route_class)
+
+        candidate =
+          EvaluationCandidate.pool_match(
+            rule,
+            projection,
+            "no_usable_assignments",
+            ~U[2026-07-25 12:00:00Z]
+          )
+
+        assert {:ok, incident} = Alerts.record_incident_match(candidate.match_attrs)
+        incident
+      end
+
+    assert Enum.uniq_by(incidents, & &1.id) == incidents
+
+    assert Repo.aggregate(
+             from(incident in AlertIncident, where: incident.state != "resolved"),
+             :count
+           ) ==
+             2
   end
 
   defp timestamp(value), do: %{value | microsecond: {0, 6}}

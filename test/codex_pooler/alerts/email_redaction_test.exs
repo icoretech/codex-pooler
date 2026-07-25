@@ -75,6 +75,7 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     refute_forbidden_values(email.text_body)
     assert email.text_body =~ "Reason code: no_usable_assignments"
     assert email.text_body =~ "- assignment_count: 0"
+    assert email.text_body =~ "- route_class_scope: proxy_stream"
     refute email.text_body =~ "safe_to_ignore"
 
     assert :ok =
@@ -102,7 +103,8 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
 
     assert attempt.response_metadata["safe_evidence_summary"] == %{
              "assignment_count" => 0,
-             "reason_code" => "no_usable_assignments"
+             "reason_code" => "no_usable_assignments",
+             "route_class_scope" => "proxy_stream"
            }
   end
 
@@ -184,6 +186,7 @@ defmodule CodexPooler.Alerts.EmailRedactionTest do
     %{
       "reason_code" => "no_usable_assignments",
       "assignment_count" => 0,
+      "route_class_scope" => "proxy_stream",
       "prompt" => "raw prompt sentinel",
       "request_body" => "raw request body sentinel",
       "response_body" => "raw response body sentinel",

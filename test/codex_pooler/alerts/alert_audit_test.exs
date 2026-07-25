@@ -29,6 +29,7 @@ defmodule CodexPooler.Alerts.AlertAuditTest do
              Alerts.update_rule(scope, rule.id, %{
                display_name: "Audited rule updated",
                cooldown_minutes: 60,
+               route_class: "proxy_stream",
                metadata: %{"prompt" => "must not persist in audit"}
              })
 
@@ -37,6 +38,8 @@ defmodule CodexPooler.Alerts.AlertAuditTest do
     assert "cooldown_minutes" in update_audit.details["changed_fields"]
     assert "display_name" in update_audit.details["changed_fields"]
     assert "metadata" in update_audit.details["changed_fields"]
+    assert "route_class" in update_audit.details["changed_fields"]
+    assert update_audit.details["route_class"] == "proxy_stream"
     refute inspect(update_audit.details) =~ "must not persist in audit"
 
     assert {:ok, disabled_rule} = Alerts.update_rule(scope, updated_rule.id, %{state: "disabled"})

@@ -147,6 +147,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
   defp rule_update_attrs(%AlertRule{} = rule, attrs, target_pool_id, timestamp) do
     attrs
     |> normalize_attrs(rule_update_attribute_keys())
+    |> maybe_clear_unsupported_route_class(rule, attrs)
     |> Map.put(:pool_id, target_pool_id)
     |> maybe_put_disabled_at(attrs, timestamp)
     |> maybe_put_saved_reset_first_seen_enable_baseline(rule, timestamp)
@@ -220,6 +221,7 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
       :cooldown_minutes,
       :state,
       :model,
+      :route_class,
       :min_usable_assignments,
       :target_state,
       :window_selector,
@@ -249,6 +251,27 @@ defmodule CodexPooler.Alerts.Rules.RuleManagement do
       :error -> acc
     end
   end
+
+  defp maybe_clear_unsupported_route_class(normalized_attrs, rule, raw_attrs) do
+    final_rule_kind = Map.get(normalized_attrs, :rule_kind, rule.rule_kind)
+
+    cond do
+      final_rule_kind in AlertRule.route_class_rule_kinds() ->
+        normalized_attrs
+
+      route_class_submitted?(raw_attrs) ->
+        normalized_attrs
+
+      final_rule_kind != rule.rule_kind ->
+        Map.put(normalized_attrs, :route_class, nil)
+
+      true ->
+        normalized_attrs
+    end
+  end
+
+  defp route_class_submitted?(attrs),
+    do: Map.has_key?(attrs, :route_class) or Map.has_key?(attrs, "route_class")
 
   defp maybe_put_disabled_at(attrs, raw_attrs, timestamp) do
     case Map.get(raw_attrs, :state) || Map.get(raw_attrs, "state") do

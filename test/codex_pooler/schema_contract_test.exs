@@ -24,6 +24,7 @@ defmodule CodexPooler.SchemaContractTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools.{OperatorPoolAssignment, RoutingSettings}
   alias CodexPooler.Repo
+  alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Schemas.{OAuthFlow, UpstreamIdentity}
 
@@ -318,6 +319,17 @@ defmodule CodexPooler.SchemaContractTest do
     assert constraints["alert_rules_cooldown_minutes_check"] =~ "cooldown_minutes <= 1440"
     assert constraints["alert_rules_state_check"] =~ "'active'"
     assert constraints["alert_rules_state_check"] =~ "'disabled'"
+
+    route_class_values =
+      ~r/'([^']+)'/
+      |> Regex.scan(constraints["alert_rules_route_class_check"], capture: :all_but_first)
+      |> List.flatten()
+      |> MapSet.new()
+
+    assert route_class_values ==
+             MapSet.new(AlertRule.route_class_rule_kinds() ++ RouteClass.all())
+
+    assert AlertRule.route_classes() == RouteClass.all()
     assert constraints["alert_rules_target_state_check"] =~ "'missing_evidence'"
     assert constraints["alert_rules_window_selector_check"] =~ "'model_secondary'"
     assert constraints["alert_channels_channel_type_check"] =~ "'email'"

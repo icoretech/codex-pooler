@@ -10,7 +10,7 @@ defmodule CodexPooler.Alerts.AuditLog do
     AlertRule
   }
 
-  @rule_update_fields ~w(pool_id scope_type rule_kind display_name severity cooldown_minutes state model min_usable_assignments target_state window_selector threshold_used_percent metadata channel_ids)
+  @rule_update_fields ~w(pool_id scope_type rule_kind display_name severity cooldown_minutes state model route_class min_usable_assignments target_state window_selector threshold_used_percent metadata channel_ids)
   @channel_update_fields ~w(channel_type display_name state email_to endpoint_url delivery_endpoint_url endpoint_scheme endpoint_host endpoint_path_prefix endpoint_fingerprint metadata webhook_signing_secret_action)
 
   @type mutation_result :: {:ok, term()} | {:error, term()} | term()
@@ -199,6 +199,7 @@ defmodule CodexPooler.Alerts.AuditLog do
       state: rule.state,
       cooldown_minutes: rule.cooldown_minutes,
       model: rule.model,
+      route_class: rule.route_class,
       target_state: rule.target_state,
       window_selector: rule.window_selector,
       min_usable_assignments: rule.min_usable_assignments,

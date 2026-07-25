@@ -13,6 +13,8 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
     AlertRule
   }
 
+  alias CodexPooler.RouteClass
+
   test "changesets reject fixed v1 vocabulary drift" do
     now = now()
     pool = pool_fixture()
@@ -73,6 +75,45 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
            ).max_attempts
   end
 
+  test "route class is nullable and limited to usability rule kinds" do
+    now = now()
+    pool = pool_fixture()
+    attrs = valid_rule_attrs(pool, now)
+
+    assert AlertRule.route_classes() == RouteClass.all()
+
+    assert AlertRule.changeset(%AlertRule{}, Map.put(attrs, :route_class, nil)).valid?
+
+    for rule_kind <- AlertRule.route_class_rule_kinds() do
+      changeset =
+        AlertRule.changeset(
+          %AlertRule{},
+          attrs
+          |> Map.put(:rule_kind, rule_kind)
+          |> Map.put(:route_class, " proxy_stream ")
+        )
+
+      assert changeset.valid?
+      assert get_change(changeset, :route_class) == "proxy_stream"
+    end
+
+    unknown_changeset =
+      AlertRule.changeset(%AlertRule{}, Map.put(attrs, :route_class, "unknown_route_class"))
+
+    assert "is invalid" in errors_on(unknown_changeset).route_class
+
+    unsupported_changeset =
+      AlertRule.changeset(
+        %AlertRule{},
+        attrs
+        |> Map.put(:rule_kind, "pool_all_assignments_in_state")
+        |> Map.put(:target_state, "exhausted")
+        |> Map.put(:route_class, "proxy_stream")
+      )
+
+    assert "is not supported for this rule kind" in errors_on(unsupported_changeset).route_class
+  end
+
   test "database constraints reject invalid values when changesets are bypassed" do
     pool = pool_fixture()
     now = now()
@@ -84,6 +125,27 @@ defmodule CodexPooler.Alerts.AlertStorageTest do
              |> Repo.insert()
 
     assert %{cooldown_minutes: ["is invalid"]} = errors_on(rule_changeset)
+
+    assert {:error, unknown_route_class_changeset} =
+             %AlertRule{}
+             |> change(Map.put(valid_rule_attrs(pool, now), :route_class, "unknown_route_class"))
+             |> check_constraint(:route_class, name: :alert_rules_route_class_check)
+             |> Repo.insert()
+
+    assert %{route_class: ["is invalid"]} = errors_on(unknown_route_class_changeset)
+
+    assert {:error, unsupported_route_class_changeset} =
+             %AlertRule{}
+             |> change(
+               valid_rule_attrs(pool, now)
+               |> Map.put(:rule_kind, "pool_all_assignments_in_state")
+               |> Map.put(:target_state, "exhausted")
+               |> Map.put(:route_class, "proxy_stream")
+             )
+             |> check_constraint(:route_class, name: :alert_rules_route_class_check)
+             |> Repo.insert()
+
+    assert %{route_class: ["is invalid"]} = errors_on(unsupported_route_class_changeset)
 
     channel = insert_channel!(now)
     incident = insert_incident!(pool, now, "alert:constraint:max-attempts")

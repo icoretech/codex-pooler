@@ -270,6 +270,7 @@ defmodule CodexPooler.PoolerFixtures do
       cooldown_minutes: Map.get(attrs, :cooldown_minutes, AlertRule.default_cooldown_minutes()),
       state: Map.get(attrs, :state, "active"),
       model: Map.get(attrs, :model),
+      route_class: Map.get(attrs, :route_class),
       min_usable_assignments: Map.get(attrs, :min_usable_assignments),
       target_state: Map.get(attrs, :target_state),
       window_selector: Map.get(attrs, :window_selector),

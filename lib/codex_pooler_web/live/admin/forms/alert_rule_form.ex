@@ -92,6 +92,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "cooldown_minutes",
       "state",
       "model",
+      "route_class",
       "min_usable_assignments",
       "target_state",
       "window_selector",
@@ -116,6 +117,9 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
 
   @spec state_options() :: [option()]
   def state_options, do: @state_options
+
+  @spec route_class_options() :: [option()]
+  def route_class_options, do: Enum.map(AlertRule.route_classes(), &{&1, &1})
 
   @spec target_state_options(String.t()) :: [option()]
   def target_state_options("upstream_auth_state"), do: @auth_state_options
@@ -164,6 +168,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "cooldown_minutes" => AlertRule.default_cooldown_minutes(),
       "state" => @default_state,
       "model" => "",
+      "route_class" => "",
       "min_usable_assignments" => "2",
       "target_state" => "missing_evidence",
       "window_selector" => "any",
@@ -183,6 +188,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       "cooldown_minutes" => rule.cooldown_minutes,
       "state" => rule.state,
       "model" => rule.model || "",
+      "route_class" => rule.route_class || "",
       "min_usable_assignments" => rule.min_usable_assignments || "2",
       "target_state" => rule.target_state || "missing_evidence",
       "window_selector" => rule.window_selector || "any",
@@ -193,6 +199,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   defp normalize_attrs(attrs, opts \\ []) do
     attrs = Map.new(attrs)
     rule_kind = string_value(attrs, "rule_kind", @default_rule_kind)
+    route_class_supported_input? = rule_kind in AlertRule.route_class_rule_kinds()
 
     attrs
     |> stringify_keys()
@@ -202,6 +209,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     )
     |> normalize_rule_kind_fields(opts)
     |> prune_rule_kind_fields()
+    |> maybe_drop_route_class(route_class_supported_input?)
   end
 
   defp stringify_keys(attrs) do
@@ -223,6 +231,10 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
       )
     )
     |> Map.put("state", normalize_option(attrs["state"], AlertRule.states(), @default_state))
+    |> Map.put(
+      "route_class",
+      normalize_option(attrs["route_class"], AlertRule.route_classes(), "")
+    )
     |> Map.put("target_state", normalize_target_state(rule_kind, attrs["target_state"]))
     |> Map.put("window_selector", normalize_window_selector(attrs["window_selector"]))
   end
@@ -268,24 +280,47 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   defp normalize_window_selector(value),
     do: normalize_option(value, AlertRule.window_selectors(), "any")
 
+  defp maybe_drop_route_class(attrs, true), do: attrs
+  defp maybe_drop_route_class(attrs, false), do: Map.delete(attrs, "route_class")
+
+  defp prune_rule_kind_fields(%{"rule_kind" => "pool_no_usable_assignments"} = attrs) do
+    Map.drop(attrs, [
+      "min_usable_assignments",
+      "target_state",
+      "window_selector",
+      "threshold_used_percent"
+    ])
+  end
+
   defp prune_rule_kind_fields(%{"rule_kind" => "pool_low_usable_assignments"} = attrs) do
     Map.drop(attrs, ["target_state", "window_selector", "threshold_used_percent"])
   end
 
   defp prune_rule_kind_fields(%{"rule_kind" => "pool_all_assignments_in_state"} = attrs) do
-    Map.drop(attrs, ["min_usable_assignments", "window_selector", "threshold_used_percent"])
+    Map.drop(attrs, [
+      "route_class",
+      "min_usable_assignments",
+      "window_selector",
+      "threshold_used_percent"
+    ])
   end
 
   defp prune_rule_kind_fields(%{"rule_kind" => "upstream_quota_threshold"} = attrs) do
-    Map.drop(attrs, ["min_usable_assignments", "target_state"])
+    Map.drop(attrs, ["route_class", "min_usable_assignments", "target_state"])
   end
 
   defp prune_rule_kind_fields(%{"rule_kind" => "upstream_auth_state"} = attrs) do
-    Map.drop(attrs, ["min_usable_assignments", "window_selector", "threshold_used_percent"])
+    Map.drop(attrs, [
+      "route_class",
+      "min_usable_assignments",
+      "window_selector",
+      "threshold_used_percent"
+    ])
   end
 
   defp prune_rule_kind_fields(%{"rule_kind" => @saved_reset_rule_kind} = attrs) do
     Map.drop(attrs, [
+      "route_class",
       "min_usable_assignments",
       "target_state",
       "window_selector",
@@ -295,6 +330,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
 
   defp prune_rule_kind_fields(attrs) do
     Map.drop(attrs, [
+      "route_class",
       "min_usable_assignments",
       "target_state",
       "window_selector",
@@ -306,6 +342,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
     Enum.reduce(
       [
         "model",
+        "route_class",
         "min_usable_assignments",
         "target_state",
         "window_selector",

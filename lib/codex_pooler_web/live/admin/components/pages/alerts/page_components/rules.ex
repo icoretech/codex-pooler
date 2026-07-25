@@ -53,6 +53,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                 <th>Rule</th>
                 <th>Pool</th>
                 <th class="text-center">State</th>
+                <th>Route class</th>
                 <th>Threshold</th>
                 <th class="text-center">Cooldown</th>
                 <th class="text-right">Actions</th>
@@ -94,6 +95,12 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
                   >
                     {AlertRuleForm.state_label(rule.state)}
                   </span>
+                </td>
+                <td
+                  id={"alert-rule-row-#{rule.id}-route-class"}
+                  class="font-mono text-xs text-base-content/70"
+                >
+                  {rule.route_class || "any"}
                 </td>
                 <td
                   id={"alert-rule-row-#{rule.id}-threshold"}
@@ -228,6 +235,26 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
               />
               <p id="alert-rule-model-scope-help" class="px-1 text-xs leading-5 text-base-content/55">
                 {model_scope_help(AlertRuleForm.value(@rule_form[:rule_kind]))}
+              </p>
+            </div>
+            <div
+              :if={AlertRuleForm.value(@rule_form[:rule_kind]) in AlertRule.route_class_rule_kinds()}
+              id="alert-rule-route-class-field"
+              class="grid gap-1"
+            >
+              <.input
+                id="alert-rule-route-class"
+                field={@rule_form[:route_class]}
+                type="select"
+                label="Route class"
+                options={AlertRuleForm.route_class_options()}
+                prompt="All route classes"
+              />
+              <p
+                id="alert-rule-route-class-help"
+                class="px-1 text-xs leading-5 text-base-content/55"
+              >
+                Leave blank for all route classes. This uses worst-wins evaluation across every class.
               </p>
             </div>
           </div>

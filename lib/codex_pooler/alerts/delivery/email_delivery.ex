@@ -41,6 +41,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
     reason_code
     reset_expires_at
     reset_first_seen_at
+    route_class_scope
     routing_usable
     source
     status

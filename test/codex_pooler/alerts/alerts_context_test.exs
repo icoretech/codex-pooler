@@ -97,6 +97,73 @@ defmodule CodexPooler.Alerts.AlertsContextTest do
     assert deleted_channel.id == channel.id
   end
 
+  test "real rule creation and update persist route class for usability rules" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+    pool = pool_fixture(%{slug: "alerts-route-class", name: "Alerts Route Class"})
+
+    for rule_kind <- ["pool_no_usable_assignments", "pool_low_usable_assignments"] do
+      attrs =
+        rule_attrs(pool, %{
+          display_name: "Route class #{rule_kind}",
+          rule_kind: rule_kind,
+          route_class: "proxy_stream",
+          min_usable_assignments: if(rule_kind == "pool_low_usable_assignments", do: 2, else: nil)
+        })
+
+      assert {:ok, rule} = Alerts.create_rule(owner_scope, attrs)
+      assert Map.get(rule, :route_class) == "proxy_stream"
+      assert Map.get(Repo.get!(AlertRule, rule.id), :route_class) == "proxy_stream"
+
+      assert {:ok, updated_rule} =
+               Alerts.update_rule(owner_scope, rule.id, %{route_class: "proxy_compact"})
+
+      assert Map.get(updated_rule, :route_class) == "proxy_compact"
+      assert Map.get(Repo.get!(AlertRule, rule.id), :route_class) == "proxy_compact"
+
+      assert {:ok, unscoped_rule} =
+               Alerts.update_rule(owner_scope, rule.id, %{route_class: " "})
+
+      assert is_nil(Map.get(unscoped_rule, :route_class))
+    end
+  end
+
+  test "unsupported rule kinds reject direct route class input and clear stale scope on transition" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner)
+    pool = pool_fixture(%{slug: "alerts-route-rejection", name: "Alerts Route Rejection"})
+
+    unsupported_attrs =
+      rule_attrs(pool, %{
+        rule_kind: "pool_all_assignments_in_state",
+        target_state: "exhausted",
+        route_class: "proxy_stream"
+      })
+
+    assert {:error, create_changeset} = Alerts.create_rule(owner_scope, unsupported_attrs)
+    assert "is not supported for this rule kind" in errors_on(create_changeset).route_class
+
+    assert {:ok, scoped_rule} =
+             Alerts.create_rule(
+               owner_scope,
+               rule_attrs(pool, %{route_class: "proxy_stream"})
+             )
+
+    assert {:error, update_changeset} =
+             Alerts.update_rule(owner_scope, scoped_rule, unsupported_attrs)
+
+    assert "is not supported for this rule kind" in errors_on(update_changeset).route_class
+
+    assert {:ok, transitioned_rule} =
+             Alerts.update_rule(owner_scope, scoped_rule, %{
+               rule_kind: "pool_all_assignments_in_state",
+               target_state: "exhausted"
+             })
+
+    assert transitioned_rule.rule_kind == "pool_all_assignments_in_state"
+    assert is_nil(Map.get(transitioned_rule, :route_class))
+  end
+
   test "assigned admins manage rules only for assigned pools" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     owner_scope = Scope.for_user(owner)

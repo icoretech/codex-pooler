@@ -27,6 +27,7 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
         "reason_code" => reason_code,
         "pool_id" => rule.pool_id,
         "model" => rule.model,
+        "route_class_scope" => rule.route_class || "any",
         "assignment_count" => projection.assignment_count,
         "enabled_assignment_count" => projection.enabled_assignment_count,
         "usable_assignment_count" => projection.usable_assignment_count,
@@ -130,6 +131,20 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
     )
   end
 
+  def dedupe_key_for_rule(
+        %AlertRule{rule_kind: "pool_no_usable_assignments"} = rule,
+        _upstream_identity_id
+      ) do
+    pool_usability_dedupe_key(rule)
+  end
+
+  def dedupe_key_for_rule(
+        %AlertRule{rule_kind: "pool_low_usable_assignments"} = rule,
+        _upstream_identity_id
+      ) do
+    pool_usability_dedupe_key(rule)
+  end
+
   def dedupe_key_for_rule(%AlertRule{} = rule, _upstream_identity_id) do
     Enum.join(
       [
@@ -144,6 +159,27 @@ defmodule CodexPooler.Alerts.Evaluation.EvaluationCandidate do
         rule.min_usable_assignments || "none",
         "state",
         rule.target_state || "none"
+      ],
+      ":"
+    )
+  end
+
+  defp pool_usability_dedupe_key(rule) do
+    Enum.join(
+      [
+        "alerts",
+        "v1",
+        rule.rule_kind,
+        "pool",
+        rule.pool_id,
+        "model",
+        rule.model || "any",
+        "min",
+        rule.min_usable_assignments || "none",
+        "state",
+        rule.target_state || "none",
+        "route_class",
+        rule.route_class || "any"
       ],
       ":"
     )
