@@ -10,12 +10,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
-  alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.Gateway.Routing.{CircuitHealth, CircuitTelemetry}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
-  @circuit_probe_in_flight_key "probe_in_flight_count"
   @closed_status RoutingCircuitState.closed_status()
   @open_status RoutingCircuitState.open_status()
   @half_open_status RoutingCircuitState.half_open_status()
@@ -38,19 +37,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     now = now()
     settings = OperationalSettings.current()
 
-    case latest(auth, model, assignment, route_class) do
-      %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at} ->
-        DateTime.compare(next_probe_at, now) != :gt
-
-      %RoutingCircuitState{status: @open_status} ->
-        false
-
-      %RoutingCircuitState{status: @half_open_status} = state ->
-        probe_available?(state, settings, now)
-
-      _state ->
-        true
-    end
+    not CircuitHealth.blocked?(latest(auth, model, assignment, route_class), settings, now)
   end
 
   @spec eligibility_snapshots(auth(), Model.t(), [term()], String.t()) :: %{
@@ -345,7 +332,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           updated =
             state
             |> RoutingCircuitState.changeset(%{
-              metadata: probe_metadata(state, max(probe_in_flight_count(state) - 1, 0)),
+              metadata:
+                CircuitHealth.probe_metadata(
+                  state,
+                  max(CircuitHealth.probe_in_flight_count(state) - 1, 0)
+                ),
               updated_at: now
             })
             |> persist_or_rollback(:update)
@@ -407,7 +398,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         status: @half_open_status,
         half_opened_at: now,
         success_count: 0,
-        metadata: probe_metadata(state, 1),
+        metadata: CircuitHealth.probe_metadata(state, 1),
         updated_at: now
       })
       |> persist_or_rollback(:update)
@@ -418,14 +409,14 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     do: Repo.rollback(:routing_circuit_open)
 
   defp begin_state(%RoutingCircuitState{status: @half_open_status} = state, settings, now) do
-    stale? = probe_stale?(state, settings, now)
-    in_flight = if stale?, do: 0, else: probe_in_flight_count(state)
+    stale? = CircuitHealth.probe_stale?(state, settings, now)
+    in_flight = if stale?, do: 0, else: CircuitHealth.probe_in_flight_count(state)
 
     if in_flight >= settings.circuit_half_open_probe_limit do
       Repo.rollback(:routing_circuit_probe_in_flight)
     else
       attrs = %{
-        metadata: probe_metadata(state, in_flight + 1),
+        metadata: CircuitHealth.probe_metadata(state, in_flight + 1),
         updated_at: now
       }
 
@@ -446,12 +437,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   defp success_attrs(%RoutingCircuitState{status: @half_open_status} = state, settings, now) do
     success_count = state.success_count + 1
-    probe_count = max(probe_in_flight_count(state) - 1, 0)
+    probe_count = max(CircuitHealth.probe_in_flight_count(state) - 1, 0)
 
     attrs = %{
       success_count: success_count,
       last_success_at: now,
-      metadata: probe_metadata(state, probe_count),
+      metadata: CircuitHealth.probe_metadata(state, probe_count),
       updated_at: now
     }
 
@@ -477,7 +468,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       closed_at: now,
       next_probe_at: nil,
       last_success_at: now,
-      metadata: probe_metadata(state, 0),
+      metadata: CircuitHealth.probe_metadata(state, 0),
       updated_at: now
     }
   end
@@ -502,7 +493,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       closed_at: if(open?, do: nil, else: now),
       next_probe_at: if(open?, do: DateTime.add(now, settings.circuit_open_seconds, :second)),
       last_failure_at: now,
-      metadata: probe_metadata(state, probe_count_after_failure(state)),
+      metadata: CircuitHealth.probe_metadata(state, probe_count_after_failure(state)),
       updated_at: now
     }
   end
@@ -511,22 +502,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   defp failure_count(state), do: state.failure_count + 1
 
   defp probe_count_after_failure(nil), do: 0
-  defp probe_count_after_failure(state), do: max(probe_in_flight_count(state) - 1, 0)
 
-  defp probe_available?(state, settings, now) do
-    probe_in_flight_count(state) < settings.circuit_half_open_probe_limit or
-      probe_stale?(state, settings, now)
-  end
-
-  defp probe_stale?(
-         %RoutingCircuitState{status: @half_open_status, updated_at: %DateTime{} = updated_at},
-         settings,
-         now
-       ) do
-    DateTime.diff(now, updated_at, :second) >= settings.circuit_open_seconds
-  end
-
-  defp probe_stale?(_state, _settings, _now), do: false
+  defp probe_count_after_failure(state),
+    do: max(CircuitHealth.probe_in_flight_count(state) - 1, 0)
 
   defp open_after_failure?(state, failure_count, settings) do
     failure_count >= settings.circuit_failure_threshold or
@@ -605,35 +583,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   defp active_state?(%RoutingCircuitState{status: status}),
     do: status in [@open_status, @half_open_status]
 
-  defp eligible_state?(
-         %RoutingCircuitState{status: @open_status, next_probe_at: %DateTime{} = next_probe_at},
-         _settings,
-         now
-       ) do
-    DateTime.compare(next_probe_at, now) != :gt
-  end
-
-  defp eligible_state?(%RoutingCircuitState{status: @open_status}, _settings, _now), do: false
-
-  defp eligible_state?(%RoutingCircuitState{status: @half_open_status} = state, settings, now),
-    do: probe_available?(state, settings, now)
-
-  defp eligible_state?(_state, _settings, _now), do: true
-
-  defp probe_in_flight_count(%RoutingCircuitState{metadata: metadata}) when is_map(metadata) do
-    case Map.get(metadata, @circuit_probe_in_flight_key) do
-      value when is_integer(value) and value > 0 -> value
-      _value -> 0
-    end
-  end
-
-  defp probe_in_flight_count(_state), do: 0
-
-  defp probe_metadata(%RoutingCircuitState{metadata: metadata}, count) when is_map(metadata) do
-    Map.put(metadata, @circuit_probe_in_flight_key, max(count, 0))
-  end
-
-  defp probe_metadata(_state, count), do: %{@circuit_probe_in_flight_key => max(count, 0)}
+  defp eligible_state?(state, settings, now),
+    do: not CircuitHealth.blocked?(state, settings, now)
 
   defp sanitize_reason_code(code) when is_binary(code), do: String.slice(code, 0, 80)
   defp sanitize_reason_code(code), do: code |> to_string() |> String.slice(0, 80)
