@@ -35,6 +35,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 6. gateway admission accepted, queued, rejected, timed-out, and queue-time p95 signals
 7. stream-buffer oversized and truncated events
 8. Ecto query rate, queries per request, hot query sources by safe source and SQL command, unknown query rate, and DB queue p95
+9. routing circuit transition rate by transition, route class, and bounded reason class
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -159,6 +160,15 @@ histogram_quantile(0.95,
       job="codex-pooler-app"
     }[5m])
   )
+)
+```
+
+```text
+sum by (transition, route_class, reason_class) (
+  rate(codex_pooler_gateway_routing_circuit_transition_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
 )
 ```
 

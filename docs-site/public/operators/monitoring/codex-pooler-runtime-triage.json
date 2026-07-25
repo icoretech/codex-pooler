@@ -3,7 +3,7 @@
   "kind": "Dashboard",
   "metadata": {
     "name": "codex_pooler_runtime_triage",
-    "generation": 7,
+    "generation": 8,
     "creationTimestamp": "2026-06-01T13:36:25Z",
     "labels": {},
     "annotations": {}
@@ -33,7 +33,7 @@
       }
     ],
     "cursorSync": "Crosshair",
-    "description": "Production triage view for Codex Pooler runtime health, memory pressure, gateway admission, stream usage completeness, quota cycle decisions, HTTP traffic, database query pressure, admin stats dashboard reloads, request-log reloads, and restart evidence.",
+    "description": "Production triage view for Codex Pooler runtime health, memory pressure, gateway admission, routing circuit transitions, stream usage completeness, quota cycle decisions, HTTP traffic, database query pressure, admin stats dashboard reloads, request-log reloads, and restart evidence.",
     "editable": true,
     "elements": {
       "panel-10": {
@@ -4504,6 +4504,52 @@
           "id": 46,
           "links": [],
           "title": "Quota Cycle Decision Rate",
+          "vizConfig": {
+            "group": "timeseries",
+            "kind": "VizConfig",
+            "spec": {
+              "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+              "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+            },
+            "version": "12.3.1"
+          }
+        }
+      },
+      "panel-47": {
+        "kind": "Panel",
+        "spec": {
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "hidden": false,
+                    "query": {
+                      "datasource": {"name": "${datasource}"},
+                      "group": "prometheus",
+                      "kind": "DataQuery",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "sum by (transition, route_class, reason_class) (rate(codex_pooler_gateway_routing_circuit_transition_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+                        "interval": "$resolution",
+                        "legendFormat": "{{transition}} {{route_class}} {{reason_class}}"
+                      },
+                      "version": "v0"
+                    },
+                    "refId": "A"
+                  }
+                }
+              ],
+              "queryOptions": {},
+              "transformations": []
+            }
+          },
+          "description": "Routing circuit transition rate by bounded transition, route class, and reason class. Compare open, half-open, and closed transitions without account, pool, model, or raw reason labels.",
+          "id": 47,
+          "links": [],
+          "title": "Routing Circuit Transitions",
           "vizConfig": {
             "group": "timeseries",
             "kind": "VizConfig",
