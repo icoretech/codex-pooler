@@ -24,37 +24,51 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
 
   attr :request_log, :map, required: true
   attr :prefix, :string, required: true
-  attr :datetime_preferences, :map, required: true
 
-  def request_log_usage_lines(assigns) do
+  def request_log_token_lines(assigns) do
     ~H"""
     <div data-role="token-lines" class="grid min-w-0 gap-0.5">
       <%= if usage_line_applicable?(@request_log) do %>
         <span
           data-role="usage-token-line"
-          class="flex h-5 min-w-0 items-center gap-1"
-          title={usage_cached_line_title(@request_log)}
+          class="flex h-5 min-w-0 items-center justify-end whitespace-nowrap tabular-nums text-base-content"
+          title={token_totals_title(@request_log)}
         >
-          <span
-            data-role="token-totals"
-            class="min-w-0 truncate whitespace-nowrap text-base-content"
-            title={token_totals_title(@request_log)}
-          >
+          <span data-role="token-totals" class="min-w-0 truncate">
             {format_token_totals(@request_log)}
-          </span>
-          <span
-            :if={cached = format_cached_token_breakdown(@request_log)}
-            id={"#{@prefix}-#{@request_log.id}-cached-tokens"}
-            data-role="cached-tokens"
-            class="shrink-0 whitespace-nowrap text-base-content/45"
-            title={usage_cached_line_title(@request_log)}
-          >
-            {cached}
           </span>
         </span>
         <span
+          :if={cached = format_cached_token_breakdown(@request_log)}
+          id={"#{@prefix}-#{@request_log.id}-cached-tokens"}
+          data-role="cached-tokens"
+          class="flex h-5 items-center justify-end whitespace-nowrap tabular-nums text-base-content/45"
+          title={usage_cached_line_title(@request_log)}
+        >
+          {cached}
+        </span>
+      <% else %>
+        <span
+          data-role="usage-placeholder"
+          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-md:hidden md:flex"
+        >
+          —
+        </span>
+      <% end %>
+    </div>
+    """
+  end
+
+  attr :request_log, :map, required: true
+  attr :prefix, :string, required: true
+
+  def request_log_cost_lines(assigns) do
+    ~H"""
+    <div data-role="cost-lines" class="grid min-w-0 justify-end gap-0.5">
+      <%= if usage_line_applicable?(@request_log) do %>
+        <span
           data-role="usage-cost-line"
-          class="flex h-5 min-w-0 items-center gap-1.5 text-base-content/70"
+          class="flex h-5 min-w-0 items-center justify-end whitespace-nowrap font-semibold tabular-nums text-base-content"
           title={usage_cost_line_title(@request_log)}
         >
           <span
@@ -64,25 +78,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
           >
             {format_usage_cost(@request_log.cost)}
           </span>
-          <span
-            :if={compression_line = compression_savings_line(@request_log)}
-            id={"#{@prefix}-#{@request_log.id}-compression-savings"}
-            data-role="compression-savings"
-            data-compression-unit={compression_savings_unit(@request_log)}
-            data-compression-status={compression_savings_status(@request_log)}
-            data-compression-reason={compression_savings_reason(@request_log)}
-            class="flex min-w-0 items-center gap-1 whitespace-nowrap text-base-content/45"
-            title={compression_savings_title(@request_log)}
-          >
-            <.icon name="hero-arrows-pointing-in" class="size-3 shrink-0" />
-            <span class="sr-only">compression</span>
-            <span class="truncate">{compression_line}</span>
-          </span>
+        </span>
+        <span
+          :if={compression_line = compression_savings_line(@request_log)}
+          id={"#{@prefix}-#{@request_log.id}-compression-savings"}
+          data-role="compression-savings"
+          data-compression-unit={compression_savings_unit(@request_log)}
+          data-compression-status={compression_savings_status(@request_log)}
+          data-compression-reason={compression_savings_reason(@request_log)}
+          class="flex h-5 min-w-0 items-center justify-end gap-1 whitespace-nowrap tabular-nums text-base-content/45"
+          title={compression_savings_title(@request_log)}
+        >
+          <.icon name="hero-arrows-pointing-in" class="size-3 shrink-0" />
+          <span class="sr-only">compression</span>
+          <span class="truncate">{compression_line}</span>
         </span>
       <% else %>
         <span
-          data-role="usage-placeholder"
-          class="flex h-5 items-center whitespace-nowrap text-base-content/45"
+          data-role="cost-placeholder"
+          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-md:hidden md:flex"
           title={format_total_cost(@request_log.cost)}
         >
           —

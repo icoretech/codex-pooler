@@ -56,68 +56,69 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       />
 
       <div :if={@request_logs.items != []} class="overflow-x-auto">
-        <table class="admin-status-tick table table-sm admin-log-table min-w-[70rem]">
+        <table class="admin-status-tick admin-ledger-table admin-ledger-table-md table table-sm admin-log-table">
+          <%!-- Transport is the only elastic column: its route, origin and client
+          all truncate with the full value in a title, so it is the one that gives
+          way when the table has to fit. Everything else keeps a floor. --%>
           <colgroup>
-            <col style="width: 11rem;" />
-            <col style="width: 11rem;" />
-            <col style="width: 13rem;" />
-            <col />
-            <col style="width: 10rem;" />
-            <col style="width: 10rem;" />
+            <col class="w-32" />
+            <col class="w-36" />
+            <col class="w-40" />
+            <col class="min-w-32" />
+            <col class="w-24" />
+            <col class="w-24" />
           </colgroup>
           <thead>
             <tr>
               <th class="whitespace-nowrap">Request</th>
-              <th class="whitespace-nowrap">Upstream</th>
-              <th class="whitespace-nowrap">Model / API key</th>
-              <th class="whitespace-nowrap">Route</th>
-              <th class="whitespace-nowrap">Usage</th>
-              <th class="whitespace-nowrap">Outcome</th>
+              <th class="whitespace-nowrap">Model</th>
+              <th class="whitespace-nowrap">Attribution</th>
+              <th class="whitespace-nowrap">Transport</th>
+              <th class="whitespace-nowrap text-right">Tokens</th>
+              <th class="whitespace-nowrap text-right">Cost</th>
             </tr>
           </thead>
           <tbody id="request-logs-table">
-            <tr
-              :for={request_log <- @request_logs.items}
-              id={"request-log-row-#{request_log.id}"}
-              data-status={request_log.status}
-              data-tone={request_log_tone(request_log.status)}
-              phx-click="open_request_log"
-              phx-value-request-id={request_log.id}
-              class="group/request-log cursor-pointer transition-colors hover:bg-base-200/80"
-            >
-              <td class="whitespace-nowrap align-middle text-base-content/70">
-                <.request_log_timestamp_cell
-                  request_log={request_log}
-                  datetime_preferences={@datetime_preferences}
-                  prefix="request-log"
-                />
-              </td>
-              <td class="align-middle">
-                <.request_log_upstream_identity_cell
-                  request_log={request_log}
-                  plan_badge_id={"request-log-#{request_log.id}-plan-badge"}
-                />
-              </td>
-              <td class="align-middle">
-                <.request_log_model_cell request_log={request_log} prefix="request-log" />
-              </td>
-              <td class="align-middle">
-                <.request_log_route_cell request_log={request_log} prefix="request-log" />
-              </td>
-              <td class="align-middle">
-                <Usage.request_log_usage_lines
-                  request_log={request_log}
-                  prefix="request-log"
-                  datetime_preferences={@datetime_preferences}
-                />
-              </td>
-              <td class="align-middle">
-                <.request_log_outcome_cell
-                  request_log={request_log}
-                  datetime_preferences={@datetime_preferences}
-                />
-              </td>
-            </tr>
+            <%= for request_log <- @request_logs.items do %>
+              <tr
+                id={"request-log-row-#{request_log.id}"}
+                data-status={request_log.status}
+                data-tone={request_log_tone(request_log.status)}
+                phx-click="open_request_log"
+                phx-value-request-id={request_log.id}
+                class="group/request-log cursor-pointer transition-colors hover:bg-base-200/80"
+              >
+                <td class="whitespace-nowrap align-middle text-base-content/70 max-md:col-start-2 max-md:row-start-1">
+                  <.request_log_timestamp_cell
+                    request_log={request_log}
+                    datetime_preferences={@datetime_preferences}
+                    prefix="request-log"
+                  />
+                </td>
+                <td class="min-w-0 align-middle max-md:col-start-2 max-md:row-start-2">
+                  <.request_log_model_cell request_log={request_log} prefix="request-log" />
+                </td>
+                <td class="min-w-0 align-middle max-md:col-span-2 max-md:col-start-2 max-md:row-start-3">
+                  <.request_log_attribution_cell
+                    request_log={request_log}
+                    plan_badge_id={"request-log-#{request_log.id}-plan-badge"}
+                  />
+                </td>
+                <td class="min-w-0 align-middle max-md:col-span-2 max-md:col-start-2 max-md:row-start-4">
+                  <.request_log_route_cell request_log={request_log} prefix="request-log" />
+                </td>
+                <td class="align-middle max-md:col-start-3 max-md:row-start-1">
+                  <Usage.request_log_token_lines request_log={request_log} prefix="request-log" />
+                </td>
+                <td class="align-middle max-md:col-start-3 max-md:row-start-2">
+                  <Usage.request_log_cost_lines request_log={request_log} prefix="request-log" />
+                </td>
+              </tr>
+              <.request_log_failure_row
+                request_log={request_log}
+                datetime_preferences={@datetime_preferences}
+              />
+            <% end %>
           </tbody>
           <caption class="caption-bottom border-t border-base-300/70 px-3 py-2.5 text-left text-xs text-base-content/60">
             {format_total(@request_logs.total)} matching sanitized request logs<span class="lg:hidden"> · Swipe sideways for more columns</span>
@@ -131,10 +132,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :request_log, :map, required: true
   attr :plan_badge_id, :string, default: nil
 
-  def request_log_upstream_identity_cell(assigns) do
+  def request_log_attribution_cell(assigns) do
+    assigns =
+      assign(assigns, :account_named?, format_upstream_account_label(assigns.request_log) != "—")
+
     ~H"""
     <div class="grid min-w-0 gap-0.5">
-      <span class="flex h-5 min-w-0 items-center gap-1.5">
+      <%!-- A rejected request never reached an upstream, so on a phone this line
+      would be two dashes taking a whole row. It keeps its place from md up,
+      where the column has to line up with its neighbours. --%>
+      <span class={["flex h-5 min-w-0 items-center gap-1.5", !@account_named? && "max-md:hidden"]}>
         <span
           data-role="upstream-account"
           class="min-w-0 truncate font-semibold text-base-content"
@@ -152,18 +159,33 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
           title="upstream account plan"
         />
       </span>
-      <span
-        data-role="pool-name"
-        class="flex h-5 min-w-0 items-center gap-1.5 text-base-content/45"
-        title={@request_log.pool_name}
-      >
+      <span class="flex h-5 min-w-0 items-center gap-2 text-base-content/45">
         <span
-          data-role="pool-icon"
-          class="grid size-3 shrink-0 place-items-center text-base-content/35"
+          data-role="pool-name"
+          class="flex min-w-0 items-center gap-1.5"
+          title={@request_log.pool_name}
         >
-          <.icon name="hero-server-stack" class="size-3" />
+          <span
+            data-role="pool-icon"
+            class="grid size-3 shrink-0 place-items-center text-base-content/35"
+          >
+            <.icon name="hero-server-stack" class="size-3" />
+          </span>
+          <span class="truncate">{@request_log.pool_name}</span>
         </span>
-        <span class="truncate">{@request_log.pool_name}</span>
+        <span
+          data-role="api-key"
+          class="flex min-w-0 items-center gap-1.5"
+          title={format_api_key(@request_log)}
+        >
+          <span
+            data-role="api-key-icon"
+            class="grid size-3 shrink-0 place-items-center text-base-content/35"
+          >
+            <.icon name="hero-key" class="size-3" />
+          </span>
+          <span class="truncate">{format_api_key(@request_log)}</span>
+        </span>
       </span>
     </div>
     """
@@ -172,8 +194,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :request_log, :map, required: true
   attr :datetime_preferences, :map, required: true
 
-  def request_log_outcome_cell(assigns) do
-    errors = format_errors(assigns.request_log, assigns.datetime_preferences)
+  def request_log_failure_row(assigns) do
+    # format_errors/2 answers ["—"] when a request had none; the row exists only
+    # when something actually went wrong, so the placeholder is dropped here
+    # rather than printed under every healthy record.
+    errors =
+      assigns.request_log
+      |> format_errors(assigns.datetime_preferences)
+      |> Enum.reject(&(&1 == "—"))
 
     assigns =
       assigns
@@ -181,21 +209,46 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       |> assign(:errors_title, Enum.join(errors, "; "))
 
     ~H"""
-    <span
-      id={"request-log-#{@request_log.id}-errors"}
-      data-role="errors"
-      class="grid min-w-0 gap-0.5 text-base-content/65"
-      title={@errors_title}
+    <tr
+      :if={@errors != []}
+      id={"request-log-row-#{@request_log.id}-errors"}
+      data-role="request-log-failure"
+      data-tone={request_log_tone(@request_log.status)}
+      phx-click="open_request_log"
+      phx-value-request-id={@request_log.id}
+      class="cursor-pointer transition-colors group-hover/request-log:bg-base-200/80"
     >
-      <span
-        :for={error <- @errors}
-        data-role="error-line"
-        class="block h-5 min-w-0 truncate leading-5"
-      >
-        {error}
-      </span>
-    </span>
+      <td colspan="6" class="!border-t-0 !pt-0 align-top max-md:col-span-3 max-md:col-start-2">
+        <%!-- Reasons run along one line: they are facets of a single failure, not
+        separate events, and a line each doubles the height of every failed
+        record. No icon either — the tone rail beside them already says this is
+        a failure, and a bullet would push the text out of the column its record
+        occupies. --%>
+        <span
+          id={"request-log-#{@request_log.id}-errors"}
+          data-role="errors"
+          class={[
+            "flex h-5 min-w-0 items-center gap-1.5 truncate text-[0.72rem] leading-5",
+            failure_row_text(@request_log.status)
+          ]}
+          title={@errors_title}
+        >
+          <span :for={{error, index} <- Enum.with_index(@errors)} class="contents">
+            <span :if={index > 0} aria-hidden="true" class="shrink-0 opacity-40">·</span>
+            <span data-role="error-line" class="min-w-0 truncate">{error}</span>
+          </span>
+        </span>
+      </td>
+    </tr>
     """
+  end
+
+  defp failure_row_text(status) do
+    case request_log_tone(status) do
+      "error" -> "text-error"
+      "warning" -> "text-warning"
+      _tone -> "text-base-content/65"
+    end
   end
 
   attr :request_log, :map, required: true
@@ -243,60 +296,45 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   def request_log_model_cell(assigns) do
     ~H"""
-    <div class="grid min-w-0 gap-0.5">
+    <span
+      id={"#{@prefix}-#{@request_log.id}-model-details"}
+      data-role="model-details"
+      class="min-w-0 gap-0.5 max-md:block max-md:h-5 max-md:truncate max-md:whitespace-nowrap md:grid"
+      title={format_model_details_title(@request_log)}
+    >
       <span
-        id={"#{@prefix}-#{@request_log.id}-model-details"}
-        data-role="model-details"
-        class="block h-5 min-w-0 truncate whitespace-nowrap leading-5 text-base-content/60"
-        title={format_model_details_title(@request_log)}
+        data-role="model-name"
+        class="h-5 min-w-0 truncate whitespace-nowrap font-semibold leading-5 text-base-content max-md:inline md:block"
       >
-        <span data-role="model-name" class="font-semibold text-base-content">
-          {format_model_name(@request_log)}
-        </span>
-        <span
-          :if={reasoning = format_model_reasoning(@request_log)}
-          data-role="model-reasoning"
-          class="ml-1 font-normal text-base-content/60"
-        >
+        {format_model_name(@request_log)}
+      </span>
+      <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-md:inline md:flex">
+        <span :if={reasoning = format_model_reasoning(@request_log)} data-role="model-reasoning">
           {reasoning}
         </span>
         <span
           :if={detail = format_requested_reasoning_detail(@request_log)}
           id={"#{@prefix}-#{@request_log.id}-requested-reasoning"}
           data-role="requested-reasoning"
-          class="ml-1 font-normal text-base-content/60"
         >
           {detail}
         </span>
         <span
           :if={tier = format_model_service_tier(@request_log)}
           data-role="model-service-tier"
-          class="ml-1 font-normal text-base-content/60"
+          class="text-base-content/45"
         >
           <span>/</span> {tier}
         </span>
         <span
           :if={detail = format_requested_tier_detail(@request_log)}
           id={"#{@prefix}-#{@request_log.id}-requested-tier"}
-          class="ml-1 font-normal text-base-content/60"
+          class="text-base-content/45"
         >
           {detail}
         </span>
       </span>
-      <span
-        data-role="api-key"
-        class="flex h-5 min-w-0 items-center gap-1.5 text-base-content/60"
-        title={format_api_key(@request_log)}
-      >
-        <span
-          data-role="api-key-icon"
-          class="grid size-3 shrink-0 place-items-center text-base-content/40"
-        >
-          <.icon name="hero-key" class="size-3" />
-        </span>
-        <span class="truncate">{format_api_key(@request_log)}</span>
-      </span>
-    </div>
+    </span>
     """
   end
 
@@ -323,7 +361,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   def request_log_route_cell(assigns) do
     ~H"""
     <div class="grid min-w-0 gap-0.5">
-      <span class="flex h-5 min-w-0 items-center gap-2 text-base-content/60">
+      <%!-- The route repeats on every record and is one tap away in the drawer;
+      on a phone it is the line that earns its height least. --%>
+      <span class="h-5 min-w-0 items-center gap-2 text-base-content/60 max-md:hidden md:flex">
         <span
           id={"#{@prefix}-#{@request_log.id}-route"}
           data-role="route"
