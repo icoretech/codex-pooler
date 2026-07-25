@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.7...codex-pooler-v0.5.8) (2026-07-25)
+
+
+### Bug Fixes
+
+* **quota:** harden model weekly countdown anchoring ([3f6ca13](https://github.com/icoretech/codex-pooler/commit/3f6ca13d6667b4a7885498ba086b565cf400b7c7))
+
 ## [0.5.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.6...codex-pooler-v0.5.7) (2026-07-25)
 
 
