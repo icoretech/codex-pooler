@@ -352,7 +352,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-row-#{request.id} [data-role='token-totals']",
-             "7.1k tokens"
+             "7.1k"
            )
 
     assert has_element?(
@@ -361,7 +361,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
              "in 87ms"
            )
 
-    assert has_element?(view, "#request-log-row-#{request.id}", "(2k cached)")
+    assert has_element?(view, "#request-log-row-#{request.id}", "2k cached")
 
     refute has_element?(view, "#request-log-row-#{request.id} [data-role='cached-cost']")
 
@@ -371,7 +371,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-row-#{unpriced_request.id} [data-role='token-totals']",
-             "2 tokens"
+             "2"
            )
 
     assert has_element?(
@@ -1272,13 +1272,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-#{cached_request.id}-cached-tokens",
-             "(40 cached)"
+             "40 cached"
            )
 
     assert has_element?(
              view,
              "#request-log-row-#{cached_request.id} [data-role='token-totals']",
-             "150 tokens"
+             "150"
            )
 
     html = render(view)
@@ -1971,13 +1971,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#{row_selector} [data-role='usage-token-line']",
-             "300 tokens"
+             "300"
            )
 
     assert has_element?(
              view,
              "#{row_selector} [data-role='token-totals']",
-             "300 tokens"
+             "300"
            )
 
     refute has_element?(view, "#{row_selector} [data-role='token-totals']", "input: 200")
@@ -1987,7 +1987,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#{row_selector} [data-role='cached-tokens']",
-             "(50 cached)"
+             "50 cached"
            )
 
     # Cached tokens now sit on their own line under the total, in the same
@@ -1995,7 +1995,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#{row_selector} [data-role='token-lines'] [data-role='cached-tokens']",
-             "(50 cached)"
+             "50 cached"
            )
 
     refute has_element?(view, "#{row_selector} [data-role='cached-tokens']", "cache $")

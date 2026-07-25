@@ -26,17 +26,21 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
   attr :prefix, :string, required: true
 
   def request_log_token_lines(assigns) do
+    {amount, suffix} = token_parts(format_token_totals(assigns.request_log))
+    assigns = assigns |> assign(:token_amount, amount) |> assign(:token_suffix, suffix)
+
     ~H"""
     <div data-role="token-lines" class="grid min-w-0 gap-0.5">
       <%= if usage_line_applicable?(@request_log) do %>
         <span
           data-role="usage-token-line"
-          class="flex h-5 min-w-0 items-center justify-end whitespace-nowrap tabular-nums text-base-content"
+          class="flex h-5 min-w-0 items-center justify-end whitespace-nowrap font-semibold tabular-nums text-base-content"
           title={token_totals_title(@request_log)}
         >
-          <span data-role="token-totals" class="min-w-0 truncate">
-            {format_token_totals(@request_log)}
-          </span>
+          <span
+            data-role="token-totals"
+            class="min-w-0 truncate"
+          >{@token_amount}<span :if={@token_suffix} class="text-base-content/60">{@token_suffix}</span></span>
         </span>
         <span
           :if={cached = format_cached_token_breakdown(@request_log)}
@@ -63,6 +67,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
   attr :prefix, :string, required: true
 
   def request_log_cost_lines(assigns) do
+    {symbol, amount} = cost_parts(format_usage_cost(assigns.request_log.cost))
+    assigns = assigns |> assign(:cost_symbol, symbol) |> assign(:cost_amount, amount)
+
     ~H"""
     <div data-role="cost-lines" class="grid min-w-0 justify-end gap-0.5">
       <%= if usage_line_applicable?(@request_log) do %>
@@ -71,13 +78,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
           class="flex h-5 min-w-0 items-center justify-end whitespace-nowrap font-semibold tabular-nums text-base-content"
           title={usage_cost_line_title(@request_log)}
         >
+          <%!-- The currency mark and the magnitude suffix are notation, not
+          figure: they keep the figure's weight but step back to the tone the
+          model's reasoning label uses, so what carries down the column is the
+          number itself. --%>
           <span
             data-role="cost"
             class="whitespace-nowrap"
             title={format_total_cost(@request_log.cost)}
-          >
-            {format_usage_cost(@request_log.cost)}
-          </span>
+          ><span :if={@cost_symbol} class="text-base-content/60">{@cost_symbol}</span>{@cost_amount}</span>
         </span>
         <span
           :if={compression_line = compression_savings_line(@request_log)}
@@ -104,6 +113,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
       <% end %>
     </div>
     """
+  end
+
+  defp cost_parts("$" <> amount), do: {"$", amount}
+  defp cost_parts(label), do: {nil, label}
+
+  # Format.token_count/1 appends a single magnitude letter; anything else is a
+  # plain count and stays whole.
+  defp token_parts(label) do
+    case String.split_at(label, -1) do
+      {amount, suffix} when suffix in ["k", "M", "B"] -> {amount, suffix}
+      _plain -> {label, nil}
+    end
   end
 
   attr :request_log, :map, required: true

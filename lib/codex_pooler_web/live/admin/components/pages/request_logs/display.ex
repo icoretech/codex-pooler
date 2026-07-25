@@ -130,8 +130,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   def total_token_count(%{total_tokens: total}) when is_integer(total), do: total
   def total_token_count(_counts), do: nil
 
+  # The row sits under a "Tokens" header, so the word would be printed once per
+  # record to say what the column already says. The drawer keeps it, since there
+  # the value stands next to a label instead of a column.
   def format_token_totals(request_log) do
-    format_token_counts(request_log.token_counts)
+    case total_token_count(request_log.token_counts) do
+      total when is_integer(total) -> Format.token_count(total)
+      _total -> "-"
+    end
   end
 
   def token_totals_title(%{token_counts: nil}), do: nil
@@ -294,7 +300,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
     cached = log.token_counts.cached_input_tokens
 
     if cached && cached != 0 do
-      "(#{Format.token_count(cached)} cached)"
+      "#{Format.token_count(cached)} cached"
     else
       nil
     end
