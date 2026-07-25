@@ -189,6 +189,146 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp admin_surface_overflow_class(:visible), do: "overflow-visible"
   defp admin_surface_overflow_class(_overflow), do: "overflow-hidden"
 
+  @doc """
+  Footer band of labeled facts that closes an admin card.
+
+  Renders the shared footer band and an evenly divided `dl` of facts. Divider
+  padding comes from each fact's position, so call sites never hand-roll
+  `pr-3` / `px-3` / `pl-3`.
+
+  Each `:fact` renders its own `dt` and `dd`; use `card_fact_label/1` and
+  `card_fact_value/1` so the micro-label and value typography stay identical
+  across cards. Mark a fact `interactive` when the cell doubles as a panel
+  toggle: the cell becomes the positioning context (`group relative isolate`)
+  for an overlay `button` rendered inside the slot.
+
+      <.card_fact_strip
+        id="job-worker-1-schedule"
+        facts_role="worker-schedule-grid"
+        data-role="worker-schedule-facts"
+      >
+        <:fact role="next-run-group">
+          <.card_fact_label>Next run</.card_fact_label>
+          <.card_fact_value class="tabular-nums">In 4 minutes</.card_fact_value>
+        </:fact>
+      </.card_fact_strip>
+  """
+  attr :id, :string, default: nil, doc: "id for the facts `dl`"
+  attr :facts_role, :string, default: nil, doc: "`data-role` for the facts `dl`"
+  attr :class, :any, default: nil, doc: "extra classes for the footer band"
+  attr :rest, :global, doc: "attributes for the footer band"
+
+  slot :fact, required: true do
+    attr :role, :string
+    attr :class, :any
+    attr :interactive, :boolean
+  end
+
+  def card_fact_strip(assigns) do
+    ~H"""
+    <footer class={["border-t border-base-300 bg-base-200/20 px-4 py-2.5", @class]} {@rest}>
+      <dl
+        id={@id}
+        data-role={@facts_role}
+        class={[
+          "grid min-w-0 divide-x divide-base-300/70 text-xs leading-5",
+          card_fact_columns_class(length(@fact))
+        ]}
+      >
+        <div
+          :for={{fact, index} <- Enum.with_index(@fact)}
+          data-role={fact[:role]}
+          class={[
+            "min-w-0",
+            card_fact_padding_class(index, length(@fact)),
+            fact[:interactive] && "group relative isolate",
+            fact[:class]
+          ]}
+        >
+          {render_slot(fact)}
+        </div>
+      </dl>
+    </footer>
+    """
+  end
+
+  defp card_fact_columns_class(2), do: "grid-cols-2"
+  defp card_fact_columns_class(4), do: "grid-cols-4"
+  defp card_fact_columns_class(_count), do: "grid-cols-3"
+
+  defp card_fact_padding_class(0, 1), do: nil
+  defp card_fact_padding_class(0, _count), do: "pr-3"
+  defp card_fact_padding_class(index, count) when index == count - 1, do: "pl-3"
+  defp card_fact_padding_class(_index, _count), do: "px-3"
+
+  @doc """
+  Empty row for a `table` body.
+
+  Sits as the first child of the `tbody` and shows only when no record row
+  rendered (`hidden only:table-row`), so the column header stays put instead of
+  the table being swapped for a block. Use `empty_state/1` instead when the
+  whole surface is empty.
+
+      <.table_empty_row id="operator-empty-row" columns={6}>
+        No operators match the current filters.
+      </.table_empty_row>
+  """
+  attr :id, :string, required: true
+  attr :columns, :integer, required: true
+
+  slot :inner_block, required: true
+
+  def table_empty_row(assigns) do
+    ~H"""
+    <tr id={@id} class="hidden only:table-row">
+      <td colspan={@columns} class="py-8 text-center text-sm text-base-content/60">
+        {render_slot(@inner_block)}
+      </td>
+    </tr>
+    """
+  end
+
+  @doc """
+  Micro label for one `card_fact_strip/1` fact.
+
+  Pass `tone_class` to replace the resting colour (interactive cells swap it on
+  hover and while their panel is open); `class` only adds to the base.
+  """
+  attr :tone_class, :any, default: "text-base-content/35"
+  attr :class, :any, default: nil
+  attr :rest, :global
+
+  slot :inner_block, required: true
+
+  def card_fact_label(assigns) do
+    ~H"""
+    <dt
+      class={["text-[0.62rem] font-semibold uppercase tracking-[0.08em]", @tone_class, @class]}
+      {@rest}
+    >
+      {render_slot(@inner_block)}
+    </dt>
+    """
+  end
+
+  @doc """
+  Value for one `card_fact_strip/1` fact.
+
+  Truncates by default. Pass `tone_class` to replace the resting colour and
+  `class` to add treatments such as `tabular-nums`.
+  """
+  attr :tone_class, :any, default: "text-base-content/60"
+  attr :class, :any, default: nil
+  attr :rest, :global
+
+  slot :inner_block, required: true
+
+  def card_fact_value(assigns) do
+    ~H"""
+    <dd class={["truncate", @tone_class, @class]} {@rest}>{render_slot(@inner_block)}</dd>
+    """
+  end
+
   attr :id, :string, required: true
 
   attr :class, :any,

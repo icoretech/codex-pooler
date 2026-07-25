@@ -176,11 +176,9 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
               </tr>
             </thead>
             <tbody id="operators-table" phx-update="stream">
-              <tr id="operator-empty-row" class="hidden only:table-row">
-                <td colspan="6" class="py-8 text-center text-sm text-base-content/60">
-                  No operators match the current filters.
-                </td>
-              </tr>
+              <AdminComponents.table_empty_row id="operator-empty-row" columns={6}>
+                No operators match the current filters.
+              </AdminComponents.table_empty_row>
               <tr
                 :for={{row_id, operator} <- @operators}
                 id={row_id}

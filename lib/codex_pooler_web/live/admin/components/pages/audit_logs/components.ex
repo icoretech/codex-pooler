@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.AuditLogsComponents.Filters
+  alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   import CodexPoolerWeb.Admin.AuditLogsComponents.Presentation,
     only: [
@@ -60,14 +61,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
             </tr>
           </thead>
           <tbody id="audit-logs-table">
-            <tr
-              id="audit-log-empty-state"
-              class={[@audit_logs.items != [] && "hidden", "only:table-row"]}
-            >
-              <td colspan="5" class="py-8 text-center text-sm text-base-content/60">
-                No audit logs yet. Create operator activity or loosen the filters to see redacted audit events.
-              </td>
-            </tr>
+            <AdminComponents.table_empty_row id="audit-log-empty-state" columns={5}>
+              {empty_copy()}
+            </AdminComponents.table_empty_row>
             <tr
               :for={event <- @audit_logs.items}
               id={"audit-log-row-#{event.id}"}
@@ -176,14 +172,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
             </tr>
           </thead>
           <tbody id="mobile-audit-logs-table-body">
-            <tr
-              id="mobile-audit-log-empty-state"
-              class={[@audit_logs.items != [] && "hidden", "only:table-row"]}
-            >
-              <td colspan="4" class="py-8 text-center text-sm text-base-content/60">
-                No audit logs yet. Create operator activity or loosen the filters to see redacted audit events.
-              </td>
-            </tr>
+            <AdminComponents.table_empty_row id="mobile-audit-log-empty-state" columns={4}>
+              {empty_copy()}
+            </AdminComponents.table_empty_row>
             <tr
               :for={event <- @audit_logs.items}
               id={"mobile-audit-log-row-#{event.id}"}
@@ -356,5 +347,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
       </aside>
     </div>
     """
+  end
+
+  defp empty_copy do
+    "No audit logs yet. Create operator activity or loosen the filters to see redacted audit events."
   end
 end

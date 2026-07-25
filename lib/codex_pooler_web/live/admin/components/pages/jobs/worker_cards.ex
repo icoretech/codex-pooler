@@ -321,61 +321,48 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards do
 
   defp worker_schedule_facts(assigns) do
     ~H"""
-    <section
+    <AdminComponents.card_fact_strip
+      facts_role="worker-schedule-grid"
       data-role="worker-schedule-facts"
       data-density="compact"
-      class="border-t border-base-300 bg-base-200/20 px-4 py-2.5"
     >
-      <dl
-        data-role="worker-schedule-grid"
-        class="grid min-w-0 grid-cols-3 divide-x divide-base-300/70 text-xs leading-5"
-      >
-        <div data-role="next-run-group" class="min-w-0 pr-3">
-          <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-            Next run
-          </dt>
-          <dd class="truncate text-base-content/60">
-            <span
-              data-role="next-run"
-              class="inline-flex max-w-full items-center gap-1 tabular-nums"
-              title={@card.next_run_title}
-            >
-              <.icon name="hero-clock" class="size-3 shrink-0" />
-              <span class="truncate">{@card.next_run}</span>
-            </span>
-          </dd>
-        </div>
-        <div data-role="last-run" class="min-w-0 px-3">
-          <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-            Last run
-          </dt>
-          <dd class="truncate tabular-nums text-base-content/60">
-            {format_job_timestamp(@card.last_seen_at, @datetime_preferences)}
-          </dd>
-        </div>
-        <div data-role="schedule" class="min-w-0 pl-3">
-          <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-            Schedule
-          </dt>
-          <dd
-            :if={@card.on_demand}
-            data-role="cadence-label"
-            class="truncate text-base-content/60"
-            title={@card.cadence_label}
+      <:fact role="next-run-group">
+        <AdminComponents.card_fact_label>Next run</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_value>
+          <span
+            data-role="next-run"
+            class="inline-flex max-w-full items-center gap-1 tabular-nums"
+            title={@card.next_run_title}
           >
-            On demand
-          </dd>
-          <dd
-            :if={!@card.on_demand}
-            data-role="cadence-label"
-            class="truncate text-base-content/60"
-            title={@card.cadence_label}
-          >
-            {@card.cadence_label}
-          </dd>
-        </div>
-      </dl>
-    </section>
+            <.icon name="hero-clock" class="size-3 shrink-0" />
+            <span class="truncate">{@card.next_run}</span>
+          </span>
+        </AdminComponents.card_fact_value>
+      </:fact>
+      <:fact role="last-run">
+        <AdminComponents.card_fact_label>Last run</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_value class="tabular-nums">
+          {format_job_timestamp(@card.last_seen_at, @datetime_preferences)}
+        </AdminComponents.card_fact_value>
+      </:fact>
+      <:fact role="schedule">
+        <AdminComponents.card_fact_label>Schedule</AdminComponents.card_fact_label>
+        <AdminComponents.card_fact_value
+          :if={@card.on_demand}
+          data-role="cadence-label"
+          title={@card.cadence_label}
+        >
+          On demand
+        </AdminComponents.card_fact_value>
+        <AdminComponents.card_fact_value
+          :if={!@card.on_demand}
+          data-role="cadence-label"
+          title={@card.cadence_label}
+        >
+          {@card.cadence_label}
+        </AdminComponents.card_fact_value>
+      </:fact>
+    </AdminComponents.card_fact_strip>
     """
   end
 

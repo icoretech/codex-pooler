@@ -362,74 +362,77 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
           lifecycle_warning={@lifecycle_warning}
         />
       </div>
-      <footer
+      <AdminComponents.card_fact_strip
+        id={"upstream-account-#{@account.identity.id}-routing-readiness"}
         data-role="upstream-account-card-footer"
-        class="border-t border-base-300 bg-base-200/20 px-4 py-2.5"
       >
-        <dl
-          id={"upstream-account-#{@account.identity.id}-routing-readiness"}
-          class="grid min-w-0 grid-cols-3 divide-x divide-base-300/70 text-xs leading-5"
-        >
-          <div class="min-w-0 pr-3" data-role="upstream-routing-cell">
-            <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">
-              Routing
-            </dt>
-            <dd class="truncate text-base-content/60" title={@routing_readiness.reason}>
-              {@routing_readiness.label}
-            </dd>
-          </div>
-          <div class="group relative isolate min-w-0 pl-3" data-role="upstream-pool-count-cell">
-            <dt class={footer_panel_label_class(@panel_view == :pools)}>
-              <button
-                id={"upstream-account-#{@account.identity.id}-pools-panel-trigger"}
-                type="button"
-                class={footer_panel_trigger_class(@panel_view == :pools, :middle)}
-                phx-click="toggle_account_pools_panel"
-                phx-value-id={@account.identity.id}
-                aria-controls={"upstream-account-#{@account.identity.id}-pools-panel"}
-                aria-expanded={aria_bool(@panel_view == :pools)}
-                aria-label={pools_panel_trigger_label(@panel_view, @account.assignments)}
-              >
-                <span class="sr-only">Pools</span>
-              </button>
-              <span class="pointer-events-none relative z-30 block max-w-full truncate text-left uppercase">
-                Pools
-              </span>
-            </dt>
-            <dd class={footer_panel_value_class(@panel_view == :pools)}>
-              {assignment_count_label(@account.assignments)}
-            </dd>
-          </div>
-          <div class="group relative isolate min-w-0 pl-3" data-role="upstream-token-status-cell">
-            <dt class={footer_panel_label_class(@panel_view == :tokens)}>
-              <button
-                id={"upstream-account-#{@account.identity.id}-tokens-panel-trigger"}
-                type="button"
-                class={footer_panel_trigger_class(@panel_view == :tokens, :last)}
-                phx-click="toggle_account_tokens_panel"
-                phx-value-id={@account.identity.id}
-                aria-controls={"upstream-account-#{@account.identity.id}-tokens-panel"}
-                aria-describedby={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
-                aria-expanded={aria_bool(@panel_view == :tokens)}
-                aria-label={tokens_panel_trigger_label(@panel_view)}
-              >
-                <span class="sr-only">Tokens/5m</span>
-              </button>
-              <span class="pointer-events-none relative z-30 block max-w-full truncate text-left uppercase">
-                tokens/<span class="normal-case">5m</span>
-              </span>
-            </dt>
-            <dd
-              id={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
-              data-usage-state={token_burn_usage_state(@account)}
-              class={footer_panel_value_class(@panel_view == :tokens)}
-              title={token_burn_title(@account)}
+        <:fact role="upstream-routing-cell">
+          <AdminComponents.card_fact_label>Routing</AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_value title={@routing_readiness.reason}>
+            {@routing_readiness.label}
+          </AdminComponents.card_fact_value>
+        </:fact>
+        <:fact role="upstream-pool-count-cell" interactive>
+          <AdminComponents.card_fact_label
+            tone_class={footer_panel_label_tone(@panel_view == :pools)}
+            class="transition-colors"
+          >
+            <button
+              id={"upstream-account-#{@account.identity.id}-pools-panel-trigger"}
+              type="button"
+              class={footer_panel_trigger_class(@panel_view == :pools, :middle)}
+              phx-click="toggle_account_pools_panel"
+              phx-value-id={@account.identity.id}
+              aria-controls={"upstream-account-#{@account.identity.id}-pools-panel"}
+              aria-expanded={aria_bool(@panel_view == :pools)}
+              aria-label={pools_panel_trigger_label(@panel_view, @account.assignments)}
             >
-              {recent_token_count_label(@account)}
-            </dd>
-          </div>
-        </dl>
-      </footer>
+              <span class="sr-only">Pools</span>
+            </button>
+            <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
+              Pools
+            </span>
+          </AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_value
+            tone_class={footer_panel_value_tone(@panel_view == :pools)}
+            class="pointer-events-none relative z-30 transition-colors"
+          >
+            {assignment_count_label(@account.assignments)}
+          </AdminComponents.card_fact_value>
+        </:fact>
+        <:fact role="upstream-token-status-cell" interactive>
+          <AdminComponents.card_fact_label
+            tone_class={footer_panel_label_tone(@panel_view == :tokens)}
+            class="transition-colors"
+          >
+            <button
+              id={"upstream-account-#{@account.identity.id}-tokens-panel-trigger"}
+              type="button"
+              class={footer_panel_trigger_class(@panel_view == :tokens, :last)}
+              phx-click="toggle_account_tokens_panel"
+              phx-value-id={@account.identity.id}
+              aria-controls={"upstream-account-#{@account.identity.id}-tokens-panel"}
+              aria-describedby={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
+              aria-expanded={aria_bool(@panel_view == :tokens)}
+              aria-label={tokens_panel_trigger_label(@panel_view)}
+            >
+              <span class="sr-only">Tokens/5m</span>
+            </button>
+            <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
+              tokens/<span class="normal-case">5m</span>
+            </span>
+          </AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_value
+            id={"upstream-account-#{@account.identity.id}-tokens-5m-value"}
+            data-usage-state={token_burn_usage_state(@account)}
+            tone_class={footer_panel_value_tone(@panel_view == :tokens)}
+            class="pointer-events-none relative z-30 transition-colors"
+            title={token_burn_title(@account)}
+          >
+            {recent_token_count_label(@account)}
+          </AdminComponents.card_fact_value>
+        </:fact>
+      </AdminComponents.card_fact_strip>
       <SelectorContracts.refresh_status account={@account} />
       <SelectorContracts.selector_contracts account={@account} routing_readiness={@routing_readiness} />
     </article>
@@ -744,25 +747,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   # The open panel keeps its trigger cell in the hover tint, so the footer
   # shows which panel the card body is currently disclosing.
-  defp footer_panel_label_class(active?) do
-    [
-      "text-[0.62rem] font-semibold uppercase tracking-[0.08em] transition-colors",
-      if(active?,
-        do: "text-primary/70",
-        else: "text-base-content/35 group-hover:text-primary/70"
-      )
-    ]
-  end
+  defp footer_panel_label_tone(true), do: "text-primary/70"
+  defp footer_panel_label_tone(false), do: "text-base-content/35 group-hover:text-primary/70"
 
-  defp footer_panel_value_class(active?) do
-    [
-      "pointer-events-none relative z-30 truncate transition-colors",
-      if(active?,
-        do: "text-base-content/75",
-        else: "text-base-content/60 group-hover:text-base-content/75"
-      )
-    ]
-  end
+  defp footer_panel_value_tone(true), do: "text-base-content/75"
+
+  defp footer_panel_value_tone(false),
+    do: "text-base-content/60 group-hover:text-base-content/75"
 
   defp footer_panel_trigger_class(active?, position) do
     [
@@ -776,9 +767,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   end
 
   # The overlay must read as the footer cell block: an even ~4px breathing gap
-  # against the footer edges and the column dividers on every side. The cells
-  # carry asymmetric divider padding (pl-3 on the middle and last), so each
-  # position needs its own horizontal insets to end up symmetric.
+  # against the footer edges and the column dividers on every side. The last
+  # cell has no divider to its right, only the footer's own px-4, so it reaches
+  # past its box to land on the same 4px gap as the other edges.
   defp footer_panel_trigger_base_class do
     "absolute -inset-y-1.5 z-20 cursor-pointer rounded border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
   end

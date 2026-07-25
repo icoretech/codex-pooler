@@ -351,23 +351,23 @@ pools panel renders per-assignment route chevrons:
   [`route_path.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex),
   reused by the cockpit's routing lanes (§5.16).
 
-**Footer — metric blocks** (`data-role="upstream-account-card-footer"`,
-`border-t border-base-300 bg-base-200/20 px-4 py-2.5`): a three-column `dl`
-(`grid grid-cols-3 divide-x divide-base-300/70 text-xs`). The Pools and
-Tokens/5m cells double as the panel toggles: an absolutely positioned overlay
-`<button>` (`phx-click="toggle_account_pools_panel"` /
-`"toggle_account_tokens_panel"`, `aria-controls` + `aria-expanded`) sits under
-pointer-events-disabled text, and the open panel keeps its cell in the hover
-tint (`text-primary/70` label). Tokens/5m uses plain `{count} tokens` when
-usage accounting is complete, `{count}+ tokens` when reported usage is only a
-verified lower bound, and `Usage unavailable` when no token total can be
-claimed. Minimal cell:
+**Footer — routing readiness** (`data-role="upstream-account-card-footer"`):
+the shared card fact strip (§5.17) with three facts. The Pools and Tokens/5m
+cells are `interactive`: an absolutely positioned overlay `<button>`
+(`phx-click="toggle_account_pools_panel"` / `"toggle_account_tokens_panel"`,
+`aria-controls` + `aria-expanded`) sits under pointer-events-disabled text, and
+the open panel keeps its cell in the hover tint (`text-primary/70` label).
+Tokens/5m uses plain `{count} tokens` when usage accounting is complete,
+`{count}+ tokens` when reported usage is only a verified lower bound, and
+`Usage unavailable` when no token total can be claimed. Minimal cell:
 
 ```heex
-<div class="min-w-0 pr-3" data-role="upstream-routing-cell">
-  <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35">Routing</dt>
-  <dd class="truncate text-base-content/60" title={@routing_readiness.reason}>{@routing_readiness.label}</dd>
-</div>
+<:fact role="upstream-routing-cell">
+  <AdminComponents.card_fact_label>Routing</AdminComponents.card_fact_label>
+  <AdminComponents.card_fact_value title={@routing_readiness.reason}>
+    {@routing_readiness.label}
+  </AdminComponents.card_fact_value>
+</:fact>
 ```
 
 **States:** routing tone (success/warning/error stripe + footer label),
@@ -482,7 +482,7 @@ counter overlay, not a status chip.
 
 Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 
-- **Definition grid (`dl`)** — labeled facts in card footers (§5.4) and the
+- **Definition grid (`dl`)** — labeled facts in card footers (§5.17) and the
   request-log drawer rows. Drawer row (`detail_row/1` in
   [`detail_drawer.ex`](lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer.ex)):
 
@@ -499,9 +499,13 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
   inline share bar `h-1 rounded-full bg-primary/70`) and the stats leaderboard
   runner rows (`divide-y divide-base-300/70`, rank medallion, name+pool stack,
   right-aligned mono values).
-- **Zebra tables** — long homogeneous records (request logs, jobs, audit)
-  use `table table-zebra`, compacted by `admin-log-table.table-sm` padding in
-  `app.css`. Row detail lives in the drawer, not in ever-wider columns.
+- **Hairline tables** — long homogeneous records (request logs, jobs, audit)
+  use daisyUI `table` with its default row hairlines and
+  `hover:bg-base-200/80`; request logs and the jobs explorer additionally
+  compact cell padding through `admin-log-table.table-sm` in `app.css`. There
+  is no `table-zebra` in the app — the only striping is the Observatory
+  outcomes table (`nth-child(odd)` in `app.css`) and the pool serving-modes
+  grid (`even:`). Row detail lives in the drawer, not in ever-wider columns.
 
 ### 5.9 Plan badge — all tones
 
@@ -666,7 +670,18 @@ verified live as the orange "Pro" / green "Free" pills.
 - **`empty_state/1`:** dashed-border `rounded-box` panel, icon at
   `text-base-content/40`, title + optional description + actions, all
   centered. The chart-free variant (`pool-activity-empty-state` in `app.css`)
-  is the same idea for plot areas.
+  is the same idea for plot areas. Use it when the **whole surface** has no
+  records — it replaces the list, table, or card body.
+- **`table_empty_row/1`:** the in-table counterpart. First child of the
+  `tbody`, `hidden only:table-row`, one `td` spanning every column at
+  `py-8 text-center text-sm text-base-content/60`. Use it when the column
+  header should stay visible (audit logs, operators) instead of the table
+  being swapped for a block. Never hand-roll the `colspan` row.
+- **Compact lists** — a list inside a panel, dialog, or card body that is too
+  small for a dashed block states its emptiness in one muted sentence
+  (`text-xs`/`text-sm text-base-content/60`), e.g. the pool assignment picker
+  and the account tokens panel. Every list still says something when empty;
+  a header with nothing under it is a bug.
 - **`extended_notice/1`:** daisyUI `alert alert-{info|success|warning|error}
   items-start` with icon, bold title, and body; `role="status"` by default.
 - **`diagnostic_popover/1`:** hover/focus dropdown for warnings that need
@@ -750,6 +765,48 @@ verified live as the orange "Pro" / green "Free" pills.
   never repeated); machine codes appear only inside evidence contexts
   (error breakdown, event subtitles); no raw UUIDs in prose — deep links
   carry them instead.
+
+### 5.17 Card fact strip (shared card footer)
+
+- **Source:** `card_fact_strip/1`, `card_fact_label/1`, `card_fact_value/1` in
+  [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex)
+- **Purpose:** the band of two to four labeled facts that closes a card. This
+  is the only sanctioned way to render a card footer strip; the upstream
+  account card (§5.4) and the jobs worker card both use it.
+- **API:** strip attrs `id` (goes on the facts `dl`), `facts_role`
+  (`data-role` for the `dl`), `class`, and a global `rest` that lands on the
+  `footer` band; slot `fact` with `role` (cell `data-role`), `class`, and
+  `interactive`. Label and value take `tone_class` (replaces the resting
+  colour) and `class` (adds to the base).
+- **Anatomy:** band `border-t border-base-300 bg-base-200/20 px-4 py-2.5`;
+  facts `dl` `grid min-w-0 divide-x divide-base-300/70 text-xs leading-5` with
+  the column count derived from the number of facts. Divider padding is
+  positional and owned by the component — first cell `pr-3`, middle cells
+  `px-3`, last cell `pl-3`. Labels are the §3 micro label
+  (`text-[0.62rem] font-semibold uppercase tracking-[0.08em]`,
+  `text-base-content/35` at rest); values truncate at `text-base-content/60`.
+- **Interactive cells:** `interactive` makes the cell
+  `group relative isolate` so the slot can host an absolutely positioned
+  overlay `button` (panel toggles on the account card). Keep the visible label
+  and value `pointer-events-none relative z-30` so the overlay stays clickable
+  underneath them, and swap `tone_class` on both while the panel is open.
+
+```heex
+<AdminComponents.card_fact_strip
+  facts_role="worker-schedule-grid"
+  data-role="worker-schedule-facts"
+  data-density="compact"
+>
+  <:fact role="next-run-group">
+    <AdminComponents.card_fact_label>Next run</AdminComponents.card_fact_label>
+    <AdminComponents.card_fact_value class="tabular-nums">{@card.next_run}</AdminComponents.card_fact_value>
+  </:fact>
+</AdminComponents.card_fact_strip>
+```
+
+- **Rules:** never re-declare the band, grid, divider padding, or micro-label
+  classes at a call site; add a fact rather than a second strip; numeric values
+  carry `tabular-nums`.
 
 ## 6. Components — API Key Observatory extension
 
