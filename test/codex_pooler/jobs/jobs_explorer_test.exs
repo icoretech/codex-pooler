@@ -84,7 +84,7 @@ defmodule CodexPooler.Jobs.JobsExplorerTest do
       assert completed_id == completed_job.id
     end
 
-    test "filters by state, attention, worker, queue, and safe target ids" do
+    test "filters by state, attention, worker, and safe target ids" do
       now = ~U[2026-06-02 10:30:00Z]
       pool = pool_fixture()
       %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
@@ -131,8 +131,6 @@ defmodule CodexPooler.Jobs.JobsExplorerTest do
       assert_ids(filters(%{"worker" => worker_name(TokenRefreshWorker)}), [retry_job.id],
         now: now
       )
-
-      assert_ids(filters(%{"queue" => "critical"}), [api_key_job.id], now: now)
 
       assert_ids(
         filters(%{"target_kind" => "assignment", "target_id" => assignment.id}),

@@ -44,16 +44,11 @@ defmodule CodexPooler.Jobs.ReadModel.Explorer do
         Query.filter_option_values(
           Query.configured_worker_values(),
           Query.distinct_job_field_values(:worker)
-        ),
-      queues:
-        Query.filter_option_values(
-          Query.configured_queue_values(),
-          Query.distinct_job_field_values(:queue)
         )
     }
   end
 
-  def empty_filter_values, do: %{workers: [], queues: []}
+  def empty_filter_values, do: %{workers: []}
 
   def empty_page(filters) do
     limit = @explorer_page_size
@@ -72,7 +67,6 @@ defmodule CodexPooler.Jobs.ReadModel.Explorer do
     |> maybe_filter_completed_visibility(filters)
     |> maybe_filter_state(filters.state)
     |> Query.maybe_filter_explorer_worker(filters.worker)
-    |> Query.maybe_filter_explorer_queue(filters.queue)
     |> Query.maybe_filter_explorer_target(filters.target_kind, filters.target_id)
   end
 

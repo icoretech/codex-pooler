@@ -595,19 +595,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     assert has_element?(view, "#filters_worker[value='']")
 
-    assert has_element?(view, "#job-queue-filter [data-role='queue-filter-trigger']", "Any queue")
-
-    assert has_element?(
-             view,
-             "#job-queue-filter [data-role='queue-filter-option'][data-queue='jobs']"
-           )
-
-    assert has_element?(
-             view,
-             "#job-queue-filter [data-role='queue-filter-option'][data-queue='critical']"
-           )
-
-    assert has_element?(view, "#filters_queue[value='']")
+    refute has_element?(view, "#job-queue-filter")
 
     assert has_element?(
              view,
@@ -652,7 +640,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
         "attention" => "retry_pressure",
         "state" => "retryable",
         "worker" => worker,
-        "queue" => "jobs",
         "target_kind" => "pool",
         "target_id" => pool.id,
         "show_completed" => "true",
@@ -666,7 +653,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     assert query == %{
              "attention" => "retry_pressure",
-             "queue" => "jobs",
              "show_completed" => "true",
              "state" => "retryable",
              "target_id" => pool.id,
@@ -676,7 +662,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     assert has_element?(view, "#filters_attention[value='retry_pressure']")
     assert has_element?(view, "#filters_worker[value='#{worker}']")
-    assert has_element?(view, "#filters_queue[value='jobs']")
     assert has_element?(view, "#filters_target_kind[value='pool']")
     assert has_element?(view, "#filters_target_id[value='#{pool.id}']")
     assert has_element?(view, "#filters_show_completed[value='true']")
@@ -692,18 +677,12 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     {:ok, view, _html} =
       live(
         conn,
-        ~p"/admin/jobs?attention=old_attention&page=0&queue=bad/queue&show_completed=maybe&state=completed&target_id=not-a-uuid&target_kind=pool&worker=bad worker"
+        ~p"/admin/jobs?attention=old_attention&page=0&show_completed=maybe&state=completed&target_id=not-a-uuid&target_kind=pool&worker=bad worker"
       )
 
     assert has_element?(view, "#job-filter-errors", "Some filters were ignored")
     assert has_element?(view, "#job-filter-errors", "Attention filter is not supported")
     assert has_element?(view, "#job-filter-errors", "Page must be a positive integer")
-
-    assert has_element?(
-             view,
-             "#job-filter-errors",
-             "Queue filter contains unsupported characters"
-           )
 
     assert has_element?(view, "#job-filter-errors", "Show completed must be true or false")
     assert has_element?(view, "#job-filter-errors", "Completed jobs require show_completed=true")
@@ -733,8 +712,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
              "Any worker"
            )
 
-    assert has_element?(view, "#filters_queue[value='']")
-    assert has_element?(view, "#job-queue-filter [data-role='queue-filter-trigger']", "Any queue")
+    refute has_element?(view, "#job-queue-filter")
     assert has_element?(view, "#filters_target_kind[value='']")
     assert has_element?(view, "#filters_target_id[value='']")
     assert has_element?(view, "#filters_page[value='1']")
@@ -744,7 +722,6 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     assert state.socket.assigns.filters.attention == nil
     assert state.socket.assigns.filters.state == nil
     assert state.socket.assigns.filters.worker == nil
-    assert state.socket.assigns.filters.queue == nil
     assert state.socket.assigns.filters.target_kind == nil
     assert state.socket.assigns.filters.target_id == nil
     assert state.socket.assigns.filters.page == 1

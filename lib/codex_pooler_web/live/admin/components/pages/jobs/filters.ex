@@ -79,16 +79,16 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
         options={@filter_options.worker}
       />
       <.job_filter_dropdown
-        id="job-queue-filter"
-        label="Queue"
-        field_name="queue"
-        hidden_id="filters_queue"
-        role="queue-filter"
-        event="select_queue_filter"
-        value_attr={:queue}
-        selected_value={@filters.queue || ""}
-        selected={JobFilterForm.selected_queue_option(@filter_options.queue, @filters.queue)}
-        options={@filter_options.queue}
+        id="job-target-kind-filter"
+        label="Target kind"
+        field_name="target_kind"
+        hidden_id="filters_target_kind"
+        role="target-kind-filter"
+        event="select_target_kind_filter"
+        value_attr={:target_kind}
+        selected_value={@filters.target_kind || ""}
+        selected={selected_target_kind_option(@target_kind_options, @filters.target_kind)}
+        options={@target_kind_options}
       />
       <.job_filter_dropdown
         id="job-show-completed-filter"
@@ -104,18 +104,6 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
       />
 
       <:advanced>
-        <.job_filter_dropdown
-          id="job-target-kind-filter"
-          label="Target kind"
-          field_name="target_kind"
-          hidden_id="filters_target_kind"
-          role="target-kind-filter"
-          event="select_target_kind_filter"
-          value_attr={:target_kind}
-          selected_value={@filters.target_kind || ""}
-          selected={selected_target_kind_option(@target_kind_options, @filters.target_kind)}
-          options={@target_kind_options}
-        />
         <.target_id_filter value={@filters.target_id || ""} />
       </:advanced>
     </AdminComponents.filter_form>
@@ -186,14 +174,12 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Filters do
               phx-value-attention={filter_option_value(@value_attr, :attention, option)}
               phx-value-state={filter_option_value(@value_attr, :state, option)}
               phx-value-worker={filter_option_value(@value_attr, :worker, option)}
-              phx-value-queue={filter_option_value(@value_attr, :queue, option)}
               phx-value-target-kind={filter_option_value(@value_attr, :target_kind, option)}
               phx-value-show-completed={filter_option_value(@value_attr, :show_completed, option)}
               data-role={"#{@role}-option"}
               data-attention={filter_option_value(@value_attr, :attention, option)}
               data-state={filter_option_value(@value_attr, :state, option)}
               data-worker={filter_option_value(@value_attr, :worker, option)}
-              data-queue={filter_option_value(@value_attr, :queue, option)}
               data-target-kind={filter_option_value(@value_attr, :target_kind, option)}
               data-show-completed={filter_option_value(@value_attr, :show_completed, option)}
               class={[

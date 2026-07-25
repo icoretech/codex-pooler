@@ -12,7 +12,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterFormTest do
     params = %{
       "state" => " retryable ",
       "worker" => " CodexPooler.Jobs.TokenRefreshWorker ",
-      "queue" => " jobs ",
       "attention" => "active_failure",
       "target_kind" => "upstream_identity",
       "target_id" => " #{@identity_id} ",
@@ -26,7 +25,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterFormTest do
     assert filters == %{
              state: "retryable",
              worker: "CodexPooler.Jobs.TokenRefreshWorker",
-             queue: "jobs",
              attention: "active_failure",
              target_kind: "upstream_identity",
              target_id: @identity_id,
@@ -38,7 +36,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterFormTest do
     assert form_values == %{
              "state" => "retryable",
              "worker" => "CodexPooler.Jobs.TokenRefreshWorker",
-             "queue" => "jobs",
              "attention" => "active_failure",
              "target_kind" => "upstream_identity",
              "target_id" => @identity_id,
@@ -51,7 +48,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterFormTest do
              "attention" => "active_failure",
              "job_id" => "42",
              "page" => "3",
-             "queue" => "jobs",
              "show_completed" => "true",
              "state" => "retryable",
              "target_id" => @identity_id,

@@ -80,10 +80,6 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
     {:noreply, patch_filter(socket, "worker", worker)}
   end
 
-  def handle_event("select_queue_filter", %{"queue" => queue}, socket) do
-    {:noreply, patch_filter(socket, "queue", queue)}
-  end
-
   def handle_event("select_target_kind_filter", %{"target-kind" => target_kind}, socket) do
     socket =
       if target_kind == "" do

@@ -234,23 +234,6 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
     |> normalize_worker_names()
   end
 
-  def configured_queue_values do
-    :codex_pooler
-    |> Application.get_env(Oban, [])
-    |> Keyword.get(:queues, [])
-    |> case do
-      queues when is_list(queues) -> Enum.map(queues, &queue_name/1)
-      _queues_disabled -> []
-    end
-    |> Enum.filter(&is_binary/1)
-  end
-
-  def queue_name({queue, _limit}) when is_atom(queue), do: Atom.to_string(queue)
-  def queue_name({queue, _limit}) when is_binary(queue), do: queue
-  def queue_name(queue) when is_atom(queue), do: Atom.to_string(queue)
-  def queue_name(queue) when is_binary(queue), do: queue
-  def queue_name(_queue), do: nil
-
   def filter_option_values(configured_values, persisted_values) do
     [configured_values, persisted_values]
     |> List.flatten()
@@ -258,7 +241,7 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
     |> Enum.sort()
   end
 
-  def distinct_job_field_values(field) when field in [:worker, :queue] do
+  def distinct_job_field_values(field) when field in [:worker] do
     Repo.all(
       from job in Oban.Job,
         where: not is_nil(field(job, ^field)) and field(job, ^field) != "",
@@ -272,7 +255,6 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
     %{
       state: filter_value(filters, :state),
       worker: filter_value(filters, :worker),
-      queue: filter_value(filters, :queue),
       attention: filter_value(filters, :attention),
       target_kind: filter_value(filters, :target_kind),
       target_id: filter_value(filters, :target_id),
@@ -316,12 +298,6 @@ defmodule CodexPooler.Jobs.ReadModel.Query do
 
   def maybe_filter_explorer_worker(queryable, worker) do
     from job in queryable, where: job.worker == ^worker
-  end
-
-  def maybe_filter_explorer_queue(queryable, nil), do: queryable
-
-  def maybe_filter_explorer_queue(queryable, queue) do
-    from job in queryable, where: job.queue == ^queue
   end
 
   def maybe_filter_explorer_target(queryable, nil, _target_id), do: queryable

@@ -44,7 +44,6 @@ defmodule CodexPooler.Jobs.ReadModel.Overview do
   defp apply_filters(queryable, filters) do
     queryable
     |> Query.maybe_filter_explorer_worker(filters.worker)
-    |> Query.maybe_filter_explorer_queue(filters.queue)
     |> Query.maybe_filter_explorer_target(filters.target_kind, filters.target_id)
     |> Query.exclude_resolved_failure_jobs_query()
   end

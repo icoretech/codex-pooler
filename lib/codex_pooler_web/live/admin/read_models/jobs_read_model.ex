@@ -11,7 +11,6 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
   @explorer_filter_keys [
     :state,
     :worker,
-    :queue,
     :attention,
     :target_kind,
     :target_id,
@@ -24,8 +23,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
           required(:state) => [JobFilterForm.option()],
           required(:attention) => [JobFilterForm.option()],
           required(:target_kind) => [JobFilterForm.option()],
-          required(:worker) => [JobFilterForm.option()],
-          required(:queue) => [JobFilterForm.option()]
+          required(:worker) => [JobFilterForm.option()]
         }
   @type load_opts :: keyword() | map()
   @type page_state :: %{
@@ -136,8 +134,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModel do
       state: JobFilterForm.state_options(),
       attention: JobFilterForm.attention_options(),
       target_kind: JobFilterForm.target_kind_options(),
-      worker: JobFilterForm.worker_options(filter_values.workers, filters.worker),
-      queue: JobFilterForm.queue_options(filter_values.queues, filters.queue)
+      worker: JobFilterForm.worker_options(filter_values.workers, filters.worker)
     }
   end
 end

@@ -7,15 +7,13 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   @attention_options ~w(active_failure retry_pressure stuck_executing backlog_pressure cancelled healthy_context executing available scheduled suspended unknown_state)
   @target_kind_options ~w(assignment upstream_identity pool api_key rollup_date system)
   @uuid_target_kinds ~w(assignment upstream_identity pool api_key)
-  @filter_keys ~w(state worker queue attention target_kind target_id page show_completed job_id)
+  @filter_keys ~w(state worker attention target_kind target_id page show_completed job_id)
   @safe_worker_pattern ~r/\A[A-Za-z0-9_.]+\z/
-  @safe_queue_pattern ~r/\A[A-Za-z0-9_-]+\z/
 
   @type filter_error :: %{required(:field) => atom(), required(:message) => String.t()}
   @type filters :: %{
           required(:state) => String.t() | nil,
           required(:worker) => String.t() | nil,
-          required(:queue) => String.t() | nil,
           required(:attention) => String.t() | nil,
           required(:target_kind) => String.t() | nil,
           required(:target_id) => String.t() | nil,
@@ -36,7 +34,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     {show_completed?, show_completed_error} = parse_show_completed(raw_values["show_completed"])
     {state, state_error} = parse_state(raw_values["state"], show_completed?)
     {worker, worker_error} = parse_safe_text(raw_values["worker"], :worker, @safe_worker_pattern)
-    {queue, queue_error} = parse_safe_text(raw_values["queue"], :queue, @safe_queue_pattern)
     {attention, attention_error} = parse_attention(raw_values["attention"])
     {target_kind, target_id, target_errors} = parse_target(raw_values)
     {page, page_error} = parse_positive_integer(raw_values["page"], :page, default: 1)
@@ -45,7 +42,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     filters = %{
       state: state,
       worker: worker,
-      queue: queue,
       attention: attention,
       target_kind: target_kind,
       target_id: target_id,
@@ -59,7 +55,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
         show_completed_error,
         state_error,
         worker_error,
-        queue_error,
         attention_error,
         page_error,
         job_id_error
@@ -77,7 +72,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     %{}
     |> maybe_put_param("state", filters.state)
     |> maybe_put_param("worker", filters.worker)
-    |> maybe_put_param("queue", filters.queue)
     |> maybe_put_param("attention", filters.attention)
     |> maybe_put_param("target_kind", filters.target_kind)
     |> maybe_put_param("target_id", filters.target_id)
@@ -125,13 +119,18 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
 
   @spec worker_options([String.t()], String.t() | nil) :: [option()]
   def worker_options(workers, selected_worker \\ nil) do
-    [any_worker_option() | dynamic_options(workers, selected_worker, "hero-cube")]
+    options =
+      workers
+      |> dynamic_options(selected_worker, "hero-cube")
+      |> Enum.map(&%{&1 | label: worker_option_label(&1.label)})
+
+    [any_worker_option() | options]
   end
 
-  @spec queue_options([String.t()], String.t() | nil) :: [option()]
-  def queue_options(queues, selected_queue \\ nil) do
-    [any_queue_option() | dynamic_options(queues, selected_queue, "hero-queue-list")]
-  end
+  # Every worker shares the CodexPooler.Jobs. namespace, so printing it in the
+  # option list costs width without telling the operator anything. The value
+  # keeps the full module, which is what the filter matches on.
+  defp worker_option_label(worker), do: String.replace_prefix(worker, "CodexPooler.Jobs.", "")
 
   @spec selected_state_option(String.t() | nil) :: option()
   def selected_state_option(state),
@@ -149,10 +148,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   def selected_worker_option(options, worker),
     do: selected_option(options, worker, any_worker_option())
 
-  @spec selected_queue_option([option()], String.t() | nil) :: option()
-  def selected_queue_option(options, queue),
-    do: selected_option(options, queue, any_queue_option())
-
   @spec blank?(term()) :: boolean()
   def blank?(nil), do: true
   def blank?(value), do: String.trim(to_string(value)) == ""
@@ -168,7 +163,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
     %{
       "state" => filters.state || raw_values["state"],
       "worker" => filters.worker || raw_values["worker"],
-      "queue" => filters.queue || raw_values["queue"],
       "attention" => filters.attention || raw_values["attention"],
       "target_kind" => filters.target_kind || raw_values["target_kind"],
       "target_id" => filters.target_id || raw_values["target_id"],
@@ -345,7 +339,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp any_state_option, do: [%{label: "Any state", value: "", icon: "hero-queue-list"}]
   defp any_attention_option, do: %{label: "Any attention", value: "", icon: "hero-sparkles"}
   defp any_worker_option, do: %{label: "Any worker", value: "", icon: "hero-cube"}
-  defp any_queue_option, do: %{label: "Any queue", value: "", icon: "hero-queue-list"}
 
   defp state_option(state), do: %{label: humanize(state), value: state, icon: "hero-queue-list"}
 
@@ -365,7 +358,6 @@ defmodule CodexPoolerWeb.Admin.JobFilterForm do
   defp target_kind_icon("system"), do: "hero-cog-6-tooth"
 
   defp safe_text_message(:worker), do: "Worker filter contains unsupported characters"
-  defp safe_text_message(:queue), do: "Queue filter contains unsupported characters"
 
   defp truthy?(true), do: true
   defp truthy?(value) when is_binary(value), do: value in ["true", "1", "on", "yes"]

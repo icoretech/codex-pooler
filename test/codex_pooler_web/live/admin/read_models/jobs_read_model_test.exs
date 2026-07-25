@@ -65,7 +65,6 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
       JobsReadModel.load(owner_scope,
         params: %{
           "worker" => worker_name(TokenRefreshWorker),
-          "queue" => "jobs",
           "job_id" => Integer.to_string(selected_job.id)
         },
         now: now
@@ -86,7 +85,6 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     assert overview.total == 1
     assert explorer == %{items: [projection.selected_job], total: 1, limit: 20, offset: 0}
     assert filters.worker == worker_name(TokenRefreshWorker)
-    assert filters.queue == "jobs"
     assert filters.job_id == selected_job.id
     assert form_values["job_id"] == Integer.to_string(selected_job.id)
 
@@ -95,8 +93,6 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     assert worker_name(RuntimeStateCleanupWorker) in worker_option_values
     assert worker_name(TokenRefreshEnqueueWorker) in worker_option_values
     assert worker_name(TokenRefreshWorker) in worker_option_values
-
-    assert filter_options.queue |> Enum.map(& &1.value) == ["", "critical", "jobs"]
 
     failure_summary = %{title: "Attempt 1", message: "stacktrace-with-[redacted]"}
 
