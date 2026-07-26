@@ -1316,7 +1316,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#{primary_selector}-route[role='meter'][aria-valuemax='3'][aria-valuenow='3'][aria-label='Status Primary route path: Assignment active, Health active, Quota known'][aria-valuetext='Status Primary route path: Assignment active, Health active, Quota known']"
+             "#{primary_selector}-route[role='meter'][aria-valuemax='4'][aria-valuenow='4'][aria-label='Status Primary route path: Assignment active, Health active, Quota known, Circuit clear'][aria-valuetext='Status Primary route path: Assignment active, Health active, Quota known, Circuit clear']"
            )
 
     assert has_element?(
@@ -1328,13 +1328,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#{primary_selector}-route-health[title='Health active']", "Health")
     assert has_element?(view, "#{primary_selector}-route-quota[title='Quota known']", "Quota")
 
+    assert has_element?(
+             view,
+             "#{primary_selector}-route-circuit[title='Circuit clear']",
+             "Circuit"
+           )
+
     assert has_element?(view, disabled_selector, "Disabled failover assignment")
     assert has_element?(view, disabled_selector, "Status Secondary")
     assert has_element?(view, "#{disabled_selector}-pool-link[href='/admin/pools']")
 
     assert has_element?(
              view,
-             "#{disabled_selector}-route[role='meter'][aria-valuemax='3'][aria-valuenow='0'][aria-label='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked'][aria-valuetext='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked']"
+             "#{disabled_selector}-route[role='meter'][aria-valuemax='4'][aria-valuenow='1'][aria-label='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked, Circuit clear'][aria-valuetext='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked, Circuit clear']"
            )
 
     assert has_element?(
@@ -1344,6 +1350,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(view, "#{disabled_selector}-route-health[title='Health disabled']")
     assert has_element?(view, "#{disabled_selector}-route-quota[title='Priming blocked']")
+
+    assert has_element?(
+             view,
+             "#{disabled_selector}-route-circuit[title='Circuit clear']",
+             "Circuit"
+           )
 
     paused = status_fixture!(scope, "paused", %{identity_status: "paused"})
     {:ok, paused_view, _html} = live(conn, ~p"/admin/upstreams/#{paused.identity.id}")
@@ -3184,12 +3196,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-assignment-#{active_assignment.id}-route[aria-valuenow='2']"
+             "#upstream-assignment-#{active_assignment.id}-route[aria-valuenow='3'][aria-valuemax='4']"
            )
 
     assert has_element?(
              view,
-             "#upstream-assignment-#{disabled_assignment.id}-route[aria-valuenow='0']"
+             "#upstream-assignment-#{disabled_assignment.id}-route[aria-valuenow='1'][aria-valuemax='4']"
            )
 
     assert has_element?(view, "#request-health-chart")

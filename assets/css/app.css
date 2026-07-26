@@ -645,8 +645,8 @@ body {
   padding: 0.85rem 1rem 1rem;
 }
 
-/* Pool route path on upstream cards: the three gates a request crosses
-   (Assignment → Health → Quota) render as chevron-linked segments so the
+/* Pool route path on upstream cards: the four gates a request crosses
+   (Assignment → Health → Quota → Circuit) render as chevron-linked segments so the
    left-to-right flow is part of the drawing. Tone classes come from the
    template; the clip-path notches join adjacent segments. */
 .route-chevron-flow {

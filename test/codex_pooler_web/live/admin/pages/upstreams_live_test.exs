@@ -1781,7 +1781,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route'][role='meter'][aria-valuemin='0'][aria-valuemax='3'][aria-valuenow='2'][aria-label='Saved Reset Card route path: Assignment active, Health active, Priming pending'][aria-valuetext='Saved Reset Card route path: Assignment active, Health active, Priming pending']"
+             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route'][role='meter'][aria-valuemin='0'][aria-valuemax='4'][aria-valuenow='3'][aria-label='Saved Reset Card route path: Assignment active, Health active, Priming pending, Circuit clear'][aria-valuetext='Saved Reset Card route path: Assignment active, Health active, Priming pending, Circuit clear']"
            )
 
     assert has_element?(
@@ -1811,6 +1811,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route-segment'][title='Priming pending']",
              "Quota"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route-segment'][id$='-route-circuit'][title='Circuit clear']",
+             "Circuit"
            )
 
     refute has_element?(
