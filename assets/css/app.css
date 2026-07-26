@@ -680,6 +680,7 @@ body {
 
 .route-chevron:first-child {
   padding-left: 0.25rem;
+  letter-spacing: 0;
   clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
 }
 
