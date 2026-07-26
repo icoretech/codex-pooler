@@ -96,6 +96,5 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
     Map.put(metadata, @circuit_probe_in_flight_key, max(count, 0))
   end
 
-  def probe_metadata(_state, count),
-    do: %{@circuit_probe_in_flight_key => max(count, 0)}
+  def probe_metadata(_state, count), do: %{@circuit_probe_in_flight_key => max(count, 0)}
 end

@@ -15,8 +15,8 @@ defmodule CodexPooler.Jobs.AlertEvaluatorJobTest do
     AlertRuleChannel
   }
 
-  alias CodexPooler.Jobs
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Jobs
 
   alias CodexPooler.Jobs.{
     AlertDeliveryWorker,

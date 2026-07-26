@@ -131,10 +131,12 @@ defmodule CodexPooler.Alerts.Evaluation.CircuitTerm do
 
     blocked_lanes =
       circuits
-      |> Enum.filter(&(&1.pool_upstream_assignment_id == assignment_id))
-      |> Enum.filter(&route_class_in_scope?(&1, context.route_class))
-      |> Enum.filter(&circuit_model_served?(&1, served_models))
-      |> Enum.filter(&blocked_lane?(&1, settings, context.circuit_observed_at, recency_seconds))
+      |> Enum.filter(fn circuit ->
+        circuit.pool_upstream_assignment_id == assignment_id and
+          route_class_in_scope?(circuit, context.route_class) and
+          circuit_model_served?(circuit, served_models) and
+          blocked_lane?(circuit, settings, context.circuit_observed_at, recency_seconds)
+      end)
       |> Enum.map(&blocked_lane(&1, settings, context.circuit_observed_at))
 
     blocked_models =
