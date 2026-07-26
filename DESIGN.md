@@ -342,14 +342,44 @@ opacity-0 pointer-events-none` plus `aria-hidden` and `inert`; the visible one
 saved-reset meter (§5.6); tokens panel holds a model leaderboard list (§5.8);
 pools panel renders per-assignment route chevrons:
 
-- `data-role="upstream-account-pool-route"` is a `role="meter"` with
-  `aria-valuemin/max/now` = ready gate count and a spoken label; each
-  `.route-chevron` segment (Assignment → Health → Quota) carries tone classes
+- The route path is always four gates in this order: **Assignment → Health →
+  Quota → Circuit**. The compact account-card segment shortens only the first
+  visible label to **Assign**; cockpit segments, the meter's accessible name,
+  and every spoken detail keep **Assignment**. `Circuit` is a fourth gate, not
+  a replacement for quota or a broad account-availability claim.
+- `data-role="upstream-account-pool-route"` is a `role="meter"` with stable
+  route and segment ids, `data-role="upstream-account-pool-route-segment"`,
+  `aria-valuemin="0"`, `aria-valuemax={RoutePath.segment_count()}`,
+  `aria-valuenow`, and matching `aria-label` / `aria-valuetext` spoken detail.
+  The count is always out of four. A disabled assignment with no circuit rows
+  can intentionally read **1/4**: its Circuit gate is clear because no circuit
+  protection is active, while its Assignment, Health, and Quota gates retain
+  their own state. Each `.route-chevron` segment carries tone classes
   `bg-success/80 text-success-content` (or warning/error/neutral) and clips
-  into chevrons via `clip-path` (CSS in `app.css`). The gate model lives in
-  the shared
+  into chevrons via `clip-path` (CSS in `app.css`). The gate model lives in the shared
   [`route_path.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex),
   reused by the cockpit's routing lanes (§5.16).
+- Circuit presentation is a load/refresh-time snapshot. Persisted circuit
+  lifecycle is retained across replicas, but current blocking is determined
+  only by `CircuitHealth.blocked?/3` and its `blocked_reason/3`; a persisted
+  active lifecycle row is not automatically current blocking. A blocked lane
+  is not ready. A probe-eligible active lane, or closed lane with recent
+  eligible evidence, is recovering and currently ready. Recent evidence is
+  never current blocking. Circuit rows are limited to current served models:
+  retired or non-serving models are ignored before classification or recovery.
+  For each exact lane, the latest row is selected by `updated_at DESC`, then
+  `created_at DESC`, before history and recovery evidence are considered. The
+  inclusive recovery presentation window is
+  `clamp(10 * circuit_open_seconds, 300, 3600)`.
+- The snapshot updates on page load/refresh only: there are no timers, polling,
+  circuit PubSub subscriptions, or self-updating cooldowns. Circuit evidence
+  can change visible account-verdict copy and tone, but it does not change the
+  broad `routing_ready_now?` meaning or existing KPI meanings. The account
+  circuit aggregate includes only independently active, health-active, eligible
+  assignments; every assignment chevron still shows its own four-gate state.
+  Observed circuit rows cannot prove complete availability and must never infer
+  a `total blackout`. Telemetry, alerts, and dashboards already exist and are
+  not changed by this presentation contract.
 
 **Footer — routing readiness** (`data-role="upstream-account-card-footer"`):
 the shared card fact strip (§5.17) with three facts. The Pools and Tokens/5m
@@ -748,8 +778,13 @@ verified live as the orange "Pro" / green "Free" pills.
 - **Routing lanes** (`#upstream-assignments`): a readiness verdict strip
   (status chip + reason + a calm 24h failure note — a share of failed
   upstream calls is expected and only escalates past the domain threshold),
-  then one row per Pool assignment: pool link, §5.4 route-chevron gate meter
-  (via `RoutePath`), and the lane's share of 7-day successes.
+  then one row per Pool assignment: pool link, §5.4 four-gate route-chevron
+  meter (via `RoutePath`), and the lane's share of 7-day successes. The stable
+  `upstream-assignment-<assignment>-route` id and
+  `data-role="upstream-assignment-route"` / `data-role="upstream-assignment-route-segment"`
+  selectors expose the same `role="meter"`, dynamic four-gate maximum, current
+  ready count, and full `Assignment → Health → Quota → Circuit` spoken text as
+  the card. Cockpit labels never use the compact `Assign` form.
 - **Quota & banked resets** (`#upstream-quota`): account-level window rows
   (reusing the index card's `quota_limit_row`, §5.5), the saved-reset meter
   (§5.6), expiration table, and the auto-redeem policy form behind a
@@ -1035,6 +1070,11 @@ top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
   value attributes; charts have `sr-only` data mirrors and `aria-live` mode
   announcements; toggles expose `aria-pressed`/`aria-expanded`/
   `aria-controls`; hidden panels are `aria-hidden` **and** `inert`.
+- The upstream route meters preserve stable ids and `data-role` selectors on
+  both the route and each gate, expose their dynamic four-gate count through
+  `aria-valuemin`, `aria-valuemax`, and `aria-valuenow`, and use the same full
+  `aria-label` / `aria-valuetext` detail on both surfaces. Compact visual copy
+  may say `Assign`; accessibility text says `Assignment`.
 - Reduced motion disables shine, transitions, and disclosure animations.
 - Icons are decorative (`aria-hidden` spans) unless paired with `sr-only`
   text.
