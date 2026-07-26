@@ -10,6 +10,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Catalog.Sync.PreservedSources
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.InstanceSettings
   alias CodexPooler.Pools.{OperatorPoolAssignment, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -33,6 +34,11 @@ defmodule CodexPooler.Dev.Seeds.Full do
           required(:password) => String.t()
         }) :: map()
   def run(%{owner: owner, operators: operators, password: password}) do
+    {:ok, _settings} =
+      InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+        "development" => %{"account_reconciliation_paused" => true}
+      })
+
     reset_full_fake_data!()
 
     pool_active = seed_pool!(owner, %{slug: "dev-primary", name: "Dev Primary Pool"})

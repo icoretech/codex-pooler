@@ -16,6 +16,9 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
+  alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.Jobs.{AccountReconciliationEnqueueWorker, AccountReconciliationWorker}
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Quotas.Evidence
@@ -25,7 +28,6 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
-  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath
 
   import CodexPooler.AccountsFixtures
@@ -722,65 +724,109 @@ defmodule CodexPooler.Dev.SeedsTest do
     end
   end
 
-  test "full seed keeps circuit-demo route counts stable after quota freshness expires" do
-    Seeds.full()
-    Seeds.full()
+  test "full seed preserves read-model circuit-demo route counts when scheduled reconciliation encounters stale quota evidence" do
+    previous_dev_features_enabled = Application.get_env(:codex_pooler, :dev_features_enabled)
+    Application.put_env(:codex_pooler, :dev_features_enabled, true)
 
-    fixtures = circuit_demo_fixtures()
-    seeded_at = latest_quota_observation(fixtures)
-    fresh_at = DateTime.add(seeded_at, Evidence.freshness_ttl_seconds(), :second)
-    aged_at = DateTime.add(fresh_at, 1, :second)
+    on_exit(fn ->
+      if is_nil(previous_dev_features_enabled) do
+        Application.delete_env(:codex_pooler, :dev_features_enabled)
+      else
+        Application.put_env(:codex_pooler, :dev_features_enabled, previous_dev_features_enabled)
+      end
 
-    served_models =
-      Map.new(fixtures, fn {label, %{assignment: assignment}} ->
-        {label, {assignment.id, ["gpt-5.4-mini"]}}
+      InstanceSettings.reset_cache_for_test()
+    end)
+
+    settings = InstanceSettings.ensure_singleton!()
+
+    assert {:ok, before_seed} =
+             InstanceSettings.update_system_settings(settings, %{
+               "development" => %{"account_reconciliation_paused" => false}
+             })
+
+    result = Seeds.full()
+    persisted_settings = Repo.get!(Settings, true)
+
+    assert persisted_settings.development.account_reconciliation_paused == true
+
+    assert persisted_settings.development.impeccable_live_enabled ==
+             before_seed.development.impeccable_live_enabled
+
+    circuit_labels = [
+      "Dev Active Assignment",
+      "Dev Active Secondary Assignment",
+      "Dev Ready Assignment",
+      "Dev Circuit Clear Assignment",
+      "Dev Circuit Absent Assignment"
+    ]
+
+    stale_at =
+      DateTime.utc_now()
+      |> DateTime.add(-(Evidence.freshness_ttl_seconds() + 1), :second)
+      |> DateTime.truncate(:microsecond)
+
+    identity_ids = Enum.map(result.upstream_identities, & &1.id)
+
+    Repo.update_all(
+      from(window in AccountQuotaWindow, where: window.upstream_identity_id in ^identity_ids),
+      set: [observed_at: stale_at, last_sync_at: stale_at, reset_at: stale_at]
+    )
+
+    stale_windows =
+      Repo.all(
+        from window in AccountQuotaWindow,
+          where: window.upstream_identity_id in ^identity_ids,
+          select: window
+      )
+
+    assert Enum.all?(stale_windows, fn window ->
+             DateTime.diff(DateTime.utc_now(), window.observed_at, :second) >=
+               Evidence.freshness_ttl_seconds() + 1
+           end)
+
+    assert :ok = perform_job(AccountReconciliationEnqueueWorker, %{})
+    assert [] = all_enqueued(worker: AccountReconciliationWorker, queue: :jobs)
+
+    owner_scope = Scope.for_user(result.owner, ["instance_owner"])
+    assert {:ok, pools} = Pools.list_pools_for_management(owner_scope)
+
+    read_model_assignments =
+      UpstreamAccountsReadModel.list_visible_accounts(owner_scope, pools)
+      |> Enum.flat_map(& &1.assignments)
+      |> Map.new(&{&1.assignment_label, &1})
+
+    persisted_priming_statuses =
+      result.assignments
+      |> Enum.filter(&(&1.assignment_label in circuit_labels))
+      |> Map.new(fn assignment ->
+        reloaded = Repo.get!(PoolUpstreamAssignment, assignment.id)
+        {assignment.assignment_label, get_in(reloaded.metadata, ["quota_priming", "status"])}
       end)
 
-    circuit_readiness =
-      served_models
-      |> Map.values()
-      |> Map.new()
-      |> UpstreamCircuitReadiness.by_assignment_id(@circuit_settings, aged_at)
+    assert persisted_priming_statuses == Map.new(circuit_labels, &{&1, "known"})
 
-    for %{identity: identity} <- Map.values(fixtures) do
-      assert %{state: "ready", routing_ready_now?: true} =
-               UpstreamQuotaReadiness.from_windows(quota_windows_for(identity), fresh_at)
+    actual_route_counts =
+      Map.new(circuit_labels, fn label ->
+        assignment = Map.fetch!(read_model_assignments, label)
 
-      assert %{state: "stale", routing_ready_now?: false} =
-               UpstreamQuotaReadiness.from_windows(quota_windows_for(identity), aged_at)
-    end
-
-    route_counts =
-      Map.new(fixtures, fn {label, %{assignment: assignment}} ->
-        route_assignment =
-          route_path_assignment(assignment, Map.fetch!(circuit_readiness, assignment.id))
-
-        assert Enum.map(RoutePath.segments(route_assignment), & &1.label) == [
+        assert Enum.map(RoutePath.segments(assignment), & &1.label) == [
                  "Assignment",
                  "Health",
                  "Quota",
                  "Circuit"
                ]
 
-        {label, RoutePath.ready_count(route_assignment)}
+        {label, RoutePath.ready_count(assignment)}
       end)
 
-    assert route_counts == %{
+    assert actual_route_counts == %{
              "Dev Active Assignment" => 3,
              "Dev Active Secondary Assignment" => 4,
              "Dev Ready Assignment" => 4,
              "Dev Circuit Clear Assignment" => 4,
              "Dev Circuit Absent Assignment" => 4
            }
-
-    absent = Map.fetch!(fixtures, "Dev Circuit Absent Assignment")
-
-    assert Repo.aggregate(
-             from(state in RoutingCircuitState,
-               where: state.pool_upstream_assignment_id == ^absent.assignment.id
-             ),
-             :count
-           ) == 0
   end
 
   defp statuses_for(schema) do
@@ -821,46 +867,6 @@ defmodule CodexPooler.Dev.SeedsTest do
       )
     )
     |> Map.new()
-  end
-
-  defp circuit_demo_fixtures do
-    for {identity_label, assignment_label} <- [
-          {"Dev Active Pro", "Dev Active Assignment"},
-          {"Dev Active Pro", "Dev Active Secondary Assignment"},
-          {"Dev Ready Quota", "Dev Ready Assignment"},
-          {"Dev Circuit Clear", "Dev Circuit Clear Assignment"},
-          {"Dev Circuit Absent", "Dev Circuit Absent Assignment"}
-        ],
-        into: %{} do
-      identity = Repo.get_by!(UpstreamIdentity, account_label: identity_label)
-
-      assignment =
-        Repo.get_by!(PoolUpstreamAssignment,
-          upstream_identity_id: identity.id,
-          assignment_label: assignment_label
-        )
-
-      {assignment_label, %{identity: identity, assignment: assignment}}
-    end
-  end
-
-  defp latest_quota_observation(fixtures) do
-    fixtures
-    |> Map.values()
-    |> Enum.flat_map(&quota_windows_for(&1.identity))
-    |> Enum.map(& &1.observed_at)
-    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond))
-  end
-
-  defp route_path_assignment(assignment, circuit_readiness) do
-    %{
-      pool_label: "Dev Circuit Demo Pool",
-      status: assignment.status,
-      health_status: assignment.health_status,
-      quota_priming_status: QuotaProjection.assignment_priming_status(assignment),
-      quota_priming_label: QuotaProjection.assignment_priming_label(assignment),
-      circuit_readiness: circuit_readiness
-    }
   end
 
   defp circuit_states_by_label(fixtures, circuit_readiness) do
