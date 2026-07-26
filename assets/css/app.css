@@ -679,6 +679,7 @@ body {
 }
 
 .route-chevron:first-child {
+  flex-grow: 1.04;
   padding-left: 0.25rem;
   padding-right: 0.15rem;
   letter-spacing: 0;
