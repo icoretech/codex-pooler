@@ -133,9 +133,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             data-role="upstream-assignment-route"
             role="meter"
             aria-valuemin="0"
-            aria-valuemax="3"
+            aria-valuemax={RoutePath.segment_count()}
             aria-valuenow={RoutePath.ready_count(assignment)}
             aria-label={RoutePath.aria_label(assignment)}
+            aria-valuetext={RoutePath.aria_label(assignment)}
             class="route-chevron-flow"
           >
             <span

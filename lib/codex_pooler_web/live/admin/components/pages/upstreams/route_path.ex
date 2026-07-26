@@ -9,10 +9,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
   @type segment :: %{
           key: String.t(),
           label: String.t(),
+          short_label: String.t(),
           detail_label: String.t(),
           ready?: boolean(),
           tone: :success | :warning | :error
         }
+
+  @spec segment_count() :: pos_integer()
+  def segment_count, do: 3
 
   @spec segments(map()) :: [segment()]
   def segments(assignment) do
@@ -20,6 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
       %{
         key: "assignment",
         label: "Assignment",
+        short_label: "Assign",
         detail_label: assignment_state_label(Map.get(assignment, :status)),
         ready?: Map.get(assignment, :status) == "active",
         tone: assignment_state_tone(Map.get(assignment, :status))
@@ -27,6 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
       %{
         key: "health",
         label: "Health",
+        short_label: "Health",
         detail_label: assignment_health_label(Map.get(assignment, :health_status)),
         ready?: Map.get(assignment, :health_status) == "active",
         tone: assignment_health_tone(Map.get(assignment, :health_status))
@@ -34,6 +40,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath do
       %{
         key: "quota",
         label: "Quota",
+        short_label: "Quota",
         detail_label: Map.get(assignment, :quota_priming_label) || "Quota unknown",
         ready?: quota_priming_ready?(Map.get(assignment, :quota_priming_status)),
         tone: quota_priming_tone(Map.get(assignment, :quota_priming_status))

@@ -1313,15 +1313,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, primary_selector, "Primary assignment serving production traffic")
     assert has_element?(view, primary_selector, "Status Primary")
     assert has_element?(view, "#{primary_selector}-pool-link[href='/admin/pools']")
-    assert has_element?(view, "#{primary_selector}-route[role='meter'][aria-valuenow='3']")
-    assert has_element?(view, "#{primary_selector}-route-assignment[title='Assignment active']")
-    assert has_element?(view, "#{primary_selector}-route-health[title='Health active']")
-    assert has_element?(view, "#{primary_selector}-route-quota[title='Quota known']")
+
+    assert has_element?(
+             view,
+             "#{primary_selector}-route[role='meter'][aria-valuemax='3'][aria-valuenow='3'][aria-label='Status Primary route path: Assignment active, Health active, Quota known'][aria-valuetext='Status Primary route path: Assignment active, Health active, Quota known']"
+           )
+
+    assert has_element?(
+             view,
+             "#{primary_selector}-route-assignment[title='Assignment active']",
+             "Assignment"
+           )
+
+    assert has_element?(view, "#{primary_selector}-route-health[title='Health active']", "Health")
+    assert has_element?(view, "#{primary_selector}-route-quota[title='Quota known']", "Quota")
 
     assert has_element?(view, disabled_selector, "Disabled failover assignment")
     assert has_element?(view, disabled_selector, "Status Secondary")
     assert has_element?(view, "#{disabled_selector}-pool-link[href='/admin/pools']")
-    assert has_element?(view, "#{disabled_selector}-route[role='meter'][aria-valuenow='0']")
+
+    assert has_element?(
+             view,
+             "#{disabled_selector}-route[role='meter'][aria-valuemax='3'][aria-valuenow='0'][aria-label='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked'][aria-valuetext='Status Secondary route path: Assignment disabled, Health disabled, Priming blocked']"
+           )
 
     assert has_element?(
              view,

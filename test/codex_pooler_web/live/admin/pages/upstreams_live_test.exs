@@ -1781,7 +1781,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route'][role='meter'][aria-valuemin='0'][aria-valuemax='3'][aria-valuenow='2']"
+             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route'][role='meter'][aria-valuemin='0'][aria-valuemax='3'][aria-valuenow='2'][aria-label='Saved Reset Card route path: Assignment active, Health active, Priming pending'][aria-valuetext='Saved Reset Card route path: Assignment active, Health active, Priming pending']"
            )
 
     assert has_element?(
@@ -1798,7 +1798,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-route-segment'][title='Assignment active']",
-             "Assignment"
+             "Assign"
            )
 
     assert has_element?(

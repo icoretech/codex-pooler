@@ -335,9 +335,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                   data-role="upstream-account-pool-route"
                   role="meter"
                   aria-valuemin="0"
-                  aria-valuemax="3"
+                  aria-valuemax={RoutePath.segment_count()}
                   aria-valuenow={RoutePath.ready_count(assignment)}
                   aria-label={RoutePath.aria_label(assignment)}
+                  aria-valuetext={RoutePath.aria_label(assignment)}
                   class="route-chevron-flow"
                 >
                   <span
@@ -347,7 +348,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                     title={segment.detail_label}
                     class={RoutePath.segment_class(segment)}
                   >
-                    {segment.label}
+                    {segment.short_label}
                   </span>
                 </div>
               </div>
