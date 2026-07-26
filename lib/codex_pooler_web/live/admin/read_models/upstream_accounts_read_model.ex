@@ -1,9 +1,15 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
   @moduledoc false
 
-  alias CodexPooler.Admin.{UpstreamQuotaReadiness, UpstreamRoutingReadiness}
+  alias CodexPooler.Admin.{
+    UpstreamCircuitReadiness,
+    UpstreamQuotaReadiness,
+    UpstreamRoutingReadiness
+  }
+
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.AssignmentModelSummaries
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Jobs
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams
@@ -50,7 +56,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:models) => [assignment_model()],
           required(:model_count) => non_neg_integer(),
           required(:advertised_state) => assignment_advertised_state(),
-          required(:model_freshness) => assignment_model_freshness()
+          required(:model_freshness) => assignment_model_freshness(),
+          required(:circuit_readiness) => UpstreamCircuitReadiness.summary()
         }
   @type quota_limit_row :: QuotaProjection.quota_limit_row()
   @type quota_readiness :: UpstreamQuotaReadiness.t()
@@ -164,6 +171,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       |> Enum.filter(&Map.has_key?(assignments, &1.id))
       |> narrow_to_identity(identity_id)
 
+    assignments = narrow_assignments_to_identities(assignments, identities)
+    circuit_observed_at = DateTime.utc_now()
+    circuit_settings = OperationalSettings.current()
+
+    circuit_readiness_by_assignment_id =
+      assignments
+      |> served_models_by_assignment_id()
+      |> UpstreamCircuitReadiness.by_assignment_id(circuit_settings, circuit_observed_at)
+
+    assignments =
+      attach_assignment_circuit_readiness(assignments, circuit_readiness_by_assignment_id)
+
     token_burns = TokenBurnProjection.summaries(identities)
 
     identities
@@ -175,6 +194,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
   defp narrow_to_identity(identities, identity_id) when is_binary(identity_id),
     do: Enum.filter(identities, &(&1.id == identity_id))
+
+  defp narrow_assignments_to_identities(assignments, identities) do
+    Map.take(assignments, Enum.map(identities, & &1.id))
+  end
+
+  defp served_models_by_assignment_id(assignments) do
+    Map.new(
+      for {_identity_id, identity_assignments} <- assignments,
+          assignment <- identity_assignments do
+        {assignment.id, Enum.map(assignment.models, & &1.exposed_model_id)}
+      end
+    )
+  end
+
+  defp attach_assignment_circuit_readiness(assignments, circuit_readiness_by_assignment_id) do
+    Map.new(assignments, fn {identity_id, identity_assignments} ->
+      snapshots =
+        Enum.map(identity_assignments, fn assignment ->
+          circuit_readiness =
+            Map.get(
+              circuit_readiness_by_assignment_id,
+              assignment.id,
+              UpstreamCircuitReadiness.clear()
+            )
+
+          Map.put(assignment, :circuit_readiness, circuit_readiness)
+        end)
+
+      {identity_id, snapshots}
+    end)
+  end
 
   defp intersect_visible_pools(scope, pools) do
     visible_pool_ids = scope |> Pools.list_visible_pools() |> MapSet.new(& &1.id)

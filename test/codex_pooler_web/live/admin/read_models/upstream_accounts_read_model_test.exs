@@ -7,6 +7,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
 
   alias CodexPooler.Accounting.Reporting
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Admin.UpstreamCircuitReadiness
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -591,6 +593,203 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     refute projection =~ hidden_sentinel
   end
 
+  test "identity filter narrows the account snapshot after fleet model inventory", %{scope: scope} do
+    target_pool = pool_fixture(%{name: "Target identity Pool"})
+    sibling_pool = pool_fixture(%{name: "Sibling identity Pool"})
+
+    %{identity: target_identity, assignment: target_assignment} =
+      upstream_assignment_fixture(target_pool)
+
+    %{identity: sibling_identity, assignment: sibling_assignment} =
+      upstream_assignment_fixture(sibling_pool)
+
+    target_model = "gpt-example-target-#{System.unique_integer([:positive])}"
+    sibling_model = "gpt-example-sibling-#{System.unique_integer([:positive])}"
+
+    model_fixture(target_pool, %{
+      exposed_model_id: target_model,
+      metadata: %{"source_assignment_models" => %{target_assignment.id => %{}}}
+    })
+
+    model_fixture(sibling_pool, %{
+      exposed_model_id: sibling_model,
+      metadata: %{"source_assignment_models" => %{sibling_assignment.id => %{}}}
+    })
+
+    accounts =
+      UpstreamAccountsReadModel.list_visible_accounts(
+        scope,
+        [target_pool, sibling_pool],
+        %{identity_id: target_identity.id}
+      )
+
+    assert [%{identity: %{id: target_identity_id}, assignments: [snapshot]}] = accounts
+    assert target_identity_id == target_identity.id
+    assert snapshot.id == target_assignment.id
+    assert Enum.map(snapshot.models, & &1.exposed_model_id) == [target_model]
+
+    projection = inspect(accounts)
+    refute projection =~ sibling_identity.id
+    refute projection =~ sibling_assignment.id
+    refute projection =~ sibling_model
+  end
+
+  test "account snapshots batch current circuit summaries for served models", %{scope: scope} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    blocked_pool = pool_fixture(%{name: "Blocked circuit Pool"})
+    recovering_pool = pool_fixture(%{name: "Recovering circuit Pool"})
+    clear_pool = pool_fixture(%{name: "Clear circuit Pool"})
+    retired_pool = pool_fixture(%{name: "Retired circuit Pool"})
+
+    %{assignment: blocked_assignment} = upstream_assignment_fixture(blocked_pool)
+    %{assignment: recovering_assignment} = upstream_assignment_fixture(recovering_pool)
+    %{assignment: clear_assignment} = upstream_assignment_fixture(clear_pool)
+    %{assignment: retired_assignment} = upstream_assignment_fixture(retired_pool)
+
+    model_fixture(blocked_pool, %{
+      exposed_model_id: "gpt-example-circuit-blocked",
+      metadata: %{"source_assignment_models" => %{blocked_assignment.id => %{}}}
+    })
+
+    model_fixture(recovering_pool, %{
+      exposed_model_id: "gpt-example-circuit-recovering",
+      metadata: %{"source_assignment_models" => %{recovering_assignment.id => %{}}}
+    })
+
+    model_fixture(clear_pool, %{
+      exposed_model_id: "gpt-example-circuit-clear",
+      metadata: %{"source_assignment_models" => %{clear_assignment.id => %{}}}
+    })
+
+    model_fixture(retired_pool, %{
+      exposed_model_id: "gpt-example-circuit-retired",
+      status: "retired",
+      metadata: %{"source_assignment_models" => %{retired_assignment.id => %{}}}
+    })
+
+    insert_circuit_state!(
+      blocked_pool,
+      blocked_assignment,
+      "gpt-example-circuit-blocked",
+      "proxy_http",
+      status: "open",
+      next_probe_at: DateTime.add(now, 120, :second),
+      opened_at: now
+    )
+
+    insert_circuit_state!(
+      recovering_pool,
+      recovering_assignment,
+      "gpt-example-circuit-recovering",
+      "proxy_stream",
+      status: "open",
+      next_probe_at: DateTime.add(now, -1, :second),
+      opened_at: DateTime.add(now, -30, :second)
+    )
+
+    insert_circuit_state!(
+      retired_pool,
+      retired_assignment,
+      "gpt-example-circuit-retired",
+      "proxy_http",
+      status: "open",
+      next_probe_at: DateTime.add(now, 120, :second),
+      opened_at: now
+    )
+
+    {accounts, queries} =
+      count_repo_sources(fn ->
+        UpstreamAccountsReadModel.list_visible_accounts(
+          scope,
+          [blocked_pool, recovering_pool, clear_pool, retired_pool]
+        )
+      end)
+
+    assignments =
+      accounts
+      |> Enum.flat_map(& &1.assignments)
+      |> Map.new(&{&1.id, &1})
+
+    assert assignments[blocked_assignment.id].circuit_readiness.state == :blocked
+    assert assignments[recovering_assignment.id].circuit_readiness.state == :recovering
+
+    assert assignments[clear_assignment.id].circuit_readiness ==
+             UpstreamCircuitReadiness.clear()
+
+    assert assignments[retired_assignment.id].circuit_readiness ==
+             UpstreamCircuitReadiness.clear()
+
+    assert Map.get(queries, "routing_circuit_states", 0) == 1
+  end
+
+  test "identity-filtered circuit batch excludes sibling assignment evidence", %{scope: scope} do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    target_pool = pool_fixture(%{name: "Target circuit identity Pool"})
+    sibling_pool = pool_fixture(%{name: "Sibling circuit identity Pool"})
+
+    %{identity: target_identity, assignment: target_assignment} =
+      upstream_assignment_fixture(target_pool)
+
+    %{identity: sibling_identity, assignment: sibling_assignment} =
+      upstream_assignment_fixture(sibling_pool)
+
+    target_model = "gpt-example-target-circuit"
+    sibling_model = "gpt-example-sibling-circuit-sentinel"
+    sibling_route = "sibling-route-sentinel"
+
+    model_fixture(target_pool, %{
+      exposed_model_id: target_model,
+      metadata: %{"source_assignment_models" => %{target_assignment.id => %{}}}
+    })
+
+    model_fixture(sibling_pool, %{
+      exposed_model_id: sibling_model,
+      metadata: %{"source_assignment_models" => %{sibling_assignment.id => %{}}}
+    })
+
+    insert_circuit_state!(
+      target_pool,
+      target_assignment,
+      target_model,
+      "proxy_http",
+      status: "open",
+      next_probe_at: DateTime.add(now, 120, :second),
+      opened_at: now
+    )
+
+    insert_circuit_state!(
+      sibling_pool,
+      sibling_assignment,
+      sibling_model,
+      sibling_route,
+      status: "open",
+      next_probe_at: DateTime.add(now, 120, :second),
+      opened_at: now
+    )
+
+    {accounts, queries} =
+      count_repo_sources(fn ->
+        UpstreamAccountsReadModel.list_visible_accounts(
+          scope,
+          [target_pool, sibling_pool],
+          %{identity_id: target_identity.id}
+        )
+      end)
+
+    assert [%{identity: %{id: target_identity_id}, assignments: [target_snapshot]}] = accounts
+    assert target_identity_id == target_identity.id
+    assert target_snapshot.id == target_assignment.id
+    assert target_snapshot.circuit_readiness.state == :blocked
+    assert Map.get(queries, "routing_circuit_states", 0) == 1
+
+    projection = inspect(accounts)
+    refute projection =~ sibling_identity.id
+    refute projection =~ sibling_assignment.id
+    refute projection =~ sibling_model
+    refute projection =~ sibling_route
+  end
+
   test "empty and no-visible-Pool loads do not expose accounts", %{scope: owner_scope} do
     %{user: admin} =
       operator_fixture(owner_scope, %{
@@ -599,8 +798,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
         "password_change_required" => "false"
       })
 
-    assert UpstreamAccountsReadModel.list_visible_accounts(Scope.for_user(admin), []) == []
-    assert UpstreamAccountsReadModel.list_visible_accounts(owner_scope, []) == []
+    {admin_accounts, admin_queries} =
+      count_repo_sources(fn ->
+        UpstreamAccountsReadModel.list_visible_accounts(Scope.for_user(admin), [])
+      end)
+
+    {owner_accounts, owner_queries} =
+      count_repo_sources(fn ->
+        UpstreamAccountsReadModel.list_visible_accounts(owner_scope, [])
+      end)
+
+    assert admin_accounts == []
+    assert owner_accounts == []
+    assert Map.get(admin_queries, "routing_circuit_states", 0) == 0
+    assert Map.get(owner_queries, "routing_circuit_states", 0) == 0
   end
 
   test "added model reads stay constant as assignment and model counts grow", %{
@@ -719,6 +930,50 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     DateTime.utc_now()
     |> DateTime.add(offset_seconds, :second)
     |> DateTime.truncate(:microsecond)
+  end
+
+  defp insert_circuit_state!(pool, assignment, model_identifier, route_class, attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    defaults = [
+      status: "closed",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: nil,
+      half_opened_at: nil,
+      closed_at: nil,
+      next_probe_at: nil,
+      last_failure_at: nil,
+      last_success_at: nil,
+      metadata: %{},
+      created_at: DateTime.add(now, -1, :second),
+      updated_at: DateTime.add(now, -1, :second)
+    ]
+
+    attrs = Keyword.merge(defaults, attrs)
+
+    %RoutingCircuitState{
+      pool_id: pool.id,
+      api_key_id: nil,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      model_identifier: model_identifier,
+      route_class: route_class,
+      status: Keyword.fetch!(attrs, :status),
+      reason_code: "persisted_reason_must_not_escape",
+      failure_count: Keyword.fetch!(attrs, :failure_count),
+      success_count: Keyword.fetch!(attrs, :success_count),
+      opened_at: Keyword.fetch!(attrs, :opened_at),
+      half_opened_at: Keyword.fetch!(attrs, :half_opened_at),
+      closed_at: Keyword.fetch!(attrs, :closed_at),
+      next_probe_at: Keyword.fetch!(attrs, :next_probe_at),
+      last_failure_at: Keyword.fetch!(attrs, :last_failure_at),
+      last_success_at: Keyword.fetch!(attrs, :last_success_at),
+      metadata: Keyword.fetch!(attrs, :metadata),
+      created_at: Keyword.fetch!(attrs, :created_at),
+      updated_at: Keyword.fetch!(attrs, :updated_at)
+    }
+    |> Repo.insert!()
   end
 
   defp model_state(snapshot) do
