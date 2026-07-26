@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPooler.Events.Event
   alias CodexPooler.Events.PostgresBridge
   alias CodexPooler.FakeOpenAIAuthProvider
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Mailer
@@ -4080,6 +4081,665 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
   end
 
+  test "characterizes base account routing verdict precedence before circuit overlay", %{
+    scope: scope
+  } do
+    pool = pool_fixture(%{name: "Routing verdict baseline Pool"})
+
+    %{identity: ready_identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Ready verdict baseline"})
+
+    %{identity: lifecycle_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Lifecycle verdict baseline",
+        identity_status: "disabled"
+      })
+
+    %{identity: assignment_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Assignment verdict baseline",
+        health_status: "errored"
+      })
+
+    %{identity: quota_identity} =
+      upstream_assignment_fixture(pool, %{account_label: "Quota verdict baseline"})
+
+    for identity <- [ready_identity, lifecycle_identity, assignment_identity] do
+      assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+    end
+
+    accounts =
+      scope
+      |> UpstreamAccountsReadModel.list_visible_accounts([pool])
+      |> Map.new(&{&1.identity.id, &1})
+
+    assert %{
+             routing_ready_now?: true,
+             state: "ready",
+             label: "Routing ready",
+             tone: :success,
+             reason_code: "routing_ready",
+             reason:
+               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             identity_status: "active",
+             assignment_ready?: true,
+             quota_readiness: %{routing_ready_now?: true}
+           } = accounts[ready_identity.id].routing_readiness
+
+    assert %{
+             routing_ready_now?: false,
+             state: "identity_blocked",
+             label: "Account disabled",
+             tone: :error,
+             reason_code: "identity_disabled",
+             reason: "Disabled upstream accounts are excluded from model routing.",
+             identity_status: "disabled",
+             assignment_ready?: true,
+             quota_readiness: %{routing_ready_now?: true}
+           } = accounts[lifecycle_identity.id].routing_readiness
+
+    assert %{
+             routing_ready_now?: false,
+             state: "assignment_unavailable",
+             label: "Assignment unavailable",
+             tone: :warning,
+             reason_code: "assignment_unavailable",
+             reason:
+               "No active, healthy, eligible pool assignment is available for this upstream account.",
+             identity_status: "active",
+             assignment_ready?: false,
+             quota_readiness: %{routing_ready_now?: true}
+           } = accounts[assignment_identity.id].routing_readiness
+
+    assert %{
+             routing_ready_now?: false,
+             state: "quota_blocked",
+             label: "Quota missing",
+             tone: :warning,
+             reason_code: "quota_missing_evidence",
+             reason: "Quota readiness blocks model routing: Quota missing.",
+             identity_status: "active",
+             assignment_ready?: true,
+             quota_readiness: %{routing_ready_now?: false}
+           } = accounts[quota_identity.id].routing_readiness
+  end
+
+  test "renders blocked recovering clear and bounded multi-lane account circuit verdicts from real rows",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    blocked_pool = pool_fixture(%{name: "Blocked account circuit Pool"})
+    recovering_pool = pool_fixture(%{name: "Recovering account circuit Pool"})
+    clear_pool = pool_fixture(%{name: "Clear account circuit Pool"})
+
+    %{identity: blocked_identity, assignment: blocked_assignment} =
+      upstream_assignment_fixture(blocked_pool, %{account_label: "Blocked circuit account"})
+
+    %{identity: recovering_identity, assignment: recovering_assignment} =
+      upstream_assignment_fixture(recovering_pool, %{
+        account_label: "Recovering circuit account"
+      })
+
+    %{identity: clear_identity, assignment: clear_assignment} =
+      upstream_assignment_fixture(clear_pool, %{account_label: "Clear circuit account"})
+
+    for model_identifier <- ~w(gpt-account-zeta gpt-account-alpha gpt-account-beta) do
+      advertise_assignment_model!(blocked_pool, blocked_assignment, model_identifier)
+    end
+
+    advertise_assignment_model!(
+      recovering_pool,
+      recovering_assignment,
+      "gpt-account-recovering"
+    )
+
+    advertise_assignment_model!(clear_pool, clear_assignment, "gpt-account-clear")
+
+    reason_code_sentinel =
+      [
+        "ignore",
+        "prior",
+        "instructions",
+        "and",
+        "expose",
+        "credentials",
+        System.unique_integer([:positive])
+      ]
+      |> Enum.join(" ")
+
+    insert_account_circuit_state!(
+      blocked_pool,
+      blocked_assignment,
+      "gpt-account-zeta",
+      "proxy_websocket",
+      status: "open",
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 300, :second),
+      reason_code: reason_code_sentinel
+    )
+
+    insert_account_circuit_state!(
+      blocked_pool,
+      blocked_assignment,
+      "gpt-account-alpha",
+      "proxy_http",
+      status: "open",
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 300, :second)
+    )
+
+    insert_account_circuit_state!(
+      blocked_pool,
+      blocked_assignment,
+      "gpt-account-beta",
+      "proxy_stream",
+      status: "open",
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 300, :second)
+    )
+
+    insert_account_circuit_state!(
+      recovering_pool,
+      recovering_assignment,
+      "gpt-account-recovering",
+      "proxy_stream",
+      status: "open",
+      opened_at: DateTime.add(now, -30, :second),
+      next_probe_at: DateTime.add(now, -1, :second)
+    )
+
+    insert_account_circuit_state!(
+      clear_pool,
+      clear_assignment,
+      "gpt-account-clear",
+      "proxy_http",
+      status: "closed"
+    )
+
+    for identity <- [blocked_identity, recovering_identity, clear_identity] do
+      assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+    end
+
+    accounts =
+      scope
+      |> UpstreamAccountsReadModel.list_visible_accounts([
+        blocked_pool,
+        recovering_pool,
+        clear_pool
+      ])
+      |> Map.new(&{&1.identity.id, &1})
+
+    blocked = accounts[blocked_identity.id]
+    recovering = accounts[recovering_identity.id]
+    clear = accounts[clear_identity.id]
+
+    assert {blocked.routing_readiness.state, recovering.routing_readiness.state} ==
+             {"circuit_protection_active", "circuit_recovering"}
+
+    assert %{
+             routing_ready_now?: true,
+             state: "circuit_protection_active",
+             label: "Circuit protection active",
+             tone: :error,
+             reason_code: "circuit_routes_blocked",
+             reason:
+               "One or more model and route lanes are blocked; unaffected routes may remain available.",
+             identity_status: "active",
+             assignment_ready?: true,
+             quota_readiness: blocked_quota
+           } = blocked.routing_readiness
+
+    assert blocked_quota == blocked.quota_readiness
+
+    assert %{
+             state: :blocked,
+             ready?: false,
+             tone: :error,
+             blocked_lane_count: 3,
+             recovering_lane_count: 0,
+             affected_lane_count: 3,
+             detail: "3 circuit lanes blocked; gpt-account-alpha via proxy_http",
+             representative: %{
+               model_identifier: "gpt-account-alpha",
+               route_class: "proxy_http"
+             }
+           } = hd(blocked.assignments).circuit_readiness
+
+    assert String.length(hd(blocked.assignments).circuit_readiness.detail) <= 160
+
+    assert %{
+             routing_ready_now?: true,
+             state: "circuit_recovering",
+             label: "Circuit recovery in progress",
+             tone: :warning,
+             reason_code: "circuit_recovering",
+             reason:
+               "One or more model and route lanes are recovering; unaffected routes may remain available.",
+             identity_status: "active",
+             assignment_ready?: true,
+             quota_readiness: recovering_quota
+           } = recovering.routing_readiness
+
+    assert recovering_quota == recovering.quota_readiness
+    assert hd(recovering.assignments).circuit_readiness.state == :recovering
+
+    assert %{
+             routing_ready_now?: true,
+             state: "ready",
+             label: "Routing ready",
+             tone: :success,
+             reason_code: "routing_ready",
+             reason:
+               "Identity lifecycle, assignment availability, and quota readiness allow model routing.",
+             identity_status: "active",
+             assignment_ready?: true,
+             quota_readiness: clear_quota
+           } = clear.routing_readiness
+
+    assert clear_quota == clear.quota_readiness
+    assert hd(clear.assignments).circuit_readiness.state == :closed
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{blocked_identity.id}[data-routing-tone='error']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{blocked_identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit protection active"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{blocked_identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{blocked_identity.id}-pool-assignment-#{blocked_assignment.id}-route[aria-valuemax='4'][aria-valuenow='3']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{blocked_identity.id}-pool-assignment-#{blocked_assignment.id}-route-circuit[title='Circuit protection active']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{recovering_identity.id}[data-routing-tone='warning']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{recovering_identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit recovery in progress"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{recovering_identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{recovering_identity.id}-pool-assignment-#{recovering_assignment.id}-route[aria-valuemax='4'][aria-valuenow='4']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{recovering_identity.id}-pool-assignment-#{recovering_assignment.id}-route-circuit[title='Circuit recovery in progress']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{clear_identity.id}[data-routing-tone='success']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{clear_identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+
+    refute html =~ reason_code_sentinel
+  end
+
+  test "ignores blocked circuits on non-routable assignments while preserving their chevrons",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    healthy_pool = pool_fixture(%{name: "Healthy clear assignment Pool"})
+    disabled_pool = pool_fixture(%{name: "Disabled blocked assignment Pool"})
+    unhealthy_pool = pool_fixture(%{name: "Unhealthy blocked assignment Pool"})
+    ineligible_pool = pool_fixture(%{name: "Ineligible blocked assignment Pool"})
+
+    %{identity: identity, assignment: healthy_assignment} =
+      upstream_assignment_fixture(healthy_pool, %{account_label: "Mixed circuit account"})
+
+    disabled_assignment =
+      insert_account_assignment!(disabled_pool, identity,
+        assignment_label: "Disabled blocked assignment",
+        status: "disabled"
+      )
+
+    unhealthy_assignment =
+      insert_account_assignment!(unhealthy_pool, identity,
+        assignment_label: "Unhealthy blocked assignment",
+        health_status: "errored"
+      )
+
+    ineligible_assignment =
+      insert_account_assignment!(ineligible_pool, identity,
+        assignment_label: "Ineligible blocked assignment",
+        eligibility_status: "ineligible"
+      )
+
+    assignments = [
+      {healthy_pool, healthy_assignment, "gpt-mixed-healthy"},
+      {disabled_pool, disabled_assignment, "gpt-mixed-disabled"},
+      {unhealthy_pool, unhealthy_assignment, "gpt-mixed-unhealthy"},
+      {ineligible_pool, ineligible_assignment, "gpt-mixed-ineligible"}
+    ]
+
+    for {pool, assignment, model_identifier} <- assignments do
+      advertise_assignment_model!(pool, assignment, model_identifier)
+    end
+
+    for {pool, assignment, model_identifier} <- tl(assignments) do
+      insert_account_circuit_state!(
+        pool,
+        assignment,
+        model_identifier,
+        "proxy_http",
+        status: "open",
+        opened_at: now,
+        next_probe_at: DateTime.add(now, 300, :second)
+      )
+    end
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    [account] =
+      UpstreamAccountsReadModel.list_visible_accounts(
+        scope,
+        [healthy_pool, disabled_pool, unhealthy_pool, ineligible_pool]
+      )
+
+    assert %{
+             routing_ready_now?: true,
+             state: "ready",
+             label: "Routing ready",
+             tone: :success,
+             reason_code: "routing_ready",
+             assignment_ready?: true
+           } = account.routing_readiness
+
+    assignments_by_id = Map.new(account.assignments, &{&1.id, &1})
+    assert assignments_by_id[healthy_assignment.id].circuit_readiness.state == :closed
+
+    for assignment <- [disabled_assignment, unhealthy_assignment, ineligible_assignment] do
+      assert assignments_by_id[assignment.id].circuit_readiness.state == :blocked
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}[data-routing-tone='success']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+
+    for assignment <- [disabled_assignment, unhealthy_assignment, ineligible_assignment] do
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route-circuit[title='Circuit protection active']"
+             )
+    end
+  end
+
+  test "retired blocked circuit rows affect neither assignment chevron nor account verdict", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture(%{name: "Retired circuit model Pool"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{account_label: "Retired circuit account"})
+
+    advertise_assignment_model!(pool, assignment, "gpt-current-model")
+    advertise_assignment_model!(pool, assignment, "gpt-retired-model", status: "retired")
+
+    insert_account_circuit_state!(
+      pool,
+      assignment,
+      "gpt-retired-model",
+      "proxy_http",
+      status: "open",
+      opened_at: now,
+      next_probe_at: DateTime.add(now, 300, :second)
+    )
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    [assignment_snapshot] = account.assignments
+
+    assert assignment_snapshot.circuit_readiness.state == :closed
+
+    assert %{
+             routing_ready_now?: true,
+             state: "ready",
+             label: "Routing ready",
+             tone: :success,
+             reason_code: "routing_ready"
+           } = account.routing_readiness
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route[aria-valuemax='4'][aria-valuenow='4']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route-circuit[title='Circuit clear']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+  end
+
+  test "keeps lifecycle assignment and quota blockers ahead of blocked circuit evidence", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    lifecycle_pool = pool_fixture(%{name: "Lifecycle circuit precedence Pool"})
+    assignment_pool = pool_fixture(%{name: "Assignment circuit precedence Pool"})
+    quota_pool = pool_fixture(%{name: "Quota circuit precedence Pool"})
+
+    %{identity: lifecycle_identity, assignment: lifecycle_assignment} =
+      upstream_assignment_fixture(lifecycle_pool, %{
+        account_label: "Lifecycle circuit precedence",
+        identity_status: "disabled"
+      })
+
+    %{identity: assignment_identity, assignment: assignment_assignment} =
+      upstream_assignment_fixture(assignment_pool, %{
+        account_label: "Assignment circuit precedence",
+        health_status: "errored"
+      })
+
+    %{identity: quota_identity, assignment: quota_assignment} =
+      upstream_assignment_fixture(quota_pool, %{account_label: "Quota circuit precedence"})
+
+    fixtures = [
+      {lifecycle_pool, lifecycle_identity, lifecycle_assignment, "gpt-lifecycle-circuit"},
+      {assignment_pool, assignment_identity, assignment_assignment, "gpt-assignment-circuit"},
+      {quota_pool, quota_identity, quota_assignment, "gpt-quota-circuit"}
+    ]
+
+    for {pool, _identity, assignment, model_identifier} <- fixtures do
+      advertise_assignment_model!(pool, assignment, model_identifier)
+
+      insert_account_circuit_state!(
+        pool,
+        assignment,
+        model_identifier,
+        "proxy_http",
+        status: "open",
+        opened_at: now,
+        next_probe_at: DateTime.add(now, 300, :second)
+      )
+    end
+
+    for identity <- [lifecycle_identity, assignment_identity] do
+      assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+    end
+
+    accounts =
+      scope
+      |> UpstreamAccountsReadModel.list_visible_accounts([
+        lifecycle_pool,
+        assignment_pool,
+        quota_pool
+      ])
+      |> Map.new(&{&1.identity.id, &1})
+
+    assert %{
+             routing_ready_now?: false,
+             state: "identity_blocked",
+             label: "Account disabled",
+             tone: :error,
+             reason_code: "identity_disabled",
+             reason: "Disabled upstream accounts are excluded from model routing."
+           } = accounts[lifecycle_identity.id].routing_readiness
+
+    assert %{
+             routing_ready_now?: false,
+             state: "assignment_unavailable",
+             label: "Assignment unavailable",
+             tone: :warning,
+             reason_code: "assignment_unavailable",
+             reason:
+               "No active, healthy, eligible pool assignment is available for this upstream account."
+           } = accounts[assignment_identity.id].routing_readiness
+
+    assert %{
+             routing_ready_now?: false,
+             state: "quota_blocked",
+             label: "Quota missing",
+             tone: :warning,
+             reason_code: "quota_missing_evidence",
+             reason: "Quota readiness blocks model routing: Quota missing."
+           } = accounts[quota_identity.id].routing_readiness
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    for {identity, tone, label} <- [
+          {lifecycle_identity, "error", "Account disabled"},
+          {assignment_identity, "warning", "Assignment unavailable"},
+          {quota_identity, "warning", "Quota missing"}
+        ] do
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}[data-routing-tone='#{tone}']"
+             )
+
+      assert has_element?(
+               view,
+               "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+               label
+             )
+    end
+  end
+
+  test "keeps mounted account circuit verdicts as snapshots until remount", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    pool = pool_fixture(%{name: "Circuit snapshot Pool"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{account_label: "Circuit snapshot account"})
+
+    advertise_assignment_model!(pool, assignment, "gpt-circuit-snapshot")
+
+    circuit =
+      insert_account_circuit_state!(
+        pool,
+        assignment,
+        "gpt-circuit-snapshot",
+        "proxy_http",
+        status: "open",
+        opened_at: now,
+        next_probe_at: DateTime.add(now, 300, :second)
+      )
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit protection active"
+           )
+
+    circuit
+    |> Ecto.Changeset.change(next_probe_at: DateTime.add(now, -1, :second))
+    |> Repo.update!()
+
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit protection active"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit recovery in progress"
+           )
+
+    {:ok, remounted_view, _html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(
+             remounted_view,
+             "#upstream-account-#{identity.id}[data-routing-tone='warning']"
+           )
+
+    assert has_element?(
+             remounted_view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit recovery in progress"
+           )
+  end
+
   test "renders the upstream routing readiness matrix with stable selectors", %{
     conn: conn,
     scope: scope
@@ -6258,6 +6918,65 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       },
       quota_limits: []
     }
+  end
+
+  defp insert_account_assignment!(pool, identity, attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %PoolUpstreamAssignment{}
+    |> PoolUpstreamAssignment.changeset(%{
+      pool_id: pool.id,
+      upstream_identity_id: identity.id,
+      assignment_label: Keyword.fetch!(attrs, :assignment_label),
+      status: Keyword.get(attrs, :status, "active"),
+      health_status: Keyword.get(attrs, :health_status, "active"),
+      eligibility_status: Keyword.get(attrs, :eligibility_status, "eligible"),
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+  end
+
+  defp advertise_assignment_model!(pool, assignment, model_identifier, attrs \\ []) do
+    model_fixture(pool, %{
+      exposed_model_id: model_identifier,
+      status: Keyword.get(attrs, :status, "active"),
+      metadata: %{"source_assignment_models" => %{assignment.id => %{}}}
+    })
+  end
+
+  defp insert_account_circuit_state!(
+         pool,
+         assignment,
+         model_identifier,
+         route_class,
+         attrs
+       ) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %RoutingCircuitState{
+      pool_id: pool.id,
+      api_key_id: nil,
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: assignment.upstream_identity_id,
+      model_identifier: model_identifier,
+      route_class: route_class,
+      status: Keyword.get(attrs, :status, "closed"),
+      reason_code: Keyword.get(attrs, :reason_code, "synthetic_circuit_reason"),
+      failure_count: Keyword.get(attrs, :failure_count, 3),
+      success_count: Keyword.get(attrs, :success_count, 0),
+      opened_at: Keyword.get(attrs, :opened_at),
+      half_opened_at: Keyword.get(attrs, :half_opened_at),
+      closed_at: Keyword.get(attrs, :closed_at),
+      next_probe_at: Keyword.get(attrs, :next_probe_at),
+      last_failure_at: Keyword.get(attrs, :last_failure_at),
+      last_success_at: Keyword.get(attrs, :last_success_at),
+      metadata: Keyword.get(attrs, :metadata, %{}),
+      created_at: Keyword.get(attrs, :created_at, DateTime.add(now, -1, :second)),
+      updated_at: Keyword.get(attrs, :updated_at, DateTime.add(now, -1, :second))
+    }
+    |> Repo.insert!()
   end
 
   defp maybe_insert_quota_window(identity, "known") do

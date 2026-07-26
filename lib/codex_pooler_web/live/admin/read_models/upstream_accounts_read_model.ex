@@ -366,8 +366,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
         snapshot_at
       )
 
+    circuit_readiness =
+      identity_assignments
+      |> Enum.filter(&UpstreamRoutingReadiness.assignment_routing_ready?/1)
+      |> Enum.map(& &1.circuit_readiness)
+      |> UpstreamCircuitReadiness.aggregate()
+
     routing_readiness =
-      UpstreamRoutingReadiness.from_inputs(identity, identity_assignments, quota_readiness)
+      identity
+      |> UpstreamRoutingReadiness.from_inputs(identity_assignments, quota_readiness)
+      |> UpstreamRoutingReadiness.with_circuit_visibility(circuit_readiness)
 
     refresh_job = identity |> Jobs.list_recent_token_refresh_jobs(limit: 1) |> List.first()
 
