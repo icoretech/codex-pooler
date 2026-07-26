@@ -17,6 +17,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
   test "empty authorization performs no query and requested assignments without rows are clear" do
     pool = pool_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
+    %{assignment: second_assignment} = upstream_assignment_fixture(pool)
 
     {empty, empty_commands} =
       count_repo_commands(fn ->
@@ -32,10 +33,28 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
         )
       end)
 
+    {multiple_summaries, multiple_commands} =
+      count_repo_commands(fn ->
+        UpstreamCircuitReadiness.by_assignment_id(
+          %{
+            assignment.id => ["gpt-clear"],
+            second_assignment.id => ["gpt-second-clear"]
+          },
+          @settings,
+          @observed_at
+        )
+      end)
+
     assert empty == %{}
     assert command_count(empty_commands, "routing_circuit_states", "SELECT") == 0
     assert command_count(commands, "routing_circuit_states", "SELECT") == 1
+    assert command_count(multiple_commands, "routing_circuit_states", "SELECT") == 1
     assert summaries == %{assignment.id => UpstreamCircuitReadiness.clear()}
+
+    assert multiple_summaries == %{
+             assignment.id => UpstreamCircuitReadiness.clear(),
+             second_assignment.id => UpstreamCircuitReadiness.clear()
+           }
 
     assert UpstreamCircuitReadiness.clear() == %{
              state: :closed,
@@ -310,6 +329,56 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
              model_identifier: "gpt-dup",
              route_class: "proxy_http"
            }
+  end
+
+  test "distinct normalized models sharing the first eighty display graphemes remain separate lanes" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    shared_prefix = String.duplicate("m", 80)
+    model_a = shared_prefix <> "a"
+    model_b = shared_prefix <> "b"
+
+    for model <- [model_a, model_b] do
+      insert_state!(pool, assignment, model, "proxy_http",
+        status: "open",
+        next_probe_at: DateTime.add(@observed_at, 300, :second)
+      )
+    end
+
+    summary = project(%{assignment.id => [model_a, model_b]}) |> Map.fetch!(assignment.id)
+
+    assert summary.blocked_lane_count == 2
+    assert summary.affected_lane_count == 2
+
+    assert summary.representative == %{
+             model_identifier: shared_prefix,
+             route_class: "proxy_http"
+           }
+  end
+
+  test "distinct unknown normalized routes remain separate lanes before fallback display" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    for route <- ["unknown-route-b", "unknown-route-a"] do
+      insert_state!(pool, assignment, "gpt-unknown-route", route,
+        status: "open",
+        next_probe_at: DateTime.add(@observed_at, 300, :second)
+      )
+    end
+
+    first = project(%{assignment.id => ["gpt-unknown-route"]}) |> Map.fetch!(assignment.id)
+    second = project(%{assignment.id => ["gpt-unknown-route"]}) |> Map.fetch!(assignment.id)
+
+    assert first.blocked_lane_count == 2
+    assert first.affected_lane_count == 2
+
+    assert first.representative == %{
+             model_identifier: "gpt-unknown-route",
+             route_class: "unknown route"
+           }
+
+    assert second.representative == first.representative
   end
 
   test "duplicate display lanes retain the most recent eligible evidence deterministically" do

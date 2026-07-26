@@ -107,7 +107,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
       lanes =
         lanes_by_assignment
         |> Map.get(assignment_id, [])
-        |> collapse_display_lanes()
+        |> collapse_normalized_lanes()
 
       {assignment_id, summarize(lanes)}
     end)
@@ -237,8 +237,8 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
 
     %{
       state: state,
-      model_identifier: display_model(latest.model_identifier),
-      route_class: display_route(latest.route_class),
+      model_identifier: normalize_identifier(latest.model_identifier),
+      route_class: normalize_identifier(latest.route_class),
       evidence_at: evidence_at,
       reason:
         if(blocked?, do: CircuitHealth.blocked_reason(current, settings, observed_at), else: nil)
@@ -261,10 +261,10 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
 
   defp eligible_evidence?(_timestamp, _lower_bound, _observed_at), do: false
 
-  defp collapse_display_lanes(lanes) do
+  defp collapse_normalized_lanes(lanes) do
     lanes
     |> Enum.group_by(&{&1.model_identifier, &1.route_class})
-    |> Enum.map(fn {_display_lane, duplicates} ->
+    |> Enum.map(fn {_normalized_lane, duplicates} ->
       duplicates
       |> Enum.sort_by(&lane_sort_key/1)
       |> List.first()
@@ -335,7 +335,10 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
   defp representative(nil), do: nil
 
   defp representative(lane) do
-    %{model_identifier: lane.model_identifier, route_class: lane.route_class}
+    %{
+      model_identifier: display_model(lane.model_identifier),
+      route_class: display_route(lane.route_class)
+    }
   end
 
   defp lane_sort_key(lane) do
