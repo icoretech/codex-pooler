@@ -663,8 +663,8 @@ body {
   justify-content: center;
   overflow: hidden;
   white-space: nowrap;
-  padding: 0 0.55rem 0 0.7rem;
-  font-size: 0.55rem;
+  padding: 0 0.3rem 0 0.45rem;
+  font-size: 0.5rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -679,12 +679,12 @@ body {
 }
 
 .route-chevron:first-child {
-  padding-left: 0.45rem;
+  padding-left: 0.25rem;
   clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
 }
 
 .route-chevron:last-child {
-  padding-right: 0.45rem;
+  padding-right: 0.25rem;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 7px 50%);
 }
 
