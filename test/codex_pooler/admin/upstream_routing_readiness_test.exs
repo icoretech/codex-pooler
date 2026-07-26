@@ -139,6 +139,146 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
     end
   end
 
+  describe "assignment_routing_ready?/1" do
+    test "accepts active, healthy, eligible assignment structs and maps only" do
+      assert UpstreamRoutingReadiness.assignment_routing_ready?(healthy_assignment())
+
+      assert UpstreamRoutingReadiness.assignment_routing_ready?(%{
+               status: "active",
+               health_status: "active",
+               eligibility_status: "eligible"
+             })
+
+      assert UpstreamRoutingReadiness.assignment_routing_ready?(%{
+               "status" => "active",
+               "health_status" => "active",
+               "eligibility_status" => "eligible"
+             })
+
+      refute UpstreamRoutingReadiness.assignment_routing_ready?(%{
+               status: "disabled",
+               health_status: "active",
+               eligibility_status: "eligible"
+             })
+
+      refute UpstreamRoutingReadiness.assignment_routing_ready?(%{
+               status: "active",
+               health_status: "degraded",
+               eligibility_status: "eligible"
+             })
+
+      refute UpstreamRoutingReadiness.assignment_routing_ready?(%{
+               status: "active",
+               health_status: "active",
+               eligibility_status: "ineligible"
+             })
+
+      refute UpstreamRoutingReadiness.assignment_routing_ready?(%{status: "active"})
+      refute UpstreamRoutingReadiness.assignment_routing_ready?(nil)
+    end
+  end
+
+  describe "with_circuit_visibility/2" do
+    test "overlays blocked and recovering circuit evidence onto ready verdicts without changing base fields" do
+      quota_readiness = fresh_quota_readiness()
+
+      ready =
+        UpstreamRoutingReadiness.from_inputs(
+          identity("active"),
+          healthy_assignment(),
+          quota_readiness
+        )
+
+      ready_refreshing =
+        UpstreamRoutingReadiness.from_inputs(
+          identity("refreshing"),
+          healthy_assignment(),
+          quota_readiness
+        )
+
+      expected_by_circuit_state = %{
+        :blocked => %{
+          state: "circuit_protection_active",
+          label: "Circuit protection active",
+          tone: :error,
+          reason:
+            "One or more model and route lanes are blocked; unaffected routes may remain available.",
+          reason_code: "circuit_routes_blocked",
+          recovery_action:
+            "Wait for circuit protection to clear before relying on affected routes."
+        },
+        :recovering => %{
+          state: "circuit_recovering",
+          label: "Circuit recovery in progress",
+          tone: :warning,
+          reason:
+            "One or more model and route lanes are recovering; unaffected routes may remain available.",
+          reason_code: "circuit_recovering",
+          recovery_action:
+            "Wait for circuit recovery to complete before relying on affected routes."
+        }
+      }
+
+      for base_readiness <- [ready, ready_refreshing],
+          circuit_state <- [:blocked, :recovering] do
+        result =
+          UpstreamRoutingReadiness.with_circuit_visibility(
+            base_readiness,
+            circuit_summary(circuit_state)
+          )
+
+        assert Map.take(result, Map.keys(expected_by_circuit_state[circuit_state])) ==
+                 expected_by_circuit_state[circuit_state]
+
+        assert result.routing_ready_now?
+
+        assert Map.drop(result, Map.keys(expected_by_circuit_state[circuit_state])) ==
+                 Map.drop(base_readiness, Map.keys(expected_by_circuit_state[circuit_state]))
+      end
+    end
+
+    test "preserves false lifecycle, assignment, and quota verdicts despite circuit evidence" do
+      fresh_quota = fresh_quota_readiness()
+      blocked_quota = UpstreamQuotaReadiness.from_windows([], @as_of)
+
+      base_readinesses = [
+        UpstreamRoutingReadiness.from_inputs(
+          identity("disabled"),
+          healthy_assignment(),
+          fresh_quota
+        ),
+        UpstreamRoutingReadiness.from_inputs(identity("active"), nil, fresh_quota),
+        UpstreamRoutingReadiness.from_inputs(
+          identity("active"),
+          healthy_assignment(),
+          blocked_quota
+        )
+      ]
+
+      for base_readiness <- base_readinesses,
+          circuit_state <- [:blocked, :recovering] do
+        assert UpstreamRoutingReadiness.with_circuit_visibility(
+                 base_readiness,
+                 circuit_summary(circuit_state)
+               ) === base_readiness
+      end
+    end
+
+    test "returns the exact base verdict for clear circuit evidence" do
+      base_readiness =
+        UpstreamRoutingReadiness.from_inputs(
+          identity("active"),
+          [healthy_assignment()],
+          fresh_quota_readiness()
+        )
+
+      assert UpstreamRoutingReadiness.with_circuit_visibility(
+               base_readiness,
+               circuit_summary(:closed)
+             ) === base_readiness
+    end
+  end
+
   defp fresh_quota_readiness do
     [account_primary_window()]
     |> UpstreamQuotaReadiness.from_windows(@as_of)
@@ -176,6 +316,21 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadinessTest do
       status: "active",
       health_status: "active",
       eligibility_status: "eligible"
+    }
+  end
+
+  defp circuit_summary(state) do
+    %{
+      state: state,
+      ready?: state != :blocked,
+      tone: if(state == :blocked, do: :error, else: :warning),
+      label: "Circuit fixture",
+      detail: "Circuit fixture detail",
+      blocked_lane_count: if(state == :blocked, do: 1, else: 0),
+      recovering_lane_count: if(state == :recovering, do: 1, else: 0),
+      affected_lane_count: if(state == :closed, do: 0, else: 1),
+      blocked_reasons: [],
+      representative: nil
     }
   end
 end

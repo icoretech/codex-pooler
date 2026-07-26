@@ -7,13 +7,31 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
   healthy, eligible pool assignment.
   """
 
-  alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Admin.{UpstreamCircuitReadiness, UpstreamQuotaReadiness}
   alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @assignment_active PoolUpstreamAssignment.active_status()
   @assignment_health_active PoolUpstreamAssignment.active_health_status()
   @assignment_eligible PoolUpstreamAssignment.eligible_status()
+  @circuit_blocked_projection %{
+    state: "circuit_protection_active",
+    label: "Circuit protection active",
+    tone: :error,
+    reason:
+      "One or more model and route lanes are blocked; unaffected routes may remain available.",
+    reason_code: "circuit_routes_blocked",
+    recovery_action: "Wait for circuit protection to clear before relying on affected routes."
+  }
+  @circuit_recovering_projection %{
+    state: "circuit_recovering",
+    label: "Circuit recovery in progress",
+    tone: :warning,
+    reason:
+      "One or more model and route lanes are recovering; unaffected routes may remain available.",
+    reason_code: "circuit_recovering",
+    recovery_action: "Wait for circuit recovery to complete before relying on affected routes."
+  }
   @blocked_lifecycle_projections %{
     "refresh_failed" => {
       "identity_refresh_failed",
@@ -113,6 +131,17 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
       quota_readiness: quota_readiness
     })
   end
+
+  @spec with_circuit_visibility(t(), UpstreamCircuitReadiness.summary()) :: t()
+  def with_circuit_visibility(%{routing_ready_now?: true} = base_readiness, %{state: :blocked}) do
+    Map.merge(base_readiness, @circuit_blocked_projection)
+  end
+
+  def with_circuit_visibility(%{routing_ready_now?: true} = base_readiness, %{state: :recovering}) do
+    Map.merge(base_readiness, @circuit_recovering_projection)
+  end
+
+  def with_circuit_visibility(base_readiness, _circuit_summary), do: base_readiness
 
   @spec base_projection(UpstreamIdentity.status() | nil, boolean(), UpstreamQuotaReadiness.t()) ::
           projection_base()
@@ -238,22 +267,25 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
 
   @spec assignment_ready?(assignment_input()) :: boolean()
   defp assignment_ready?(assignments) when is_list(assignments) do
-    Enum.any?(assignments, &assignment_ready?/1)
+    Enum.any?(assignments, &assignment_routing_ready?/1)
   end
 
-  defp assignment_ready?(%PoolUpstreamAssignment{} = assignment) do
+  defp assignment_ready?(assignment), do: assignment_routing_ready?(assignment)
+
+  @spec assignment_routing_ready?(PoolUpstreamAssignment.t() | map() | term()) :: boolean()
+  def assignment_routing_ready?(%PoolUpstreamAssignment{} = assignment) do
     assignment.status == @assignment_active and
       assignment.health_status == @assignment_health_active and
       assignment.eligibility_status == @assignment_eligible
   end
 
-  defp assignment_ready?(%{} = assignment) do
+  def assignment_routing_ready?(%{} = assignment) do
     assignment_status(assignment, :status) == @assignment_active and
       assignment_status(assignment, :health_status) == @assignment_health_active and
       assignment_status(assignment, :eligibility_status) == @assignment_eligible
   end
 
-  defp assignment_ready?(_assignment), do: false
+  def assignment_routing_ready?(_assignment), do: false
 
   @spec assignment_status(map(), atom()) :: String.t() | nil
   defp assignment_status(assignment, field) do
