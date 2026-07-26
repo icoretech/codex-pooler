@@ -23,7 +23,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     {"sample-account-03", "Example Quota Exhausted"},
     {"sample-account-04", "Example Refresh Due"},
     {"sample-account-05", "Example Reauthentication"},
-    {"sample-account-06", "Example Paused Account"}
+    {"sample-account-06", "Example Paused Account"},
+    {"sample-account-07", "Example Circuit Clear"},
+    {"sample-account-08", "Example Circuit Absent"}
   ]
 
   @assignment_labels [
@@ -33,7 +35,9 @@ defmodule CodexPooler.Dev.Seeds.DocsScreenshots do
     "Example Cooldown Assignment",
     "Example Reauthentication Assignment",
     "Example Paused Assignment",
-    "Example Secondary Assignment"
+    "Example Secondary Assignment",
+    "Example Circuit Clear Assignment",
+    "Example Circuit Absent Assignment"
   ]
 
   @spec run(map()) :: map()

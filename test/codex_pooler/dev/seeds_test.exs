@@ -4,10 +4,17 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Access.{APIKey, Invite}
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounts.{Scope, User}
-  alias CodexPooler.Admin.UpstreamQuotaReadiness
+
+  alias CodexPooler.Admin.{
+    UpstreamCircuitReadiness,
+    UpstreamQuotaReadiness,
+    UpstreamRoutingReadiness
+  }
+
   alias CodexPooler.Catalog
-  alias CodexPooler.Catalog.SyncRun
+  alias CodexPooler.Catalog.{Model, SyncRun}
   alias CodexPooler.Dev.Seeds
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
@@ -19,6 +26,11 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
 
   import CodexPooler.AccountsFixtures
+
+  @circuit_settings %OperationalSettings{
+    circuit_open_seconds: 60,
+    circuit_half_open_probe_limit: 1
+  }
 
   setup do
     reset_bootstrap_state_fixture!()
@@ -271,12 +283,16 @@ defmodule CodexPooler.Dev.SeedsTest do
              "active",
              "active",
              "active",
+             "active",
+             "active",
              "paused",
              "reauth_required",
              "refresh_due"
            ]
 
     assert statuses_for(PoolUpstreamAssignment) == [
+             "active",
+             "active",
              "active",
              "active",
              "active",
@@ -302,7 +318,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     assert statuses_for(Invite) == ["accepted", "active", "expired", "revoked"]
 
-    assert Repo.aggregate(AccountQuotaWindow, :count) == 10
+    assert Repo.aggregate(AccountQuotaWindow, :count) == 14
 
     account_windows =
       Repo.all(
@@ -420,8 +436,42 @@ defmodule CodexPooler.Dev.SeedsTest do
              "Example Quota Exhausted",
              "Example Refresh Due",
              "Example Reauthentication",
-             "Example Paused Account"
+             "Example Paused Account",
+             "Example Circuit Clear",
+             "Example Circuit Absent"
            ]
+
+    assert Enum.map(result.upstream_identities, & &1.chatgpt_account_id) == [
+             "sample-account-01",
+             "sample-account-02",
+             "sample-account-03",
+             "sample-account-04",
+             "sample-account-05",
+             "sample-account-06",
+             "sample-account-07",
+             "sample-account-08"
+           ]
+
+    assert Enum.map(result.assignments, & &1.assignment_label) == [
+             "Example Primary Assignment",
+             "Example Ready Assignment",
+             "Example Exhausted Assignment",
+             "Example Cooldown Assignment",
+             "Example Reauthentication Assignment",
+             "Example Paused Assignment",
+             "Example Secondary Assignment",
+             "Example Circuit Clear Assignment",
+             "Example Circuit Absent Assignment"
+           ]
+
+    assert {length(result.upstream_identities), length(result.assignments)} == {8, 9}
+
+    assert {Repo.aggregate(UpstreamIdentity, :count),
+            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+             {8, 9}
+
+    refute Enum.any?(result.upstream_identities, &String.starts_with?(&1.account_label, "Dev "))
+    refute Enum.any?(result.assignments, &String.starts_with?(&1.assignment_label, "Dev "))
 
     assert Enum.all?(result.request_logs, fn request ->
              is_nil(request.upstream_account_label) or
@@ -460,6 +510,194 @@ defmodule CodexPooler.Dev.SeedsTest do
     assert Repo.aggregate(ModelServingOverride, :count) == 2
   end
 
+  test "full and documentation screenshot seeds preserve their existing ordered shapes" do
+    Seeds.full()
+    full = Seeds.full()
+
+    assert Enum.take(Enum.map(full.upstream_identities, & &1.chatgpt_account_id), 6) == [
+             "dev-acct-active",
+             "dev-acct-ready-quota",
+             "dev-acct-exhausted-quota",
+             "dev-acct-plus",
+             "dev-acct-reauth",
+             "dev-acct-paused"
+           ]
+
+    assert Enum.take(Enum.map(full.assignments, & &1.assignment_label), 7) == [
+             "Dev Active Assignment",
+             "Dev Ready Assignment",
+             "Dev Exhausted Assignment",
+             "Dev Cooldown Assignment",
+             "Dev Reauth Assignment",
+             "Dev Paused Assignment",
+             "Dev Active Secondary Assignment"
+           ]
+
+    assert {length(full.upstream_identities), length(full.assignments)} == {8, 9}
+
+    assert {Repo.aggregate(UpstreamIdentity, :count),
+            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+             {8, 9}
+
+    Seeds.docs_screenshots()
+    docs = Seeds.docs_screenshots()
+
+    assert Enum.take(Enum.map(docs.upstream_identities, & &1.chatgpt_account_id), 6) == [
+             "sample-account-01",
+             "sample-account-02",
+             "sample-account-03",
+             "sample-account-04",
+             "sample-account-05",
+             "sample-account-06"
+           ]
+
+    assert Enum.take(Enum.map(docs.assignments, & &1.assignment_label), 7) == [
+             "Example Primary Assignment",
+             "Example Ready Assignment",
+             "Example Exhausted Assignment",
+             "Example Cooldown Assignment",
+             "Example Reauthentication Assignment",
+             "Example Paused Assignment",
+             "Example Secondary Assignment"
+           ]
+
+    assert {length(docs.upstream_identities), length(docs.assignments)} == {8, 9}
+
+    assert {Repo.aggregate(UpstreamIdentity, :count),
+            Repo.aggregate(PoolUpstreamAssignment, :count)} ==
+             {8, 9}
+  end
+
+  test "full seed exposes distinct stable circuit visibility states" do
+    Seeds.full()
+    result = Seeds.full()
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    later_observed_at = DateTime.add(observed_at, 2, :hour)
+
+    assert {length(result.upstream_identities), length(result.assignments)} == {8, 9}
+    assert Repo.aggregate(UpstreamIdentity, :count) == 8
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 9
+    assert Repo.aggregate(Model, :count) == 6
+    assert Repo.aggregate(AccountQuotaWindow, :count) == 14
+    assert Repo.aggregate(RoutingCircuitState, :count) == 3
+
+    assert Enum.map(result.upstream_identities, & &1.chatgpt_account_id) == [
+             "dev-acct-active",
+             "dev-acct-ready-quota",
+             "dev-acct-exhausted-quota",
+             "dev-acct-plus",
+             "dev-acct-reauth",
+             "dev-acct-paused",
+             "dev-acct-circuit-clear",
+             "dev-acct-circuit-absent"
+           ]
+
+    assert Enum.map(result.assignments, & &1.assignment_label) == [
+             "Dev Active Assignment",
+             "Dev Ready Assignment",
+             "Dev Exhausted Assignment",
+             "Dev Cooldown Assignment",
+             "Dev Reauth Assignment",
+             "Dev Paused Assignment",
+             "Dev Active Secondary Assignment",
+             "Dev Circuit Clear Assignment",
+             "Dev Circuit Absent Assignment"
+           ]
+
+    fixtures =
+      for {identity_label, assignment_label} <- [
+            {"Dev Active Pro", "Dev Active Assignment"},
+            {"Dev Ready Quota", "Dev Ready Assignment"},
+            {"Dev Circuit Clear", "Dev Circuit Clear Assignment"},
+            {"Dev Circuit Absent", "Dev Circuit Absent Assignment"}
+          ],
+          into: %{} do
+        identity = Repo.get_by!(UpstreamIdentity, account_label: identity_label)
+
+        assignment =
+          Repo.get_by!(PoolUpstreamAssignment,
+            upstream_identity_id: identity.id,
+            assignment_label: assignment_label
+          )
+
+        {assignment_label, %{identity: identity, assignment: assignment}}
+      end
+
+    served_models =
+      Map.new(fixtures, fn {_label, %{assignment: assignment}} ->
+        {assignment.id, ["gpt-5.4-mini"]}
+      end)
+
+    mini_model =
+      Enum.find(result.models, fn model ->
+        model.exposed_model_id == "gpt-5.4-mini" and model.source_assignment_count == 4
+      end)
+
+    assert mini_model
+
+    assert MapSet.subset?(
+             served_models |> Map.keys() |> MapSet.new(),
+             mini_model.metadata["source_assignment_ids"] |> MapSet.new()
+           )
+
+    circuit_at_seed =
+      UpstreamCircuitReadiness.by_assignment_id(served_models, @circuit_settings, observed_at)
+
+    circuit_later =
+      UpstreamCircuitReadiness.by_assignment_id(
+        served_models,
+        @circuit_settings,
+        later_observed_at
+      )
+
+    states_at_seed = circuit_states_by_label(fixtures, circuit_at_seed)
+    states_later = circuit_states_by_label(fixtures, circuit_later)
+
+    assert states_at_seed == %{
+             "Dev Active Assignment" => :blocked,
+             "Dev Ready Assignment" => :recovering,
+             "Dev Circuit Clear Assignment" => :closed,
+             "Dev Circuit Absent Assignment" => :closed
+           }
+
+    assert states_later == states_at_seed
+
+    blocked = Map.fetch!(fixtures, "Dev Active Assignment")
+    recovering = Map.fetch!(fixtures, "Dev Ready Assignment")
+    clear = Map.fetch!(fixtures, "Dev Circuit Clear Assignment")
+    absent = Map.fetch!(fixtures, "Dev Circuit Absent Assignment")
+
+    refute circuit_at_seed[blocked.assignment.id].ready?
+    assert circuit_at_seed[recovering.assignment.id].ready?
+    assert circuit_at_seed[clear.assignment.id] == UpstreamCircuitReadiness.clear()
+    assert circuit_at_seed[absent.assignment.id] == UpstreamCircuitReadiness.clear()
+    assert circuit_at_seed[recovering.assignment.id].blocked_lane_count == 0
+    assert circuit_at_seed[recovering.assignment.id].recovering_lane_count == 1
+
+    assert Repo.aggregate(
+             from(state in RoutingCircuitState,
+               where: state.pool_upstream_assignment_id == ^absent.assignment.id
+             ),
+             :count
+           ) == 0
+
+    for %{identity: identity, assignment: assignment} <- Map.values(fixtures) do
+      quota_readiness =
+        UpstreamQuotaReadiness.from_windows(quota_windows_for(identity), observed_at)
+
+      assert quota_readiness.routing_ready_now?
+      assert UpstreamRoutingReadiness.assignment_routing_ready?(assignment)
+
+      assert UpstreamRoutingReadiness.from_inputs(identity, assignment, quota_readiness).routing_ready_now?
+    end
+
+    assert circuit_route_count(circuit_at_seed[blocked.assignment.id]) == 3
+
+    for %{assignment: assignment} <- [recovering, clear, absent] do
+      assert circuit_route_count(circuit_at_seed[assignment.id]) == 4
+    end
+  end
+
   defp statuses_for(schema) do
     schema
     |> Repo.all()
@@ -474,4 +712,13 @@ defmodule CodexPooler.Dev.SeedsTest do
         order_by: [asc: window.window_kind]
     )
   end
+
+  defp circuit_states_by_label(fixtures, circuit_readiness) do
+    Map.new(fixtures, fn {label, %{assignment: assignment}} ->
+      {label, circuit_readiness[assignment.id].state}
+    end)
+  end
+
+  defp circuit_route_count(circuit_readiness),
+    do: 3 + if(circuit_readiness.ready?, do: 1, else: 0)
 end

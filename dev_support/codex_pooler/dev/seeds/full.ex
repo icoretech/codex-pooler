@@ -68,7 +68,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
 
     models = seed_models!(pool_active, assignments, secondary_assignment)
     secondary_models = seed_secondary_models!(pool_secondary, secondary_assignment)
-    seed_routing_circuit_states!(pool_active, assignments, active)
+    seed_routing_circuit_states!(pool_active, assignments, identities)
     quota_windows = seed_quota_windows!(identities)
     request_logs = seed_request_logs!(pool_active, api_keys, assignments, models)
     seed_recent_token_usage!(pool_active, api_keys, assignments, models)
@@ -83,7 +83,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
       pools: [pool_active, pool_secondary, pool_disabled],
       api_keys: api_keys,
       upstream_identities: identities,
-      assignments: assignments ++ [secondary_assignment],
+      assignments:
+        Enum.take(assignments, 6) ++ [secondary_assignment] ++ Enum.drop(assignments, 6),
       models: models ++ secondary_models,
       quota_windows: quota_windows,
       request_logs: request_logs,
@@ -220,14 +221,39 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "team",
         "Team"
       ),
-      identity_attrs(owner, "dev-acct-paused", "Dev Paused Account", "paused", "free", "Free")
+      identity_attrs(owner, "dev-acct-paused", "Dev Paused Account", "paused", "free", "Free"),
+      identity_attrs(
+        owner,
+        "dev-acct-circuit-clear",
+        "Dev Circuit Clear",
+        "active",
+        "pro",
+        "Pro"
+      ),
+      identity_attrs(
+        owner,
+        "dev-acct-circuit-absent",
+        "Dev Circuit Absent",
+        "active",
+        "pro",
+        "Pro"
+      )
     ]
     |> Enum.map(fn attrs ->
       %UpstreamIdentity{} |> UpstreamIdentity.changeset(attrs) |> Repo.insert!()
     end)
   end
 
-  defp seed_assignments!(owner, pool, [active, ready, exhausted, plus, reauth, paused]) do
+  defp seed_assignments!(owner, pool, [
+         active,
+         ready,
+         exhausted,
+         plus,
+         reauth,
+         paused,
+         clear,
+         absent
+       ]) do
     [
       assignment_attrs(
         owner,
@@ -283,6 +309,24 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "paused",
         "disabled",
         "ineligible"
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        clear,
+        "Dev Circuit Clear Assignment",
+        "active",
+        "active",
+        "eligible"
+      ),
+      assignment_attrs(
+        owner,
+        pool,
+        absent,
+        "Dev Circuit Absent Assignment",
+        "active",
+        "active",
+        "eligible"
       )
     ]
     |> Enum.map(&seed_assignment!/1)
@@ -292,15 +336,32 @@ defmodule CodexPooler.Dev.Seeds.Full do
     %PoolUpstreamAssignment{} |> PoolUpstreamAssignment.changeset(attrs) |> Repo.insert!()
   end
 
-  defp seed_models!(pool, [active_assignment, ready_assignment | _rest], _secondary_assignment) do
+  defp seed_models!(
+         pool,
+         [
+           active_assignment,
+           ready_assignment,
+           _exhausted_assignment,
+           _cooldown_assignment,
+           _reauth_assignment,
+           _paused_assignment,
+           clear_assignment,
+           absent_assignment
+         ],
+         _secondary_assignment
+       ) do
     active_id = active_assignment.id
     ready_id = ready_assignment.id
+    clear_id = clear_assignment.id
+    absent_id = absent_assignment.id
 
     [
       model_attrs(pool, "gpt-5.4-mini", "GPT 5.4 Mini", "active",
         source_assignment_models: %{
           active_id => observed_source_metadata(),
-          ready_id => observed_source_metadata()
+          ready_id => observed_source_metadata(),
+          clear_id => observed_source_metadata(),
+          absent_id => observed_source_metadata()
         }
       ),
       model_attrs(pool, "gpt-5.4", "GPT 5.4", "active",
@@ -339,39 +400,52 @@ defmodule CodexPooler.Dev.Seeds.Full do
     }
   end
 
-  # Circuit rows chosen so the routing panel shows one model per serving
-  # signal: a serving rejection, a cooling-off route with a probe in flight,
-  # and a nominal observed route that must render without badges.
-  defp seed_routing_circuit_states!(pool, [active_assignment | _rest], active_identity) do
+  defp seed_routing_circuit_states!(
+         pool,
+         [
+           active_assignment,
+           ready_assignment,
+           _exhausted_assignment,
+           _cooldown_assignment,
+           _reauth_assignment,
+           _paused_assignment,
+           clear_assignment,
+           _absent_assignment
+         ],
+         [
+           active_identity,
+           ready_identity,
+           _exhausted_identity,
+           _plus_identity,
+           _reauth_identity,
+           _paused_identity,
+           clear_identity,
+           _absent_identity
+         ]
+       ) do
     [
       circuit_attrs(pool, active_assignment, active_identity, "gpt-5.4-mini", "proxy_stream",
-        status: "closed",
+        status: "open",
         reason_code: "upstream_model_unavailable",
         failure_count: 4,
         last_failure_at: minutes_ago(6),
-        closed_at: minutes_ago(6)
+        opened_at: minutes_ago(6),
+        next_probe_at: nil
       ),
-      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.5", "proxy_http",
+      circuit_attrs(pool, ready_assignment, ready_identity, "gpt-5.4-mini", "proxy_stream",
         status: "open",
         reason_code: "upstream_model_unavailable",
         failure_count: 3,
         last_failure_at: minutes_ago(4),
         opened_at: minutes_ago(4),
-        next_probe_at: minutes_from_now(12)
+        next_probe_at: minutes_ago(1)
       ),
-      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.5", "proxy_websocket",
-        status: "half_open",
-        reason_code: "upstream_model_unavailable",
-        failure_count: 2,
-        last_failure_at: minutes_ago(9),
-        half_opened_at: minutes_ago(1)
-      ),
-      circuit_attrs(pool, active_assignment, active_identity, "gpt-5.4", "proxy_http",
+      circuit_attrs(pool, clear_assignment, clear_identity, "gpt-5.4-mini", "proxy_stream",
         status: "closed",
         failure_count: 0,
         success_count: 12,
-        last_success_at: minutes_ago(2),
-        closed_at: minutes_ago(120)
+        last_success_at: minutes_ago(180),
+        closed_at: minutes_ago(180)
       )
     ]
     |> Enum.each(fn attrs ->
@@ -404,7 +478,7 @@ defmodule CodexPooler.Dev.Seeds.Full do
     }
   end
 
-  defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused]) do
+  defp seed_quota_windows!([active, ready, exhausted, plus, reauth, paused, clear, absent]) do
     windows = [
       quota_attrs(active, quota_window_spec("primary", 300, "account", 1000, 640, "36", "fresh")),
       quota_attrs(
@@ -435,7 +509,17 @@ defmodule CodexPooler.Dev.Seeds.Full do
         reauth,
         quota_window_spec("primary", 300, "account", 1000, nil, nil, "unknown")
       ),
-      quota_attrs(paused, quota_window_spec("primary", 300, "account", 1000, 0, "100", "stale"))
+      quota_attrs(paused, quota_window_spec("primary", 300, "account", 1000, 0, "100", "stale")),
+      quota_attrs(clear, quota_window_spec("primary", 300, "account", 1000, 760, "24", "fresh")),
+      quota_attrs(
+        clear,
+        quota_window_spec("secondary", 10_080, "account", 1000, 680, "32", "fresh")
+      ),
+      quota_attrs(absent, quota_window_spec("primary", 300, "account", 1000, 810, "19", "fresh")),
+      quota_attrs(
+        absent,
+        quota_window_spec("secondary", 10_080, "account", 1000, 730, "27", "fresh")
+      )
     ]
 
     Enum.map(windows, fn attrs ->
