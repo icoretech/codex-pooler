@@ -2,7 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   @moduledoc false
 
   alias CodexPooler.Accounts.Scope
-  alias CodexPooler.Admin.UpstreamCockpitMetrics
+  alias CodexPooler.Admin.{UpstreamCircuitReadiness, UpstreamCockpitMetrics}
   alias CodexPooler.Audit
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams.SavedResets
@@ -68,7 +68,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:quota_priming_status) => String.t(),
           required(:quota_priming_label) => String.t(),
           required(:last_successful_refresh_at) => DateTime.t() | nil,
-          required(:pool_label) => String.t()
+          required(:pool_label) => String.t(),
+          required(:circuit_readiness) => UpstreamCircuitReadiness.summary()
         }
   @type assignments :: %{
           required(:items) => [assignment()],
@@ -302,7 +303,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       quota_priming_status: snapshot.quota_priming_status,
       quota_priming_label: snapshot.quota_priming_label,
       last_successful_refresh_at: snapshot.last_successful_refresh_at,
-      pool_label: snapshot.pool_label
+      pool_label: snapshot.pool_label,
+      circuit_readiness: snapshot.circuit_readiness
     }
   end
 
