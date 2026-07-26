@@ -4254,6 +4254,59 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert [] = all_enqueued(worker: AccountReconciliationWorker)
     end
 
+    test "scheduled enqueue observes same-process pause updates after the cache was primed" do
+      {_pool, assignment} =
+        active_assignment_fixture(%{"quota_priming" => %{"status" => "known"}})
+
+      Application.put_env(:codex_pooler, :dev_features_enabled, true)
+
+      assert {:ok, _settings} =
+               InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+                 "development" => %{"account_reconciliation_paused" => false}
+               })
+
+      assert InstanceSettings.current().development.account_reconciliation_paused == false
+
+      assert {:ok, _settings} =
+               InstanceSettings.update_system_settings(InstanceSettings.get!(), %{
+                 "development" => %{"account_reconciliation_paused" => true}
+               })
+
+      assert :ok = perform_job(AccountReconciliationEnqueueWorker, %{})
+
+      reloaded_assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert reloaded_assignment.metadata["quota_priming"]["status"] == "known"
+      assert [] = all_enqueued(worker: AccountReconciliationWorker, queue: :jobs)
+    end
+
+    test "scheduled enqueue observes an external pause update after the cache was primed" do
+      {_pool, assignment} =
+        active_assignment_fixture(%{"quota_priming" => %{"status" => "known"}})
+
+      Application.put_env(:codex_pooler, :dev_features_enabled, true)
+
+      assert {:ok, settings} =
+               InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+                 "development" => %{"account_reconciliation_paused" => false}
+               })
+
+      assert InstanceSettings.current().development.account_reconciliation_paused == false
+
+      settings
+      |> Repo.reload!()
+      |> Settings.changeset(%{
+        "development" => %{"account_reconciliation_paused" => true}
+      })
+      |> Repo.update!()
+
+      assert Repo.get!(Settings, true).development.account_reconciliation_paused == true
+      assert :ok = perform_job(AccountReconciliationEnqueueWorker, %{})
+
+      reloaded_assignment = Repo.get!(PoolUpstreamAssignment, assignment.id)
+      assert reloaded_assignment.metadata["quota_priming"]["status"] == "known"
+      assert [] = all_enqueued(worker: AccountReconciliationWorker, queue: :jobs)
+    end
+
     test "account reconciliation worker no-ops when development reconciliation pause is enabled" do
       upstream =
         start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-dev-paused"}]}))

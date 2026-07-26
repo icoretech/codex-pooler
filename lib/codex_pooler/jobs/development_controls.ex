@@ -8,7 +8,7 @@ defmodule CodexPooler.Jobs.DevelopmentControls do
   if @build_enabled do
     def account_reconciliation_paused? do
       Application.get_env(:codex_pooler, :dev_features_enabled, false) == true and
-        CodexPooler.InstanceSettings.current().development.account_reconciliation_paused == true
+        CodexPooler.InstanceSettings.get!().development.account_reconciliation_paused == true
     end
   else
     def account_reconciliation_paused?, do: false
