@@ -18,12 +18,15 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Gateway.Persistence.{CodexSession, RoutingCircuitState}
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath
 
   import CodexPooler.AccountsFixtures
 
@@ -698,6 +701,88 @@ defmodule CodexPooler.Dev.SeedsTest do
     end
   end
 
+  test "full seed rerun recreates and refreshes quota evidence" do
+    Seeds.full()
+    first_quota_evidence = quota_evidence_by_logical_key()
+
+    Seeds.full()
+    second_quota_evidence = quota_evidence_by_logical_key()
+
+    assert map_size(first_quota_evidence) == 14
+
+    assert Map.keys(second_quota_evidence) |> MapSet.new() ==
+             Map.keys(first_quota_evidence) |> MapSet.new()
+
+    for {logical_key, first_evidence} <- first_quota_evidence do
+      second_evidence = Map.fetch!(second_quota_evidence, logical_key)
+
+      assert DateTime.compare(second_evidence.observed_at, first_evidence.observed_at) == :gt
+      assert DateTime.compare(second_evidence.last_sync_at, first_evidence.last_sync_at) == :gt
+      assert DateTime.compare(second_evidence.reset_at, first_evidence.reset_at) == :gt
+    end
+  end
+
+  test "full seed keeps circuit-demo route counts stable after quota freshness expires" do
+    Seeds.full()
+    Seeds.full()
+
+    fixtures = circuit_demo_fixtures()
+    seeded_at = latest_quota_observation(fixtures)
+    fresh_at = DateTime.add(seeded_at, Evidence.freshness_ttl_seconds(), :second)
+    aged_at = DateTime.add(fresh_at, 1, :second)
+
+    served_models =
+      Map.new(fixtures, fn {label, %{assignment: assignment}} ->
+        {label, {assignment.id, ["gpt-5.4-mini"]}}
+      end)
+
+    circuit_readiness =
+      served_models
+      |> Map.values()
+      |> Map.new()
+      |> UpstreamCircuitReadiness.by_assignment_id(@circuit_settings, aged_at)
+
+    for %{identity: identity} <- Map.values(fixtures) do
+      assert %{state: "ready", routing_ready_now?: true} =
+               UpstreamQuotaReadiness.from_windows(quota_windows_for(identity), fresh_at)
+
+      assert %{state: "stale", routing_ready_now?: false} =
+               UpstreamQuotaReadiness.from_windows(quota_windows_for(identity), aged_at)
+    end
+
+    route_counts =
+      Map.new(fixtures, fn {label, %{assignment: assignment}} ->
+        route_assignment =
+          route_path_assignment(assignment, Map.fetch!(circuit_readiness, assignment.id))
+
+        assert Enum.map(RoutePath.segments(route_assignment), & &1.label) == [
+                 "Assignment",
+                 "Health",
+                 "Quota",
+                 "Circuit"
+               ]
+
+        {label, RoutePath.ready_count(route_assignment)}
+      end)
+
+    assert route_counts == %{
+             "Dev Active Assignment" => 3,
+             "Dev Active Secondary Assignment" => 4,
+             "Dev Ready Assignment" => 4,
+             "Dev Circuit Clear Assignment" => 4,
+             "Dev Circuit Absent Assignment" => 4
+           }
+
+    absent = Map.fetch!(fixtures, "Dev Circuit Absent Assignment")
+
+    assert Repo.aggregate(
+             from(state in RoutingCircuitState,
+               where: state.pool_upstream_assignment_id == ^absent.assignment.id
+             ),
+             :count
+           ) == 0
+  end
+
   defp statuses_for(schema) do
     schema
     |> Repo.all()
@@ -711,6 +796,71 @@ defmodule CodexPooler.Dev.SeedsTest do
         where: window.upstream_identity_id == ^identity.id and window.quota_scope == "account",
         order_by: [asc: window.window_kind]
     )
+  end
+
+  defp quota_evidence_by_logical_key do
+    Repo.all(
+      from(window in AccountQuotaWindow,
+        join: identity in UpstreamIdentity,
+        on: identity.id == window.upstream_identity_id,
+        select: {
+          {
+            identity.account_label,
+            window.quota_scope,
+            window.quota_key,
+            window.window_kind,
+            window.window_minutes,
+            window.model
+          },
+          %{
+            observed_at: window.observed_at,
+            last_sync_at: window.last_sync_at,
+            reset_at: window.reset_at
+          }
+        }
+      )
+    )
+    |> Map.new()
+  end
+
+  defp circuit_demo_fixtures do
+    for {identity_label, assignment_label} <- [
+          {"Dev Active Pro", "Dev Active Assignment"},
+          {"Dev Active Pro", "Dev Active Secondary Assignment"},
+          {"Dev Ready Quota", "Dev Ready Assignment"},
+          {"Dev Circuit Clear", "Dev Circuit Clear Assignment"},
+          {"Dev Circuit Absent", "Dev Circuit Absent Assignment"}
+        ],
+        into: %{} do
+      identity = Repo.get_by!(UpstreamIdentity, account_label: identity_label)
+
+      assignment =
+        Repo.get_by!(PoolUpstreamAssignment,
+          upstream_identity_id: identity.id,
+          assignment_label: assignment_label
+        )
+
+      {assignment_label, %{identity: identity, assignment: assignment}}
+    end
+  end
+
+  defp latest_quota_observation(fixtures) do
+    fixtures
+    |> Map.values()
+    |> Enum.flat_map(&quota_windows_for(&1.identity))
+    |> Enum.map(& &1.observed_at)
+    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond))
+  end
+
+  defp route_path_assignment(assignment, circuit_readiness) do
+    %{
+      pool_label: "Dev Circuit Demo Pool",
+      status: assignment.status,
+      health_status: assignment.health_status,
+      quota_priming_status: QuotaProjection.assignment_priming_status(assignment),
+      quota_priming_label: QuotaProjection.assignment_priming_label(assignment),
+      circuit_readiness: circuit_readiness
+    }
   end
 
   defp circuit_states_by_label(fixtures, circuit_readiness) do

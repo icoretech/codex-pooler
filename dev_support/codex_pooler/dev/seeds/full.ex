@@ -62,7 +62,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
           "Dev Active Secondary Assignment",
           "active",
           "active",
-          "eligible"
+          "eligible",
+          metadata: %{"quota_priming" => %{"status" => "known"}}
         )
       )
 
@@ -262,7 +263,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "Dev Active Assignment",
         "active",
         "active",
-        "eligible"
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "known"}}
       ),
       assignment_attrs(
         owner,
@@ -271,7 +273,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "Dev Ready Assignment",
         "active",
         "active",
-        "eligible"
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "known"}}
       ),
       assignment_attrs(
         owner,
@@ -317,7 +320,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "Dev Circuit Clear Assignment",
         "active",
         "active",
-        "eligible"
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "known"}}
       ),
       assignment_attrs(
         owner,
@@ -326,7 +330,8 @@ defmodule CodexPooler.Dev.Seeds.Full do
         "Dev Circuit Absent Assignment",
         "active",
         "active",
-        "eligible"
+        "eligible",
+        metadata: %{"quota_priming" => %{"status" => "known"}}
       )
     ]
     |> Enum.map(&seed_assignment!/1)
@@ -971,7 +976,9 @@ defmodule CodexPooler.Dev.Seeds.Full do
       created_by_user_id: owner.id,
       created_at: timestamp,
       updated_at: timestamp,
-      metadata: %{"dev_seed" => @seed_key, "state" => health}
+      metadata:
+        %{"dev_seed" => @seed_key, "state" => health}
+        |> Map.merge(Keyword.get(extras, :metadata, %{}))
     }
   end
 
