@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias Ecto.Adapters.SQL.Sandbox
 
   @endpoint_path "/backend-api/codex/responses"
 
@@ -229,7 +230,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         )
       end)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), task.pid)
+    Sandbox.allow(Repo, self(), task.pid)
     :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
     before_preload = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

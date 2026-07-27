@@ -389,12 +389,12 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
       assert function_exported?(AccountReconciliation, :run, 4)
 
       assert {:ok, result} =
-               apply(AccountReconciliation, :run, [
+               AccountReconciliation.run(
                  pool.id,
                  assignment.id,
                  "timestamp_contract",
-                 [operation_clock: operation_clock]
-               ])
+                 operation_clock: operation_clock
+               )
 
       assert_receive {:terminal_operation_clock, [persisted_window]}
       refute_received {:terminal_operation_clock, _other_windows}

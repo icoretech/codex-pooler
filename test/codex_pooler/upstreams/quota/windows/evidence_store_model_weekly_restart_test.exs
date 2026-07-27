@@ -7,11 +7,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Quota.Windows.Routing
+  alias CodexPooler.Upstreams.Quota.WindowSelector
 
   @window_seconds 10_080 * 60
 

@@ -332,10 +332,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
         case Plan.filter_eligible_candidates(input, refreshed_route_state) do
           {:refreshable_quota, remaining_plan} ->
-            case Executor.refresh_stale_candidates(remaining_plan) do
-              {:ok, candidates, decision, %RouteState{}} -> {:ok, candidates, decision}
-              other -> other
-            end
+            remaining_plan
+            |> Executor.refresh_stale_candidates()
+            |> without_refreshed_route_state()
 
           {:ok, candidates, decision} ->
             {:ok, candidates, decision}
@@ -347,6 +346,11 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
       result
   end
+
+  defp without_refreshed_route_state({:ok, candidates, decision, %RouteState{}}),
+    do: {:ok, candidates, decision}
+
+  defp without_refreshed_route_state(other), do: other
 
   defp all_candidates_excluded_only_by_weekly_exhaustion?(error, refresh_plan)
        when is_map(error) do

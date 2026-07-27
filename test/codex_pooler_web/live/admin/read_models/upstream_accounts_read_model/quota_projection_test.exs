@@ -2,8 +2,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
   alias CodexPoolerWeb.DateTimeDisplay
