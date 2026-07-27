@@ -5,6 +5,14 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
   alias CodexPooler.Upstreams.Quota.WindowSelector
 
   @as_of ~U[2026-07-09 15:45:00Z]
+  @qf_as_of ~U[2026-07-25 12:00:00.000000Z]
+  @spark_tokens [
+    "codex_spark",
+    "codex_bengalfox",
+    "gpt_5_3_codex_spark",
+    "codex_other",
+    "gpt-5.3-codex-spark"
+  ]
 
   test "prefers measured account evidence over a later zero-capacity usage outlier" do
     outlier =
@@ -229,6 +237,290 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
     end
   end
 
+  test "generic account logical selection is byte-for-byte stable in both candidate orders" do
+    expected =
+      account_window(
+        id: "11111111-1111-4111-8111-111111111111",
+        used_percent: Decimal.new("17"),
+        reset_at: DateTime.add(@as_of, 3, :hour),
+        observed_at: DateTime.add(@as_of, -30, :second)
+      )
+
+    lower_pressure =
+      account_window(
+        id: "22222222-2222-4222-8222-222222222222",
+        used_percent: Decimal.new("11"),
+        reset_at: DateTime.add(@as_of, 3, :hour),
+        observed_at: DateTime.add(@as_of, -30, :second)
+      )
+
+    expected_bytes = :erlang.term_to_binary([expected])
+
+    assert WindowSelector.logical_windows([expected, lower_pressure], @as_of)
+           |> :erlang.term_to_binary() == expected_bytes
+
+    assert WindowSelector.logical_windows([lower_pressure, expected], @as_of)
+           |> :erlang.term_to_binary() == expected_bytes
+  end
+
+  test "every recognized Spark token folds from both eligible fields and target scopes in both candidate orders" do
+    for token <- @spark_tokens,
+        scope <- ["model", "upstream_model"],
+        field <- [:quota_key, :active_dimension] do
+      alias_window =
+        spark_alias_window(
+          scope,
+          field,
+          token,
+          "ffffffff-ffff-4fff-bfff-ffffffffffff"
+        )
+
+      canonical_window =
+        spark_alias_window(
+          scope,
+          :canonical,
+          "codex_spark",
+          "10000000-0000-4000-8000-000000000001"
+        )
+
+      for candidates <- [
+            [alias_window, canonical_window],
+            [canonical_window, alias_window]
+          ] do
+        assert [winner] = WindowSelector.logical_windows(candidates, @as_of)
+        assert winner.id == alias_window.id
+        assert WindowSelector.logical_key(winner) == canonical_spark_key(scope)
+      end
+    end
+  end
+
+  test "legacy weekly primary Spark rows fold into the secondary canonical identity" do
+    for scope <- ["model", "upstream_model"] do
+      legacy =
+        spark_alias_window(
+          scope,
+          :quota_key,
+          "codex_bengalfox",
+          "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          window_kind: "primary"
+        )
+
+      canonical =
+        spark_alias_window(
+          scope,
+          :canonical,
+          "codex_spark",
+          "10000000-0000-4000-8000-000000000001"
+        )
+
+      assert [winner] = WindowSelector.logical_windows([legacy, canonical], @as_of)
+      assert winner.id == legacy.id
+      assert winner.window_kind == "secondary"
+      assert WindowSelector.logical_key(winner) == canonical_spark_key(scope)
+    end
+  end
+
+  test "feature and account codex_other rows remain distinct from model Spark evidence" do
+    model_spark = spark_window(id: "10000000-0000-4000-8000-000000000001")
+
+    for scope <- ["feature", "account"] do
+      non_target =
+        account_window(
+          id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          quota_key: "codex_other",
+          quota_scope: scope,
+          quota_family: scope,
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          used_percent: Decimal.new("0"),
+          reset_at: DateTime.add(@as_of, 7, :day)
+        )
+
+      result = WindowSelector.logical_windows([model_spark, non_target], @as_of)
+
+      assert Enum.map(result, & &1.id) |> Enum.sort() ==
+               Enum.sort([model_spark.id, non_target.id])
+    end
+  end
+
+  test "unrelated weekly target identifiers remain separate logical windows" do
+    first =
+      spark_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        quota_key: "codex_otherwise",
+        model: "gpt-5.3-codex-spark-preview"
+      )
+
+    second =
+      spark_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        quota_key: "another-model",
+        model: "another-model"
+      )
+
+    assert WindowSelector.logical_windows([first, second], @as_of)
+           |> Enum.map(& &1.id)
+           |> Enum.sort() == Enum.sort([first.id, second.id])
+  end
+
+  test "recognized Spark tokens in inactive target-scope dimensions remain separate from canonical Spark" do
+    for token <- @spark_tokens,
+        scope <- ["model", "upstream_model"] do
+      inactive_alias =
+        spark_alias_window(
+          scope,
+          :inactive_dimension,
+          token,
+          "ffffffff-ffff-4fff-bfff-ffffffffffff"
+        )
+
+      canonical =
+        spark_alias_window(
+          scope,
+          :canonical,
+          "codex_spark",
+          "10000000-0000-4000-8000-000000000001"
+        )
+
+      expected_inactive_key =
+        case scope do
+          "model" ->
+            {"model", "unrelated-family", "unrelated-model", nil, "unrelated-quota", "secondary",
+             10_080}
+
+          "upstream_model" ->
+            {"upstream_model", "unrelated-family", nil, "unrelated-upstream-model",
+             "unrelated-quota", "secondary", 10_080}
+        end
+
+      assert WindowSelector.logical_key(inactive_alias) == expected_inactive_key
+      refute WindowSelector.logical_key(inactive_alias) == canonical_spark_key(scope)
+
+      for candidates <- [[inactive_alias, canonical], [canonical, inactive_alias]] do
+        assert WindowSelector.logical_windows(candidates, @as_of)
+               |> Enum.map(& &1.id)
+               |> Enum.sort() == Enum.sort([inactive_alias.id, canonical.id])
+      end
+    end
+  end
+
+  test "QF-001 explicit floating evidence wins both permutations by semantic rank and persisted id" do
+    explicit_floating = qf001_explicit_floating()
+    markerless_headers = qf001_markerless_headers()
+
+    assert explicit_floating.id == "10000000-0000-4000-8000-000000000001"
+    assert markerless_headers.id == "ffffffff-ffff-4fff-bfff-ffffffffffff"
+    assert explicit_floating.used_percent == markerless_headers.used_percent
+    assert explicit_floating.active_limit == markerless_headers.active_limit
+    assert explicit_floating.credits == markerless_headers.credits
+    assert explicit_floating.freshness_state == markerless_headers.freshness_state
+    assert explicit_floating.source_precision == markerless_headers.source_precision
+    assert match?(%DateTime{}, explicit_floating.reset_at)
+    assert match?(%DateTime{}, markerless_headers.reset_at)
+    assert markerless_headers.merge_precedence > explicit_floating.merge_precedence
+    assert DateTime.after?(markerless_headers.observed_at, explicit_floating.observed_at)
+    assert DateTime.after?(markerless_headers.last_sync_at, explicit_floating.last_sync_at)
+    assert DateTime.after?(markerless_headers.updated_at, explicit_floating.updated_at)
+    assert DateTime.after?(markerless_headers.reset_at, explicit_floating.reset_at)
+    assert markerless_headers.id > explicit_floating.id
+
+    for candidates <- [
+          [explicit_floating, markerless_headers],
+          [markerless_headers, explicit_floating]
+        ] do
+      assert [winner] = WindowSelector.logical_windows(candidates, @qf_as_of)
+      assert winner.id == explicit_floating.id
+      assert winner == explicit_floating
+    end
+  end
+
+  test "QF-001 excludes a separate observation one microsecond after as_of" do
+    explicit_floating = qf001_explicit_floating()
+
+    future =
+      qf001_markerless_headers(
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        used_percent: Decimal.new("100"),
+        metadata: %{"reset_state" => "anchored"},
+        observed_at: DateTime.add(@qf_as_of, 1, :microsecond),
+        last_sync_at: DateTime.add(@qf_as_of, 1, :microsecond),
+        created_at: DateTime.add(@qf_as_of, 1, :microsecond),
+        updated_at: DateTime.add(@qf_as_of, 1, :microsecond)
+      )
+
+    assert WindowSelector.logical_windows([future, explicit_floating], @qf_as_of) == [
+             explicit_floating
+           ]
+  end
+
+  test "semantic rank stays behind pressure for positive and exhausted Spark evidence" do
+    floating = qf001_explicit_floating()
+
+    for used_percent <- [Decimal.new("12"), Decimal.new("100")] do
+      pressure =
+        qf001_markerless_headers(
+          id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          used_percent: used_percent
+        )
+
+      assert WindowSelector.logical_windows([floating, pressure], @qf_as_of) == [pressure]
+    end
+  end
+
+  test "fresh evidence still beats stale pressure while all-stale pressure remains pessimistic" do
+    fresh_zero =
+      qf001_explicit_floating(
+        id: "10000000-0000-4000-8000-000000000001",
+        observed_at: DateTime.add(@qf_as_of, -60, :second),
+        last_sync_at: DateTime.add(@qf_as_of, -60, :second)
+      )
+
+    stale_exhausted =
+      qf001_markerless_headers(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        used_percent: Decimal.new("100"),
+        observed_at: DateTime.add(@qf_as_of, -4, :hour),
+        last_sync_at: DateTime.add(@qf_as_of, -4, :hour)
+      )
+
+    stale_lower =
+      qf001_explicit_floating(
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        observed_at: DateTime.add(@qf_as_of, -5, :hour),
+        last_sync_at: DateTime.add(@qf_as_of, -5, :hour)
+      )
+
+    assert WindowSelector.logical_windows([stale_exhausted, fresh_zero], @qf_as_of) == [
+             fresh_zero
+           ]
+
+    assert WindowSelector.logical_windows([stale_lower, stale_exhausted], @qf_as_of) == [
+             stale_exhausted
+           ]
+  end
+
+  test "valid nonweekly model rows receive neutral semantics and retain existing tie-breaking" do
+    earlier =
+      spark_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        window_minutes: 300,
+        merge_precedence: 60,
+        observed_at: DateTime.add(@as_of, -30, :second),
+        metadata: %{"reset_state" => "anchored"}
+      )
+
+    later =
+      spark_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        window_minutes: 300,
+        merge_precedence: 80,
+        observed_at: @as_of,
+        metadata: %{}
+      )
+
+    assert WindowSelector.logical_windows([earlier, later], @as_of) == [later]
+  end
+
   defp account_window(attrs) do
     observed_at = Keyword.get(attrs, :observed_at, @as_of)
 
@@ -276,6 +568,130 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
           last_sync_at: observed_at,
           updated_at: observed_at,
           metadata: %{}
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp spark_alias_window(scope, field, token, id, attrs \\ []) do
+    {model, upstream_model, quota_key} =
+      case {scope, field} do
+        {"model", :quota_key} ->
+          {"unrelated-model", nil, token}
+
+        {"model", :active_dimension} ->
+          {token, nil, "unrelated-quota"}
+
+        {"model", :inactive_dimension} ->
+          {"unrelated-model", token, "unrelated-quota"}
+
+        {"model", :canonical} ->
+          {"gpt-5.3-codex-spark", nil, "codex_spark"}
+
+        {"upstream_model", :quota_key} ->
+          {nil, "unrelated-upstream-model", token}
+
+        {"upstream_model", :active_dimension} ->
+          {nil, token, "unrelated-quota"}
+
+        {"upstream_model", :inactive_dimension} ->
+          {token, "unrelated-upstream-model", "unrelated-quota"}
+
+        {"upstream_model", :canonical} ->
+          {nil, "gpt-5.3-codex-spark", "codex_spark"}
+      end
+
+    spark_window(
+      Keyword.merge(
+        [
+          id: id,
+          quota_scope: scope,
+          quota_family: "unrelated-family",
+          quota_key: quota_key,
+          model: model,
+          upstream_model: upstream_model,
+          used_percent: Decimal.new("0"),
+          reset_at: DateTime.add(@as_of, 7, :day),
+          observed_at: @as_of
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp canonical_spark_key("model") do
+    {"model", "codex_model", "gpt-5.3-codex-spark", nil, "codex_spark", "secondary", 10_080}
+  end
+
+  defp canonical_spark_key("upstream_model") do
+    {"upstream_model", "codex_model", nil, "gpt-5.3-codex-spark", "codex_spark", "secondary",
+     10_080}
+  end
+
+  defp qf001_explicit_floating(attrs \\ []) do
+    qf001_window(
+      Keyword.merge(
+        [
+          id: "10000000-0000-4000-8000-000000000001",
+          reset_at: ~U[2026-08-01 12:00:00.000000Z],
+          source: "codex_usage_api",
+          raw_limit_id: "qf001-usage",
+          last_sync_at: ~U[2026-07-25 11:59:00.000000Z],
+          observed_at: ~U[2026-07-25 11:59:00.000000Z],
+          merge_precedence: 60,
+          metadata: %{"reset_state" => "floating"},
+          created_at: ~U[2026-07-25 11:59:00.000000Z],
+          updated_at: ~U[2026-07-25 11:59:00.000000Z]
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp qf001_markerless_headers(attrs \\ []) do
+    qf001_window(
+      Keyword.merge(
+        [
+          id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+          reset_at: ~U[2026-08-01 12:30:00.000000Z],
+          source: "codex_response_headers",
+          raw_limit_id: "qf001-header",
+          last_sync_at: ~U[2026-07-25 11:59:30.000000Z],
+          observed_at: ~U[2026-07-25 11:59:30.000000Z],
+          merge_precedence: 80,
+          metadata: %{},
+          created_at: ~U[2026-07-25 11:59:30.000000Z],
+          updated_at: ~U[2026-07-25 11:59:30.000000Z]
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp qf001_window(attrs) do
+    struct!(
+      AccountQuotaWindow,
+      Keyword.merge(
+        [
+          upstream_identity_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          quota_key: "codex_spark",
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          active_limit: nil,
+          credits: nil,
+          used_percent: Decimal.new("0"),
+          display_label: "GPT-5.3-Codex-Spark",
+          limit_name: "gpt-5.3-codex-spark",
+          metered_feature: "codex_spark",
+          source_precision: "observed",
+          quota_scope: "model",
+          quota_family: "codex_model",
+          model: "gpt-5.3-codex-spark",
+          upstream_model: nil,
+          raw_limit_name: "gpt-5.3-codex-spark",
+          raw_metered_feature: "codex_spark",
+          freshness_state: "fresh"
         ],
         attrs
       )

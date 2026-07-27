@@ -1,7 +1,8 @@
 defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   @moduledoc false
 
-  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
+  alias CodexPooler.Quotas.Evidence.Descriptors
+  alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
 
@@ -130,7 +131,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     window
     |> Evidence.logical_window_key()
     |> normalize_scope_dimensions()
-    |> normalize_spark_alias()
+    |> Descriptors.canonical_logical_window_key()
   end
 
   defp normalize_scope_dimensions(
@@ -144,13 +145,6 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
        do: {"upstream_model", family, nil, upstream_model, quota_key, kind, minutes}
 
   defp normalize_scope_dimensions(logical_key), do: logical_key
-
-  defp normalize_spark_alias({scope, family, model, upstream_model, quota_key, kind, minutes})
-       when quota_key in ["codex_bengalfox", "gpt_5_3_codex_spark"] do
-    {scope, family, model, upstream_model, "codex_spark", kind, minutes}
-  end
-
-  defp normalize_spark_alias(logical_key), do: logical_key
 
   defp best_by_score(windows, as_of, extra_rank \\ fn _window -> 0 end) do
     Enum.max_by(
@@ -175,6 +169,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
       pressure_rank(window),
       usable_rank(window, as_of),
       reset_rank(window),
+      window |> ModelWeeklyResetSemantics.classify() |> ModelWeeklyResetSemantics.rank(),
       source_precision_rank(window.source_precision),
       window.merge_precedence || 0,
       timestamp_rank(window.observed_at),

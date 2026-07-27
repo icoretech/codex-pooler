@@ -4,6 +4,11 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
   """
 
   @account_quota_key "account"
+  @spark_quota_key "codex_spark"
+  @spark_model "gpt-5.3-codex-spark"
+  @spark_display_label "GPT-5.3-Codex-Spark"
+  @spark_tokens ~w(codex_spark codex_bengalfox gpt_5_3_codex_spark codex_other)
+  @weekly_minutes 10_080
 
   @spec account_descriptor() :: map()
   def account_descriptor do
@@ -75,15 +80,30 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
     normalized_limit_id = normalize_quota_key(limit_id)
     normalized_limit_name = normalize_quota_key(limit_name)
 
-    if normalized_limit_id in ["codex_bengalfox", "gpt_5_3_codex_spark", "codex_other"] or
-         normalized_limit_name in ["codex_bengalfox", "gpt_5_3_codex_spark", "codex_other"] do
+    if spark_token?(normalized_limit_id) or spark_token?(normalized_limit_name) do
       %{
-        quota_key: "codex_spark",
-        model: "gpt-5.3-codex-spark",
-        display_label: "GPT-5.3-Codex-Spark"
+        quota_key: @spark_quota_key,
+        model: @spark_model,
+        display_label: @spark_display_label
       }
     end
   end
+
+  @spec canonical_logical_window_key(tuple()) :: tuple()
+  def canonical_logical_window_key(
+        {scope, _family, model, upstream_model, quota_key, kind, minutes} = logical_key
+      )
+      when scope in ["model", "upstream_model"] and kind in ["primary", "secondary"] do
+    active_dimension = if scope == "model", do: model, else: upstream_model
+
+    if spark_token?(quota_key) or spark_token?(active_dimension) do
+      canonical_spark_logical_key(scope, kind, minutes)
+    else
+      logical_key
+    end
+  end
+
+  def canonical_logical_window_key(logical_key), do: logical_key
 
   @spec additional_display_label(map(), term()) :: String.t() | nil
   def additional_display_label(limit, limit_id) do
@@ -143,6 +163,21 @@ defmodule CodexPooler.Quotas.Evidence.Descriptors do
   end
 
   defp normalize_quota_key(value), do: value |> to_string() |> normalize_quota_key()
+
+  defp spark_token?(value), do: normalize_quota_key(value) in @spark_tokens
+
+  defp canonical_spark_logical_key("model", kind, minutes) do
+    {"model", "codex_model", @spark_model, nil, @spark_quota_key,
+     canonical_window_kind(kind, minutes), minutes}
+  end
+
+  defp canonical_spark_logical_key("upstream_model", kind, minutes) do
+    {"upstream_model", "codex_model", nil, @spark_model, @spark_quota_key,
+     canonical_window_kind(kind, minutes), minutes}
+  end
+
+  defp canonical_window_kind("primary", @weekly_minutes), do: "secondary"
+  defp canonical_window_kind(kind, _minutes), do: kind
 
   defp present_string(value) when is_binary(value) do
     value = String.trim(value)
