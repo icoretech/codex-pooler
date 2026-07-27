@@ -126,7 +126,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         name = String.downcase(name)
 
         if name in @regular_runtime_metadata_header_names do
-          [{name, value}]
+          [{name, maybe_project_turn_metadata_header(name, value)}]
         else
           []
         end
@@ -134,6 +134,27 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       _other ->
         []
     end)
+  end
+
+  defp maybe_project_turn_metadata_header("x-codex-turn-metadata", value) do
+    case Jason.decode(value) do
+      {:ok, %{"code_mode_tool_names" => _value} = metadata} ->
+        encode_projected_turn_metadata(metadata, value)
+
+      _other ->
+        value
+    end
+  end
+
+  defp maybe_project_turn_metadata_header(_name, value), do: value
+
+  defp encode_projected_turn_metadata(metadata, original) do
+    case metadata
+         |> Map.delete("code_mode_tool_names")
+         |> Jason.encode(escape: :unicode_safe) do
+      {:ok, projected} -> projected
+      {:error, _error} -> original
+    end
   end
 
   @spec http_request(DispatchRequest.t()) :: {:ok, Req.Response.t()} | {:error, map()}

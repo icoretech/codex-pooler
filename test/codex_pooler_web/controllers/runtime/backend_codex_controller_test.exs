@@ -74,6 +74,54 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "type" => "server_error"
     }
   }
+  @code_mode_turn_metadata_projection_routes [
+    %{
+      local_path: "/backend-api/codex/responses",
+      canonical_upstream_path: "/backend-api/codex/responses",
+      compact?: false,
+      fake_response:
+        FakeUpstream.json_response(%{
+          "id" => "resp_code_mode_turn_metadata_responses",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+    },
+    %{
+      local_path: "/backend-api/codex/v1/responses",
+      canonical_upstream_path: "/backend-api/codex/responses",
+      compact?: false,
+      fake_response:
+        FakeUpstream.json_response(%{
+          "id" => "resp_code_mode_turn_metadata_v1_responses",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+    },
+    %{
+      local_path: "/backend-api/codex/responses/compact",
+      canonical_upstream_path: "/backend-api/codex/responses/compact",
+      compact?: true,
+      fake_response:
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+    },
+    %{
+      local_path: "/backend-api/codex/v1/responses/compact",
+      canonical_upstream_path: "/backend-api/codex/responses/compact",
+      compact?: true,
+      fake_response:
+        FakeUpstream.json_response(%{
+          "object" => "response.compaction",
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+    }
+  ]
 
   test "backend Responses HTTP and SSE enforce native reasoning aliases before dispatch", %{
     conn: conn
@@ -2654,6 +2702,62 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["client_metadata"]["x-codex-turn-metadata"] == metadata.turn_metadata
 
     assert_client_metadata_not_persisted!(setup, metadata)
+  end
+
+  for %{
+        local_path: local_path,
+        canonical_upstream_path: canonical_upstream_path,
+        compact?: compact?,
+        fake_response: fake_response
+      } <- @code_mode_turn_metadata_projection_routes do
+    @tag :code_mode_turn_metadata_projection
+    test "POST #{local_path} projects code mode turn metadata only from the direct header", %{
+      conn: conn
+    } do
+      upstream = start_upstream(unquote(Macro.escape(fake_response)))
+      setup = gateway_setup(upstream, compact?: unquote(compact?))
+      metadata = code_mode_turn_metadata_projection_fixture()
+      headers = lineage_request_headers(metadata)
+
+      assert {"x-codex-turn-metadata", metadata.turn_metadata} in headers
+      assert metadata.client_metadata["x-codex-turn-metadata"] == metadata.turn_metadata
+
+      conn =
+        conn
+        |> auth(setup)
+        |> post_json_runtime_with_headers(
+          unquote(local_path),
+          %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic code mode turn metadata projection request",
+            "client_metadata" => metadata.client_metadata
+          },
+          headers
+        )
+
+      response = json_response(conn, 200)
+
+      if unquote(compact?) do
+        assert %{"object" => "response.compaction"} = response
+      else
+        assert %{"id" => "resp_code_mode_turn_metadata" <> _route} = response
+      end
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == unquote(canonical_upstream_path)
+      assert_code_mode_turn_metadata_header_projected!(captured, metadata)
+      assert_code_mode_client_metadata_preserved!(captured, metadata)
+      assert_approved_lineage_headers_except_turn_metadata_forwarded!(captured, metadata)
+      assert_disallowed_client_headers_not_forwarded!(captured, setup)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == unquote(canonical_upstream_path)
+
+      assert request.transport ==
+               if(unquote(compact?), do: "http_compact_json", else: "http_json")
+
+      assert_code_mode_turn_metadata_not_persisted!(setup, metadata)
+    end
   end
 
   @tag :client_metadata
@@ -11717,6 +11821,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
   end
 
+  defp code_mode_turn_metadata_projection_fixture do
+    code_mode_tool_names =
+      Map.new(1..256, fn index ->
+        {"code-mode-tool-#{index}", "code-mode-handler-#{index}"}
+      end)
+
+    non_ascii_sentinel = "code-mode-cafe \u2615"
+    nested_sentinel = "code-mode-nested-sentinel"
+    existing_client_metadata = "code-mode-existing-client-metadata"
+
+    turn_metadata_object = %{
+      "code_mode_tool_names" => code_mode_tool_names,
+      "nested" => %{
+        "code_mode_tool_names" => %{"nested-tool" => nested_sentinel}
+      },
+      "non_ascii" => non_ascii_sentinel,
+      "unrelated" => "code-mode-unrelated-field"
+    }
+
+    turn_metadata = Jason.encode!(turn_metadata_object)
+
+    lineage_metadata_fixture("code-mode-turn-metadata-projection")
+    |> Map.merge(%{
+      turn_metadata: turn_metadata,
+      turn_metadata_object: turn_metadata_object,
+      code_mode_tool_names: code_mode_tool_names,
+      synthetic_tool_name: "code-mode-tool-1",
+      synthetic_tool_handler: "code-mode-handler-1",
+      non_ascii_sentinel: non_ascii_sentinel,
+      nested_sentinel: nested_sentinel,
+      existing_client_metadata: existing_client_metadata,
+      client_metadata: %{
+        "x-codex-turn-metadata" => turn_metadata,
+        "existing_client_metadata" => existing_client_metadata
+      }
+    })
+  end
+
   defp additional_tools_item do
     %{
       "type" => "additional_tools",
@@ -11790,6 +11932,51 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured_headers["x-openai-subagent"] == metadata.subagent
   end
 
+  defp assert_approved_lineage_headers_except_turn_metadata_forwarded!(captured, metadata) do
+    captured_headers = Map.new(captured.headers)
+
+    assert captured_headers["x-codex-window-id"] == metadata.window_id
+    assert captured_headers["x-codex-parent-thread-id"] == metadata.parent_thread_id
+    assert captured_headers["x-codex-installation-id"] == metadata.installation_id
+    assert captured_headers["x-openai-subagent"] == metadata.subagent
+  end
+
+  defp assert_code_mode_turn_metadata_header_projected!(captured, metadata) do
+    projected = Map.fetch!(Map.new(captured.headers), "x-codex-turn-metadata")
+    expected = Map.delete(metadata.turn_metadata_object, "code_mode_tool_names")
+
+    assert projected != metadata.turn_metadata
+    assert byte_size(projected) < byte_size(metadata.turn_metadata)
+    assert ascii_only?(projected)
+    assert Jason.decode!(projected) == expected
+
+    assert get_in(Jason.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
+             "nested-tool" => metadata.nested_sentinel
+           }
+
+    assert Jason.decode!(projected)["non_ascii"] == metadata.non_ascii_sentinel
+  end
+
+  defp assert_code_mode_client_metadata_preserved!(captured, metadata) do
+    client_metadata = captured.json["client_metadata"]
+
+    assert client_metadata == metadata.client_metadata
+    assert client_metadata["x-codex-turn-metadata"] == metadata.turn_metadata
+
+    assert Jason.decode!(client_metadata["x-codex-turn-metadata"]) ==
+             metadata.turn_metadata_object
+
+    assert Jason.decode!(client_metadata["x-codex-turn-metadata"])["code_mode_tool_names"] ==
+             metadata.code_mode_tool_names
+
+    assert get_in(Jason.decode!(client_metadata["x-codex-turn-metadata"]), [
+             "nested",
+             "code_mode_tool_names"
+           ]) == %{"nested-tool" => metadata.nested_sentinel}
+
+    assert client_metadata["existing_client_metadata"] == metadata.existing_client_metadata
+  end
+
   defp assert_disallowed_client_headers_not_forwarded!(captured, setup) do
     captured_headers = Map.new(captured.headers)
     codex_version = CodexClientIdentity.version()
@@ -11803,6 +11990,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     refute Map.has_key?(captured_headers, "cookie")
     refute Map.has_key?(captured_headers, "idempotency-key")
+    refute Map.has_key?(captured_headers, "x-request-id")
     refute Map.has_key?(captured_headers, "x-openai-internal-codex-responses-lite")
     refute Map.has_key?(captured_headers, "x-codex-unapproved")
     refute Map.has_key?(captured_headers, "x-openai-unapproved")
@@ -11812,6 +12000,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(captured.headers) =~ "lineage-client-cookie=secret"
     refute inspect(captured.headers) =~ "lineage-client-idempotency-secret"
     refute inspect(captured.headers) =~ "lineage-client-accept"
+    refute inspect(captured.headers) =~ "task4-lineage-request-correlation"
     refute inspect(captured.headers) =~ "lineage-spoofed-lite"
     refute inspect(captured.headers) =~ "lineage-unapproved-codex"
     refute inspect(captured.headers) =~ "lineage-unapproved-openai"
@@ -11866,6 +12055,37 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       inspect({requests, attempts, sessions, turns, audit_events, logs.items})
 
     refute_client_metadata_text!(persistence_text, metadata)
+  end
+
+  defp assert_code_mode_turn_metadata_not_persisted!(setup, metadata) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(a in Attempt,
+          join: r in Request,
+          on: a.request_id == r.id,
+          where: r.pool_id == ^setup.pool.id
+        )
+      )
+
+    sessions = Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id))
+    request_ids = Enum.map(requests, & &1.id)
+    turns = Repo.all(from(t in CodexTurn, where: t.request_id in ^request_ids))
+    audit_events = Repo.all(from(e in AuditEvent, where: e.pool_id == ^setup.pool.id))
+    logs = RequestLogs.list(setup.pool.id, limit: 10)
+    persistence_text = inspect({requests, attempts, sessions, turns, audit_events, logs.items})
+
+    for sentinel <- [
+          metadata.turn_metadata,
+          metadata.synthetic_tool_name,
+          metadata.synthetic_tool_handler,
+          metadata.non_ascii_sentinel,
+          metadata.nested_sentinel,
+          metadata.existing_client_metadata
+        ] do
+      refute persistence_text =~ sentinel
+    end
   end
 
   defp assert_turn_state_not_persisted!(setup, turn_state) do
@@ -11932,6 +12152,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute text =~ metadata.window_id
     refute text =~ metadata.sentinel
     refute text =~ "existing-client-metadata"
+  end
+
+  defp ascii_only?(value) do
+    value
+    |> :binary.bin_to_list()
+    |> Enum.all?(&(&1 < 128))
   end
 
   defp pruned_control_plane_requests do

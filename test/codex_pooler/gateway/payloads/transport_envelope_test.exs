@@ -136,6 +136,149 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                )
              ) == []
     end
+
+    @tag :code_mode_turn_metadata_projection
+    test "projects only top-level code mode tools from direct native metadata headers" do
+      original = turn_metadata("first")
+      duplicate = turn_metadata("second")
+
+      input_headers = [
+        {"X-Codex-Turn-Metadata", original},
+        {"x-codex-window-id", "window-redacted"},
+        {"x-codex-turn-metadata", duplicate},
+        {"x-codex-parent-thread-id", "thread-redacted"},
+        {"x-codex-installation-id", "installation-redacted"},
+        {"x-codex-turn-state", "turn-state-redacted"},
+        {"x-openai-subagent", "subagent-redacted"}
+      ]
+
+      options =
+        runtime_options("/backend-api/codex/responses", forwarded_headers: input_headers)
+
+      forwarded_headers = UpstreamDispatch.regular_runtime_forwarded_metadata_headers(options)
+
+      assert [
+               {"x-codex-turn-metadata", projected},
+               {"x-codex-window-id", "window-redacted"},
+               {"x-codex-turn-metadata", projected_duplicate},
+               {"x-codex-parent-thread-id", "thread-redacted"},
+               {"x-codex-installation-id", "installation-redacted"},
+               {"x-codex-turn-state", "turn-state-redacted"},
+               {"x-openai-subagent", "subagent-redacted"}
+             ] = forwarded_headers
+
+      expected = Map.delete(Jason.decode!(original), "code_mode_tool_names")
+      expected_duplicate = Map.delete(Jason.decode!(duplicate), "code_mode_tool_names")
+
+      assert Jason.decode!(projected) == expected
+      assert Jason.decode!(projected_duplicate) == expected_duplicate
+      assert projected != original
+      assert projected_duplicate != duplicate
+      assert byte_size(projected) < byte_size(original)
+      assert byte_size(projected_duplicate) < byte_size(duplicate)
+      assert ascii_only?(projected)
+      assert ascii_only?(projected_duplicate)
+
+      assert get_in(Jason.decode!(projected), ["nested", "code_mode_tool_names"]) == %{
+               "nested-tool" => "nested sentinel"
+             }
+
+      assert Jason.decode!(projected)["non_ascii"] == "cafe \u2615"
+      assert options.transport.forwarded_metadata_headers == input_headers
+
+      regular_headers =
+        UpstreamDispatch.regular_runtime_headers(
+          identity(),
+          "upstream-token",
+          options,
+          [{"accept", "application/json"}]
+        )
+
+      assert turn_metadata_headers(regular_headers) == [
+               {"x-codex-turn-metadata", projected},
+               {"x-codex-turn-metadata", projected_duplicate}
+             ]
+
+      compact_options =
+        runtime_options("/backend-api/codex/responses/compact", forwarded_headers: input_headers)
+
+      assert turn_metadata_headers(
+               UpstreamDispatch.regular_runtime_headers(
+                 identity(),
+                 "upstream-token",
+                 compact_options,
+                 [{"accept", "application/json"}]
+               )
+             ) == [
+               {"x-codex-turn-metadata", projected},
+               {"x-codex-turn-metadata", projected_duplicate}
+             ]
+    end
+
+    @tag :code_mode_turn_metadata_projection
+    test "removes every JSON top-level code mode tool-name value" do
+      for value <- [%{}, [], "scalar", 42, true, nil] do
+        metadata = Jason.encode!(%{"code_mode_tool_names" => value})
+
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 runtime_options("/backend-api/codex/responses",
+                   forwarded_headers: [{"x-codex-turn-metadata", metadata}]
+                 )
+               ) == [{"x-codex-turn-metadata", "{}"}]
+      end
+    end
+
+    @tag :code_mode_turn_metadata_projection
+    test "preserves no-target, malformed, non-object, blank, and opaque metadata bytes" do
+      large_opaque = String.duplicate("opaque-turn-metadata/", 2_048)
+
+      passthrough_values = [
+        ~s({ "unrelated" : "unchanged", "nested" : {"code_mode_tool_names" : ["preserve"]} }),
+        "{malformed-json",
+        ~s("json string"),
+        "[]",
+        "42",
+        "true",
+        "false",
+        "null",
+        "",
+        " \t\n ",
+        large_opaque
+      ]
+
+      for value <- passthrough_values do
+        assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+                 runtime_options("/backend-api/codex/responses",
+                   forwarded_headers: [{"x-codex-turn-metadata", value}]
+                 )
+               ) == [{"x-codex-turn-metadata", value}]
+      end
+    end
+
+    @tag :code_mode_turn_metadata_projection
+    test "keeps non-target approved headers and excludes v1 and OpenAI-origin requests" do
+      metadata = turn_metadata("excluded")
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+               runtime_options("/v1/responses",
+                 forwarded_headers: [{"x-codex-turn-metadata", metadata}]
+               )
+             ) == []
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+               runtime_options("/backend-api/codex/responses",
+                 openai_source_endpoint: "/v1/responses",
+                 forwarded_headers: [{"x-codex-turn-metadata", metadata}]
+               )
+             ) == []
+
+      assert UpstreamDispatch.regular_runtime_forwarded_metadata_headers(
+               runtime_options("/backend-api/codex/responses",
+                 openai_chat_payload: %{"model" => "example-model", "messages" => []},
+                 forwarded_headers: [{"x-codex-turn-metadata", metadata}]
+               )
+             ) == []
+    end
   end
 
   defp request_options(%TimeoutConfig{} = timeout_config) do
@@ -155,9 +298,29 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp runtime_options(endpoint, opts \\ []) do
     opts
-    |> Keyword.put(:forwarded_headers, forwarded_metadata_headers())
+    |> Keyword.put_new(:forwarded_headers, forwarded_metadata_headers())
     |> Map.new()
     |> RequestOptions.build(endpoint, %{"model" => "example-model"})
+  end
+
+  defp turn_metadata(label) do
+    Jason.encode!(%{
+      "code_mode_tool_names" =>
+        Map.new(1..256, fn index -> {"tool_#{index}", "#{label}-handler-#{index}"} end),
+      "nested" => %{"code_mode_tool_names" => %{"nested-tool" => "nested sentinel"}},
+      "non_ascii" => "cafe \u2615",
+      "unrelated" => "#{label}-unrelated"
+    })
+  end
+
+  defp turn_metadata_headers(headers) do
+    Enum.filter(headers, fn {name, _value} -> name == "x-codex-turn-metadata" end)
+  end
+
+  defp ascii_only?(value) do
+    value
+    |> :binary.bin_to_list()
+    |> Enum.all?(&(&1 < 128))
   end
 
   defp forwarded_metadata_headers do

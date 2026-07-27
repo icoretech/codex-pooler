@@ -787,7 +787,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "backend_websocket_response.create",
                  "public_v1_websocket_response.create"
                ],
-               privacy: "raw_values_not_persisted"
+               privacy: "raw_values_not_persisted",
+               turn_metadata_projection: %{
+                 direct_header_removes_top_level: ["code_mode_tool_names"],
+                 structured_output: "ascii_safe_json",
+                 object_without_target: "original_bytes",
+                 opaque_or_non_object: "original_bytes",
+                 duplicate_headers: "project_each_preserve_order",
+                 canonical_client_metadata: "full_value_preserved",
+                 websocket_upgrade_header_forwarded: false,
+                 generic_size_cap_added: false
+               }
              }
     end
 
