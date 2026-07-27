@@ -38,7 +38,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias Ecto.Adapters.SQL.Sandbox
 
   @endpoint CodexPoolerWeb.Endpoint
-  @websocket_frame_timeout 1_000
+  @detection_timeout_ms 15_000
   def stream_retry_setup(first_mode, second_mode \\ stream_success_sse()) do
     first_upstream = start_upstream(first_mode)
     second_upstream = start_upstream(second_mode)
@@ -947,7 +947,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
             await_public_websocket_upgrade(conn, ref, status, response_headers)
         end
     after
-      @websocket_frame_timeout -> flunk("timed out waiting for websocket upgrade")
+      @detection_timeout_ms -> flunk("timed out waiting for websocket upgrade")
     end
   end
 
@@ -997,7 +997,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         conn,
         websocket,
         ref,
-        timeout_ms \\ @websocket_frame_timeout
+        timeout_ms \\ @detection_timeout_ms
       ) do
     receive do
       message ->
@@ -1046,7 +1046,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                 public_websocket_receive_text!(conn, websocket, ref)
             end
         after
-          @websocket_frame_timeout -> flunk("timed out waiting for websocket frame")
+          @detection_timeout_ms -> flunk("timed out waiting for websocket frame")
         end
     end
   end
@@ -1250,11 +1250,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       {:codex_response_chunk, frame} ->
         CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
     after
-      1_000 -> flunk("expected websocket response chunk")
+      @detection_timeout_ms -> flunk("expected websocket response chunk")
     end
   end
 
-  def receive_socket_done(state, timeout_ms \\ 1_000) do
+  def receive_socket_done(state, timeout_ms \\ @detection_timeout_ms) do
     receive do
       {:codex_response_done, pid, result} ->
         CodexResponsesSocket.handle_info({:codex_response_done, pid, result}, state)

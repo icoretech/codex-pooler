@@ -12,6 +12,8 @@ end
 defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog, only: [with_log: 1]
+
   alias CodexPooler.Repo
   alias CodexPooler.Repo.Migrations.AddSavedResetFirstSeenLedgerToUpstreamIdentities
   alias Ecto.Adapters.SQL.Sandbox
@@ -24,12 +26,7 @@ defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
     Sandbox.mode(Repo, :auto)
 
     on_exit(fn ->
-      Migrator.up(
-        Repo,
-        @migration_version,
-        AddSavedResetFirstSeenLedgerToUpstreamIdentities,
-        log: false
-      )
+      migrate_up()
 
       Sandbox.mode(Repo, :manual)
     end)
@@ -65,13 +62,7 @@ defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
 
     insert_identity!(identity_id, metadata)
 
-    assert :ok =
-             Migrator.up(
-               Repo,
-               @migration_version,
-               AddSavedResetFirstSeenLedgerToUpstreamIdentities,
-               log: false
-             )
+    assert :ok = migrate_up()
 
     assert [[ledger]] =
              Repo.query!(
@@ -157,13 +148,7 @@ defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
 
     assert stored_size > @saved_reset_detail_max_bytes
 
-    assert :ok =
-             Migrator.up(
-               Repo,
-               @migration_version,
-               AddSavedResetFirstSeenLedgerToUpstreamIdentities,
-               log: false
-             )
+    assert :ok = migrate_up()
 
     assert [[^metadata, %{"version" => 1, "entries" => []}]] =
              Repo.query!(
@@ -198,6 +183,20 @@ defmodule CodexPooler.Upstreams.SavedResetFirstSeenLedgerMigrationTest do
         [Ecto.UUID.dump!(identity_id)]
       )
     end)
+  end
+
+  defp migrate_up do
+    {result, _expected_order_warning} =
+      with_log(fn ->
+        Migrator.up(
+          Repo,
+          @migration_version,
+          AddSavedResetFirstSeenLedgerToUpstreamIdentities,
+          log: false
+        )
+      end)
+
+    result
   end
 
   defp entry(expires_at, first_seen_at) do

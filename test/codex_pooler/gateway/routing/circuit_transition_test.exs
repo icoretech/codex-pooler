@@ -336,14 +336,21 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
 
     events = capture_transition_events()
 
-    assert {:ok, :skipped} =
-             CircuitState.record_failure(
-               auth,
-               model,
-               assignment,
-               "proxy_stream",
-               :upstream_5xx
-             )
+    log =
+      capture_log(fn ->
+        assert {:ok, :skipped} =
+                 CircuitState.record_failure(
+                   auth,
+                   model,
+                   assignment,
+                   "proxy_stream",
+                   :upstream_5xx
+                 )
+      end)
+
+    assert log =~ "routing side effect skipped"
+    assert log =~ "side_effect=circuit_failure"
+    assert log =~ "code=upstream_identity_not_found"
 
     refute_receive {^events, _in_transaction?, _metadata}
   end
