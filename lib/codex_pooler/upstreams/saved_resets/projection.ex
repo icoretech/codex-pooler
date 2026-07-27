@@ -263,7 +263,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
         %DateTime{} = timestamp
       )
       when is_integer(available_count) do
-    snapshot = snapshot(identity_or_metadata)
+    snapshot = snapshot(identity_or_metadata, timestamp)
 
     cond do
       available_count <= 0 ->
@@ -320,7 +320,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
         within_seconds \\ @expiring_soon_seconds
       )
       when is_integer(within_seconds) and within_seconds >= 0 do
-    snapshot = snapshot(identity_or_metadata)
+    snapshot = snapshot(identity_or_metadata, timestamp)
 
     with next_expires_at when is_binary(next_expires_at) <- snapshot.next_expires_at,
          {:ok, expires_at, _offset} <- DateTime.from_iso8601(next_expires_at) do

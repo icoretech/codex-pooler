@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.RoutingSettings
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   @endpoint_path "/backend-api/codex/responses"
 
@@ -109,6 +110,153 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert Enum.all?(quota_window_dimension_keys, &(&1.api_key_id == auth.api_key.id))
     assert Repo.all(Request) == []
+  end
+
+  test "refreshing quota snapshots preserves model and circuit snapshots" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "preserve routing snapshots"
+    }
+
+    request_options =
+      request_options(auth, payload,
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
+
+    route_state = prepared.route_state
+    refreshed_route_state = RouteState.refresh_quota_window_snapshots(route_state)
+
+    assert refreshed_route_state.visible_model == route_state.visible_model
+    assert refreshed_route_state.visible_model_context == route_state.visible_model_context
+    assert refreshed_route_state.visible_models == route_state.visible_models
+
+    assert refreshed_route_state.effective_model_serving_modes ==
+             route_state.effective_model_serving_modes
+
+    assert refreshed_route_state.circuit_snapshots == route_state.circuit_snapshots
+
+    assert refreshed_route_state.circuit_eligibility_snapshots ==
+             route_state.circuit_eligibility_snapshots
+  end
+
+  test "route state atomically binds quota snapshots to their observation instant" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
+
+    snapshots =
+      QuotaWindows.list_quota_windows_by_identity_ids(
+        [setup.identity.id],
+        DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      )
+
+    assert [_window] = Map.fetch!(snapshots, setup.identity.id)
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [{setup.assignment, setup.identity}]
+      })
+
+    assert route_state.quota_window_snapshots == %{}
+    assert route_state.quota_snapshot_at == nil
+
+    updated_route_state =
+      RouteState.put_quota_window_snapshot(route_state, snapshots, snapshot_at)
+
+    assert updated_route_state.quota_window_snapshots == snapshots
+    assert updated_route_state.quota_snapshot_at == snapshot_at
+    assert updated_route_state.visible_model == route_state.visible_model
+    assert updated_route_state.circuit_snapshots == route_state.circuit_snapshots
+
+    assert %RouteState{quota_window_snapshots: %{}, quota_snapshot_at: nil} =
+             RouteState.put_quota_window_snapshot(updated_route_state, %{}, nil)
+
+    assert_raise ArgumentError, fn ->
+      RouteState.put_quota_window_snapshot(route_state, snapshots, nil)
+    end
+
+    assert_raise ArgumentError, fn ->
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [{setup.assignment, setup.identity}],
+        quota_window_snapshots: snapshots
+      })
+    end
+
+    assert_raise ArgumentError, fn ->
+      RouteState.put_quota_window_snapshot(route_state, snapshots, :invalid_timestamp)
+    end
+  end
+
+  test "preload captures one read instant before the bulk quota read and stores that exact instant" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    request_options =
+      request_options(auth, %{"model" => setup.model.exposed_model_id},
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [{setup.assignment, setup.identity}]
+      })
+
+    traced_mfa = {QuotaWindows, :list_quota_windows_by_identity_ids, 2}
+    {:module, QuotaWindows} = Code.ensure_loaded(QuotaWindows)
+    :erlang.trace_pattern(traced_mfa, true, [])
+
+    task =
+      Task.async(fn ->
+        receive do
+          :preload -> :ok
+        end
+
+        RouteState.preload_routing_snapshots(
+          route_state,
+          auth,
+          setup.model,
+          request_options
+        )
+      end)
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), task.pid)
+    :erlang.trace(task.pid, true, [:call, {:tracer, self()}])
+    before_preload = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    try do
+      send(task.pid, :preload)
+      preloaded = Task.await(task)
+      after_preload = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      assert_receive {:trace, pid, :call,
+                      {QuotaWindows, :list_quota_windows_by_identity_ids,
+                       [[identity_id], %DateTime{} = read_at]}}
+                     when pid == task.pid and identity_id == setup.identity.id
+
+      assert preloaded.quota_snapshot_at == read_at
+      assert DateTime.compare(read_at, before_preload) in [:eq, :gt]
+      assert DateTime.compare(read_at, after_preload) in [:eq, :lt]
+
+      assert preloaded.quota_window_snapshots ==
+               QuotaWindows.list_quota_windows_by_identity_ids([setup.identity.id], read_at)
+    after
+      :erlang.trace_pattern(traced_mfa, false, [])
+
+      if Process.alive?(task.pid) do
+        :erlang.trace(task.pid, false, [:call])
+        Task.shutdown(task, :brutal_kill)
+      end
+    end
   end
 
   test "prepare stores one full-policy catalog ETag instead of a selected-model or pool digest" do

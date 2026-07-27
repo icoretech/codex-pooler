@@ -15,6 +15,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Pools.Membership
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
@@ -472,6 +473,76 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                "/backend-api/wham/usage",
                "/backend-api/codex/usage"
              ]
+    end
+
+    test "persisted quota reuse owns one historical timestamp across freshness boundaries" do
+      as_of = ~U[2026-07-25 12:00:00.000000Z]
+      ttl = Evidence.freshness_ttl_seconds()
+
+      for {label, age_seconds, expected_code} <- [
+            {"TTL-1s", ttl - 1, "quota_reused_fresh"},
+            {"TTL", ttl, "quota_reused_fresh"},
+            {"TTL+1s", ttl + 1, "quota_refresh_unavailable"}
+          ] do
+        upstream = start_upstream(unavailable_usage_paths())
+
+        {pool, assignment} =
+          active_assignment_fixture(
+            %{"base_url" => FakeUpstream.url(upstream)},
+            identity_metadata: %{
+              "base_url" => FakeUpstream.url(upstream),
+              "access_token_expires_at" => "2026-07-27T23:59:59Z"
+            }
+          )
+
+        identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+        persist_quota_windows!(identity, [
+          persisted_account_primary_window_attrs(
+            DateTime.add(as_of, -age_seconds, :second),
+            %{reset_at: DateTime.add(as_of, 4, :hour)}
+          )
+        ])
+
+        assert {:ok, result} =
+                 PoolReconciliation.reconcile_pool_account(pool, assignment, as_of: as_of)
+
+        assert result.quota.code == expected_code, label
+      end
+    end
+
+    test "persisted quota reuse treats reset_at less than or equal to as_of as expired" do
+      as_of = ~U[2026-07-25 12:00:00.000000Z]
+
+      for {label, reset_offset_seconds, expected_code} <- [
+            {"before", -1, "quota_refresh_unavailable"},
+            {"equal", 0, "quota_refresh_unavailable"},
+            {"after", 1, "quota_reused_fresh"}
+          ] do
+        upstream = start_upstream(unavailable_usage_paths())
+
+        {pool, assignment} =
+          active_assignment_fixture(
+            %{"base_url" => FakeUpstream.url(upstream)},
+            identity_metadata: %{
+              "base_url" => FakeUpstream.url(upstream),
+              "access_token_expires_at" => "2026-07-27T23:59:59Z"
+            }
+          )
+
+        identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
+
+        persist_quota_windows!(identity, [
+          persisted_account_primary_window_attrs(as_of, %{
+            reset_at: DateTime.add(as_of, reset_offset_seconds, :second)
+          })
+        ])
+
+        assert {:ok, result} =
+                 PoolReconciliation.reconcile_pool_account(pool, assignment, as_of: as_of)
+
+        assert result.quota.code == expected_code, label
+      end
     end
 
     test "reuses fresh persisted monthly account primary quota when live usage is unavailable" do

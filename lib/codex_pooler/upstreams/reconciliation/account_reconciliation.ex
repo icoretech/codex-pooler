@@ -26,9 +26,19 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   @assignment_reauth_required PoolUpstreamAssignment.reauth_required_status()
 
   @type orchestration_result :: {:ok, map()} | {:error, term()}
+  @type operation_clock :: (-> DateTime.t())
+  @type run_option :: {:operation_clock, operation_clock()}
+  @type run_options :: [run_option()]
 
   @spec run(term(), term(), term()) :: orchestration_result()
   def run(pool_id, assignment_id, trigger_kind) do
+    run(pool_id, assignment_id, trigger_kind, [])
+  end
+
+  @doc false
+  @spec run(term(), term(), term(), run_options()) :: orchestration_result()
+  def run(pool_id, assignment_id, trigger_kind, opts) when is_list(opts) do
+    operation_clock = operation_clock!(opts)
     trigger_kind = normalize_trigger_kind(trigger_kind)
 
     if reason = skipped_reconciliation_target(pool_id, assignment_id) do
@@ -41,11 +51,11 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       broadcast_job_result(pool_id, "account_reconciliation", {:ok, result})
       {:ok, result}
     else
-      run_reconciliation(pool_id, assignment_id, trigger_kind)
+      run_reconciliation(pool_id, assignment_id, trigger_kind, operation_clock)
     end
   end
 
-  defp run_reconciliation(pool_id, assignment_id, trigger_kind) do
+  defp run_reconciliation(pool_id, assignment_id, trigger_kind, operation_clock) do
     priming_fence = priming_fence(pool_id, assignment_id)
     mark_refreshing(pool_id, assignment_id, trigger_kind, priming_fence)
 
@@ -53,8 +63,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       {:ok, result} ->
         catalog_step = reconcile_catalog(pool_id, trigger_kind)
         status = summarize_status([result.health, result.quota, catalog_step])
+        operation_timestamp = operation_timestamp!(operation_clock)
 
-        case finalize_terminal_result(result, catalog_step, status, trigger_kind) do
+        case finalize_terminal_result(
+               result,
+               catalog_step,
+               status,
+               trigger_kind,
+               operation_timestamp
+             ) do
           {:ok, finalized_result} ->
             broadcast_job_result(pool_id, "account_reconciliation", {:ok, finalized_result})
             {:ok, finalized_result}
@@ -175,18 +192,20 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     |> Repo.update_all(set: [state: "discarded", discarded_at: now])
   end
 
-  defp maybe_record_result!(%{quota: %{code: "quota_refresh_superseded"}} = result) do
+  defp maybe_record_result!(
+         %{quota: %{code: "quota_refresh_superseded"}} = result,
+         _operation_timestamp
+       ) do
     %{result | assignment: Repo.reload!(result.assignment)}
   end
 
-  defp maybe_record_result!(result) do
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+  defp maybe_record_result!(result, operation_timestamp) do
     assignment = result.assignment
     metadata = assignment.metadata || %{}
 
     summary = %{
       "status" => Atom.to_string(result.status),
-      "finished_at" => DateTime.to_iso8601(timestamp),
+      "finished_at" => DateTime.to_iso8601(operation_timestamp),
       "steps" => Enum.map([result.health, result.quota, result.catalog], &step_to_metadata/1)
     }
 
@@ -195,7 +214,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
         metadata: Map.put(metadata, "last_reconciliation", summary),
         last_successful_refresh_at:
           if(result.status == :succeeded,
-            do: timestamp,
+            do: operation_timestamp,
             else: assignment.last_successful_refresh_at
           )
       })
@@ -203,9 +222,22 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     %{result | assignment: assignment}
   end
 
-  defp finalize_terminal_result(result, catalog_step, status, trigger_kind) do
+  defp finalize_terminal_result(
+         result,
+         catalog_step,
+         status,
+         trigger_kind,
+         operation_timestamp
+       ) do
     apply = fn locked_identity ->
-      finalize_locked_terminal_result(result, locked_identity, catalog_step, status, trigger_kind)
+      finalize_locked_terminal_result(
+        result,
+        locked_identity,
+        catalog_step,
+        status,
+        trigger_kind,
+        operation_timestamp
+      )
     end
 
     result.identity
@@ -241,7 +273,14 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     CredentialFencing.guard_active_reconciliation(identity, apply)
   end
 
-  defp finalize_locked_terminal_result(result, identity, catalog_step, status, trigger_kind) do
+  defp finalize_locked_terminal_result(
+         result,
+         identity,
+         catalog_step,
+         status,
+         trigger_kind,
+         operation_timestamp
+       ) do
     case Repo.get(PoolUpstreamAssignment, result.assignment.id) do
       %PoolUpstreamAssignment{status: @assignment_active} = assignment ->
         result = %{
@@ -260,10 +299,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
             identity,
             status,
             trigger_kind,
-            result.quota
+            result.quota,
+            operation_timestamp
           )
 
-        {:ok, {:finalized, result |> Map.put(:assignment, assignment) |> maybe_record_result!()}}
+        {:ok,
+         {:finalized,
+          result
+          |> Map.put(:assignment, assignment)
+          |> maybe_record_result!(operation_timestamp)}}
 
       %PoolUpstreamAssignment{} = assignment ->
         {:ok, {:assignment_superseded, assignment}}
@@ -356,7 +400,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     |> Map.put(:identity, identity)
   end
 
-  defp mark_refreshing(pool_id, assignment_id, trigger_kind, priming_fence) do
+  defp mark_refreshing(
+         pool_id,
+         assignment_id,
+         trigger_kind,
+         priming_fence
+       ) do
+    # This pre-operation lifecycle marker is intentionally outside the terminal
+    # quota-priming summary cycle.
+    timestamp = now()
+
     record_active_priming_state(
       pool_id,
       assignment_id,
@@ -365,12 +418,21 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       %{
         "status" => "refreshing",
         "trigger_kind" => trigger_kind,
-        "started_at" => timestamp_iso()
+        "started_at" => timestamp_iso(timestamp)
       }
     )
   end
 
-  defp mark_failed(pool_id, assignment_id, trigger_kind, reason, priming_fence) do
+  defp mark_failed(
+         pool_id,
+         assignment_id,
+         trigger_kind,
+         reason,
+         priming_fence
+       ) do
+    # This failure path has no persisted-window summary read.
+    timestamp = now()
+
     record_active_priming_state(
       pool_id,
       assignment_id,
@@ -379,7 +441,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
       %{
         "status" => "failed",
         "trigger_kind" => trigger_kind,
-        "finished_at" => timestamp_iso(),
+        "finished_at" => timestamp_iso(timestamp),
         "reason" => sanitized_reason(reason)
       }
     )
@@ -607,10 +669,10 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
          identity,
          reconciliation_status,
          trigger_kind,
-         quota_step
+         quota_step,
+         operation_timestamp
        ) do
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    summary = quota_priming_summary(identity, timestamp)
+    summary = quota_priming_summary(identity, operation_timestamp)
     status = quota_priming_status(reconciliation_status, quota_step, summary)
 
     details =
@@ -629,23 +691,27 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   end
 
   defp quota_priming_summary(identity, timestamp) do
-    windows = QuotaWindows.list_quota_windows(identity)
+    persisted_windows = QuotaWindows.list_evidence(identity)
+    effective_windows = QuotaWindows.effective_quota_windows(persisted_windows, timestamp)
 
     %{
       timestamp: timestamp,
-      windows: windows,
+      windows: persisted_windows,
       account_primary_usable_count:
-        Enum.count(windows, &account_primary_usable_window?(&1, timestamp)),
-      usable_count: Enum.count(windows, &QuotaWindows.usable_window?(&1, timestamp)),
-      reset_bearing_count: Enum.count(windows, &Evidence.reset_bearing?/1),
+        Enum.count(effective_windows, &account_primary_usable_window?(&1, timestamp)),
+      usable_count: Enum.count(effective_windows, &QuotaWindows.usable_window?(&1, timestamp)),
+      reset_bearing_count: Enum.count(persisted_windows, &Evidence.reset_bearing?/1),
       stale_count:
         Enum.count(
-          windows,
+          persisted_windows,
           &(Evidence.reset_bearing?(&1) and
               not QuotaWindows.fresh_window?(&1, timestamp))
         ),
       expired_count:
-        Enum.count(windows, &(Evidence.reset_bearing?(&1) and Evidence.expired?(&1, timestamp)))
+        Enum.count(
+          persisted_windows,
+          &(Evidence.reset_bearing?(&1) and Evidence.expired?(&1, timestamp))
+        )
     }
   end
 
@@ -783,9 +849,28 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
     }
   end
 
-  defp timestamp_iso,
-    do: DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
-
   defp timestamp_iso(%DateTime{} = timestamp),
     do: timestamp |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+  defp operation_clock!(opts) do
+    case Keyword.get(opts, :operation_clock, &now/0) do
+      clock when is_function(clock, 0) ->
+        clock
+
+      _invalid_clock ->
+        raise ArgumentError, "operation_clock must be a zero-arity function"
+    end
+  end
+
+  defp operation_timestamp!(operation_clock) do
+    case operation_clock.() do
+      %DateTime{} = timestamp ->
+        DateTime.truncate(timestamp, :microsecond)
+
+      _invalid_timestamp ->
+        raise ArgumentError, "operation_clock must return a DateTime"
+    end
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

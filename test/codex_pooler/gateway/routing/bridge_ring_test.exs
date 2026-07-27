@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   alias Ecto.Adapters.SQL.Sandbox
@@ -618,6 +619,46 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       assert plan.selected_assignment_id == snapshot_best.id
       assert hd(candidate_ids(plan.candidates)) == snapshot_best.id
     end
+
+    test "quota_first excludes a post-snapshot observation until the route snapshot advances" do
+      setup = routing_setup(2)
+      [first_assignment, second_assignment] = setup.assignments
+      [first_identity, second_identity] = setup.identities
+      snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
+      refreshed_at = ~U[2026-07-25 12:00:00.000001Z]
+
+      snapshots = %{
+        first_identity.id => [
+          account_window_at(Decimal.new("10"), snapshot_at),
+          account_window_at(Decimal.new("95"), refreshed_at)
+        ],
+        second_identity.id => [
+          account_window_at(Decimal.new("20"), snapshot_at)
+        ]
+      }
+
+      route_state =
+        RouteState.new(%{
+          visible_model: setup.model,
+          candidates: setup.candidates
+        })
+        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+
+      snapshot_plan =
+        plan_for(setup, "quota_first", "quota-snapshot-boundary", route_state: route_state)
+
+      assert snapshot_plan.selected_assignment_id == first_assignment.id
+
+      refreshed_route_state =
+        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+
+      refreshed_plan =
+        plan_for(setup, "quota_first", "quota-snapshot-boundary",
+          route_state: refreshed_route_state
+        )
+
+      assert refreshed_plan.selected_assignment_id == second_assignment.id
+    end
   end
 
   describe "plan_route/1 affinity/demotion recovery" do
@@ -969,8 +1010,25 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       model: setup.model,
       candidates: candidates,
       route_plan_input: RoutePlanInput.from_reserved(%{request: request}),
-      request_options: request_options
+      request_options: request_options,
+      route_state: Keyword.get(opts, :route_state)
     })
+  end
+
+  defp account_window_at(used_percent, observed_at) do
+    %AccountQuotaWindow{
+      quota_key: "account",
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: used_percent,
+      reset_at: DateTime.add(observed_at, 300, :second),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh",
+      observed_at: observed_at
+    }
   end
 
   defp seed_avoiding_assignment(candidates, assignment_id) do

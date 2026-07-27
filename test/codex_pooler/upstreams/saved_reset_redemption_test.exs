@@ -7,11 +7,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResetRedemption
+  alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.ProbeLease
+  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -1388,6 +1391,79 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   describe "gateway auto post-consume latch" do
+    test "consume cooldown stays latched at cooldown-1ms and clears at equality" do
+      as_of = ~U[2026-07-25 12:00:00.000000Z]
+      cooldown_ms = RedemptionLifecycle.gateway_auto_consume_cooldown_ms()
+
+      redemption = %{
+        "status" => "succeeded",
+        "phase" => "confirmed_by_quota",
+        "consumed_at" => DateTime.to_iso8601(as_of),
+        "result" => %{"applied" => true}
+      }
+
+      assert RedemptionLifecycle.gateway_auto_latch(
+               redemption,
+               DateTime.add(as_of, cooldown_ms - 1, :millisecond)
+             ) == :cooldown
+
+      assert RedemptionLifecycle.gateway_auto_latch(
+               redemption,
+               DateTime.add(as_of, cooldown_ms, :millisecond)
+             ) == :clear
+    end
+
+    test "saved-reset expiration uses the scan timestamp at before, equality, and after" do
+      as_of = ~U[2026-07-25 12:00:00.000000Z]
+
+      metadata_for = fn expires_at ->
+        %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "next_expires_at" => DateTime.to_iso8601(expires_at)
+          }
+        }
+      end
+
+      refute SavedResets.expires_soon?(metadata_for.(DateTime.add(as_of, -1, :second)), as_of)
+      assert SavedResets.expires_soon?(metadata_for.(as_of), as_of)
+      assert SavedResets.expires_soon?(metadata_for.(DateTime.add(as_of, 1, :second)), as_of)
+    end
+
+    test "natural-reset minimum blocks at min-1s and redeems from equality through the maximum" do
+      as_of = ~U[2026-07-18 12:00:00.000000Z]
+      policy = %{min_blocked_minutes: 60}
+
+      window = %AccountQuotaWindow{
+        quota_key: "account",
+        quota_scope: "account",
+        quota_family: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(as_of, 60 * 60 - 1, :second),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        freshness_state: "fresh",
+        observed_at: as_of
+      }
+
+      refute AutoEligibility.blocked_weekly_exhaustion?([window], policy, as_of)
+
+      assert AutoEligibility.blocked_weekly_exhaustion?(
+               [%{window | reset_at: DateTime.add(as_of, 60, :minute)}],
+               policy,
+               as_of
+             )
+
+      assert AutoEligibility.blocked_weekly_exhaustion?(
+               [%{window | reset_at: DateTime.add(as_of, 7 * 24 * 60 * 60 + 60 * 60, :second)}],
+               policy,
+               as_of
+             )
+    end
+
     test "an applied auto consume awaiting quota convergence blocks another auto consume" do
       {:ok, fake} = codex_reset_fake(0)
 

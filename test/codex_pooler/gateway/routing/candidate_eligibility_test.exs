@@ -315,15 +315,20 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
 
       missing_candidate = {assignment("missing-assignment", missing_identity), missing_identity}
 
+      snapshots = %{
+        eligible_identity.id => [account_window(Decimal.new("15"))],
+        missing_identity.id => [account_window(Decimal.new("100"))]
+      }
+
       route_state =
         RouteState.new(%{
           visible_model: quota_model(),
           candidates: [eligible_candidate, missing_candidate]
         })
-        |> RouteState.put_quota_window_snapshots(%{
-          eligible_identity.id => [account_window(Decimal.new("15"))],
-          missing_identity.id => [account_window(Decimal.new("100"))]
-        })
+        |> RouteState.put_quota_window_snapshot(
+          snapshots,
+          DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        )
 
       assert {:ok, [^eligible_candidate], %{"routing_state" => "precise"}} =
                CandidateEligibility.filter_quota_eligible_candidates(
@@ -344,16 +349,21 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       credit_candidate = {assignment("credit-assignment", credit_identity), credit_identity}
       weekly_candidate = {assignment("weekly-assignment", weekly_identity), weekly_identity}
 
+      snapshots = %{
+        precise_identity.id => [account_window(Decimal.new("15"))],
+        credit_identity.id => [credit_backed_secondary_window()],
+        weekly_identity.id => [weekly_probe_window()]
+      }
+
       route_state =
         RouteState.new(%{
           visible_model: quota_model(),
           candidates: [weekly_candidate, credit_candidate, precise_candidate]
         })
-        |> RouteState.put_quota_window_snapshots(%{
-          precise_identity.id => [account_window(Decimal.new("15"))],
-          credit_identity.id => [credit_backed_secondary_window()],
-          weekly_identity.id => [weekly_probe_window()]
-        })
+        |> RouteState.put_quota_window_snapshot(
+          snapshots,
+          DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        )
 
       assert {:ok, candidates, decision} =
                CandidateEligibility.filter_quota_eligible_candidates(
@@ -379,6 +389,78 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
 
       assert decision["summary"] ==
                "allowed by fresh, credit-backed secondary, and weekly quota evidence"
+    end
+
+    test "quota eligibility excludes a post-snapshot observation until the snapshot instant advances" do
+      snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
+      refreshed_at = ~U[2026-07-25 12:00:00.000001Z]
+      identity = upstream_identity("snapshot-boundary-identity")
+      candidate = {assignment("snapshot-boundary-assignment", identity), identity}
+
+      snapshots = %{
+        identity.id => [
+          account_window_at(Decimal.new("15"), DateTime.add(snapshot_at, -1, :microsecond)),
+          account_window_at(Decimal.new("15"), snapshot_at),
+          account_window_at(Decimal.new("100"), refreshed_at)
+        ]
+      }
+
+      filter_input =
+        filter_input(quota_model(), %{"model" => "sample-model"}, request_options(), [candidate])
+
+      route_state =
+        RouteState.new(%{
+          visible_model: quota_model(),
+          candidates: [candidate]
+        })
+        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+
+      before_only_route_state =
+        RouteState.put_quota_window_snapshot(
+          route_state,
+          %{identity.id => [hd(snapshots[identity.id])]},
+          snapshot_at
+        )
+
+      assert {:ok, [^candidate], %{"routing_state" => "precise"}} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input,
+                 before_only_route_state
+               )
+
+      equal_only_route_state =
+        RouteState.put_quota_window_snapshot(
+          route_state,
+          %{identity.id => [account_window_at(Decimal.new("100"), snapshot_at)]},
+          snapshot_at
+        )
+
+      assert {:refreshable_quota, %{candidate_exclusions: [_exclusion]}} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input,
+                 equal_only_route_state
+               )
+
+      assert {:ok, [^candidate], %{"routing_state" => "precise"}} =
+               CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state)
+
+      refreshed_route_state =
+        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+
+      assert {:refreshable_quota,
+              %{
+                candidate_exclusions: [
+                  %{
+                    reasons: [
+                      %{"code" => "quota_window_unusable", "reason_codes" => ["exhausted"]}
+                    ]
+                  }
+                ]
+              }} =
+               CandidateEligibility.filter_quota_eligible_candidates(
+                 filter_input,
+                 refreshed_route_state
+               )
     end
 
     test "selected route skips an open snapshot and admits a later eligible candidate" do
@@ -522,12 +604,16 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   defp account_window(used_percent) do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    account_window_at(used_percent, observed_at)
+  end
+
+  defp account_window_at(used_percent, observed_at) do
     %AccountQuotaWindow{
       quota_key: "account",
       window_kind: "primary",
       window_minutes: 300,
       used_percent: used_percent,
-      reset_at: DateTime.add(observed_at, 900, :second),
+      reset_at: DateTime.add(observed_at, 300, :second),
       source: "codex_usage_api",
       source_precision: "observed",
       quota_scope: "account",

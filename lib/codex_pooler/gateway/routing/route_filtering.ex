@@ -11,15 +11,23 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   @type candidate :: CandidateEligibility.FilterInput.candidate()
   @type gateway_error :: Contracts.gateway_error()
   @type quota_mode :: :required | :optional
+  @type refilter_clock :: (-> DateTime.t())
+  @type filter_option ::
+          {:quota_mode, quota_mode()}
+          | {:saved_reset_scan_at, DateTime.t()}
+          | {:saved_reset_refilter_clock, refilter_clock()}
+  @type filter_options :: [filter_option()]
 
   @spec filter_candidates(CandidateEligibility.FilterInput.t()) ::
           {:ok, [candidate()], RequestOptions.t()} | {:error, gateway_error()}
-  @spec filter_candidates(CandidateEligibility.FilterInput.t(), keyword()) ::
+  @spec filter_candidates(CandidateEligibility.FilterInput.t(), filter_options()) ::
           {:ok, [candidate()], RequestOptions.t()} | {:error, gateway_error()}
   def filter_candidates(filter_input, opts \\ [])
 
   def filter_candidates(%CandidateEligibility.FilterInput{} = filter_input, opts)
       when is_list(opts) do
+    saved_reset_scan_at = saved_reset_scan_timestamp(opts)
+    saved_reset_opts = saved_reset_options(opts)
     request_options = filter_input.request_options
     quota_mode = Keyword.get(opts, :quota_mode, :required)
 
@@ -28,7 +36,11 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
          filter_input = CandidateEligibility.FilterInput.put_candidates(filter_input, candidates),
          {:ok, candidates, quota_decision, request_options} <-
            filter_input
-           |> filter_quota_eligible_candidates(quota_mode)
+           |> filter_quota_eligible_candidates(
+             quota_mode,
+             saved_reset_scan_at,
+             saved_reset_opts
+           )
            |> filter_quota_eligible_candidates_result(request_options),
          request_options = put_quota_decision(request_options, quota_decision),
          filter_input =
@@ -61,7 +73,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   @spec filter_candidates_with_route_state(
           CandidateEligibility.FilterInput.t(),
           RouteState.t(),
-          keyword()
+          filter_options()
         ) :: {:ok, [candidate()], RequestOptions.t(), RouteState.t()} | {:error, gateway_error()}
   @spec filter_candidates_with_route_state(CandidateEligibility.FilterInput.t(), RouteState.t()) ::
           {:ok, [candidate()], RequestOptions.t(), RouteState.t()} | {:error, gateway_error()}
@@ -72,6 +84,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
         opts \\ []
       )
       when is_list(opts) do
+    saved_reset_scan_at = saved_reset_scan_timestamp(opts)
+    saved_reset_opts = saved_reset_options(opts)
     request_options = filter_input.request_options
     quota_mode = Keyword.get(opts, :quota_mode, :required)
 
@@ -80,7 +94,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
          route_state = RouteState.put_candidates(route_state, candidates),
          filter_input = CandidateEligibility.FilterInput.put_candidates(filter_input, candidates),
          {:ok, candidates, quota_decision, route_state} <-
-           filter_quota_eligible_candidates(filter_input, route_state, quota_mode),
+           filter_quota_eligible_candidates(
+             filter_input,
+             route_state,
+             quota_mode,
+             saved_reset_scan_at,
+             saved_reset_opts
+           ),
          request_options =
            request_options
            |> put_reset_probe(route_state.reset_probe)
@@ -98,22 +118,36 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
 
   defp filter_quota_eligible_candidates(
          %CandidateEligibility.FilterInput{} = filter_input,
-         quota_mode
+         quota_mode,
+         saved_reset_scan_at,
+         saved_reset_opts
        ) do
     case Plan.filter_eligible_candidates(filter_input) do
       {:refreshable_quota, refresh_plan} ->
         refreshed_result = Executor.refresh_stale_candidates(refresh_plan)
 
         refreshed_result
-        |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(refresh_plan, quota_mode)
-        |> SavedResetAutoRedeem.maybe_redeem_after_quota_exhaustion(refresh_plan, quota_mode)
+        |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(
+          refresh_plan,
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
+        )
+        |> SavedResetAutoRedeem.maybe_redeem_after_quota_exhaustion(
+          refresh_plan,
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
+        )
         |> maybe_allow_missing_quota(filter_input, quota_mode)
 
       {:ok, _candidates, _decision} = result ->
         result
         |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(
           %{filter_input: filter_input},
-          quota_mode
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
         )
         |> maybe_allow_missing_quota(filter_input, quota_mode)
     end
@@ -122,22 +156,36 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   defp filter_quota_eligible_candidates(
          %CandidateEligibility.FilterInput{} = filter_input,
          %RouteState{} = route_state,
-         quota_mode
+         quota_mode,
+         saved_reset_scan_at,
+         saved_reset_opts
        ) do
     case Plan.filter_eligible_candidates(filter_input, route_state) do
       {:refreshable_quota, refresh_plan} ->
         refreshed_result = Executor.refresh_stale_candidates(refresh_plan)
 
         refreshed_result
-        |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(refresh_plan, quota_mode)
-        |> SavedResetAutoRedeem.maybe_redeem_after_quota_exhaustion(refresh_plan, quota_mode)
+        |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(
+          refresh_plan,
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
+        )
+        |> SavedResetAutoRedeem.maybe_redeem_after_quota_exhaustion(
+          refresh_plan,
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
+        )
         |> maybe_allow_missing_quota(filter_input, quota_mode, route_state)
 
       {:ok, _candidates, _decision} = result ->
         result
         |> SavedResetAutoRedeem.maybe_redeem_before_quota_exhaustion(
           %{filter_input: filter_input, route_state: route_state},
-          quota_mode
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
         )
         |> maybe_allow_missing_quota(filter_input, quota_mode, route_state)
     end
@@ -193,4 +241,19 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
 
   defp put_reset_probe(%RequestOptions{} = request_options, reset_probe),
     do: RequestOptions.put_routing(request_options, reset_probe: reset_probe)
+
+  defp saved_reset_scan_timestamp(opts) do
+    opts
+    |> Keyword.get_lazy(:saved_reset_scan_at, &now/0)
+    |> DateTime.truncate(:microsecond)
+  end
+
+  defp saved_reset_options(opts) do
+    case Keyword.fetch(opts, :saved_reset_refilter_clock) do
+      {:ok, clock} -> [refilter_clock: clock]
+      :error -> []
+    end
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

@@ -157,17 +157,27 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
     end
   end
 
-  defp routing_quota_eligibility(identity, %Model{} = model, %RouteState{} = route_state) do
+  defp routing_quota_eligibility(
+         identity,
+         %Model{} = model,
+         %RouteState{quota_snapshot_at: %DateTime{} = snapshot_at} = route_state
+       ) do
     if claimed_pending_reset_probe?(identity) do
       claimed_pending_reset_probe_exclusion()
     else
       route_state
       |> RouteState.quota_windows_for_identity(identity)
-      |> QuotaWindows.routing_quota_eligibility_from_windows(quota_scope_opts(model))
+      |> QuotaWindows.routing_quota_eligibility_from_windows(
+        Keyword.put(quota_scope_opts(model), :at, snapshot_at)
+      )
     end
   end
 
-  defp routing_quota_eligibility(identity, %Model{} = model, _route_state) do
+  defp routing_quota_eligibility(_identity, %Model{}, %RouteState{}) do
+    raise ArgumentError, "route state quota snapshot timestamp is missing"
+  end
+
+  defp routing_quota_eligibility(identity, %Model{} = model, nil) do
     if claimed_pending_reset_probe?(identity) do
       claimed_pending_reset_probe_exclusion()
     else

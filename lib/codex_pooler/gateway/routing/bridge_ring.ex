@@ -696,18 +696,36 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     |> Enum.min(fn -> 0 end)
   end
 
-  defp quota_capacity_score(identity, %Model{} = model, %RouteState{} = route_state) do
+  defp quota_capacity_score(
+         identity,
+         %Model{} = model,
+         %RouteState{quota_snapshot_at: %DateTime{} = snapshot_at} = route_state
+       ) do
     route_state
     |> RouteState.quota_windows_for_identity(identity)
-    |> QuotaWindows.quota_window_selection_data_from_windows(quota_scope_opts(model))
+    |> QuotaWindows.quota_window_selection_data_from_windows(
+      Keyword.put(quota_scope_opts(model), :at, snapshot_at)
+    )
     |> Map.get(:routing_windows, [])
-    |> Enum.filter(&QuotaWindows.usable_window?/1)
+    |> Enum.filter(&QuotaWindows.usable_window?(&1, snapshot_at))
     |> Enum.map(&remaining_percent/1)
     |> Enum.reject(&is_nil/1)
     |> Enum.min(fn -> 0 end)
   end
 
-  defp quota_capacity_score(identity, %Model{} = model, _route_state),
+  defp quota_capacity_score(
+         _identity,
+         %Model{},
+         %RouteState{quota_window_snapshots: snapshots, quota_snapshot_at: nil}
+       )
+       when snapshots == %{},
+       do: 0
+
+  defp quota_capacity_score(_identity, %Model{}, %RouteState{}) do
+    raise ArgumentError, "route state quota snapshot timestamp is missing"
+  end
+
+  defp quota_capacity_score(identity, %Model{} = model, nil),
     do: quota_capacity_score(identity, model)
 
   defp routing_settings(_auth, %RouteState{routing_settings: %RoutingSettings{} = settings}),

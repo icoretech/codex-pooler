@@ -140,9 +140,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   @spec saved_reset_available?(UpstreamIdentity.t(), SavedResets.auto_policy_projection()) ::
           boolean()
   def saved_reset_available?(%UpstreamIdentity{} = identity, policy) do
-    identity
-    |> SavedResets.snapshot()
-    |> saved_reset_available?(policy)
+    # Compatibility projection outside an explicit candidate scan. Scan and
+    # redemption validation paths pass their owned timestamp through /3.
+    saved_reset_available?(
+      identity,
+      policy,
+      DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    )
   end
 
   @spec saved_reset_available?(
@@ -154,6 +158,21 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     policy.enabled? and is_integer(snapshot.available_count) and
       snapshot.available_count > policy.keep_credits and not snapshot.in_progress? and
       not snapshot.redemption_stale?
+  end
+
+  @spec saved_reset_available?(
+          UpstreamIdentity.t(),
+          SavedResets.auto_policy_projection(),
+          DateTime.t()
+        ) :: boolean()
+  def saved_reset_available?(
+        %UpstreamIdentity{} = identity,
+        policy,
+        %DateTime{} = timestamp
+      ) do
+    identity
+    |> SavedResets.snapshot(timestamp)
+    |> saved_reset_available?(policy)
   end
 
   @doc """
@@ -169,7 +188,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           DateTime.t()
         ) :: boolean()
   def gateway_auto_ready?(%UpstreamIdentity{} = identity, policy, %DateTime{} = timestamp) do
-    saved_reset_available?(identity, policy) and
+    saved_reset_available?(identity, policy, timestamp) and
       identity_consume_latch(identity, timestamp) == :clear
   end
 

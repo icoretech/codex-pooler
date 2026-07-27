@@ -15,84 +15,182 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
-  @spec maybe_redeem_after_quota_exhaustion(term(), map(), :required | :optional) :: term()
-  def maybe_redeem_after_quota_exhaustion(result, refresh_plan, quota_mode)
+  @type refilter_clock :: (-> DateTime.t())
+  @type refilter_option :: {:refilter_clock, refilter_clock()}
+  @type refilter_options :: [refilter_option()]
 
+  @spec maybe_redeem_after_quota_exhaustion(term(), map(), :required | :optional) :: term()
+  def maybe_redeem_after_quota_exhaustion(result, refresh_plan, quota_mode) do
+    # Compatibility entry point for callers outside RouteFiltering's explicit
+    # candidate scan. The routed cycle always calls /4 with its owned timestamp.
+    maybe_redeem_after_quota_exhaustion(result, refresh_plan, quota_mode, now())
+  end
+
+  @spec maybe_redeem_after_quota_exhaustion(
+          term(),
+          map(),
+          :required | :optional,
+          DateTime.t()
+        ) :: term()
+  def maybe_redeem_after_quota_exhaustion(
+        result,
+        refresh_plan,
+        quota_mode,
+        %DateTime{} = timestamp
+      ) do
+    maybe_redeem_after_quota_exhaustion(result, refresh_plan, quota_mode, timestamp, [])
+  end
+
+  @doc false
+  @spec maybe_redeem_after_quota_exhaustion(
+          term(),
+          map(),
+          :required | :optional,
+          DateTime.t(),
+          refilter_options()
+        ) :: term()
   def maybe_redeem_after_quota_exhaustion(
         {:error, %{code: code} = error} = result,
         refresh_plan,
-        :required
+        :required,
+        %DateTime{} = timestamp,
+        opts
       )
-      when code in ["quota_exhausted", :quota_exhausted] and is_map(refresh_plan) do
+      when code in ["quota_exhausted", :quota_exhausted] and is_map(refresh_plan) and
+             is_list(opts) do
     if all_candidates_excluded_only_by_weekly_exhaustion?(error, refresh_plan) do
-      maybe_redeem_candidate(result, refresh_plan, :blocked_weekly_exhaustion)
+      maybe_redeem_candidate(result, refresh_plan, :blocked_weekly_exhaustion, timestamp, opts)
     else
       result
     end
   end
 
-  def maybe_redeem_after_quota_exhaustion(result, _refresh_plan, _quota_mode), do: result
+  def maybe_redeem_after_quota_exhaustion(
+        result,
+        _refresh_plan,
+        _quota_mode,
+        %DateTime{},
+        opts
+      )
+      when is_list(opts),
+      do: result
 
   @spec maybe_redeem_before_quota_exhaustion(term(), map(), :required | :optional) :: term()
-  def maybe_redeem_before_quota_exhaustion(result, refresh_plan, quota_mode)
+  def maybe_redeem_before_quota_exhaustion(result, refresh_plan, quota_mode) do
+    # Compatibility entry point for callers outside RouteFiltering's explicit
+    # candidate scan. The routed cycle always calls /4 with its owned timestamp.
+    maybe_redeem_before_quota_exhaustion(result, refresh_plan, quota_mode, now())
+  end
 
+  @spec maybe_redeem_before_quota_exhaustion(
+          term(),
+          map(),
+          :required | :optional,
+          DateTime.t()
+        ) :: term()
+  def maybe_redeem_before_quota_exhaustion(
+        result,
+        refresh_plan,
+        quota_mode,
+        %DateTime{} = timestamp
+      ) do
+    maybe_redeem_before_quota_exhaustion(result, refresh_plan, quota_mode, timestamp, [])
+  end
+
+  @doc false
+  @spec maybe_redeem_before_quota_exhaustion(
+          term(),
+          map(),
+          :required | :optional,
+          DateTime.t(),
+          refilter_options()
+        ) :: term()
   def maybe_redeem_before_quota_exhaustion(
         {:ok, _candidates, _decision} = result,
         refresh_plan,
-        :required
+        :required,
+        %DateTime{} = timestamp,
+        opts
       )
-      when is_map(refresh_plan) do
-    maybe_redeem_threshold_candidate(result, refresh_plan)
+      when is_map(refresh_plan) and is_list(opts) do
+    maybe_redeem_threshold_candidate(result, refresh_plan, timestamp, opts)
   end
 
   def maybe_redeem_before_quota_exhaustion(
         {:ok, _candidates, _decision, %RouteState{}} = result,
         refresh_plan,
-        :required
+        :required,
+        %DateTime{} = timestamp,
+        opts
       )
-      when is_map(refresh_plan) do
-    maybe_redeem_threshold_candidate(result, refresh_plan)
+      when is_map(refresh_plan) and is_list(opts) do
+    maybe_redeem_threshold_candidate(result, refresh_plan, timestamp, opts)
   end
 
-  def maybe_redeem_before_quota_exhaustion(result, _refresh_plan, _quota_mode), do: result
+  def maybe_redeem_before_quota_exhaustion(
+        result,
+        _refresh_plan,
+        _quota_mode,
+        %DateTime{},
+        opts
+      )
+      when is_list(opts),
+      do: result
 
-  defp maybe_redeem_candidate(result, refresh_plan, trigger) do
+  defp maybe_redeem_candidate(result, refresh_plan, trigger, timestamp, opts) do
     refresh_plan
     |> candidate_order()
-    |> Enum.find(&redeemable_candidate?/1)
+    |> Enum.find(&redeemable_candidate?(&1, timestamp))
     |> case do
       {assignment, identity} ->
-        redeem_and_refilter(result, refresh_plan, assignment, identity, trigger)
+        redeem_and_refilter(result, refresh_plan, assignment, identity, trigger, timestamp, opts)
 
       nil ->
         result
     end
   end
 
-  defp maybe_redeem_threshold_candidate(result, refresh_plan) do
+  defp maybe_redeem_threshold_candidate(result, refresh_plan, timestamp, opts) do
     candidates = candidate_order(refresh_plan)
 
     candidates
-    |> Enum.find_value(&early_redeemable_candidate(&1, candidates))
+    |> Enum.find_value(&early_redeemable_candidate(&1, candidates, timestamp))
     |> case do
       {{assignment, identity}, trigger} ->
-        redeem_and_refilter(result, refresh_plan, assignment, identity, trigger)
+        redeem_and_refilter(result, refresh_plan, assignment, identity, trigger, timestamp, opts)
 
       nil ->
         result
     end
   end
 
-  defp redeem_and_refilter(result, refresh_plan, assignment, identity, trigger) do
+  defp redeem_and_refilter(
+         result,
+         refresh_plan,
+         assignment,
+         identity,
+         trigger,
+         scan_timestamp,
+         opts
+       ) do
     case SavedResetRedemption.redeem(assignment,
            trigger_kind: "gateway_auto",
+           started_at: scan_timestamp,
            gateway_auto_context:
              gateway_auto_context(refresh_plan, assignment, identity, trigger),
            receive_timeout: 15_000
          ) do
       {:ok, %{applied?: true, code: code} = redeem_result} ->
         log_redemption(assignment, identity, "gateway_auto", code, true)
-        route_after_redemption(result, refresh_plan, assignment, redeem_result)
+
+        route_after_redemption(
+          result,
+          refresh_plan,
+          assignment,
+          redeem_result,
+          scan_timestamp,
+          opts
+        )
 
       {:ok, %{applied?: applied?, code: code}} ->
         log_redemption(assignment, identity, "gateway_auto", code, applied?)
@@ -113,16 +211,26 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   # reads exhausted — so the one triggering request claims the irreversible probe
   # and force-routes to the redeemed identity. If the probe was already claimed
   # (another node/request), fall back to the normal refilter.
-  defp route_after_redemption(result, refresh_plan, assignment, redeem_result) do
+  defp route_after_redemption(
+         result,
+         refresh_plan,
+         assignment,
+         redeem_result,
+         scan_timestamp,
+         opts
+       ) do
     identity = redeem_result.identity
 
     if pending_probe?(redeem_result) do
       case claim_probe(refresh_plan, assignment, identity) do
-        {:ok, probe} -> force_probe_route(refresh_plan, assignment, identity, probe)
-        {:error, _reason} -> refilter_after_redemption(result, refresh_plan)
+        {:ok, probe} ->
+          force_probe_route(refresh_plan, assignment, identity, probe)
+
+        {:error, _reason} ->
+          refilter_after_redemption(result, refresh_plan, scan_timestamp, opts)
       end
     else
-      refilter_after_redemption(result, refresh_plan)
+      refilter_after_redemption(result, refresh_plan, scan_timestamp, opts)
     end
   end
 
@@ -195,11 +303,16 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp refilter_after_redemption(
          result,
-         %{filter_input: %CandidateEligibility.FilterInput{} = input} = plan
+         %{filter_input: %CandidateEligibility.FilterInput{} = input} = plan,
+         scan_timestamp,
+         opts
        ) do
+    refilter_timestamp = refilter_timestamp(scan_timestamp, opts)
+
     case Map.get(plan, :route_state) do
       %RouteState{} = route_state ->
-        refreshed_route_state = RouteState.refresh_quota_window_snapshots(route_state)
+        refreshed_route_state =
+          refresh_route_state_quota(route_state, refilter_timestamp)
 
         case Plan.filter_eligible_candidates(input, refreshed_route_state) do
           {:refreshable_quota, remaining_plan} ->
@@ -210,9 +323,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         end
 
       _no_route_state ->
-        case Plan.filter_eligible_candidates(input) do
+        refreshed_route_state =
+          RouteState.new(%{
+            visible_model: input.model,
+            candidates: input.candidates
+          })
+          |> refresh_route_state_quota(refilter_timestamp)
+
+        case Plan.filter_eligible_candidates(input, refreshed_route_state) do
           {:refreshable_quota, remaining_plan} ->
-            Executor.refresh_stale_candidates(remaining_plan)
+            case Executor.refresh_stale_candidates(remaining_plan) do
+              {:ok, candidates, decision, %RouteState{}} -> {:ok, candidates, decision}
+              other -> other
+            end
 
           {:ok, candidates, decision} ->
             {:ok, candidates, decision}
@@ -334,21 +457,23 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   defp reason_token(reason, key), do: Map.get(reason, key) || Map.get(reason, Atom.to_string(key))
 
   defp redeemable_candidate?(
-         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity} = candidate
+         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity} = candidate,
+         timestamp
        ) do
     policy = SavedResets.auto_policy(identity)
 
-    saved_reset_available?(identity, policy) and redeemable_weekly_window?(candidate, policy)
+    saved_reset_available?(identity, policy, timestamp) and
+      redeemable_weekly_window?(candidate, policy, timestamp)
   end
 
-  defp redeemable_candidate?(_candidate), do: false
+  defp redeemable_candidate?(_candidate, _timestamp), do: false
 
-  defp early_redeemable_candidate(candidate, candidates) when is_list(candidates) do
+  defp early_redeemable_candidate(candidate, candidates, timestamp) when is_list(candidates) do
     cond do
-      threshold_redeemable_candidate?(candidate, candidates) ->
+      threshold_redeemable_candidate?(candidate, candidates, timestamp) ->
         {candidate, :threshold_pressure}
 
-      expiring_redeemable_candidate?(candidate) ->
+      expiring_redeemable_candidate?(candidate, timestamp) ->
         {candidate, :expiring_reset}
 
       true ->
@@ -358,40 +483,43 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp threshold_redeemable_candidate?(
          {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity},
-         candidates
+         candidates,
+         timestamp
        )
        when is_list(candidates) do
     policy = SavedResets.auto_policy(identity)
 
-    saved_reset_available?(identity, policy) and policy.trigger_mode == "threshold" and
-      all_candidates_at_threshold?(candidates, policy)
+    saved_reset_available?(identity, policy, timestamp) and policy.trigger_mode == "threshold" and
+      all_candidates_at_threshold?(candidates, policy, timestamp)
   end
 
-  defp threshold_redeemable_candidate?(_candidate, _candidates), do: false
+  defp threshold_redeemable_candidate?(_candidate, _candidates, _timestamp), do: false
 
   defp expiring_redeemable_candidate?(
-         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity} = candidate
+         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity} = candidate,
+         timestamp
        ) do
     policy = SavedResets.auto_policy(identity)
-    timestamp = now()
 
-    saved_reset_available?(identity, policy) and SavedResets.expires_soon?(identity, timestamp) and
+    saved_reset_available?(identity, policy, timestamp) and
+      SavedResets.expires_soon?(identity, timestamp) and
       redeemable_expiring_weekly_window?(candidate, policy, timestamp)
   end
 
-  defp expiring_redeemable_candidate?(_candidate), do: false
+  defp expiring_redeemable_candidate?(_candidate, _timestamp), do: false
 
-  defp saved_reset_available?(%UpstreamIdentity{} = identity, policy) do
-    AutoEligibility.gateway_auto_ready?(identity, policy, now())
+  defp saved_reset_available?(%UpstreamIdentity{} = identity, policy, timestamp) do
+    AutoEligibility.gateway_auto_ready?(identity, policy, timestamp)
   end
 
   defp redeemable_weekly_window?(
          {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity},
-         policy
+         policy,
+         timestamp
        ) do
     identity
-    |> Windows.list_quota_windows()
-    |> AutoEligibility.blocked_weekly_exhaustion?(policy, now())
+    |> Windows.list_quota_windows(timestamp)
+    |> AutoEligibility.blocked_weekly_exhaustion?(policy, timestamp)
   end
 
   defp redeemable_expiring_weekly_window?(
@@ -401,17 +529,15 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
        ) do
     AutoEligibility.expiring_reset?(
       identity,
-      Windows.list_quota_windows(identity),
+      Windows.list_quota_windows(identity, timestamp),
       policy,
       timestamp
     )
   end
 
-  defp all_candidates_at_threshold?([], _policy), do: false
+  defp all_candidates_at_threshold?([], _policy, _timestamp), do: false
 
-  defp all_candidates_at_threshold?(candidates, policy) when is_list(candidates) do
-    timestamp = now()
-
+  defp all_candidates_at_threshold?(candidates, policy, timestamp) when is_list(candidates) do
     candidate_identity_ids =
       candidates
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
@@ -425,7 +551,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       end)
       |> MapSet.new(fn {_assignment, identity} -> identity.id end)
 
-    windows_by_identity_id = Windows.list_quota_windows_by_identity_ids(candidate_identity_ids)
+    windows_by_identity_id =
+      Windows.list_quota_windows_by_identity_ids(candidate_identity_ids, timestamp)
 
     AutoEligibility.threshold_pressure?(
       candidate_identity_ids,
@@ -434,6 +561,62 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       latched_identity_ids,
       timestamp
     )
+  end
+
+  defp refresh_route_state_quota(%RouteState{} = route_state, timestamp) do
+    snapshots =
+      route_state.candidates
+      |> Enum.map(fn {_assignment, identity} -> identity.id end)
+      |> Enum.uniq()
+      |> Windows.list_quota_windows_by_identity_ids(timestamp)
+
+    RouteState.put_quota_window_snapshot(route_state, snapshots, timestamp)
+  end
+
+  defp newer_timestamp(%DateTime{} = previous_timestamp) do
+    ensure_newer_timestamp(now(), previous_timestamp)
+  end
+
+  defp newer_timestamp(%DateTime{} = previous_timestamp, refilter_clock)
+       when is_function(refilter_clock, 0) do
+    refilter_clock
+    |> refilter_clock_timestamp!()
+    |> ensure_newer_timestamp(previous_timestamp)
+  end
+
+  defp refilter_timestamp(previous_timestamp, []) do
+    newer_timestamp(previous_timestamp)
+  end
+
+  defp refilter_timestamp(previous_timestamp, opts) when is_list(opts) do
+    newer_timestamp(previous_timestamp, refilter_clock!(opts))
+  end
+
+  defp refilter_clock!(opts) do
+    case Keyword.get(opts, :refilter_clock, &now/0) do
+      clock when is_function(clock, 0) ->
+        clock
+
+      _invalid_clock ->
+        raise ArgumentError, "refilter_clock must be a zero-arity function"
+    end
+  end
+
+  defp refilter_clock_timestamp!(refilter_clock) do
+    case refilter_clock.() do
+      %DateTime{} = timestamp ->
+        DateTime.truncate(timestamp, :microsecond)
+
+      _invalid_timestamp ->
+        raise ArgumentError, "refilter_clock must return a DateTime"
+    end
+  end
+
+  defp ensure_newer_timestamp(timestamp, previous_timestamp) do
+    case DateTime.compare(timestamp, previous_timestamp) do
+      :gt -> timestamp
+      _not_newer -> DateTime.add(previous_timestamp, 1, :microsecond)
+    end
   end
 
   defp log_redemption(assignment, identity, trigger_kind, code, applied?) do

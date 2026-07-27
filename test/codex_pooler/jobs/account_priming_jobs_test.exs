@@ -4,13 +4,14 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.{AccountReconciliationWorker, SavedResetRedemptionWorker}
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
-  alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   import CodexPooler.PoolerFixtures
 
@@ -346,6 +347,85 @@ defmodule CodexPooler.Jobs.AccountPrimingJobsTest do
       assert result.assignment.metadata["quota_priming"]["status"] == "stale"
       assert result.assignment.metadata["quota_priming"]["stale_window_count"] == 1
       assert result.assignment.metadata["quota_priming"]["usable_window_count"] == 0
+    end
+
+    test "account reconciliation threads its operation timestamp through priming reads and writes" do
+      # July 25, 2026 is past/historical relative to Monday, July 27, 2026.
+      historical_operation_timestamp = ~U[2026-07-25 12:00:00.000000Z]
+      observed_at = DateTime.add(historical_operation_timestamp, -900, :second)
+      reset_at = DateTime.add(historical_operation_timestamp, 1, :microsecond)
+      current_date_contract_at = ~U[2026-07-27 00:00:00.000000Z]
+
+      {pool, assignment} =
+        active_assignment_fixture(%{
+          "quota_windows" => [
+            %{
+              "quota_key" => "account",
+              "window_kind" => "primary",
+              "window_minutes" => 300,
+              "used_percent" => 25,
+              "reset_at" => DateTime.to_iso8601(reset_at),
+              "observed_at" => DateTime.to_iso8601(observed_at),
+              "last_sync_at" => DateTime.to_iso8601(observed_at),
+              "source" => "local_reconciliation",
+              "source_precision" => "observed",
+              "quota_scope" => "account",
+              "quota_family" => "account",
+              "freshness_state" => "fresh"
+            }
+          ]
+        })
+
+      identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+      parent = self()
+
+      operation_clock = fn ->
+        persisted_windows = QuotaWindows.list_evidence(identity)
+        send(parent, {:terminal_operation_clock, persisted_windows})
+        historical_operation_timestamp
+      end
+
+      assert {:module, AccountReconciliation} = Code.ensure_loaded(AccountReconciliation)
+      assert function_exported?(AccountReconciliation, :run, 4)
+
+      assert {:ok, result} =
+               apply(AccountReconciliation, :run, [
+                 pool.id,
+                 assignment.id,
+                 "timestamp_contract",
+                 [operation_clock: operation_clock]
+               ])
+
+      assert_receive {:terminal_operation_clock, [persisted_window]}
+      refute_received {:terminal_operation_clock, _other_windows}
+
+      assert persisted_window.reset_at == reset_at
+      assert persisted_window.observed_at == observed_at
+
+      assert QuotaWindows.effective_quota_windows(
+               [persisted_window],
+               historical_operation_timestamp
+             ) == [persisted_window]
+
+      assert QuotaWindows.fresh_window?(persisted_window, historical_operation_timestamp)
+      assert QuotaWindows.usable_window?(persisted_window, historical_operation_timestamp)
+      refute Evidence.expired?(persisted_window, historical_operation_timestamp)
+
+      refute QuotaWindows.fresh_window?(persisted_window, current_date_contract_at)
+      refute QuotaWindows.usable_window?(persisted_window, current_date_contract_at)
+      assert Evidence.expired?(persisted_window, current_date_contract_at)
+
+      priming = result.assignment.metadata["quota_priming"]
+      reconciliation = result.assignment.metadata["last_reconciliation"]
+
+      assert priming["status"] == "known"
+      assert priming["usable_window_count"] == 1
+      assert priming["stale_window_count"] == 0
+      assert priming["expired_window_count"] == 0
+      assert priming["finished_at"] == DateTime.to_iso8601(historical_operation_timestamp)
+
+      assert reconciliation["finished_at"] ==
+               DateTime.to_iso8601(historical_operation_timestamp)
     end
   end
 

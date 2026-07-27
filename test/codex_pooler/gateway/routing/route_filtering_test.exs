@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -83,6 +84,44 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                 code: "quota_evidence_unavailable",
                 quota_refresh_attempted: false
               }} = RouteFiltering.filter_candidates(filter_input)
+    end
+
+    test "route-state filtering excludes a post-snapshot observation until the snapshot advances" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
+      filter_input = filter_input(pool, api_key, assignment, identity, "snapshot-boundary")
+      snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
+      refreshed_at = ~U[2026-07-25 12:00:00.000001Z]
+
+      snapshots = %{
+        identity.id => [
+          account_window_at(Decimal.new("15"), snapshot_at),
+          account_window_at(Decimal.new("100"), refreshed_at)
+        ]
+      }
+
+      route_state =
+        RouteState.new(%{
+          visible_model: filter_input.model,
+          candidates: filter_input.candidates,
+          circuit_snapshots: %{assignment.id => true}
+        })
+        |> RouteState.put_quota_window_snapshot(snapshots, snapshot_at)
+
+      assert {:ok, [{^assignment, ^identity}], request_options, returned_route_state} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert request_options.routing.quota_decision["routing_state"] == "precise"
+      assert returned_route_state.quota_snapshot_at == snapshot_at
+
+      refreshed_route_state =
+        RouteState.put_quota_window_snapshot(route_state, snapshots, refreshed_at)
+
+      assert {:error, %{code: "quota_exhausted"}} =
+               RouteFiltering.filter_candidates_with_route_state(
+                 filter_input,
+                 refreshed_route_state
+               )
     end
 
     test "routes to preserved catalog source when another same-pool source has exhausted quota" do
@@ -361,6 +400,114 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       metadata_json = Jason.encode!(persisted.metadata)
       refute metadata_json =~ consume_request.json["redeem_request_id"]
       refute metadata_json =~ "credit_id"
+    end
+
+    test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
+      # July 25, 2026 is past/historical relative to Monday, July 27, 2026.
+      historical_scan_at = ~U[2026-07-25 12:00:00.000000Z]
+      # This historical +1µs value is post-snapshot, not future relative to today.
+      post_snapshot = DateTime.add(historical_scan_at, 1, :microsecond)
+      expiration = ~U[2026-07-25 13:00:00.000000Z]
+      natural_reset_at = ~U[2026-07-25 14:00:00.000000Z]
+
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{
+          metadata:
+            saved_reset_metadata(upstream, 1, %{
+              "observed_at" => DateTime.to_iso8601(historical_scan_at),
+              "available_expires_at" => [DateTime.to_iso8601(expiration)],
+              "next_expires_at" => DateTime.to_iso8601(expiration),
+              "expires_observed_at" => DateTime.to_iso8601(historical_scan_at),
+              "expires_refresh_attempted_at" => DateTime.to_iso8601(historical_scan_at)
+            })
+        })
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+
+      upsert_weekly_pressure_quota!(identity, Decimal.new("100"),
+        observed_at: historical_scan_at,
+        last_sync_at: historical_scan_at,
+        reset_at: natural_reset_at
+      )
+
+      filter_input = filter_input(pool, api_key, assignment, identity, "newer-refilter")
+      circuit_snapshot = %{eligible?: true, marker: "preserved"}
+      visible_model_context = %{visible_model: filter_input.model, marker: "preserved"}
+      parent = self()
+
+      route_state =
+        RouteState.new(%{
+          visible_model: filter_input.model,
+          visible_model_context: visible_model_context,
+          candidates: filter_input.candidates,
+          circuit_snapshots: %{assignment.id => circuit_snapshot}
+        })
+        |> RouteState.put_quota_window_snapshot(
+          %{identity.id => QuotaWindows.list_quota_windows(identity, historical_scan_at)},
+          historical_scan_at
+        )
+
+      refilter_clock = fn ->
+        persisted_primary =
+          identity
+          |> QuotaWindows.list_evidence()
+          |> Enum.find(&(&1.window_kind == "primary"))
+
+        assert %AccountQuotaWindow{} = persisted_primary
+        assert DateTime.compare(persisted_primary.observed_at, post_snapshot) == :gt
+
+        persisted_primary
+        |> Ecto.Changeset.change(observed_at: post_snapshot, last_sync_at: post_snapshot)
+        |> Repo.update!()
+
+        send(parent, {:saved_reset_refilter_clock, persisted_primary.id})
+        historical_scan_at
+      end
+
+      assert {:ok, [{^assignment, ^identity}], _request_options, refreshed_route_state} =
+               RouteFiltering.filter_candidates_with_route_state(
+                 filter_input,
+                 route_state,
+                 saved_reset_scan_at: historical_scan_at,
+                 saved_reset_refilter_clock: refilter_clock
+               )
+
+      assert_receive {:saved_reset_refilter_clock, persisted_primary_id}
+      refute_received {:saved_reset_refilter_clock, _other_primary_id}
+
+      assert refreshed_route_state.quota_snapshot_at == post_snapshot
+
+      assert DateTime.diff(
+               refreshed_route_state.quota_snapshot_at,
+               historical_scan_at,
+               :microsecond
+             ) == 1
+
+      assert refreshed_route_state.visible_model_context == visible_model_context
+      assert refreshed_route_state.circuit_snapshots[assignment.id] == circuit_snapshot
+      assert route_state.quota_snapshot_at == historical_scan_at
+      assert route_state.visible_model_context == visible_model_context
+      assert route_state.circuit_snapshots[assignment.id] == circuit_snapshot
+
+      old_rows = QuotaWindows.list_quota_windows(identity, historical_scan_at)
+      refute Enum.any?(old_rows, &(&1.window_kind == "primary"))
+
+      assert Enum.any?(
+               refreshed_route_state.quota_window_snapshots[identity.id],
+               &(&1.id == persisted_primary_id and &1.window_kind == "primary" and
+                   Decimal.equal?(&1.used_percent, Decimal.new(10)))
+             )
     end
 
     test "force-routes the triggering request as a guarded probe when usage omits the account window" do
@@ -1132,6 +1279,22 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     %{visible_model: model, candidates: candidates}
     |> RouteState.new()
     |> RouteState.preload_routing_snapshots(auth, model, request_options)
+  end
+
+  defp account_window_at(used_percent, observed_at) do
+    %AccountQuotaWindow{
+      quota_key: "account",
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: used_percent,
+      reset_at: DateTime.add(observed_at, 300, :second),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      freshness_state: "fresh",
+      observed_at: observed_at
+    }
   end
 
   defp candidate_ids(candidates),

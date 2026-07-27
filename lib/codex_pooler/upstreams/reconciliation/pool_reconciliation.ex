@@ -54,12 +54,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         ) ::
           lifecycle_result()
   def reconcile_pool_account(pool_or_id, assignment_or_id, opts \\ []) do
+    persisted_window_reuse_at = persisted_window_reuse_timestamp(opts)
     pool_id = pool_id(pool_or_id)
     assignment_id = assignment_id(assignment_or_id)
 
     case load_active_assignment_with_identity(pool_id, assignment_id) do
       {%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity} ->
-        quota_step = refresh_reconciliation_quota(identity, assignment, opts)
+        quota_step =
+          refresh_reconciliation_quota(identity, assignment, opts, persisted_window_reuse_at)
+
         finalize_reconciliation(assignment, identity, quota_step, opts)
 
       nil ->
@@ -363,8 +366,9 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   defp eligibility_after_reconciliation(assignment, _quota_step),
     do: assignment.eligibility_status
 
-  defp refresh_reconciliation_quota(identity, assignment, opts) do
-    source = reconciliation_quota_source(identity, assignment, opts)
+  defp refresh_reconciliation_quota(identity, assignment, opts, persisted_window_reuse_at) do
+    source =
+      reconciliation_quota_source(identity, assignment, opts, persisted_window_reuse_at)
 
     case source do
       :auth_unavailable ->
@@ -431,7 +435,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
-  defp reconciliation_quota_source(identity, assignment, opts) do
+  defp reconciliation_quota_source(identity, assignment, opts, persisted_window_reuse_at) do
     cond do
       Keyword.has_key?(opts, :quota_windows) ->
         {:windows, Keyword.get(opts, :quota_windows), Keyword.get(opts, :identity_attrs, %{}),
@@ -443,7 +447,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       true ->
         identity
         |> codex_usage_quota_windows(assignment, opts)
-        |> maybe_reuse_persisted_quota_windows(identity)
+        |> maybe_reuse_persisted_quota_windows(identity, persisted_window_reuse_at)
     end
   end
 
@@ -848,26 +852,27 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   defp maybe_reuse_persisted_quota_windows(
          {:usage_unavailable, {:upstream_status, status}, _fence} = unavailable,
-         _identity
+         _identity,
+         _timestamp
        )
        when status in @fallback_denied_usage_statuses,
        do: unavailable
 
   defp maybe_reuse_persisted_quota_windows(
          {:usage_unavailable, {:mixed_auth_rejection, _reason}, _fence} = unavailable,
-         _identity
+         _identity,
+         _timestamp
        ),
        do: unavailable
 
   defp maybe_reuse_persisted_quota_windows(
          {:usage_unavailable, _reason, fence} = unavailable,
-         identity
+         identity,
+         timestamp
        ) do
-    timestamp = now()
-
     windows =
       identity
-      |> Quota.Windows.list_quota_windows()
+      |> Quota.Windows.list_quota_windows(timestamp)
       |> Enum.filter(&reusable_persisted_quota_window?(&1, timestamp))
 
     if windows != [] do
@@ -877,7 +882,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     end
   end
 
-  defp maybe_reuse_persisted_quota_windows(result, _identity), do: result
+  defp maybe_reuse_persisted_quota_windows(result, _identity, _timestamp), do: result
 
   # The weekly account window counts as reusable: since the provider
   # suspended the anchored 5h windows (announced as temporary), it is the
@@ -1044,6 +1049,12 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     identity
     |> UpstreamIdentity.changeset(attrs)
     |> Repo.update()
+  end
+
+  defp persisted_window_reuse_timestamp(opts) do
+    opts
+    |> Keyword.get_lazy(:as_of, &now/0)
+    |> DateTime.truncate(:microsecond)
   end
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
