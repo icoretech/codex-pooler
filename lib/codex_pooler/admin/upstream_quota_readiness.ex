@@ -24,7 +24,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadiness do
         }
 
   @spec from_windows([window()], DateTime.t()) :: t()
-  def from_windows(windows, as_of \\ DateTime.utc_now()) when is_list(windows) do
+  def from_windows(windows, %DateTime{} = as_of) when is_list(windows) do
     account_windows = Enum.filter(windows, &account_window?/1)
     routing_account_windows = Enum.reject(account_windows, &usage_zero_capacity_primary_window?/1)
 

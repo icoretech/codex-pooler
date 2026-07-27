@@ -355,7 +355,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     # readiness and card projections below reason about the same view
     snapshot_at = DateTime.utc_now()
     quota_windows = QuotaWindows.list_quota_windows(identity, snapshot_at)
-    quota_readiness = QuotaProjection.readiness(quota_windows)
+    quota_readiness = QuotaProjection.readiness(quota_windows, snapshot_at)
     identity_assignments = identity_assignments(identity, assignments, quota_readiness)
 
     identity_observability =
@@ -417,7 +417,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       assignments: identity_assignments,
       quota_readiness: quota_readiness,
       routing_readiness: routing_readiness,
-      quota_limits: QuotaProjection.quota_limit_rows(quota_windows, datetime_preferences),
+      quota_limits:
+        QuotaProjection.quota_limit_rows(quota_windows, datetime_preferences, snapshot_at),
       identity_observability: identity_observability
     }
 

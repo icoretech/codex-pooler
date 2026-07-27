@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @moduledoc false
 
   alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Quotas.ModelWeeklyResetSemantics
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
   alias CodexPooler.Upstreams.Quota.WindowSelector
@@ -41,9 +42,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:reset_title) => String.t() | nil
         }
 
-  @spec readiness([Quota.AccountQuotaWindow.t()]) :: UpstreamQuotaReadiness.t()
-  def readiness(windows) when is_list(windows) do
-    UpstreamQuotaReadiness.from_windows(windows)
+  @spec readiness([Quota.AccountQuotaWindow.t()], DateTime.t()) :: UpstreamQuotaReadiness.t()
+  def readiness(windows, %DateTime{} = snapshot_at) when is_list(windows) do
+    UpstreamQuotaReadiness.from_windows(windows, snapshot_at)
   end
 
   @spec assignment_priming_status(map()) :: String.t()
@@ -103,10 +104,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     end
   end
 
-  @spec quota_limit_rows([Quota.AccountQuotaWindow.t()], DateTimeDisplay.preferences()) :: [
-          quota_limit_row()
-        ]
-  def quota_limit_rows(windows, datetime_preferences) when is_list(windows) do
+  @spec quota_limit_rows(
+          [Quota.AccountQuotaWindow.t()],
+          DateTimeDisplay.preferences(),
+          DateTime.t()
+        ) :: [quota_limit_row()]
+  def quota_limit_rows(windows, datetime_preferences, %DateTime{} = snapshot_at)
+      when is_list(windows) do
     additional_limits =
       windows
       |> Enum.reject(&account_quota_window?/1)
@@ -118,7 +122,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           key,
           label,
           window,
-          datetime_preferences
+          datetime_preferences,
+          snapshot_at
         )
       end)
 
@@ -126,20 +131,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       quota_limit_row(
         :primary_5h,
         "5h",
-        quota_account_window(windows, :primary_5h),
-        datetime_preferences
+        quota_account_window(windows, :primary_5h, snapshot_at),
+        datetime_preferences,
+        snapshot_at
       ),
       quota_limit_row(
         :primary_30d,
         "30d",
-        quota_account_window(windows, :monthly_primary),
-        datetime_preferences
+        quota_account_window(windows, :monthly_primary, snapshot_at),
+        datetime_preferences,
+        snapshot_at
       ),
       quota_limit_row(
         :weekly,
         "Weekly",
-        quota_account_window(windows, "secondary", nil),
-        datetime_preferences
+        quota_account_window(windows, "secondary", snapshot_at),
+        datetime_preferences,
+        snapshot_at
       )
     ] ++ additional_limits
   end
@@ -162,12 +170,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     not is_nil(quota_remaining_percent(window)) or not is_nil(quota_count_label(window))
   end
 
-  defp quota_account_window(windows, descriptor) do
-    WindowSelector.best_account_window(windows, descriptor)
+  defp quota_account_window(windows, "secondary", snapshot_at) do
+    WindowSelector.best_account_window(windows, :weekly_secondary, snapshot_at)
   end
 
-  defp quota_account_window(windows, "secondary", nil) do
-    WindowSelector.best_account_window(windows, :weekly_secondary)
+  defp quota_account_window(windows, descriptor, snapshot_at) do
+    WindowSelector.best_account_window(windows, descriptor, snapshot_at)
   end
 
   defp quota_limit_sort_key(%Quota.AccountQuotaWindow{} = window) do
@@ -359,11 +367,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   defp humanize_quota_label(_label), do: "Additional limit"
 
-  defp quota_limit_row(key, label, %Quota.AccountQuotaWindow{} = window, datetime_preferences) do
+  defp quota_limit_row(
+         key,
+         label,
+         %Quota.AccountQuotaWindow{} = window,
+         datetime_preferences,
+         snapshot_at
+       ) do
     remaining_percent = quota_remaining_percent(window)
 
-    {reset_semantics, reset_label, reset_title} =
-      quota_reset_presentation(window, datetime_preferences)
+    {reset_semantics, reset_at, reset_label, reset_title} =
+      quota_reset_presentation(window, datetime_preferences, snapshot_at)
 
     %{
       key: key,
@@ -374,13 +388,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       count_label: quota_count_label(window),
       credit_backed: credit_backed_window?(window),
       reset_semantics: reset_semantics,
-      reset_at: window.reset_at,
+      reset_at: reset_at,
       reset_label: reset_label,
       reset_title: reset_title
     }
   end
 
-  defp quota_limit_row(key, label, nil, _datetime_preferences) do
+  defp quota_limit_row(key, label, nil, _datetime_preferences, _snapshot_at) do
     %{
       key: key,
       label: label,
@@ -484,42 +498,67 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   defp quota_count_label(%Quota.AccountQuotaWindow{}), do: nil
 
-  defp quota_reset_presentation(
+  defp quota_reset_presentation(window, datetime_preferences, snapshot_at) do
+    case ModelWeeklyResetSemantics.classify(window) do
+      :anchored ->
+        anchored_reset_presentation(window.reset_at, datetime_preferences, snapshot_at)
+
+      :floating ->
+        {:floating, nil, "starts on use",
+         "provider reports a rolling seven-day window until use starts"}
+
+      :unknown ->
+        {:unknown, nil, nil, nil}
+
+      :not_applicable ->
+        legacy_quota_reset_presentation(window, datetime_preferences, snapshot_at)
+    end
+  end
+
+  defp legacy_quota_reset_presentation(
          %Quota.AccountQuotaWindow{metadata: metadata, reset_at: reset_at},
-         datetime_preferences
+         datetime_preferences,
+         snapshot_at
        )
        when is_map(metadata) do
     case Map.fetch(metadata, "reset_state") do
       {:ok, "floating"} ->
-        {:floating, "starts on use",
+        {:floating, reset_at, "starts on use",
          "provider reports a rolling seven-day window until use starts"}
 
       {:ok, "anchored"} ->
-        anchored_reset_presentation(reset_at, datetime_preferences)
+        anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
 
       {:ok, _reset_state} ->
-        {:unknown, nil, nil}
+        {:unknown, reset_at, nil, nil}
 
       :error ->
-        anchored_reset_presentation(reset_at, datetime_preferences)
+        anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
     end
   end
 
-  defp quota_reset_presentation(
+  defp legacy_quota_reset_presentation(
          %Quota.AccountQuotaWindow{reset_at: reset_at},
-         datetime_preferences
+         datetime_preferences,
+         snapshot_at
        ) do
-    anchored_reset_presentation(reset_at, datetime_preferences)
+    anchored_reset_presentation(reset_at, datetime_preferences, snapshot_at)
   end
 
-  defp anchored_reset_presentation(%DateTime{} = reset_at, datetime_preferences) do
-    {:anchored, quota_reset_label(reset_at), quota_reset_title(reset_at, datetime_preferences)}
+  defp anchored_reset_presentation(
+         %DateTime{} = reset_at,
+         datetime_preferences,
+         snapshot_at
+       ) do
+    {:anchored, reset_at, quota_reset_label(reset_at, snapshot_at),
+     quota_reset_title(reset_at, datetime_preferences)}
   end
 
-  defp anchored_reset_presentation(_reset_at, _datetime_preferences), do: {:unknown, nil, nil}
+  defp anchored_reset_presentation(_reset_at, _datetime_preferences, _snapshot_at),
+    do: {:unknown, nil, nil, nil}
 
-  defp quota_reset_label(%DateTime{} = reset_at) do
-    seconds_until_reset = DateTime.diff(reset_at, DateTime.utc_now(), :second)
+  defp quota_reset_label(%DateTime{} = reset_at, %DateTime{} = snapshot_at) do
+    seconds_until_reset = DateTime.diff(reset_at, snapshot_at, :second)
 
     if seconds_until_reset > 0 do
       "in #{Formatting.format_reset_duration(seconds_until_reset)}"

@@ -262,6 +262,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     pool = pool_fixture(%{name: "Spark reset semantics Pool"})
     %{identity: anchored} = upstream_assignment_fixture(pool, %{account_label: "Anchored Spark"})
     %{identity: floating} = upstream_assignment_fixture(pool, %{account_label: "Floating Spark"})
+    %{identity: unknown} = upstream_assignment_fixture(pool, %{account_label: "Unknown Spark"})
 
     initial_observed_at = ~U[2026-07-25 10:00:00Z]
 
@@ -308,9 +309,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert DateTime.compare(anchored_row.observed_at, anchored_observed_at) == :eq
     assert floating_row.metadata["reset_state"] == "floating"
 
+    sensitive_marker = "provider-sensitive-marker-must-not-render"
+
+    assert {:ok, [_unknown_row]} =
+             QuotaWindows.upsert_quota_windows(unknown, [
+               spark_weekly_quota_window(initial_observed_at, %{
+                 "provider_debug" => sensitive_marker
+               })
+             ])
+
     accounts = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
     anchored_account = Enum.find(accounts, &(&1.identity.id == anchored.id))
     floating_account = Enum.find(accounts, &(&1.identity.id == floating.id))
+    unknown_account = Enum.find(accounts, &(&1.identity.id == unknown.id))
 
     assert Enum.find(
              anchored_account.quota_limits,
@@ -324,6 +335,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            ).reset_semantics ==
              :floating
 
+    assert Enum.find(
+             unknown_account.quota_limits,
+             &(&1.key == "model-codex_spark-secondary-10080")
+           ).reset_semantics ==
+             :unknown
+
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
     anchored_reset_id =
@@ -331,6 +348,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     floating_reset_id =
       "upstream-account-#{floating.id}-limit-model-codex_spark-secondary-10080-reset"
+
+    unknown_reset_id =
+      "upstream-account-#{unknown.id}-limit-model-codex_spark-secondary-10080-reset"
 
     assert has_element?(
              view,
@@ -355,6 +375,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "##{floating_reset_id}[title='provider reports a rolling seven-day window until use starts']"
            )
+
+    refute has_element?(view, "##{unknown_reset_id}")
+    refute render(view) =~ sensitive_marker
   end
 
   @tag :provider_reset_convergence

@@ -357,6 +357,7 @@ defmodule CodexPooler.Dev.SeedsTest do
 
     ready_windows = quota_windows_for(ready_identity)
     exhausted_windows = quota_windows_for(exhausted_identity)
+    snapshot_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     assert Enum.map(ready_windows, &{&1.window_kind, &1.window_minutes, &1.freshness_state}) == [
              {"primary", 300, "fresh"},
@@ -369,8 +370,10 @@ defmodule CodexPooler.Dev.SeedsTest do
                {"secondary", 10_080, "fresh"}
              ]
 
-    assert UpstreamQuotaReadiness.from_windows(ready_windows).label == "Quota ready"
-    assert UpstreamQuotaReadiness.from_windows(exhausted_windows).label == "Quota exhausted"
+    assert UpstreamQuotaReadiness.from_windows(ready_windows, snapshot_at).label == "Quota ready"
+
+    assert UpstreamQuotaReadiness.from_windows(exhausted_windows, snapshot_at).label ==
+             "Quota exhausted"
 
     assert Enum.find(exhausted_windows, &(&1.window_kind == "secondary")).credits == 0
 

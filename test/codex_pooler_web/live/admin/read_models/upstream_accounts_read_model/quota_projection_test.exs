@@ -2,12 +2,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   use CodexPooler.DataCase, async: false
 
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
   alias CodexPoolerWeb.DateTimeDisplay
 
   import CodexPooler.PoolerFixtures
+
+  @snapshot_at ~U[2026-07-25 12:00:00Z]
+
+  test "requires one trusted snapshot timestamp for readiness and quota rows" do
+    refute function_exported?(QuotaProjection, :readiness, 1)
+    refute function_exported?(QuotaProjection, :quota_limit_rows, 2)
+  end
 
   describe "identity observability projection" do
     test "newer success supersedes an older sibling failure" do
@@ -209,7 +217,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     rows =
       identity
       |> QuotaWindows.list_quota_windows()
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(
+        DateTimeDisplay.preferences_for_user(nil),
+        observed_at
+      )
 
     spark_rows = Enum.filter(rows, &String.starts_with?(&1.label, "GPT-5.3-Codex-Spark"))
 
@@ -316,7 +327,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     rows =
       identity
       |> QuotaWindows.list_quota_windows()
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(
+        DateTimeDisplay.preferences_for_user(nil),
+        observed_at
+      )
 
     primary_5h = Enum.find(rows, &(&1.key == :primary_5h))
     assert primary_5h.percent == nil
@@ -344,7 +358,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
                provider_shape_window_attrs(initial_at, :full)
              )
 
-    initial_rows = projected_rows(identity)
+    initial_rows = projected_rows(identity, initial_at)
     assert_one_account_and_spark_window(initial_rows, "5h")
     assert_one_account_and_spark_window(initial_rows, "Weekly")
 
@@ -354,7 +368,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
                provider_shape_window_attrs(weekly_at, :weekly_only)
              )
 
-    weekly_rows = projected_rows(identity)
+    weekly_rows = projected_rows(identity, weekly_at)
     assert account_5h_row(weekly_rows).percent == nil
     assert account_5h_row(weekly_rows).reset_label == nil
     refute Enum.any?(weekly_rows, &(&1.label == "GPT-5.3-Codex-Spark 5h"))
@@ -366,7 +380,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
                provider_shape_window_attrs(restored_at, :primary_only, used_percent: "13")
              )
 
-    restored_rows = projected_rows(identity)
+    restored_rows = projected_rows(identity, restored_at)
     assert_one_account_and_spark_window(restored_rows, "5h")
     assert_one_account_and_spark_window(restored_rows, "Weekly")
     assert account_5h_row(restored_rows).reset_label != nil
@@ -395,7 +409,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     primary =
       [outlier, measured]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
       |> Enum.find(&(&1.key == :primary_5h))
 
     assert Decimal.equal?(primary.percent, Decimal.new("94"))
@@ -418,7 +432,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     primary =
       [outlier]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
       |> Enum.find(&(&1.key == :primary_5h))
 
     assert Decimal.equal?(primary.percent, Decimal.new("100"))
@@ -443,7 +457,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
             observed_at: observed_at
           )
         ]
-        |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          observed_at
+        )
         |> Enum.find(&(&1.key == :primary_5h))
 
       assert Decimal.equal?(primary.percent, Decimal.new("100")), source
@@ -469,7 +486,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     primary =
       [row]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
       |> Enum.find(&(&1.key == :primary_5h))
 
     assert primary.percent == nil
@@ -487,7 +504,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
         spark_window("primary", 300, observed_at),
         spark_window("secondary", 10_080, observed_at)
       ]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 
     assert primary = Enum.find(rows, &(&1.key == "model-codex_spark-primary-300"))
     assert primary.label == "GPT-5.3-Codex-Spark 5h"
@@ -501,7 +518,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     assert Decimal.equal?(secondary.percent, Decimal.new("100"))
     assert secondary.percent_value == 100
     assert secondary.percent_label == "100%"
-    assert String.starts_with?(secondary.reset_label, "in ")
+    assert secondary.reset_semantics == :unknown
+    assert secondary.reset_at == nil
+    assert secondary.reset_label == nil
+    assert secondary.reset_title == nil
   end
 
   @tag :quota_spark_projection
@@ -511,7 +531,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     for source <- ~w(codex_rate_limit_event codex_response_headers codex_rate_limit_error) do
       rows =
         [spark_window("primary", 300, observed_at, source: source)]
-        |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          observed_at
+        )
 
       assert primary = Enum.find(rows, &(&1.key == "model-codex_spark-primary-300"))
       assert Decimal.equal?(primary.percent, Decimal.new("100")), source
@@ -531,10 +554,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
           metadata: %{"reset_state" => "floating", "reset_after_seconds" => 604_800}
         )
       ]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 
     assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
     assert weekly.reset_semantics == :floating
+    assert weekly.reset_at == nil
     assert weekly.reset_label == "starts on use"
     assert weekly.reset_title == "provider reports a rolling seven-day window until use starts"
   end
@@ -545,12 +569,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     rows =
       [spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "anchored"})]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 
     assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
     assert weekly.reset_semantics == :anchored
-    assert String.starts_with?(weekly.reset_label, "in ")
-    assert String.starts_with?(weekly.reset_title, "resets ")
+    assert weekly.reset_at == DateTime.add(observed_at, 10_080, :minute)
+    assert weekly.reset_label == "in 7d"
+
+    assert weekly.reset_title ==
+             "resets " <>
+               DateTimeDisplay.format_datetime(
+                 weekly.reset_at,
+                 DateTimeDisplay.preferences_for_user(nil)
+               )
   end
 
   @tag :quota_spark_projection
@@ -559,12 +590,67 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     rows =
       [spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "unknown"})]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 
     assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
     assert weekly.reset_semantics == :unknown
+    assert weekly.reset_at == nil
     assert weekly.reset_label == nil
     assert weekly.reset_title == nil
+  end
+
+  @tag :quota_spark_projection
+  test "markerless zero-use Spark weekly evidence has no reset countdown" do
+    rows =
+      [spark_window("secondary", 10_080, @snapshot_at)]
+      |> QuotaProjection.quota_limit_rows(
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at
+      )
+
+    assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    assert weekly.reset_semantics == :unknown
+    assert weekly.reset_at == nil
+    assert weekly.reset_label == nil
+    assert weekly.reset_title == nil
+  end
+
+  @tag :quota_spark_projection
+  test "QF-001 projects the explicit floating winner in both input permutations" do
+    explicit_floating =
+      spark_window("secondary", 10_080, ~U[2026-07-25 11:59:00Z],
+        id: "10000000-0000-4000-8000-000000000001",
+        reset_at: ~U[2026-08-01 12:00:00Z],
+        merge_precedence: 60,
+        metadata: %{"reset_state" => "floating"}
+      )
+
+    markerless_headers =
+      spark_window("secondary", 10_080, ~U[2026-07-25 11:59:30Z],
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        reset_at: ~U[2026-08-01 12:30:00Z],
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        metadata: %{}
+      )
+
+    for candidates <- [
+          [explicit_floating, markerless_headers],
+          [markerless_headers, explicit_floating]
+        ] do
+      rows =
+        candidates
+        |> WindowSelector.logical_windows(@snapshot_at)
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      assert weekly = Enum.find(rows, &(&1.key == "model-codex_spark-secondary-10080"))
+      assert weekly.reset_semantics == :floating
+      assert weekly.reset_at == nil
+      assert weekly.reset_label == "starts on use"
+    end
   end
 
   @tag :quota_spark_projection
@@ -578,7 +664,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
           source_precision: "inferred"
         )
       ]
-      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
 
     refute Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
   end
@@ -710,10 +796,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     )
   end
 
-  defp projected_rows(identity) do
+  defp projected_rows(identity, snapshot_at) do
     identity
-    |> QuotaWindows.list_quota_windows()
-    |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil))
+    |> QuotaWindows.list_quota_windows(snapshot_at)
+    |> QuotaProjection.quota_limit_rows(
+      DateTimeDisplay.preferences_for_user(nil),
+      snapshot_at
+    )
   end
 
   defp account_5h_row(rows), do: Enum.find(rows, &(&1.key == :primary_5h))

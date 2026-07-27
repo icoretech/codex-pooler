@@ -2,6 +2,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
 
   @as_of ~U[2026-05-30 12:00:00Z]
@@ -20,6 +21,45 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
                  ])
 
   describe "from_windows/2" do
+    test "requires the trusted snapshot timestamp" do
+      refute function_exported?(UpstreamQuotaReadiness, :from_windows, 1)
+    end
+
+    test "uses the supplied snapshot for freshness and reset expiry boundaries" do
+      ttl = Evidence.freshness_ttl_seconds()
+
+      fresh =
+        account_primary_window(
+          observed_at: DateTime.add(@as_of, -ttl + 1, :second),
+          last_sync_at: DateTime.add(@as_of, -ttl + 1, :second)
+        )
+
+      ttl_equal =
+        account_primary_window(
+          observed_at: DateTime.add(@as_of, -ttl, :second),
+          last_sync_at: DateTime.add(@as_of, -ttl, :second)
+        )
+
+      stale =
+        account_primary_window(
+          observed_at: DateTime.add(@as_of, -ttl - 1, :second),
+          last_sync_at: DateTime.add(@as_of, -ttl - 1, :second)
+        )
+
+      reset_expired = account_primary_window(reset_at: @as_of)
+
+      assert UpstreamQuotaReadiness.from_windows([fresh], @as_of).state == "ready"
+      assert UpstreamQuotaReadiness.from_windows([ttl_equal], @as_of).state == "ready"
+      assert UpstreamQuotaReadiness.from_windows([stale], @as_of).state == "stale"
+
+      assert %{
+               state: "stale",
+               reason_codes: reason_codes
+             } = UpstreamQuotaReadiness.from_windows([reset_expired], @as_of)
+
+      assert "expired" in reason_codes
+    end
+
     test "maps precise account quota eligibility to ready" do
       primary = account_primary_window()
 
