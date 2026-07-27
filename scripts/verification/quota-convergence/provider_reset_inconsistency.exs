@@ -452,7 +452,8 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
     expect!(length(persisted_rows) == 3, "QF physical row count mismatch")
     expect!(length(historical_rows) == 1, "QF effective row count mismatch")
-    expect!(selection.secondary.id == @qf_historical_ids.floating, "QF floating winner mismatch")
+    [winner] = selection.routing_windows
+    expect!(winner.id == @qf_historical_ids.floating, "QF floating winner mismatch")
 
     [floating_first_winner] =
       WindowSelector.logical_windows([floating, markerless], @historical_as_of)
