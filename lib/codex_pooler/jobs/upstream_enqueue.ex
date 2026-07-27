@@ -35,6 +35,12 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
     states: :successful,
     period: 60
   ]
+  @scheduled_saved_reset_unique [
+    fields: [:args, :queue, :worker],
+    keys: [:upstream_identity_id],
+    states: :incomplete,
+    period: :infinity
+  ]
   # Oban applies the unique period to incomplete states too, so an
   # executing/available job older than the cooldown would stop blocking new
   # inserts. The untimed incomplete-state guard below keeps at most one
@@ -105,6 +111,26 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
       |> tap_saved_reset_redemption_enqueue(assignment_or_id)
     end
   end
+
+  @spec enqueue_scheduled_saved_reset_redemption(PoolUpstreamAssignment.t()) ::
+          job_insert_result()
+  def enqueue_scheduled_saved_reset_redemption(%PoolUpstreamAssignment{} = assignment) do
+    with {:ok, assignment_id} <- assignment_id(assignment),
+         {:ok, identity_id} <- identity_id(assignment.upstream_identity_id) do
+      %{
+        "pool_upstream_assignment_id" => assignment_id,
+        "upstream_identity_id" => identity_id,
+        "target_kind" => "upstream_identity",
+        "trigger_kind" => "scheduled_expiry_rescue"
+      }
+      |> SavedResetRedemptionWorker.new(unique: @scheduled_saved_reset_unique)
+      |> Oban.insert()
+      |> tap_saved_reset_redemption_enqueue(assignment)
+    end
+  end
+
+  def enqueue_scheduled_saved_reset_redemption(_assignment),
+    do: {:error, :pool_upstream_assignment_id_required}
 
   @spec enqueue_scheduled_identity_account_reconciliation(PoolUpstreamAssignment.t(), keyword()) ::
           job_insert_result()

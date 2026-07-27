@@ -15,8 +15,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
   @assignment_active PoolUpstreamAssignment.active_status()
-  @identity_deleted UpstreamIdentity.deleted_status()
-  @identity_disabled UpstreamIdentity.disabled_status()
+  @identity_active UpstreamIdentity.active_status()
+  @redemption_stale_grace_ms 60_000
 
   @type trigger :: Context.trigger()
   @type context :: Context.t()
@@ -84,6 +84,67 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     end
   end
 
+  @doc """
+  Cheap post-reconciliation gate for traffic-independent expiry rescue.
+
+  It reads only the persisted identity projection and that identity's quota
+  evidence. The scheduled redemption transaction repeats every condition after
+  locking the identity and assignment.
+  """
+  @spec scheduled_expiry_candidate?(UpstreamIdentity.t(), DateTime.t()) :: boolean()
+  def scheduled_expiry_candidate?(
+        %UpstreamIdentity{} = identity,
+        %DateTime{} = timestamp
+      ) do
+    policy = SavedResets.auto_policy(identity)
+    snapshot = SavedResets.snapshot(identity, timestamp)
+
+    identity.status == @identity_active and policy.enabled? and
+      scheduled_redemption_state(identity, snapshot, timestamp, 0) == :clear and
+      scheduled_saved_reset_state(snapshot, policy) == :available and
+      SavedResets.expires_soon?(identity, timestamp) and
+      scheduled_weekly_eligibility(
+        scheduled_identity_windows(identity, snapshot, timestamp),
+        policy,
+        timestamp
+      ) == :eligible
+  end
+
+  @spec validate_locked_scheduled_expiry(
+          UpstreamIdentity.t(),
+          PoolUpstreamAssignment.t(),
+          Ecto.UUID.t(),
+          DateTime.t(),
+          non_neg_integer()
+        ) :: validation_result()
+  def validate_locked_scheduled_expiry(
+        %UpstreamIdentity{} = identity,
+        %PoolUpstreamAssignment{} = assignment,
+        expected_identity_id,
+        %DateTime{} = timestamp,
+        receive_timeout
+      )
+      when is_integer(receive_timeout) and receive_timeout >= 0 do
+    with :ok <- validate_locked_scheduled_lifecycle(identity, assignment, expected_identity_id) do
+      policy = SavedResets.auto_policy(identity)
+      snapshot = SavedResets.snapshot(identity, timestamp)
+
+      with :ok <- scheduled_policy_result(policy),
+           :ok <-
+             identity
+             |> scheduled_redemption_state(snapshot, timestamp, receive_timeout)
+             |> scheduled_redemption_result(),
+           :ok <-
+             snapshot |> scheduled_saved_reset_state(policy) |> scheduled_saved_reset_result(),
+           :ok <- scheduled_expiry_result(identity, timestamp) do
+        identity
+        |> scheduled_identity_windows(snapshot, timestamp)
+        |> scheduled_weekly_eligibility(policy, timestamp)
+        |> scheduled_weekly_result()
+      end
+    end
+  end
+
   defp compatible_source_windows(windows, %{source: source}) when is_binary(source) do
     Enum.filter(windows, &(&1.source == source))
   end
@@ -92,21 +153,28 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   defp compatible_source_windows_by_identity(windows_by_identity_id, snapshot, timestamp) do
     Map.new(windows_by_identity_id, fn {identity_id, windows} ->
-      windows =
-        windows
-        |> Windows.reject_superseded_primary_windows(timestamp)
-        |> compatible_source_windows(snapshot)
-        |> WindowSelector.logical_windows(timestamp)
-
-      {identity_id, windows}
+      {identity_id, effective_source_windows(windows, snapshot, timestamp)}
     end)
+  end
+
+  defp scheduled_identity_windows(identity, snapshot, timestamp) do
+    identity
+    |> Windows.list_evidence()
+    |> effective_source_windows(snapshot, timestamp)
+  end
+
+  defp effective_source_windows(windows, snapshot, timestamp) do
+    windows
+    |> Windows.reject_superseded_primary_windows(timestamp)
+    |> compatible_source_windows(snapshot)
+    |> WindowSelector.logical_windows(timestamp)
   end
 
   @spec validate_locked_lifecycle(UpstreamIdentity.t(), PoolUpstreamAssignment.t()) ::
           :ok | {:noop, String.t()}
   defp validate_locked_lifecycle(identity, assignment) do
     cond do
-      identity.status in [@identity_deleted, @identity_disabled] ->
+      identity.status in [UpstreamIdentity.deleted_status(), UpstreamIdentity.disabled_status()] ->
         {:noop, "gateway_auto_identity_unavailable"}
 
       assignment.status != @assignment_active ->
@@ -114,6 +182,23 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
       assignment.upstream_identity_id != identity.id ->
         {:noop, "gateway_auto_context_mismatch"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_locked_scheduled_lifecycle(identity, assignment, expected_identity_id) do
+    cond do
+      identity.status != @identity_active ->
+        {:noop, "scheduled_expiry_identity_unavailable"}
+
+      assignment.status != @assignment_active ->
+        {:noop, "scheduled_expiry_assignment_unavailable"}
+
+      identity.id != expected_identity_id or
+          assignment.upstream_identity_id != expected_identity_id ->
+        {:noop, "scheduled_expiry_identity_mismatch"}
 
       true ->
         :ok
@@ -342,6 +427,131 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp weekly_used_window?(window, timestamp) do
     weekly_usable_window?(window, timestamp) and used_percent_above_zero?(window.used_percent)
   end
+
+  defp scheduled_saved_reset_state(snapshot, policy) do
+    cond do
+      not is_integer(snapshot.available_count) -> :unavailable
+      snapshot.available_count <= policy.keep_credits -> :keep
+      true -> :available
+    end
+  end
+
+  defp scheduled_policy_result(%{enabled?: true}), do: :ok
+  defp scheduled_policy_result(_policy), do: {:noop, "scheduled_expiry_policy_disabled"}
+
+  defp scheduled_redemption_result(:clear), do: :ok
+  defp scheduled_redemption_result(:in_progress), do: {:error, :redemption_in_progress}
+  defp scheduled_redemption_result(:stale), do: {:noop, "scheduled_expiry_redemption_stale"}
+
+  defp scheduled_redemption_result(:invalid),
+    do: {:noop, "scheduled_expiry_lifecycle_unavailable"}
+
+  defp scheduled_redemption_result(:latched),
+    do: {:noop, "scheduled_expiry_consume_latched"}
+
+  defp scheduled_saved_reset_result(:available), do: :ok
+
+  defp scheduled_saved_reset_result(:unavailable),
+    do: {:noop, "scheduled_expiry_saved_reset_unavailable"}
+
+  defp scheduled_saved_reset_result(:keep), do: {:noop, "scheduled_expiry_keep_credits"}
+
+  defp scheduled_expiry_result(identity, timestamp) do
+    if SavedResets.expires_soon?(identity, timestamp),
+      do: :ok,
+      else: {:noop, "scheduled_expiry_not_expiring"}
+  end
+
+  defp scheduled_redemption_state(identity, snapshot, timestamp, receive_timeout) do
+    redemption = (identity.metadata || %{})["saved_reset_redemption"]
+
+    case scheduled_claim_state(redemption, timestamp, receive_timeout) do
+      :clear -> scheduled_non_claim_state(identity, redemption, snapshot, timestamp)
+      state -> state
+    end
+  end
+
+  defp scheduled_claim_state(redemption, timestamp, receive_timeout) do
+    cond do
+      RedemptionLifecycle.phase(redemption) == :unknown ->
+        :invalid
+
+      active_claim?(redemption) and
+          fresh_claim?(redemption, timestamp, receive_timeout) ->
+        :in_progress
+
+      active_claim?(redemption) ->
+        :stale
+
+      true ->
+        :clear
+    end
+  end
+
+  defp scheduled_non_claim_state(identity, redemption, snapshot, timestamp) do
+    cond do
+      RedemptionLifecycle.blocks_new_redemption?(redemption, timestamp) ->
+        :latched
+
+      identity_consume_latch(identity, timestamp) != :clear ->
+        :latched
+
+      snapshot.in_progress? ->
+        :in_progress
+
+      snapshot.redemption_stale? ->
+        :stale
+
+      true ->
+        :clear
+    end
+  end
+
+  defp active_claim?(%{"status" => "redeeming"} = redemption) do
+    RedemptionLifecycle.phase(redemption) in [nil, RedemptionLifecycle.consuming()]
+  end
+
+  defp active_claim?(_redemption), do: false
+
+  defp fresh_claim?(%{"started_at" => started_at}, timestamp, receive_timeout)
+       when is_binary(started_at) do
+    case DateTime.from_iso8601(started_at) do
+      {:ok, started_at, _offset} ->
+        DateTime.diff(timestamp, started_at, :millisecond) <
+          receive_timeout + @redemption_stale_grace_ms
+
+      _invalid ->
+        false
+    end
+  end
+
+  defp fresh_claim?(_redemption, _timestamp, _receive_timeout), do: false
+
+  defp scheduled_weekly_eligibility(windows, policy, timestamp) do
+    used_windows = Enum.filter(windows, &weekly_used_window?(&1, timestamp))
+
+    cond do
+      used_windows == [] ->
+        :unavailable
+
+      Enum.any?(
+        used_windows,
+        &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
+      ) ->
+        :eligible
+
+      true ->
+        :natural_reset_buffer
+    end
+  end
+
+  defp scheduled_weekly_result(:eligible), do: :ok
+
+  defp scheduled_weekly_result(:natural_reset_buffer),
+    do: {:noop, "scheduled_expiry_natural_reset_buffer"}
+
+  defp scheduled_weekly_result(:unavailable),
+    do: {:noop, "scheduled_expiry_weekly_evidence_unavailable"}
 
   defp weekly_usable_window?(window, timestamp) do
     WindowClassifier.weekly_secondary?(window) and

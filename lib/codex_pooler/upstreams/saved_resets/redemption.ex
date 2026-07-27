@@ -25,6 +25,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   @identity_disabled UpstreamIdentity.disabled_status()
   @default_receive_timeout 15_000
   @stale_grace_ms 60_000
+  @scheduled_expiry_trigger "scheduled_expiry_rescue"
   @known_noop_codes ~w(already_redeemed no_credit nothing_to_reset)
 
   @type trigger_kind :: String.t()
@@ -43,6 +44,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           optional(:available_count_after) => non_neg_integer(),
           optional(:http_status) => non_neg_integer(),
           optional(:reason) => String.t()
+        }
+
+  @type scheduled_noop_result :: %{
+          required(:status) => :noop,
+          required(:applied?) => false,
+          required(:code) => String.t(),
+          optional(:identity) => UpstreamIdentity.t()
         }
 
   @type saved_reset_observation_intent :: %{
@@ -110,11 +118,39 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
+  @spec redeem_scheduled_expiry(
+          PoolUpstreamAssignment.t() | Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          keyword()
+        ) ::
+          {:ok, redeem_result() | scheduled_noop_result()}
+          | {:error, lifecycle_error() | :redemption_in_progress}
+  def redeem_scheduled_expiry(assignment_or_id, expected_identity_id, opts \\ []) do
+    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    started_at = Keyword.get_lazy(opts, :started_at, &now/0)
+
+    opts =
+      opts
+      |> Keyword.put(:trigger_kind, @scheduled_expiry_trigger)
+      |> Keyword.put(:receive_timeout, receive_timeout)
+
+    assignment_or_id
+    |> assignment_id()
+    |> claim_scheduled_attempt(
+      expected_identity_id,
+      receive_timeout,
+      started_at
+    )
+    |> redeem_claim(opts)
+  end
+
   @spec redeem_claim(
-          {:ok, claim() | {:noop, redeem_result()}}
+          {:ok, claim() | {:noop, redeem_result() | scheduled_noop_result()}}
           | {:error, lifecycle_error() | :redemption_in_progress},
           keyword()
-        ) :: {:ok, redeem_result()} | {:error, lifecycle_error() | :redemption_in_progress}
+        ) ::
+          {:ok, redeem_result() | scheduled_noop_result()}
+          | {:error, lifecycle_error() | :redemption_in_progress}
   defp redeem_claim({:ok, {:noop, result}}, _opts), do: {:ok, result}
   defp redeem_claim({:ok, claim}, opts), do: do_redeem(claim, opts)
   defp redeem_claim({:error, reason}, _opts), do: {:error, reason}
@@ -241,6 +277,76 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
+  defp claim_scheduled_attempt(
+         assignment_id,
+         expected_identity_id,
+         receive_timeout,
+         started_at
+       ) do
+    Repo.transaction(fn ->
+      case lock_scheduled_identity(expected_identity_id) do
+        %UpstreamIdentity{} = locked_identity ->
+          claim_locked_scheduled_identity!(
+            locked_identity,
+            assignment_id,
+            expected_identity_id,
+            receive_timeout,
+            started_at
+          )
+
+        nil ->
+          {:noop, scheduled_noop_result("scheduled_expiry_identity_unavailable")}
+      end
+    end)
+    |> case do
+      {:ok, claim} -> {:ok, claim}
+      {:error, :redemption_in_progress} -> {:error, :redemption_in_progress}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp claim_locked_scheduled_identity!(
+         locked_identity,
+         assignment_id,
+         expected_identity_id,
+         receive_timeout,
+         started_at
+       ) do
+    case lock_scheduled_assignment(assignment_id) do
+      %PoolUpstreamAssignment{} = locked_assignment ->
+        case AutoEligibility.validate_locked_scheduled_expiry(
+               locked_identity,
+               locked_assignment,
+               expected_identity_id,
+               started_at,
+               receive_timeout
+             ) do
+          :ok ->
+            build_redemption_claim!(
+              locked_identity.metadata || %{},
+              locked_identity,
+              locked_assignment,
+              @scheduled_expiry_trigger,
+              receive_timeout,
+              started_at
+            )
+
+          {:noop, code} ->
+            {:noop, noop_result(locked_identity, locked_assignment, code)}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+
+      nil ->
+        {:noop,
+         scheduled_noop_result(
+           "scheduled_expiry_assignment_unavailable",
+           locked_identity
+         )}
+    end
+  end
+
   defp claim_locked_identity!(
          locked_identity,
          assignment,
@@ -340,6 +446,34 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          ) do
       %PoolUpstreamAssignment{} = assignment -> {:ok, assignment}
       nil -> {:noop, "gateway_auto_assignment_unavailable"}
+    end
+  end
+
+  defp lock_scheduled_identity(identity_id) do
+    case Ecto.UUID.cast(identity_id) do
+      {:ok, identity_id} ->
+        Repo.one(
+          from identity in UpstreamIdentity,
+            where: identity.id == ^identity_id,
+            lock: "FOR UPDATE"
+        )
+
+      :error ->
+        nil
+    end
+  end
+
+  defp lock_scheduled_assignment(assignment_id) do
+    case Ecto.UUID.cast(assignment_id) do
+      {:ok, assignment_id} ->
+        Repo.one(
+          from assignment in PoolUpstreamAssignment,
+            where: assignment.id == ^assignment_id,
+            lock: "FOR UPDATE"
+        )
+
+      :error ->
+        nil
     end
   end
 
@@ -857,6 +991,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       assignment: assignment
     }
   end
+
+  defp scheduled_noop_result(code, identity \\ nil) when is_binary(code) do
+    %{status: :noop, applied?: false, code: code}
+    |> maybe_put_result_identity(identity)
+  end
+
+  defp maybe_put_result_identity(result, %UpstreamIdentity{} = identity),
+    do: Map.put(result, :identity, identity)
+
+  defp maybe_put_result_identity(result, _identity), do: result
 
   @spec no_credit_observation_intent(
           SavedResets.snapshot_projection(),

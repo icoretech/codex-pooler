@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
   alias CodexPooler.Jobs.{
     AccountReconciliationWorker,
     RuntimeStateCleanupWorker,
+    SavedResetRedemptionWorker,
     TokenRefreshEnqueueWorker,
     TokenRefreshWorker
   }
@@ -136,6 +137,59 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     assert projection.explorer.items == []
     assert projection.selected_job == nil
     assert projection.filters.job_id == hidden_completed_job.id
+  end
+
+  @tag :scheduled_expiry_enqueue
+  test "projects scheduled saved-reset jobs as identity targets with assignment context" do
+    pool = pool_fixture(%{name: "Scheduled Rescue Pool", slug: "scheduled-rescue-pool"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Scheduled rescue account",
+        assignment_label: "Scheduled rescue assignment"
+      })
+
+    job =
+      insert_job(1,
+        worker: SavedResetRedemptionWorker,
+        state: "available",
+        inserted_at: ~U[2026-06-02 10:00:00Z],
+        args: %{
+          "pool_upstream_assignment_id" => assignment.id,
+          "upstream_identity_id" => identity.id,
+          "target_kind" => "upstream_identity",
+          "trigger_kind" => "scheduled_expiry_rescue"
+        }
+      )
+
+    projection =
+      JobsReadModel.load(:system,
+        params: %{
+          "job_id" => Integer.to_string(job.id),
+          "target_kind" => "upstream_identity",
+          "target_id" => identity.id
+        },
+        now: ~U[2026-06-02 10:30:00Z]
+      )
+
+    assert %{
+             id: job_id,
+             trigger_kind: "scheduled_expiry_rescue",
+             target: %{
+               target_kind: "upstream_identity",
+               assignment_id: assignment_id,
+               assignment_label: "Scheduled rescue assignment",
+               assignment_identity_id: identity_id,
+               assignment_identity_label: "Scheduled rescue account",
+               upstream_identity_id: identity_id,
+               direct_identity_label: "Scheduled rescue account"
+             }
+           } = projection.selected_job
+
+    assert job_id == job.id
+    assert assignment_id == assignment.id
+    assert identity_id == identity.id
+    assert Enum.map(projection.explorer.items, & &1.id) == [job.id]
   end
 
   test "default projection excludes discarded jobs resolved by a later target success" do

@@ -118,6 +118,12 @@ defmodule CodexPooler.Jobs do
     UpstreamEnqueue.enqueue_saved_reset_redemption(assignment_or_id, opts)
   end
 
+  @spec enqueue_scheduled_saved_reset_redemption(PoolUpstreamAssignment.t()) ::
+          job_insert_result()
+  def enqueue_scheduled_saved_reset_redemption(assignment) do
+    UpstreamEnqueue.enqueue_scheduled_saved_reset_redemption(assignment)
+  end
+
   @spec enqueue_runtime_state_cleanup(keyword()) :: job_insert_result()
   def enqueue_runtime_state_cleanup(opts \\ []) do
     args =

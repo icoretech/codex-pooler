@@ -5,6 +5,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Events
+  alias CodexPooler.Jobs
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -155,6 +157,91 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
 
       refute Map.has_key?(first_job.args, "credit_id")
       refute Map.has_key?(first_job.args, "redeem_request_id")
+    end
+  end
+
+  describe "scheduled expiry enqueue" do
+    @tag :scheduled_expiry_enqueue
+    test "requires a canonical assignment struct and inserts no job for invalid references" do
+      assert {:error, :pool_upstream_assignment_id_required} =
+               Jobs.enqueue_scheduled_saved_reset_redemption(nil)
+
+      assert {:error, :pool_upstream_assignment_id_required} =
+               Jobs.enqueue_scheduled_saved_reset_redemption(Ecto.UUID.generate())
+
+      assert saved_reset_job_count() == 0
+    end
+
+    @tag :scheduled_expiry_enqueue
+    test "persists exactly four safe scheduled args without changing the manual contract" do
+      pool = pool_fixture()
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_saved_resets(pool, 1)
+
+      parent = self()
+
+      subscriber =
+        Task.async(fn ->
+          :ok = Events.subscribe_pool(pool.id)
+          send(parent, :saved_reset_subscribed)
+
+          for _index <- 1..2 do
+            receive do
+              event -> event
+            end
+          end
+        end)
+
+      assert_receive :saved_reset_subscribed
+      assert {:ok, manual_job} = Jobs.enqueue_saved_reset_redemption(assignment)
+
+      assert manual_job.args == %{
+               "pool_upstream_assignment_id" => assignment.id,
+               "trigger_kind" => "admin_manual"
+             }
+
+      assert {:ok, scheduled_job} =
+               Jobs.enqueue_scheduled_saved_reset_redemption(assignment)
+
+      assert scheduled_job.args == %{
+               "pool_upstream_assignment_id" => assignment.id,
+               "upstream_identity_id" => identity.id,
+               "target_kind" => "upstream_identity",
+               "trigger_kind" => "scheduled_expiry_rescue"
+             }
+
+      assert scheduled_job.meta == %{}
+
+      [manual_event, scheduled_event] = Task.await(subscriber)
+      manual_job_id = Integer.to_string(manual_job.id)
+      scheduled_job_id = Integer.to_string(scheduled_job.id)
+
+      assert {Events,
+              %{
+                reason: "saved_reset_redemption",
+                payload: %{
+                  "id" => ^manual_job_id,
+                  "pool_upstream_assignment_id" => assignment_id,
+                  "status" => "scheduled",
+                  "worker" => "saved_reset_redemption"
+                }
+              }} = manual_event
+
+      assert assignment_id == assignment.id
+
+      assert {Events,
+              %{
+                reason: "saved_reset_redemption",
+                payload: %{
+                  "id" => ^scheduled_job_id,
+                  "pool_upstream_assignment_id" => assignment_id,
+                  "status" => "scheduled",
+                  "worker" => "saved_reset_redemption"
+                }
+              }} = scheduled_event
+
+      assert assignment_id == assignment.id
     end
   end
 
