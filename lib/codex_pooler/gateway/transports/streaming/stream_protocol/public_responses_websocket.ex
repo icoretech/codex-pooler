@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
   @type state :: PublicResponsesSequence.state()
@@ -21,9 +22,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         decoded = canonicalize_existing_public_error(data, decoded)
 
         case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
-          {:emit, _type, normalized, state} -> {:push, Jason.encode!(normalized), state}
-          {:drop, state} -> {:drop, state}
-          {:overflow, _failed, state} -> {:error, sequence_exhausted(), state}
+          {:emit, type, normalized, state} ->
+            normalized = PublicResponses.normalize_malformed_terminal_errors(type, normalized)
+            {:push, Jason.encode!(normalized), state}
+
+          {:drop, state} ->
+            {:drop, state}
+
+          {:overflow, _failed, state} ->
+            {:error, sequence_exhausted(), state}
         end
 
       _invalid ->

@@ -4,6 +4,14 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
+  @non_map_terminal_errors [
+    {"string", "raw_non_map_error_string"},
+    {"list", ["raw_non_map_error_list"]},
+    {"number", 987_654_321},
+    {"boolean", true},
+    {"null", nil}
+  ]
+
   @tag :task_1_pin
   test "PIN-P01 response.completed remains a completed terminal" do
     frame =
@@ -127,6 +135,39 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
                Jason.encode!(malformed),
                websocket_state
              )
+  end
+
+  for {value_class, malformed_error} <- @non_map_terminal_errors do
+    @malformed_error malformed_error
+
+    test "public SSE and websocket sanitize #{value_class} terminal errors at both locations" do
+      fallback = %{
+        "message" => "upstream request failed",
+        "type" => "server_error",
+        "code" => "upstream_error"
+      }
+
+      observations =
+        for location <- [:top_level, :nested],
+            transport <- [:sse, :websocket] do
+          terminal = malformed_terminal(location, @malformed_error)
+          {wire, decoded} = normalize_public_wire(transport, terminal)
+
+          {
+            location,
+            transport,
+            terminal_errors(decoded),
+            String.contains?(wire, Jason.encode!(@malformed_error))
+          }
+        end
+
+      assert observations == [
+               {:top_level, :sse, %{top_level: fallback, nested: fallback}, false},
+               {:top_level, :websocket, %{top_level: fallback, nested: fallback}, false},
+               {:nested, :sse, %{top_level: :absent, nested: fallback}, false},
+               {:nested, :websocket, %{top_level: :absent, nested: fallback}, false}
+             ]
+    end
   end
 
   @tag :task_1_fix_red
@@ -396,6 +437,57 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       IO.iodata_to_binary(stream),
       StreamProtocol.public_openai_responses_stream_state()
     )
+  end
+
+  defp normalize_public_wire(:sse, terminal) do
+    {wire, _state} = normalize_sse(sse_event("response.failed", terminal))
+    [%{event: "response.failed", data: decoded}] = public_events(wire)
+    {wire, decoded}
+  end
+
+  defp normalize_public_wire(:websocket, terminal) do
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    {:push, wire, _state} =
+      StreamProtocol.normalize_public_openai_responses_websocket_data(
+        Jason.encode!(terminal),
+        state
+      )
+
+    {wire, Jason.decode!(wire)}
+  end
+
+  defp malformed_terminal(:top_level, error) do
+    %{
+      "type" => "response.failed",
+      "error" => error,
+      "response" => %{"id" => "resp_non_map_top_level", "status" => "failed"}
+    }
+  end
+
+  defp malformed_terminal(:nested, error) do
+    %{
+      "type" => "response.failed",
+      "response" => %{
+        "id" => "resp_non_map_nested",
+        "status" => "failed",
+        "error" => error
+      }
+    }
+  end
+
+  defp terminal_errors(decoded) do
+    %{
+      top_level: fetch_error(decoded),
+      nested: decoded |> Map.fetch!("response") |> fetch_error()
+    }
+  end
+
+  defp fetch_error(container) do
+    case Map.fetch(container, "error") do
+      {:ok, error} -> error
+      :error -> :absent
+    end
   end
 
   defp completed(id) do

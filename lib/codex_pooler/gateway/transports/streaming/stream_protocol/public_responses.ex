@@ -400,24 +400,62 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp normalize_public_event(type, %{} = decoded) do
     if terminal_event?(type) do
       normalize_terminal_output_items(decoded)
-      |> normalize_terminal_errors()
+      |> then(&normalize_terminal_errors(type, &1))
     else
       decoded
     end
   end
 
-  defp normalize_terminal_errors(%{} = decoded) do
+  @spec normalize_terminal_errors(String.t() | nil, map()) :: map()
+  def normalize_terminal_errors(type, %{} = decoded)
+      when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
     decoded
     |> normalize_top_level_error()
     |> normalize_response_error()
   end
 
-  defp normalize_top_level_error(%{"error" => %{} = error} = decoded),
+  def normalize_terminal_errors(_type, %{} = decoded), do: decoded
+
+  @spec normalize_malformed_terminal_errors(String.t() | nil, map()) :: map()
+  def normalize_malformed_terminal_errors(type, %{} = decoded)
+      when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
+    {decoded, top_level_fallback} = normalize_malformed_top_level_error(decoded)
+    normalize_malformed_response_error(decoded, top_level_fallback)
+  end
+
+  def normalize_malformed_terminal_errors(_type, %{} = decoded), do: decoded
+
+  defp normalize_malformed_top_level_error(%{"error" => error} = decoded)
+       when not is_map(error) do
+    fallback = normalize_terminal_error(error)
+    {Map.put(decoded, "error", fallback), fallback}
+  end
+
+  defp normalize_malformed_top_level_error(decoded), do: {decoded, nil}
+
+  defp normalize_malformed_response_error(
+         %{"response" => %{"error" => error} = response} = decoded,
+         _top_level_fallback
+       )
+       when not is_map(error) do
+    Map.put(decoded, "response", Map.put(response, "error", normalize_terminal_error(error)))
+  end
+
+  defp normalize_malformed_response_error(
+         %{"response" => %{} = response} = decoded,
+         %{} = top_level_fallback
+       ) do
+    Map.put(decoded, "response", Map.put_new(response, "error", top_level_fallback))
+  end
+
+  defp normalize_malformed_response_error(decoded, _top_level_fallback), do: decoded
+
+  defp normalize_top_level_error(%{"error" => error} = decoded),
     do: Map.put(decoded, "error", normalize_terminal_error(error))
 
   defp normalize_top_level_error(decoded), do: decoded
 
-  defp normalize_response_error(%{"response" => %{"error" => %{} = error} = response} = decoded) do
+  defp normalize_response_error(%{"response" => %{"error" => error} = response} = decoded) do
     Map.put(
       decoded,
       "response",
@@ -433,9 +471,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp normalize_response_error(decoded), do: decoded
 
-  defp normalize_terminal_error(error) do
+  defp normalize_terminal_error(%{} = error) do
     PublicResponse.normalize_error(error, status: PublicResponse.terminal_error_status(error))
   end
+
+  defp normalize_terminal_error(error), do: PublicResponse.normalize_error(error, status: 502)
 
   defp normalize_terminal_output_items(%{"response" => %{} = response} = decoded) do
     Map.put(decoded, "response", normalize_response_output_items(response))
