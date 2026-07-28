@@ -1,7 +1,6 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket do
   @moduledoc false
 
-  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
@@ -16,14 +15,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize(binary(), state()) :: result()
   def normalize(data, state) when is_binary(data) do
+    data = PublicResponses.normalize_json_message(data)
+
     case Jason.decode(data) do
       {:ok, %{} = decoded} ->
-        decoded = canonicalize_existing_public_error(data, decoded)
         event_type = string_value(decoded, "type")
 
         case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
           {:emit, type, normalized, state} ->
-            normalized = PublicResponses.normalize_malformed_terminal_errors(type, normalized)
+            normalized = PublicResponses.normalize_terminal_errors(type, normalized)
             {:push, Jason.encode!(normalized), state}
 
           {:drop, state} ->
@@ -35,13 +35,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
       _invalid ->
         {:push, data, state}
-    end
-  end
-
-  defp canonicalize_existing_public_error(data, decoded) do
-    case data |> StreamProtocol.canonicalize_codex_responses_json_message() |> Jason.decode() do
-      {:ok, %{} = canonical} -> canonical
-      _invalid -> decoded
     end
   end
 

@@ -78,6 +78,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   def normalize_data(data, state), do: {data, state}
 
+  @spec normalize_json_message(binary()) :: binary()
+  def normalize_json_message(data) when is_binary(data) do
+    case Jason.decode(data) do
+      {:ok, %{"type" => "response.failed"} = decoded} ->
+        "response.failed"
+        |> normalize_terminal_errors(decoded)
+        |> Jason.encode!()
+
+      {:ok, %{} = decoded} ->
+        canonical_data = canonicalize_public_json_message(decoded, data)
+
+        case Jason.decode(canonical_data) do
+          {:ok, %{} = canonical} -> normalize_public_json_message(canonical, canonical_data)
+          _invalid -> data
+        end
+
+      _invalid ->
+        data
+    end
+  end
+
   defp normalize_data_chunk(data, %{passthrough?: true} = state) do
     normalize_passthrough_data(data, state)
   end
@@ -246,6 +267,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
+    decoded = normalize_matching_terminal_errors(event_type, decoded)
 
     case PublicResponsesSequence.public_shape(event_type, decoded) do
       {:ok, type, decoded} ->
@@ -407,8 +429,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   @spec normalize_terminal_errors(String.t() | nil, map()) :: map()
+  def normalize_terminal_errors("response.failed", %{} = decoded) do
+    response =
+      case Map.get(decoded, "response") do
+        %{} = response -> response
+        _value -> %{}
+      end
+
+    decoded
+    |> Map.drop(["headers"])
+    |> Map.put("type", "response.failed")
+    |> normalize_present_error()
+    |> Map.put("response", response |> Map.put("status", "failed") |> normalize_present_error())
+  end
+
   def normalize_terminal_errors(type, %{} = decoded)
-      when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
+      when type in ["response.completed", "response.incomplete", "error"] do
     decoded
     |> normalize_top_level_error()
     |> normalize_response_error()
@@ -416,39 +452,55 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   def normalize_terminal_errors(_type, %{} = decoded), do: decoded
 
-  @spec normalize_malformed_terminal_errors(String.t() | nil, map()) :: map()
-  def normalize_malformed_terminal_errors(type, %{} = decoded)
-      when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
-    {decoded, top_level_fallback} = normalize_malformed_top_level_error(decoded)
-    normalize_malformed_response_error(decoded, top_level_fallback)
+  defp canonicalize_public_json_message(decoded, data) do
+    prepared = suppress_incomplete_provider_error_types(decoded)
+    canonical_input = if prepared == decoded, do: data, else: Jason.encode!(prepared)
+    StreamProtocol.canonicalize_codex_responses_json_message(canonical_input)
   end
 
-  def normalize_malformed_terminal_errors(_type, %{} = decoded), do: decoded
+  defp normalize_public_json_message(%{} = decoded, canonical_data) do
+    type = clean_string(Map.get(decoded, "type"))
+    normalized = normalize_terminal_errors(type, decoded)
 
-  defp normalize_malformed_top_level_error(%{"error" => error} = decoded)
-       when not is_map(error) do
-    fallback = normalize_terminal_error(error)
-    {Map.put(decoded, "error", fallback), fallback}
+    if normalized == decoded, do: canonical_data, else: Jason.encode!(normalized)
   end
 
-  defp normalize_malformed_top_level_error(decoded), do: {decoded, nil}
-
-  defp normalize_malformed_response_error(
-         %{"response" => %{"error" => error} = response} = decoded,
-         _top_level_fallback
-       )
-       when not is_map(error) do
-    Map.put(decoded, "response", Map.put(response, "error", normalize_terminal_error(error)))
+  defp suppress_incomplete_provider_error_types(%{"type" => "response.incomplete"} = decoded) do
+    decoded
+    |> drop_type_without_code(["error"])
+    |> drop_type_without_code(["response", "error"])
   end
 
-  defp normalize_malformed_response_error(
-         %{"response" => %{} = response} = decoded,
-         %{} = top_level_fallback
-       ) do
-    Map.put(decoded, "response", Map.put_new(response, "error", top_level_fallback))
+  defp suppress_incomplete_provider_error_types(decoded), do: decoded
+
+  defp drop_type_without_code(decoded, path) do
+    case get_in(decoded, path) do
+      %{"type" => _type, "code" => code} when is_binary(code) ->
+        decoded
+
+      %{"type" => _type} = error ->
+        put_in(decoded, path, Map.delete(error, "type"))
+
+      _error ->
+        decoded
+    end
   end
 
-  defp normalize_malformed_response_error(decoded, _top_level_fallback), do: decoded
+  defp normalize_present_error(container) do
+    case Map.fetch(container, "error") do
+      {:ok, error} -> Map.put(container, "error", normalize_terminal_error(error))
+      :error -> container
+    end
+  end
+
+  defp normalize_matching_terminal_errors(event_type, decoded) do
+    if public_types_agree?(event_type, clean_string(Map.get(decoded, "type"))) do
+      decoded = suppress_incomplete_provider_error_types(decoded)
+      normalize_terminal_errors(event_type || clean_string(Map.get(decoded, "type")), decoded)
+    else
+      decoded
+    end
+  end
 
   defp normalize_top_level_error(%{"error" => error} = decoded),
     do: Map.put(decoded, "error", normalize_terminal_error(error))
@@ -688,11 +740,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp stream_terminal?(blocks) do
     Enum.any?(blocks, fn block ->
       {event_type, decoded} = stream_block_event(block)
+      data_type = clean_string(Map.get(decoded, "type"))
 
-      match?({:ok, _outcome}, StreamProtocol.terminal_outcome(event_type, decoded)) or
-        done_marker?(block)
+      done_marker?(block) or
+        (public_types_agree?(event_type, data_type) and
+           match?(
+             {:ok, _outcome},
+             StreamProtocol.terminal_outcome(
+               event_type,
+               normalize_terminal_errors(event_type || data_type, decoded)
+             )
+           ))
     end)
   end
+
+  defp public_types_agree?(event_type, data_type)
+       when is_binary(event_type) and event_type != "" and is_binary(data_type) and
+              data_type != "",
+       do: event_type == data_type
+
+  defp public_types_agree?(_event_type, _data_type), do: true
 
   defp terminal_event?(type)
        when type in [

@@ -421,7 +421,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute chunk =~ "event: response.output_text.delta\n"
     end
 
-    test "adds redacted nested response error for top-level context overflow failures" do
+    test "keeps a top-level context overflow error independent from a missing nested error" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       failed =
@@ -442,9 +442,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["error"]["code"] == "context_length_exceeded"
       assert data["error"]["message"] == "upstream request failed"
 
-      assert %{"error" => response_error} = data["response"]
-      assert response_error["code"] == "context_length_exceeded"
-      assert response_error["message"] == "upstream request failed"
+      refute Map.has_key?(data["response"], "error")
     end
 
     test "emits early top-level error without synthetic success prefix" do
@@ -612,14 +610,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                |> Jason.decode!()
     end
 
-    test "keeps public websocket and bridge options on generic mapping before stateful adaptation" do
-      frame =
-        Jason.encode!(%{
-          "type" => "error",
-          "status" => 400,
-          "error" => %{"code" => "previous_response_not_found"}
-        })
-
+    test "normalizes type-only public failures before the first websocket mapper and stateful adapter" do
       public_options = [
         RequestOptions.build(
           %{
@@ -643,30 +634,102 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
         )
       ]
 
-      for options <- public_options do
-        mapper = capture_upstream_message_mapper(options)
-        mapped = mapper.(frame)
+      for location <- [:top_level, :nested], options <- public_options do
+        provider_type = "provider_#{location}_type_sentinel"
+
+        error = %{
+          "type" => provider_type,
+          "message" => "provider message sentinel",
+          "param" => "provider.param"
+        }
+
+        frame =
+          case location do
+            :top_level ->
+              %{
+                "type" => "response.failed",
+                "headers" => %{"authorization" => "Bearer provider-secret-sentinel"},
+                "error" => error,
+                "response" => %{"id" => "resp_first_mapper", "status" => "failed"}
+              }
+
+            :nested ->
+              %{
+                "type" => "response.failed",
+                "headers" => %{"authorization" => "Bearer provider-secret-sentinel"},
+                "response" => %{
+                  "id" => "resp_first_mapper",
+                  "status" => "failed",
+                  "error" => error
+                }
+              }
+          end
+          |> Jason.encode!()
+
+        mapped = options |> capture_upstream_message_mapper() |> then(& &1.(frame))
+        mapped_decoded = Jason.decode!(mapped)
+
+        refute Map.has_key?(mapped_decoded, "headers")
+        refute mapped =~ provider_type
+        refute mapped =~ "provider message sentinel"
+        refute mapped =~ "provider.param"
+        refute mapped =~ "provider-secret-sentinel"
+
+        assert get_in(mapped_decoded, error_path(location) ++ ["code"]) == "upstream_error"
+
         state = Adapter.public_responses_turn_state()
-
-        assert %{
-                 "type" => "response.failed",
-                 "error" => %{"code" => "stream_incomplete"},
-                 "response" => %{
-                   "status" => "failed",
-                   "error" => %{"code" => "stream_incomplete"}
-                 }
-               } = Jason.decode!(mapped)
-
         assert {:push, pushed, next_state} = Adapter.downstream_response_chunk(mapped, state)
-
-        assert %{
-                 "type" => "response.failed",
-                 "sequence_number" => 0,
-                 "error" => %{"code" => "stream_incomplete"}
-               } = Jason.decode!(pushed)
-
+        assert Jason.decode!(pushed)["sequence_number"] == 0
+        assert get_in(Jason.decode!(pushed), error_path(location) ++ ["code"]) == "upstream_error"
         assert next_state.terminal_latched?
       end
+    end
+
+    test "public first mapper preserves previous-response and incomplete-reason precedence" do
+      options =
+        RequestOptions.build(
+          %{
+            transport: "websocket",
+            openai_source_endpoint: "/v1/responses",
+            openai_translated_endpoint: "/backend-api/codex/responses",
+            public_openai_responses_stream: true
+          },
+          "/backend-api/codex/responses",
+          %{"type" => "response.create"}
+        )
+
+      mapper = capture_upstream_message_mapper(options)
+
+      previous_response =
+        Jason.encode!(%{
+          "type" => "error",
+          "error" => %{
+            "code" => "previous_response_not_found",
+            "type" => "provider_type_must_not_win"
+          }
+        })
+
+      incomplete =
+        Jason.encode!(%{
+          "type" => "response.incomplete",
+          "error" => %{"type" => "provider_type_must_not_win"},
+          "response" => %{
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "context_length_exceeded"}
+          }
+        })
+
+      assert %{
+               "type" => "response.failed",
+               "error" => %{"code" => "stream_incomplete"},
+               "response" => %{"error" => %{"code" => "stream_incomplete"}}
+             } = previous_response |> mapper.() |> Jason.decode!()
+
+      assert %{
+               "type" => "response.failed",
+               "error" => %{"code" => "context_length_exceeded"},
+               "response" => %{"error" => %{"code" => "context_length_exceeded"}}
+             } = incomplete |> mapper.() |> Jason.decode!()
     end
 
     test "extracts the first present validated upstream error param by exact precedence" do
@@ -1161,4 +1224,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     assert_receive {:captured_upstream_message_mapper, mapper}
     mapper
   end
+
+  defp error_path(:top_level), do: ["error"]
+  defp error_path(:nested), do: ["response", "error"]
 end

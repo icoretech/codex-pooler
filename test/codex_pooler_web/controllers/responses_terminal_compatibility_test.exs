@@ -36,12 +36,20 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     {:failed_without_nested_code,
      %{
        "type" => "response.failed",
+       "headers" => %{
+         "authorization" => "Bearer provider-secret-sentinel",
+         "x-provider-debug" => "provider-header-sentinel"
+       },
        "response" => %{
          "id" => "resp_terminal_failed",
          "status" => "failed",
-         "error" => %{"message" => "synthetic upstream detail"}
-       }
-     }, nil},
+         "error" => %{
+           "message" => "synthetic upstream detail",
+           "type" => "provider_type_must_not_become_public_code"
+         }
+       },
+       "ordinary_sibling" => %{"kept" => true}
+     }, "upstream_error"},
     {:typeless_detail, %{"detail" => "synthetic upstream detail"}, "upstream_terminal_failure"}
   ]
 
@@ -191,6 +199,25 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       assert terminal_error_code(terminal) == expected_code,
              "unexpected websocket terminal for #{shape}: #{inspect(terminal)}"
+
+      if shape == :failed_without_nested_code do
+        assert terminal == %{
+                 "response" => %{
+                   "error" => %{
+                     "code" => "upstream_error",
+                     "message" => "upstream request failed",
+                     "type" => "server_error"
+                   },
+                   "id" => "resp_terminal_failed",
+                   "status" => "failed"
+                 },
+                 "ordinary_sibling" => %{"kept" => true},
+                 "sequence_number" => 0,
+                 "type" => "response.failed"
+               }
+
+        refute Map.has_key?(terminal, "headers")
+      end
     end
   end
 

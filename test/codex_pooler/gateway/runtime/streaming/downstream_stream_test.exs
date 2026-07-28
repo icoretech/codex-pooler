@@ -669,7 +669,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert failure.event_type == "response.failed"
     end
 
-    test "copies top-level public Responses terminal error into response failure" do
+    test "keeps a top-level public Responses terminal error independent from the response" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -701,8 +701,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.event_type == "response.failed"
 
-      assert {data["response"]["error"]["code"], failure.code} ==
-               {"context_length_exceeded", "context_length_exceeded"}
+      refute Map.has_key?(data["response"], "error")
+      assert failure.code == "context_length_exceeded"
     end
 
     test "synthesizes a sanitized terminal failure without a public response object" do

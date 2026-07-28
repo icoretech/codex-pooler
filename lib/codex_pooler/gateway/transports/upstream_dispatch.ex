@@ -371,6 +371,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp websocket_message_mapper(%RequestOptions{
+         openai_compatibility: %{public_openai_responses_stream: true}
+       }),
+       do: &StreamProtocol.normalize_public_openai_responses_json_message/1
+
+  defp websocket_message_mapper(%RequestOptions{
          openai_compatibility: %{
            source_endpoint: nil,
            public_openai_responses_stream: false

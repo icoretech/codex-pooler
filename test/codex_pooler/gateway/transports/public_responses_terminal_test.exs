@@ -162,8 +162,8 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
         end
 
       assert observations == [
-               {:top_level, :sse, %{top_level: fallback, nested: fallback}, false},
-               {:top_level, :websocket, %{top_level: fallback, nested: fallback}, false},
+               {:top_level, :sse, %{top_level: fallback, nested: :absent}, false},
+               {:top_level, :websocket, %{top_level: fallback, nested: :absent}, false},
                {:nested, :sse, %{top_level: :absent, nested: fallback}, false},
                {:nested, :websocket, %{top_level: :absent, nested: fallback}, false}
              ]
@@ -408,7 +408,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
   test "public websocket canonicalizes direct incomplete errors before sequence agreement" do
     raw =
-      ~s({"type":"response.incomplete","response":{"id":"resp_direct_canonicalization","status":"incomplete","incomplete_details":{"reason":"context_length_exceeded"}}})
+      ~s({"type":"response.incomplete","error":{"type":"provider_type_must_not_win"},"response":{"id":"resp_direct_canonicalization","status":"incomplete","incomplete_details":{"reason":"context_length_exceeded"}}})
 
     state = StreamProtocol.public_openai_responses_websocket_state()
 
@@ -422,6 +422,271 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert decoded["error"]["code"] == "context_length_exceeded"
     assert decoded["response"]["error"]["code"] == "context_length_exceeded"
     assert decoded["sequence_number"] == 0
+    refute wire =~ "provider_type_must_not_win"
+    assert state.terminal_latched?
+    assert state.max_seen == 0
+  end
+
+  test "public failed-envelope repair preserves siblings, repairs response, and is idempotent" do
+    terminal = %{
+      "type" => "response.failed",
+      "headers" => %{
+        "authorization" => "Bearer provider-secret-sentinel",
+        "x-provider-debug" => "provider-header-sentinel"
+      },
+      "sequence_number" => 7,
+      "ordinary_sibling" => %{"kept" => true},
+      "error" => %{
+        "code" => "same_explicit_code",
+        "type" => "same_explicit_code",
+        "message" => "provider message sentinel"
+      },
+      "response" => "not-a-map"
+    }
+
+    expected = %{
+      "type" => "response.failed",
+      "sequence_number" => 7,
+      "ordinary_sibling" => %{"kept" => true},
+      "error" => %{
+        "code" => "same_explicit_code",
+        "type" => "server_error",
+        "message" => "upstream request failed"
+      },
+      "response" => %{"status" => "failed"}
+    }
+
+    for transport <- [:sse, :websocket] do
+      {wire, decoded} = normalize_public_wire(transport, terminal)
+      assert decoded == expected
+      refute wire =~ "provider-secret-sentinel"
+      refute wire =~ "provider-header-sentinel"
+      refute wire =~ "provider message sentinel"
+
+      {_wire, twice} = normalize_public_wire(transport, decoded)
+      assert twice == expected
+    end
+  end
+
+  test "public failed-envelope repair sanitizes top-level and nested errors independently" do
+    terminal = %{
+      "type" => "response.failed",
+      "error" => %{
+        "code" => "top_safe_code",
+        "type" => "top_provider_type",
+        "message" => "top provider message"
+      },
+      "response" => %{
+        "id" => "resp_distinct_codes",
+        "status" => "inconsistent",
+        "ordinary_response_sibling" => %{"kept" => true},
+        "error" => %{
+          "code" => "nested_safe_code",
+          "type" => "nested_provider_type",
+          "message" => "nested provider message"
+        }
+      }
+    }
+
+    for transport <- [:sse, :websocket] do
+      {wire, decoded} = normalize_public_wire(transport, terminal)
+
+      assert decoded["error"] == %{
+               "code" => "top_safe_code",
+               "type" => "server_error",
+               "message" => "upstream request failed"
+             }
+
+      assert decoded["response"]["error"] == %{
+               "code" => "nested_safe_code",
+               "type" => "server_error",
+               "message" => "upstream request failed"
+             }
+
+      assert decoded["response"]["id"] == "resp_distinct_codes"
+      assert decoded["response"]["ordinary_response_sibling"] == %{"kept" => true}
+      assert decoded["response"]["status"] == "failed"
+      refute wire =~ "top_provider_type"
+      refute wire =~ "nested_provider_type"
+      refute wire =~ "top provider message"
+      refute wire =~ "nested provider message"
+    end
+  end
+
+  test "public failed-envelope repair preserves valid sequence, latches terminal, and drops later frames" do
+    terminal = %{
+      "type" => "response.failed",
+      "sequence_number" => 23,
+      "response" => %{"id" => "resp_sequence_preserved", "status" => "failed"}
+    }
+
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    assert {:push, wire, state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(
+               Jason.encode!(terminal),
+               state
+             )
+
+    assert Jason.decode!(wire)["sequence_number"] == 23
+    assert state.max_seen == 23
+    assert state.terminal_latched?
+
+    assert {:drop, ^state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(
+               Jason.encode!(completed("resp_after_failed")),
+               state
+             )
+  end
+
+  test "public websocket redacts nested map errors after canonicalizing failure-coded incomplete" do
+    nested_message = "NESTED_PROVIDER_MESSAGE_SENTINEL"
+    nested_type = "NESTED_PROVIDER_TYPE_SENTINEL"
+    nested_param = "NESTED_PROVIDER_PARAM_SENTINEL"
+    nested_extra = "NESTED_PROVIDER_EXTRA_SENTINEL"
+
+    raw =
+      Jason.encode!(%{
+        "type" => "response.incomplete",
+        "response" => %{
+          "id" => "resp_nested_map_error",
+          "status" => "incomplete",
+          "incomplete_details" => %{"reason" => "context_length_exceeded"},
+          "error" => %{
+            "code" => "context_length_exceeded",
+            "message" => nested_message,
+            "type" => nested_type,
+            "param" => nested_param,
+            "provider_extra" => nested_extra
+          }
+        }
+      })
+
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    assert {:push, wire, state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(raw, state)
+
+    decoded = Jason.decode!(wire)
+
+    assert decoded["type"] == "response.failed"
+    assert decoded["response"]["status"] == "failed"
+    assert decoded["sequence_number"] == 0
+
+    assert decoded["error"] == %{
+             "message" => "upstream request failed",
+             "type" => "server_error",
+             "code" => "context_length_exceeded"
+           }
+
+    assert decoded["response"]["error"] == decoded["error"]
+
+    for sentinel <- [nested_message, nested_type, nested_param, nested_extra] do
+      refute wire =~ sentinel
+    end
+
+    assert state.terminal_latched?
+    assert state.max_seen == 0
+
+    assert {:drop, ^state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(
+               Jason.encode!(completed("resp_after_nested_map_error")),
+               state
+             )
+  end
+
+  test "public websocket redacts unsafe top-level map errors on existing failed terminals" do
+    top_message = "TOP_PROVIDER_MESSAGE_SENTINEL"
+    top_type = "TOP_PROVIDER_TYPE_SENTINEL"
+    top_param = "TOP_PROVIDER_PARAM_SENTINEL"
+    top_extra = "TOP_PROVIDER_EXTRA_SENTINEL"
+
+    raw =
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "error" => %{
+          "code" => "unsafe/code",
+          "message" => top_message,
+          "type" => top_type,
+          "param" => top_param,
+          "provider_extra" => top_extra
+        },
+        "response" => %{"id" => "resp_top_map_error", "status" => "failed"}
+      })
+
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    assert {:push, wire, state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(raw, state)
+
+    decoded = Jason.decode!(wire)
+
+    assert decoded["type"] == "response.failed"
+    assert decoded["response"]["status"] == "failed"
+    assert decoded["sequence_number"] == 0
+
+    assert decoded["error"] == %{
+             "message" => "upstream request failed",
+             "type" => "server_error",
+             "code" => "upstream_error"
+           }
+
+    refute Map.has_key?(decoded["response"], "error")
+
+    for sentinel <- [top_message, top_type, top_param, top_extra] do
+      refute wire =~ sentinel
+    end
+
+    assert state.terminal_latched?
+    assert state.max_seen == 0
+  end
+
+  test "public websocket redacts nested map errors without a provider code on existing failed terminals" do
+    nested_message = "MISSING_CODE_PROVIDER_MESSAGE_SENTINEL"
+    nested_type = "MISSING_CODE_PROVIDER_TYPE_SENTINEL"
+    nested_param = "MISSING_CODE_PROVIDER_PARAM_SENTINEL"
+    nested_extra = "MISSING_CODE_PROVIDER_EXTRA_SENTINEL"
+
+    raw =
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "id" => "resp_nested_missing_code",
+          "status" => "failed",
+          "error" => %{
+            "message" => nested_message,
+            "type" => nested_type,
+            "param" => nested_param,
+            "provider_extra" => nested_extra
+          }
+        }
+      })
+
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    assert {:push, wire, state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(raw, state)
+
+    decoded = Jason.decode!(wire)
+
+    assert decoded == %{
+             "response" => %{
+               "error" => %{
+                 "message" => "upstream request failed",
+                 "type" => "server_error",
+                 "code" => "upstream_error"
+               },
+               "id" => "resp_nested_missing_code",
+               "status" => "failed"
+             },
+             "sequence_number" => 0,
+             "type" => "response.failed"
+           }
+
+    for sentinel <- [nested_message, nested_type, nested_param, nested_extra] do
+      refute wire =~ sentinel
+    end
+
     assert state.terminal_latched?
     assert state.max_seen == 0
   end

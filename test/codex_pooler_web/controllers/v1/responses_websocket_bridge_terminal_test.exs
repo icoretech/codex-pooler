@@ -30,8 +30,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     {"response.failed",
      %{
        "type" => "response.failed",
-       "response" => %{"id" => "resp_terminal_failed", "status" => "failed"},
-       "error" => %{"code" => "server_error", "message" => "synthetic terminal failure"}
+       "headers" => %{
+         "authorization" => "Bearer bridge-provider-secret-sentinel",
+         "x-provider-debug" => "bridge-provider-header-sentinel"
+       },
+       "response" => %{
+         "id" => "resp_terminal_failed",
+         "status" => "failed",
+         "error" => %{
+           "type" => "bridge_provider_type_must_not_become_public_code",
+           "message" => "synthetic terminal failure"
+         }
+       }
      }, "response.failed"},
     {"response.incomplete",
      %{
@@ -277,6 +287,23 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       assert response.status == 200
       assert Enum.count(stream_event_types(response.resp_body), &(&1 == @public_type)) == 1
       refute response.resp_body =~ "unexpected_http_replay"
+
+      if @terminal_type == "response.failed" do
+        failed =
+          response.resp_body
+          |> public_sse_events()
+          |> Enum.find_value(fn
+            %{"event" => "response.failed", "data" => data} -> data
+            _event -> nil
+          end)
+
+        assert failed["response"]["error"]["code"] == "upstream_error"
+        refute Map.has_key?(failed, "headers")
+        refute response.resp_body =~ "bridge_provider_type_must_not_become_public_code"
+        refute response.resp_body =~ "bridge-provider-secret-sentinel"
+        refute response.resp_body =~ "bridge-provider-header-sentinel"
+        refute response.resp_body =~ "synthetic terminal failure"
+      end
 
       assert [upstream_request] = FakeUpstream.requests(upstream)
       assert upstream_request.method == "WEBSOCKET"
