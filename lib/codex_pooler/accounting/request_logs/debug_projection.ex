@@ -13,6 +13,10 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   @bounded_detail_attempts 10
   @upstream_error_param_max_bytes 160
   @upstream_error_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
+  @rejection_token_max_bytes 80
+  @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_param_max_bytes 160
+  @rejection_param_pattern @upstream_error_param_pattern
 
   @type surface :: :default | :admin
 
@@ -235,6 +239,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     }
     |> maybe_put_transport_failure(attempt)
     |> maybe_put_upstream_error_param(attempt)
+    |> maybe_put_rejection_metadata(attempt)
     |> maybe_put_upstream_websocket_connection(attempt, surface)
   end
 
@@ -277,6 +282,74 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   end
 
   defp valid_upstream_error_param(_metadata), do: nil
+
+  defp maybe_put_rejection_metadata(projection, %Attempt{status: status} = attempt)
+       when status in ["failed", "retryable_failed"] do
+    Map.merge(projection, valid_rejection_metadata(attempt.response_metadata))
+  end
+
+  defp maybe_put_rejection_metadata(projection, _attempt), do: projection
+
+  defp valid_rejection_metadata(metadata) when is_map(metadata) do
+    %{}
+    |> maybe_put_valid_rejection(
+      :rejection_error_code,
+      valid_rejection_token(metadata["rejection_error_code"])
+    )
+    |> maybe_put_valid_rejection(
+      :rejection_error_type,
+      valid_rejection_token(metadata["rejection_error_type"])
+    )
+    |> maybe_put_valid_rejection(
+      :rejection_error_param,
+      valid_rejection_param(metadata["rejection_error_param"])
+    )
+    |> maybe_put_valid_rejection_message(metadata)
+  end
+
+  defp valid_rejection_metadata(_metadata), do: %{}
+
+  defp maybe_put_valid_rejection(projection, _key, nil), do: projection
+  defp maybe_put_valid_rejection(projection, key, value), do: Map.put(projection, key, value)
+
+  defp valid_rejection_token(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_token_max_bytes and
+         Regex.match?(@rejection_token_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_token(_value), do: nil
+
+  defp valid_rejection_param(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_param_max_bytes and
+         Regex.match?(@rejection_param_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_param(_value), do: nil
+
+  defp maybe_put_valid_rejection_message(
+         projection,
+         %{"rejection_message_present" => true, "rejection_message_bytes" => bytes}
+       )
+       when is_integer(bytes) and bytes in 1..1_024 do
+    projection
+    |> Map.put(:rejection_message_present, true)
+    |> Map.put(:rejection_message_bytes, bytes)
+  end
+
+  defp maybe_put_valid_rejection_message(
+         projection,
+         %{"rejection_message_present" => false, "rejection_message_bytes" => 0}
+       ) do
+    projection
+    |> Map.put(:rejection_message_present, false)
+    |> Map.put(:rejection_message_bytes, 0)
+  end
+
+  defp maybe_put_valid_rejection_message(projection, _metadata), do: projection
 
   defp metadata_session_id(metadata) when is_map(metadata) do
     case Map.fetch(metadata, "codex_session_id") do

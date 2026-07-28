@@ -9,7 +9,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
+  alias CodexPooler.Gateway.Transports.UpstreamDispatch.RejectionDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -173,6 +176,100 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+  end
+
+  test "streaming non-429 4xx drains the complete rejection body into response private" do
+    body =
+      Jason.encode!(%{
+        "error" => %{
+          "code" => "invalid_request_error",
+          "message" => "synthetic rejection detail",
+          "param" => "input[0].content",
+          "type" => "invalid_request_error"
+        }
+      })
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.chunked_response(
+          [binary_part(body, 0, 7), binary_part(body, 7, byte_size(body) - 7)],
+          status: 400
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    payload = %{"model" => "example-model", "stream" => true}
+
+    request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(payload),
+      original_payload: payload,
+      identity: upstream_identity(),
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 5_000},
+          "/backend-api/codex/responses",
+          payload
+        )
+    }
+
+    assert {:ok, response} = UpstreamDispatch.http_request(request)
+    assert response.status == 400
+    assert %Req.Response.Async{} = response.body
+    assert RejectionBody.fetch(response) == body
+    assert Metadata.response_body(response) == ""
+  end
+
+  test "rejection drain ignores trailers, waits for done, and preserves foreign mailbox messages" do
+    {response, ref} = async_response(self())
+    other_ref = make_ref()
+    send(self(), {other_ref, {:data, "foreign"}})
+    send(self(), {ref, {:data, "first"}})
+    send(self(), {ref, {:trailers, [{"x-test", "trailer"}]}})
+    send(self(), {ref, {:data, "second"}})
+    send(self(), {ref, :done})
+
+    assert RejectionDrain.drain(response) == "firstsecond"
+    assert_receive {^other_ref, {:data, "foreign"}}
+    refute_received {:rejection_cancelled, ^ref}
+  end
+
+  test "rejection drain discards over-cap and error prefixes and cancels" do
+    {cap_response, cap_ref} = async_response(self())
+    send(self(), {cap_ref, {:data, String.duplicate("x", 65_537)}})
+    assert RejectionDrain.drain(cap_response) == ""
+    assert_receive {:rejection_cancelled, ^cap_ref}
+
+    {error_response, error_ref} = async_response(self())
+    send(self(), {error_ref, {:data, "partial"}})
+    send(self(), {error_ref, {:error, :closed}})
+    assert RejectionDrain.drain(error_response) == ""
+    assert_receive {:rejection_cancelled, ^error_ref}
+  end
+
+  @tag timeout: 5_000
+  test "rejection drain uses one absolute deadline and discards a stalled partial prefix" do
+    {response, ref} = async_response(self())
+    send(self(), {ref, {:data, "partial"}})
+    started_at = System.monotonic_time(:millisecond)
+
+    assert RejectionDrain.drain(response) == ""
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+    assert elapsed_ms in 1_900..2_500
+    assert_receive {:rejection_cancelled, ^ref}
+  end
+
+  test "rejection drain treats cancellation failure as nonfatal" do
+    {response, ref} =
+      async_response(self(), fn _ref ->
+        raise "synthetic cancellation failure"
+      end)
+
+    send(self(), {ref, {:error, :closed}})
+    assert RejectionDrain.drain(response) == ""
   end
 
   test "regular runtime headers use only the effective serving-mode snapshot for Lite markers" do
@@ -362,6 +459,39 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     opts = %{receive_timeout_ms: 1_000}
     opts = if is_pid(session), do: Map.put(opts, :upstream_websocket_session, session), else: opts
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
+  end
+
+  defp async_response(notify, cancel_fun \\ nil) do
+    ref = make_ref()
+
+    stream_fun = fn stream_ref, message ->
+      case message do
+        {^stream_ref, {:data, data}} -> {:ok, [data: data]}
+        {^stream_ref, :done} -> {:ok, [:done]}
+        {^stream_ref, {:trailers, trailers}} -> {:ok, [trailers: trailers]}
+        {^stream_ref, {:error, reason}} -> {:error, reason}
+        _message -> :unknown
+      end
+    end
+
+    cancel_fun =
+      cancel_fun ||
+        fn cancel_ref ->
+          send(notify, {:rejection_cancelled, cancel_ref})
+          :ok
+        end
+
+    response = %Req.Response{
+      status: 400,
+      body: %Req.Response.Async{
+        pid: self(),
+        ref: ref,
+        stream_fun: stream_fun,
+        cancel_fun: cancel_fun
+      }
+    }
+
+    {response, ref}
   end
 
   defp serving_mode_opts(mode) when mode in ["lite", "full"] do

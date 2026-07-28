@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.RejectionBody
 
   test "classifies only resolved Full ordinary Responses HTTP rejections" do
     ordinary_endpoints = [
@@ -471,6 +472,108 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
              "status_code" => 429,
              "upstream_request_id" => "req_123"
            }
+  end
+
+  test "response metadata extracts bounded rejection facts from private before the ordinary body" do
+    private_body =
+      Jason.encode!(%{
+        "error" => %{
+          "code" => nil,
+          "message" => "synthetic rejection detail",
+          "param" => "input[0].content",
+          "type" => "invalid_request_error"
+        }
+      })
+
+    response =
+      %Req.Response{
+        status: 400,
+        body:
+          Jason.encode!(%{
+            "error" => %{
+              "code" => "wrong_fallback",
+              "message" => "wrong fallback detail",
+              "param" => "wrong.path",
+              "type" => "wrong_fallback"
+            }
+          })
+      }
+      |> RejectionBody.put(private_body)
+
+    metadata = Metadata.response_metadata(response, "upstream_status", %{})
+
+    refute Map.has_key?(metadata, "rejection_error_code")
+    assert metadata["rejection_error_type"] == "invalid_request_error"
+    assert metadata["rejection_error_param"] == "input[0].content"
+    assert metadata["rejection_message_present"] == true
+    assert metadata["rejection_message_bytes"] == byte_size("synthetic rejection detail")
+    refute inspect(metadata) =~ "synthetic rejection detail"
+    refute inspect(metadata) =~ "wrong fallback detail"
+  end
+
+  test "response metadata emits the false zero message pair and independently validates fields" do
+    for message <- [nil, "", 42] do
+      response = %Req.Response{
+        status: 422,
+        body:
+          Jason.encode!(%{
+            "error" => %{
+              "code" => "invalid_request",
+              "message" => message,
+              "param" => 123,
+              "type" => "invalid_request_error"
+            }
+          })
+      }
+
+      metadata = Metadata.response_metadata(response, "upstream_status", %{})
+
+      assert metadata["rejection_error_code"] == "invalid_request"
+      assert metadata["rejection_error_type"] == "invalid_request_error"
+      refute Map.has_key?(metadata, "rejection_error_param")
+      assert metadata["rejection_message_present"] == false
+      assert metadata["rejection_message_bytes"] == 0
+    end
+  end
+
+  test "response metadata clamps rejection message bytes and rejects invalid sources" do
+    long_message = String.duplicate("m", 1_100)
+
+    valid = %Req.Response{
+      status: 400,
+      body: Jason.encode!(%{"error" => %{"message" => long_message}})
+    }
+
+    assert Metadata.response_metadata(valid, "upstream_status", %{})[
+             "rejection_message_bytes"
+           ] == 1_024
+
+    for response <- [
+          %Req.Response{status: 400, body: "not-json"},
+          %Req.Response{
+            status: 400,
+            body: Jason.encode!(%{"error" => %{"message" => String.duplicate("x", 65_537)}})
+          },
+          %Req.Response{
+            status: 429,
+            body: Jason.encode!(%{"error" => %{"code" => "rate_limit_exceeded"}})
+          }
+        ] do
+      metadata = Metadata.response_metadata(response, "upstream_status", %{})
+      refute Enum.any?(Map.keys(metadata), &String.starts_with?(&1, "rejection_"))
+    end
+  end
+
+  test "an empty private rejection body is authoritative over a materialized fallback" do
+    response =
+      %Req.Response{
+        status: 400,
+        body: Jason.encode!(%{"error" => %{"code" => "must_not_fall_through"}})
+      }
+      |> RejectionBody.put("")
+
+    metadata = Metadata.response_metadata(response, "upstream_status", %{})
+    refute Enum.any?(Map.keys(metadata), &String.starts_with?(&1, "rejection_"))
   end
 
   test "response metadata records response body limit evidence without retaining body bytes" do

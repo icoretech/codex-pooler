@@ -9,6 +9,18 @@ defmodule CodexPooler.Accounting.MetadataTest do
   import CodexPooler.AccountingTestSupport
 
   describe "sanitize_metadata/1" do
+    test "preserves the five exact bounded rejection metadata key names" do
+      metadata = %{
+        "rejection_error_code" => "invalid_request",
+        "rejection_error_type" => "invalid_request_error",
+        "rejection_error_param" => "input[0].content",
+        "rejection_message_present" => false,
+        "rejection_message_bytes" => 0
+      }
+
+      assert Accounting.sanitize_metadata(metadata) == metadata
+    end
+
     test "redacts the existing reset probe token nested in a quota decision" do
       token = Ecto.UUID.generate()
 

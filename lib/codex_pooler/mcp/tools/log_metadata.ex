@@ -356,6 +356,11 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
         "latency_ms" => %{"type" => ["integer", "null"]},
         "final" => %{"type" => ["boolean", "null"]},
         "upstream_error_param" => nullable_string_property(),
+        "rejection_error_code" => string_property(),
+        "rejection_error_type" => string_property(),
+        "rejection_error_param" => string_property(),
+        "rejection_message_present" => %{"type" => "boolean"},
+        "rejection_message_bytes" => integer_property(),
         "transport_failure" => %{"type" => "object"}
       }
     }

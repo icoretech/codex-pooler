@@ -5,9 +5,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @canonical_uuid_byte_size 36
+  @rejection_body_max_bytes 65_536
+  @rejection_token_max_bytes 80
+  @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_param_max_bytes 160
+  @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @upstream_websocket_connection_atom_keys [
     :lifecycle_id,
     :generation,
@@ -80,6 +86,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
     metadata = if error_kind, do: Map.put(metadata, "error_kind", error_kind), else: metadata
     metadata = Map.merge(metadata, response_body_limit_metadata(response))
+    metadata = Map.merge(metadata, rejection_metadata(response))
 
     opts
     |> route_attempt_metadata()
@@ -111,6 +118,77 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp upstream_websocket_bridge_attempt_metadata(_opts), do: %{}
+
+  defp rejection_metadata(%Req.Response{} = response) do
+    if response.status in 400..499 and response.status != 429 do
+      response
+      |> rejection_body()
+      |> decode_rejection_metadata()
+    else
+      %{}
+    end
+  end
+
+  defp rejection_body(response) do
+    case RejectionBody.fetch(response) do
+      body when is_binary(body) -> body
+      _absent -> response_body(response)
+    end
+  end
+
+  defp decode_rejection_metadata(body)
+       when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes do
+    case Jason.decode(body) do
+      {:ok, %{"error" => error}} when is_map(error) ->
+        %{}
+        |> maybe_put_rejection_value("rejection_error_code", valid_rejection_token(error["code"]))
+        |> maybe_put_rejection_value("rejection_error_type", valid_rejection_token(error["type"]))
+        |> maybe_put_rejection_value(
+          "rejection_error_param",
+          valid_rejection_param(error["param"])
+        )
+        |> put_rejection_message_metadata(error["message"])
+
+      _other ->
+        %{}
+    end
+  end
+
+  defp decode_rejection_metadata(_body), do: %{}
+
+  defp maybe_put_rejection_value(metadata, _key, nil), do: metadata
+  defp maybe_put_rejection_value(metadata, key, value), do: Map.put(metadata, key, value)
+
+  defp valid_rejection_token(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_token_max_bytes and
+         Regex.match?(@rejection_token_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_token(_value), do: nil
+
+  defp valid_rejection_param(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_param_max_bytes and
+         Regex.match?(@rejection_param_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_param(_value), do: nil
+
+  defp put_rejection_message_metadata(metadata, message)
+       when is_binary(message) and message != "" do
+    metadata
+    |> Map.put("rejection_message_present", true)
+    |> Map.put("rejection_message_bytes", min(byte_size(message), 1_024))
+  end
+
+  defp put_rejection_message_metadata(metadata, _message) do
+    metadata
+    |> Map.put("rejection_message_present", false)
+    |> Map.put("rejection_message_bytes", 0)
+  end
 
   @spec explicit_full_ordinary_responses?(RequestOptions.t() | term()) :: boolean()
   def explicit_full_ordinary_responses?(%RequestOptions{} = request_options) do

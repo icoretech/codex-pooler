@@ -846,7 +846,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     sentinels_absent? =
       full_failure_sentinels_absent?(
         [response.resp_body, logs, request, attempt, request_log, audit_events],
-        sentinels
+        Map.take(sentinels, [:message, :body])
       )
 
     canonical_response? = canonical_full_failure_response?(response, 400)
@@ -887,6 +887,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
            )
 
     assert canonical_full_failure_response?(response, 429)
+  end
+
+  test "streaming 400 without content type persists bounded rejection facts only as metadata", %{
+    conn: conn
+  } do
+    raw_message = "synthetic private rejection message"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.raw_response(
+          Jason.encode!(%{
+            "error" => %{
+              "code" => nil,
+              "message" => raw_message,
+              "param" => "input[0].content",
+              "type" => "invalid_request_error"
+            }
+          }),
+          status: 400
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic rejection request",
+        "stream" => true
+      })
+
+    assert response(conn, 400) == ""
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert request.last_error_code == "upstream_status"
+    assert request.retry_count == 0
+    refute Map.has_key?(attempt.response_metadata, "content_type")
+    refute Map.has_key?(attempt.response_metadata, "upstream_request_id")
+    refute Map.has_key?(attempt.response_metadata, "rejection_error_code")
+    assert attempt.response_metadata["rejection_error_type"] == "invalid_request_error"
+    assert attempt.response_metadata["rejection_error_param"] == "input[0].content"
+    assert attempt.response_metadata["rejection_message_present"] == true
+    assert attempt.response_metadata["rejection_message_bytes"] == byte_size(raw_message)
+    refute inspect({request, attempt, conn.resp_body}) =~ raw_message
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
   end
 
   @tag :task_15_sanitization

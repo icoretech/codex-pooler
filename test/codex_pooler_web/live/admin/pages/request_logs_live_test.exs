@@ -1383,6 +1383,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       status: "failed",
       response_metadata: %{
         "upstream_error_param" => "reasoning.summary",
+        "rejection_error_code" => "invalid_request",
+        "rejection_error_type" => "invalid_request_error",
+        "rejection_error_param" => "input[0].content",
+        "rejection_message_present" => true,
+        "rejection_message_bytes" => byte_size(raw_message),
         "raw_message" => raw_message,
         "value" => raw_value,
         "websocket_frame" => raw_frame,

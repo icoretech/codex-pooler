@@ -107,6 +107,27 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.invalid_or_successful_attempt == "omitted"
       assert fixture.raw_error_message_or_value == "never_projected"
     end
+
+    test "pins bounded rejection metadata extraction and publication" do
+      feature = CompatibilityMatrix.by_slug!(:rejection_metadata)
+      fixture = CompatibilityMatrix.fixture!(:rejection_metadata)
+
+      assert feature.current == :bounded_non_429_4xx_rejection_metadata
+      assert feature.routes == CompatibilityMatrix.by_slug!(:upstream_error_param).routes
+      assert fixture.source == "private_stream_drain_then_materialized_body"
+      assert fixture.projection == "failed_attempt_detail_only"
+      assert fixture.max_body_bytes == 65_536
+      assert fixture.message_bytes_max == 1_024
+      assert fixture.fields == ~w(
+               rejection_error_code
+               rejection_error_type
+               rejection_error_param
+               rejection_message_present
+               rejection_message_bytes
+             )
+      assert fixture.invalid_shapes == "omitted"
+      assert fixture.raw_error_message_or_body == "never_projected"
+    end
   end
 
   describe "request compression compatibility contract" do

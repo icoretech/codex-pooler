@@ -829,6 +829,53 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     end
   end
 
+  test "gets bounded rejection metadata in structured detail and readable text without raw message",
+       %{
+         auth: auth
+       } do
+    pool = pool_fixture(%{slug: "mcp-rejection-metadata", name: "MCP Rejection Metadata"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    raw_message = "raw-rejection-message-sentinel"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-mcp-rejection-metadata",
+        status: "failed",
+        correlation_id: "mcp-rejection-metadata"
+      })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 1,
+      status: "failed",
+      response_metadata: %{
+        "rejection_error_code" => "invalid_request",
+        "rejection_error_type" => "invalid_request_error",
+        "rejection_error_param" => "input[0].content",
+        "rejection_message_present" => true,
+        "rejection_message_bytes" => byte_size(raw_message)
+      }
+    })
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert %{"item" => item} = result["structuredContent"]
+    assert [attempt] = item["debug"]["attempts"]
+    assert attempt["rejection_error_code"] == "invalid_request"
+    assert attempt["rejection_error_type"] == "invalid_request_error"
+    assert attempt["rejection_error_param"] == "input[0].content"
+    assert attempt["rejection_message_present"] == true
+    assert attempt["rejection_message_bytes"] == byte_size(raw_message)
+    assert text =~ "rejection_error_code=invalid_request"
+    assert text =~ "rejection_message_present=true"
+    refute inspect(result) =~ raw_message
+  end
+
   test "request id inputs are exact for full UUIDs and fuzzy for fragments", %{auth: auth} do
     pool = pool_fixture(%{slug: "mcp-request-log-exact-id", name: "MCP Exact Request Log"})
     %{api_key: api_key} = active_api_key_fixture(pool, %{display_name: "MCP exact key"})

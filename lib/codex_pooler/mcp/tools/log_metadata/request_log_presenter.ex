@@ -16,6 +16,10 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   @upstream_error_param_max_bytes 160
   @upstream_error_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
+  @rejection_token_max_bytes 80
+  @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
+  @rejection_param_max_bytes 160
+  @rejection_param_pattern @upstream_error_param_pattern
 
   @list_debug_keys ~w(continuity failure attempt)
   @detail_debug_keys ~w(continuity terminal_state turn attempts)
@@ -133,6 +137,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> maybe_put_value("response", Map.get(item, "response_status_code"))
     |> Map.put("upstream", upstream_text(item))
     |> maybe_put_upstream_error_param_text(Map.get(item, "debug"))
+    |> maybe_put_rejection_metadata_text(Map.get(item, "debug"))
     |> maybe_put_metadata_summary(Map.get(item, "metadata"))
   end
 
@@ -172,6 +177,11 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         {"response", "response"},
         {"upstream", "upstream", required: true},
         {"upstream_error_param", "upstream_error_param"},
+        {"rejection_error_code", "rejection_error_code"},
+        {"rejection_error_type", "rejection_error_type"},
+        {"rejection_error_param", "rejection_error_param"},
+        {"rejection_message_present", "rejection_message_present"},
+        {"rejection_message_bytes", "rejection_message_bytes"},
         {"metadata_summary", "metadata"}
       ]
   end
@@ -262,6 +272,16 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   defp maybe_put_upstream_error_param_text(row, _debug), do: row
 
+  defp maybe_put_rejection_metadata_text(row, %{"attempts" => attempts})
+       when is_list(attempts) do
+    case Enum.find_value(attempts, &valid_failed_attempt_rejection_metadata/1) do
+      nil -> row
+      metadata -> Map.merge(row, metadata)
+    end
+  end
+
+  defp maybe_put_rejection_metadata_text(row, _debug), do: row
+
   defp valid_failed_attempt_upstream_error_param(%{
          "status" => status,
          "upstream_error_param" => value
@@ -276,6 +296,70 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   end
 
   defp valid_failed_attempt_upstream_error_param(_attempt), do: nil
+
+  defp valid_failed_attempt_rejection_metadata(%{"status" => status} = attempt)
+       when status in ["failed", "retryable_failed"] do
+    metadata = valid_rejection_metadata(attempt)
+    if map_size(metadata) == 0, do: nil, else: metadata
+  end
+
+  defp valid_failed_attempt_rejection_metadata(_attempt), do: nil
+
+  defp valid_rejection_metadata(metadata) do
+    %{}
+    |> maybe_put_value(
+      "rejection_error_code",
+      valid_rejection_token(metadata["rejection_error_code"])
+    )
+    |> maybe_put_value(
+      "rejection_error_type",
+      valid_rejection_token(metadata["rejection_error_type"])
+    )
+    |> maybe_put_value(
+      "rejection_error_param",
+      valid_rejection_param(metadata["rejection_error_param"])
+    )
+    |> maybe_put_valid_rejection_message(metadata)
+  end
+
+  defp valid_rejection_token(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_token_max_bytes and
+         Regex.match?(@rejection_token_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_token(_value), do: nil
+
+  defp valid_rejection_param(value) when is_binary(value) do
+    if byte_size(value) in 1..@rejection_param_max_bytes and
+         Regex.match?(@rejection_param_pattern, value),
+       do: value,
+       else: nil
+  end
+
+  defp valid_rejection_param(_value), do: nil
+
+  defp maybe_put_valid_rejection_message(
+         metadata,
+         %{"rejection_message_present" => true, "rejection_message_bytes" => bytes}
+       )
+       when is_integer(bytes) and bytes in 1..1_024 do
+    metadata
+    |> Map.put("rejection_message_present", true)
+    |> Map.put("rejection_message_bytes", bytes)
+  end
+
+  defp maybe_put_valid_rejection_message(
+         metadata,
+         %{"rejection_message_present" => false, "rejection_message_bytes" => 0}
+       ) do
+    metadata
+    |> Map.put("rejection_message_present", false)
+    |> Map.put("rejection_message_bytes", 0)
+  end
+
+  defp maybe_put_valid_rejection_message(metadata, _attempt), do: metadata
 
   defp metadata_summary(metadata) do
     keys =
@@ -401,10 +485,23 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   defp sanitize_debug_value(value), do: value
 
   defp sanitize_debug_attempt(%{"attempt_number" => _attempt_number} = attempt) do
-    case valid_failed_attempt_upstream_error_param(attempt) do
-      nil -> Map.delete(attempt, "upstream_error_param")
-      value -> Map.put(attempt, "upstream_error_param", value)
-    end
+    rejection_keys = ~w(
+      rejection_error_code
+      rejection_error_type
+      rejection_error_param
+      rejection_message_present
+      rejection_message_bytes
+    )
+
+    attempt =
+      case valid_failed_attempt_upstream_error_param(attempt) do
+        nil -> Map.delete(attempt, "upstream_error_param")
+        value -> Map.put(attempt, "upstream_error_param", value)
+      end
+
+    attempt
+    |> Map.drop(rejection_keys)
+    |> Map.merge(valid_rejection_metadata(attempt))
   end
 
   defp sanitize_debug_attempt(value), do: value

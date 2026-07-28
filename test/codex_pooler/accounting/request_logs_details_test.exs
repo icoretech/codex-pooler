@@ -775,6 +775,55 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     end
   end
 
+  test "request log detail revalidates grouped rejection metadata and preserves false" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-rejection-metadata",
+        status: "failed",
+        correlation_id: "rejection-metadata-detail"
+      })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 1,
+      status: "failed",
+      response_metadata: %{
+        "rejection_error_code" => "invalid_request",
+        "rejection_error_type" => "invalid_request_error",
+        "rejection_error_param" => "input[0].content",
+        "rejection_message_present" => false,
+        "rejection_message_bytes" => 0
+      }
+    })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 2,
+      status: "failed",
+      response_metadata: %{
+        "rejection_error_code" => String.duplicate("x", 81),
+        "rejection_error_param" => "https://example.com/not-a-path",
+        "rejection_message_present" => true,
+        "rejection_message_bytes" => 2_000
+      }
+    })
+
+    assert %{items: [log]} = Accounting.list_request_logs(pool)
+    [valid, invalid] = log.debug.attempts
+
+    assert valid.rejection_error_code == "invalid_request"
+    assert valid.rejection_error_type == "invalid_request_error"
+    assert valid.rejection_error_param == "input[0].content"
+    assert valid.rejection_message_present == false
+    assert valid.rejection_message_bytes == 0
+
+    refute Enum.any?(
+             Map.keys(invalid),
+             &(&1 in ~w(rejection_error_code rejection_error_param rejection_message_present rejection_message_bytes)a)
+           )
+  end
+
   test "request log detail projects bounded peer close diagnostics only through transport failure" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

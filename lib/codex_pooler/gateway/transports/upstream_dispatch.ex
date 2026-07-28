@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -74,6 +75,65 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           }
   end
 
+  defmodule RejectionDrain do
+    @moduledoc false
+
+    @max_bytes 65_536
+    @timeout_ms 2_000
+
+    @spec drain(Req.Response.t()) :: binary()
+    def drain(%Req.Response{body: %Req.Response.Async{ref: ref}} = response) do
+      deadline = System.monotonic_time(:millisecond) + @timeout_ms
+      drain(response, ref, deadline, [], 0)
+    end
+
+    defp drain(response, ref, deadline, chunks, seen_bytes) do
+      timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+      receive do
+        {^ref, _part} = message ->
+          case Req.parse_message(response, message) do
+            {:ok, [data: data]} when is_binary(data) ->
+              next_seen_bytes = seen_bytes + byte_size(data)
+
+              if next_seen_bytes > @max_bytes do
+                cancel(response)
+                ""
+              else
+                drain(response, ref, deadline, [data | chunks], next_seen_bytes)
+              end
+
+            {:ok, [:done]} ->
+              chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+            {:ok, [trailers: _trailers]} ->
+              drain(response, ref, deadline, chunks, seen_bytes)
+
+            {:error, _reason} ->
+              cancel(response)
+              ""
+
+            :unknown ->
+              cancel(response)
+              raise "unexpected Req async rejection message"
+          end
+      after
+        timeout ->
+          cancel(response)
+          ""
+      end
+    end
+
+    defp cancel(response) do
+      Req.cancel_async_response(response)
+    rescue
+      _exception -> :ok
+    catch
+      _kind, _reason -> :ok
+    end
+  end
+
+  alias __MODULE__.RejectionDrain
   alias __MODULE__.Request, as: DispatchRequest
 
   @doc false
@@ -185,6 +245,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     result = Req.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
+    result = maybe_drain_rejection_body(result)
 
     result
     |> normalize_upstream_transport_result(identity, opts)
@@ -244,6 +305,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     result = Req.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
+    result = maybe_drain_rejection_body(result)
 
     result
     |> normalize_upstream_transport_result(identity, opts)
@@ -695,6 +757,19 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     do: {:ok, BoundedResponseBody.finalize(response)}
 
   defp normalize_upstream_transport_result(result, _identity, _opts), do: result
+
+  defp maybe_drain_rejection_body(
+         {:ok,
+          %Req.Response{
+            status: status,
+            body: %Req.Response.Async{}
+          } = response}
+       )
+       when status in 400..499 and status != 429 do
+    {:ok, RejectionBody.put(response, RejectionDrain.drain(response))}
+  end
+
+  defp maybe_drain_rejection_body(result), do: result
 
   defp upstream_transport_error(reason) do
     TransportFailureReason.upstream_transport_error(reason, %{phase: :request})

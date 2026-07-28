@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     pool_model_serving_modes
     backend_responses_envelope
     upstream_error_param
+    rejection_metadata
     responses_chat
     response_body_cap
     backend_v1_alias_surface
@@ -1532,6 +1533,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert attempt.status == "failed"
       assert attempt.network_error_code == "upstream_status"
       assert attempt.upstream_status_code == 400
+      assert attempt.response_metadata["rejection_error_code"] == "invalid_request_error"
+      assert attempt.response_metadata["rejection_message_present"] == true
+
+      assert attempt.response_metadata["rejection_message_bytes"] ==
+               byte_size("synthetic upstream validation failure")
+
+      assert attempt.response_metadata["upstream_request_id"] == nil
 
       metadata_text = inspect({request.request_metadata, attempt.response_metadata})
       refute metadata_text =~ "upstream validation secret text"
@@ -1583,6 +1591,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert attempt.status == "failed"
       assert attempt.network_error_code == "upstream_status"
       assert attempt.upstream_status_code == 400
+      assert attempt.response_metadata["rejection_error_code"] == "context_length_exceeded"
+      assert attempt.response_metadata["rejection_message_present"] == true
+
+      assert attempt.response_metadata["rejection_message_bytes"] ==
+               byte_size("synthetic context overflow failure")
 
       metadata_text = inspect({request.request_metadata, attempt.response_metadata})
       refute metadata_text =~ "synthetic oversized context request"

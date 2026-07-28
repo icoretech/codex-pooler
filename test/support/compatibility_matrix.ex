@@ -200,6 +200,20 @@ defmodule CodexPooler.CompatibilityMatrix do
         "upstream_error_param is a bounded allowlisted field-path value projected on failed-attempt detail only; invalid values and successful attempts are omitted, with never raw upstream error messages or values projected"
     },
     %{
+      slug: :rejection_metadata,
+      status: :supported,
+      current: :bounded_non_429_4xx_rejection_metadata,
+      categories: [:error, :ownership, :degraded],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :rejection_metadata,
+      contract:
+        "non-429 HTTP 4xx rejection metadata is extracted from a bounded private streaming drain or the bounded materialized body, projected only on failed-attempt detail, and publishes bounded code, type, param, message-presence, and message-byte facts without raw provider bodies or messages"
+    },
+    %{
       slug: :responses_chat,
       status: :supported,
       current: :proxied_json_and_sse,
@@ -702,6 +716,24 @@ defmodule CodexPooler.CompatibilityMatrix do
       allowed_shape: "field_name_or_index_path",
       invalid_or_successful_attempt: "omitted",
       raw_error_message_or_value: "never_projected"
+    },
+    rejection_metadata: %{
+      fields: [
+        "rejection_error_code",
+        "rejection_error_type",
+        "rejection_error_param",
+        "rejection_message_present",
+        "rejection_message_bytes"
+      ],
+      source: "private_stream_drain_then_materialized_body",
+      projection: "failed_attempt_detail_only",
+      max_body_bytes: 65_536,
+      token_max_bytes: 80,
+      param_max_bytes: 160,
+      message_bytes_max: 1_024,
+      accepted_shape: "direct_string_key_error_map",
+      invalid_shapes: "omitted",
+      raw_error_message_or_body: "never_projected"
     },
     responses_chat: %{
       routes: ["/v1/responses", "/v1/chat/completions"],
