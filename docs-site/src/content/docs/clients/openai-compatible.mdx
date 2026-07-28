@@ -184,6 +184,19 @@ Streaming `/v1/responses` clients must also handle a terminal `type: "error"` SS
 
 Streaming `/v1/chat/completions` clients must separately handle a terminal `data: {"error":{...}}` chunk with nested `server_error` fields and no top-level `type`; no `[DONE]` chunk follows that terminal.
 
+### Relayed terminal errors
+
+When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when
+the value is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`. Other code values are redacted to `upstream_error`.
+A surviving code may be a Codex-backend value that is not part of the OpenAI platform `ResponseError` enum.
+
+Upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
+`server_error`. Clients must therefore treat `error.code` as an open string: handle the values they understand and
+keep an unknown-code fallback rather than validating against the platform enum.
+
+Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
+`openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.
+
 Ordinary OpenAI Responses incomplete terminals are preserved. If an upstream returns `response.incomplete` with `status: "incomplete"` for output limits or content filtering and no embedded error, `/v1/responses` streaming and websocket clients receive that incomplete terminal instead of a synthetic failure. Error-coded incomplete terminals, such as context overflow or stale continuation anchors, are still returned through the sanitized failure path.
 
 Accepted `POST /v1/responses` tool definitions are narrow. OpenAI Responses remote MCP tool definitions are rejected before dispatch.

@@ -950,6 +950,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "lift Responses system/developer input-message text"
       assert feature.contract =~ "early public streaming terminal errors"
 
+      assert feature.contract =~
+               "preserves a trimmed upstream error code only when it is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`"
+
+      assert feature.contract =~ "redacts every other code value to `upstream_error`"
+      assert feature.contract =~ "including clean values — is replaced with `server_error`"
+      assert feature.contract =~ "clients must treat `error.code` as an open string"
+
       assert feature.contract =~ "accept safe Hermes assistant replay status values"
       assert feature.contract =~ "drop known OMP function_call replay status fields"
       assert feature.contract =~ "translate OpenClaw assistant thinking replays before validation"
