@@ -383,6 +383,210 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              )
   end
 
+  test "public socket records only client-committed output" do
+    task_pid = self()
+    state = public_turn_state(task_pid)
+
+    visible = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+
+    assert {:push, {:text, _payload}, visible_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, visible},
+               state
+             )
+
+    assert visible_state.public_turn_output_committed?
+
+    rate_limits = Jason.encode!(%{"type" => "codex.rate_limits", "remaining" => 1})
+
+    assert {:push, {:text, _payload}, rate_limit_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, rate_limits},
+               state
+             )
+
+    refute rate_limit_state.public_turn_output_committed?
+
+    dropped =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_drop", "status" => "in_progress"}
+      })
+
+    assert {:ok, dropped_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, dropped},
+               state
+             )
+
+    refute dropped_state.public_turn_output_committed?
+
+    overflow_state =
+      public_turn_state(task_pid, %{
+        public_responses_websocket_state: %{
+          max_seen: PublicResponsesSequence.max_safe_integer() - 1,
+          terminal_latched?: false,
+          overflow_latched?: false
+        }
+      })
+
+    assert {:push, {:text, _payload}, error_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, visible},
+               overflow_state
+             )
+
+    assert error_state.public_turn_output_committed?
+  end
+
+  test "public socket acknowledges commitment to the probe-carried owner pid" do
+    task_pid = self()
+    active_turn_ref = make_ref()
+    probe_ref = make_ref()
+
+    state =
+      public_turn_state(task_pid, %{
+        public_turn_output_committed?: true,
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 21,
+          correlation_id: "corr-probe",
+          active_turn_reconnect?: false
+        }
+      })
+
+    owner_pid =
+      spawn(fn ->
+        receive do
+          message -> send(task_pid, {:carried_owner_ack, message})
+        end
+      end)
+
+    probe =
+      {:websocket_owner_output_commit_probe, "corr-probe", 21, task_pid, active_turn_ref,
+       owner_pid, probe_ref}
+
+    assert {:ok, ^state} = CodexResponsesSocket.handle_info(probe, state)
+
+    assert_receive {:carried_owner_ack,
+                    {:websocket_owner_output_commit_ack, "corr-probe", 21, ^task_pid,
+                     ^active_turn_ref, ^probe_ref, true}}
+  end
+
+  test "public socket refuses commitment probes for stale aborted or completed turns" do
+    task_pid = self()
+    active_turn_ref = make_ref()
+    probe_ref = make_ref()
+
+    base =
+      public_turn_state(task_pid, %{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 22,
+          correlation_id: "corr-probe-refuse",
+          active_turn_reconnect?: false
+        }
+      })
+
+    probe = fn owner_turn_id ->
+      {:websocket_owner_output_commit_probe, "corr-probe-refuse", 22, owner_turn_id,
+       active_turn_ref, self(), probe_ref}
+    end
+
+    assert {:ok, ^base} =
+             CodexResponsesSocket.handle_info(probe.(owner_turn_pid()), base)
+
+    assert {:ok, aborted} =
+             CodexResponsesSocket.handle_info(probe.(task_pid), %{
+               base
+               | public_turn_aborted?: true
+             })
+
+    assert aborted.public_turn_aborted?
+
+    assert {:ok, completed} =
+             CodexResponsesSocket.handle_info(
+               probe.(task_pid),
+               %{base | public_turn_owner_complete?: true}
+             )
+
+    assert completed.public_turn_owner_complete?
+    refute_received {:websocket_owner_output_commit_ack, _, _, _, _, _, _}
+  end
+
+  test "owner-forwarded upstream interruption logs once before task completion" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+
+    state =
+      public_turn_state(task_pid, %{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 23,
+          correlation_id: "corr-upstream-interruption",
+          active_turn_reconnect?: false
+        }
+      })
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, nil)
+
+    owner_error =
+      {:websocket_owner_frame, "corr-upstream-interruption", 23, task_pid,
+       {:error, :upstream_stream_error, safe_payload}}
+
+    {_result, logs} =
+      with_native_turn_log(:info, fn ->
+        assert {:push, {:text, payload}, pushed_state} =
+                 CodexResponsesSocket.handle_info(owner_error, state)
+
+        assert Jason.decode!(payload) == %{
+                 "type" => "error",
+                 "status" => 502,
+                 "error" => %{
+                   "type" => "invalid_request_error",
+                   "code" => "server_error",
+                   "message" =>
+                     "upstream request failed: stream interrupted before terminal response event",
+                   "param" => nil
+                 }
+               }
+
+        assert {:ok, _done_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid,
+                    {:response_task_result, {:error, :upstream_stream_error}, true}},
+                   pushed_state
+                 )
+      end)
+
+    assert_native_turn_logs(logs, 1)
+  end
+
+  test "owner-forwarded liveness failure closes without fabricating a terminal" do
+    task_pid = self()
+
+    state =
+      public_turn_state(task_pid, %{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 24,
+          correlation_id: "corr-dead-owner",
+          active_turn_reconnect?: false
+        }
+      })
+
+    assert {:stop, :normal, {1011, "websocket owner crashed"}, closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:response_task_result, {:error, :owner_crashed}, true}},
+               state
+             )
+
+    assert closed_state.public_response_task_pid == nil
+    refute_received {:websocket_owner_frame, _, _, _, _}
+  end
+
   test "active public task down aborts without starting queued work in both owner signal orders" do
     for owner_complete_first? <- [false, true] do
       task_pid = self()
@@ -834,7 +1038,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,
-        public_turn_aborted?: false
+        public_turn_aborted?: false,
+        public_turn_output_committed?: false
       },
       overrides
     )

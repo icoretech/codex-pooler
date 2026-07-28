@@ -6,6 +6,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   owners, route frames, renew leases, or change the active websocket runtime path.
   """
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+
   @type owner_key :: Ecto.UUID.t()
   @type owner_token :: Ecto.UUID.t()
   @type correlation_id :: binary()
@@ -26,6 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           | :owner_forwarding_disabled
           | :owner_busy
           | :client_disconnected
+          | :upstream_stream_error
           | :upstream_websocket_terminal_delivery_timeout
 
   @type request_status :: binary()
@@ -60,6 +63,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
 
   @type downstream_match_result ::
           {:ok, downstream_payload()} | :drop | {:error, :invalid_downstream_message}
+  @type output_commit_probe ::
+          {:websocket_owner_output_commit_probe, correlation_id(), downstream_epoch(),
+           owner_turn_id(), reference(), pid(), reference()}
+  @type output_commit_ack ::
+          {:websocket_owner_output_commit_ack, correlation_id(), downstream_epoch(),
+           owner_turn_id(), reference(), reference(), boolean()}
 
   @owner_errors [
     :owner_unavailable,
@@ -72,6 +81,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     :owner_forwarding_disabled,
     :owner_busy,
     :client_disconnected,
+    :upstream_stream_error,
     :upstream_websocket_terminal_delivery_timeout
   ]
 
@@ -111,6 +121,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       code: "client_disconnected",
       message: "websocket client disconnected",
       reason: "client_disconnected"
+    ],
+    upstream_stream_error: [
+      status: 502,
+      code: "server_error",
+      message: StreamProtocol.synthetic_public_openai_responses_failure_message(),
+      reason: "upstream_stream_error"
     ],
     upstream_websocket_terminal_delivery_timeout: [
       status: 502,
@@ -268,6 +284,83 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
         _current_owner_turn_id
       ),
       do: {:error, :invalid_downstream_message}
+
+  @spec output_commit_probe?(term()) :: boolean()
+  def output_commit_probe?(
+        {:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id,
+         active_turn_ref, owner_pid, probe_ref}
+      )
+      when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
+             is_pid(owner_turn_id) and is_reference(active_turn_ref) and is_pid(owner_pid) and
+             is_reference(probe_ref),
+      do: true
+
+  def output_commit_probe?(_message), do: false
+
+  @spec accept_output_commit_probe(
+          term(),
+          downstream_epoch(),
+          correlation_id(),
+          owner_turn_id()
+        ) :: {:ok, reference(), pid(), reference()} | :drop | {:error, :invalid_probe}
+  def accept_output_commit_probe(
+        {:websocket_owner_output_commit_probe, correlation_id, downstream_epoch, owner_turn_id,
+         active_turn_ref, owner_pid, probe_ref} = message,
+        downstream_epoch,
+        correlation_id,
+        owner_turn_id
+      ) do
+    if output_commit_probe?(message),
+      do: {:ok, active_turn_ref, owner_pid, probe_ref},
+      else: {:error, :invalid_probe}
+  end
+
+  def accept_output_commit_probe(message, _epoch, _correlation_id, _owner_turn_id) do
+    if output_commit_probe?(message), do: :drop, else: {:error, :invalid_probe}
+  end
+
+  @spec output_commit_ack?(term()) :: boolean()
+  def output_commit_ack?(
+        {:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id,
+         active_turn_ref, probe_ref, committed?}
+      )
+      when is_binary(correlation_id) and is_integer(downstream_epoch) and downstream_epoch > 0 and
+             is_pid(owner_turn_id) and is_reference(active_turn_ref) and is_reference(probe_ref) and
+             is_boolean(committed?),
+      do: true
+
+  def output_commit_ack?(_message), do: false
+
+  @spec accept_output_commit_ack(
+          term(),
+          downstream_epoch(),
+          correlation_id(),
+          owner_turn_id(),
+          reference(),
+          reference()
+        ) :: {:ok, boolean()} | :drop | {:error, :invalid_ack}
+  def accept_output_commit_ack(
+        {:websocket_owner_output_commit_ack, correlation_id, downstream_epoch, owner_turn_id,
+         active_turn_ref, probe_ref, committed?} = message,
+        downstream_epoch,
+        correlation_id,
+        owner_turn_id,
+        active_turn_ref,
+        probe_ref
+      ) do
+    if output_commit_ack?(message), do: {:ok, committed?}, else: {:error, :invalid_ack}
+  end
+
+  def accept_output_commit_ack(
+        message,
+        _epoch,
+        _correlation_id,
+        _owner_turn_id,
+        _active_turn_ref,
+        _probe_ref
+      ) do
+    if output_commit_ack?(message), do: :drop, else: {:error, :invalid_ack}
+  end
 
   defp downstream_payload?({:data, encoded_text_frame}) when is_binary(encoded_text_frame),
     do: true

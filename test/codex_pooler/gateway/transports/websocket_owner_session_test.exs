@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
@@ -15,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 
@@ -728,6 +730,350 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     release_controlled(barriers, controls, :nonterminal_frames)
     terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
     release_controlled(terminal_barrier, controls, :terminal_frames)
+  end
+
+  test "public interrupted turns preserve ack ordering and consume a prior socket terminal",
+       context do
+    for committed? <- [false, true] do
+      owner_context = unique_owner_context(context, "commit-#{committed?}")
+      visible_frame = "visible-#{committed?}"
+      upstream = interrupted_upstream(self(), visible_frame)
+      {:ok, owner} = start_owner(owner_context, upstream: upstream)
+
+      {:ok, stable_downstream} =
+        WebsocketOwnerSession.attach_downstream(
+          owner,
+          downstream_target("commit-#{committed?}")
+        )
+
+      owner_turn_id = self()
+      downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+      submit_task =
+        Task.async(fn ->
+          WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+        end)
+
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id,
+                      {:data, ^visible_frame}}
+
+      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch,
+                      ^owner_turn_id, active_turn_ref, ^owner, probe_ref}
+
+      assert Task.yield(submit_task, 0) == nil
+
+      send(
+        owner,
+        {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id,
+         active_turn_ref, probe_ref, committed?}
+      )
+
+      if committed? do
+        assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
+                        {:error, :upstream_stream_error, safe_payload}}
+
+        assert safe_payload.code == "server_error"
+      else
+        refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
+                         {:error, :upstream_stream_error, _payload}}
+      end
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
+      assert Task.await(submit_task, 1_000) == interrupted_result()
+      assert %{active_turn: nil} = :sys.get_state(owner)
+    end
+
+    visible_frame =
+      Jason.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => "visible-before-overflow",
+        "sequence_number" => PublicResponsesSequence.max_safe_integer() - 1
+      })
+
+    overflow_frame =
+      Jason.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => "overflow"
+      })
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, writer ->
+        _result = writer.(visible_frame)
+        _result = writer.(overflow_frame)
+        interrupted_result()
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
+    }
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("socket-overflow"))
+
+    submit_task =
+      Task.async(fn ->
+        receive do
+          {:submit_owner_turn, downstream} ->
+            WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+        end
+      end)
+
+    owner_turn_id = submit_task.pid
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+    send(owner_turn_id, {:submit_owner_turn, downstream})
+
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    socket_state = %{
+      opts: opts,
+      tasks: MapSet.new([owner_turn_id]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      public_response_task_pid: owner_turn_id,
+      public_responses_websocket_state: nil,
+      public_turn_task_done?: false,
+      public_turn_owner_complete?: false,
+      public_turn_aborted?: false,
+      public_turn_output_committed?: false,
+      websocket_owner_downstream: stable_downstream
+    }
+
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
+                    {:data, ^visible_frame}}
+
+    assert {:push, {:text, visible_payload}, socket_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id,
+                {:data, visible_frame}},
+               socket_state
+             )
+
+    assert Jason.decode!(visible_payload)["type"] == "response.output_text.delta"
+
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
+                    {:data, ^overflow_frame}}
+
+    assert {:push, {:text, overflow_payload}, socket_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "socket-overflow", 1, owner_turn_id,
+                {:data, overflow_frame}},
+               socket_state
+             )
+
+    assert Jason.decode!(overflow_payload)["error"]["code"] == "websocket_sequence_exhausted"
+
+    assert_receive {:websocket_owner_output_commit_probe, "socket-overflow", 1, ^owner_turn_id,
+                    active_turn_ref, ^owner, probe_ref} = probe
+
+    assert {:ok, ^socket_state} = CodexResponsesSocket.handle_info(probe, socket_state)
+
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
+                    {:error, :upstream_stream_error, safe_payload}} = owner_error
+
+    {{:ok, socket_state}, logs} =
+      with_log([level: :warning], fn ->
+        CodexResponsesSocket.handle_info(owner_error, socket_state)
+      end)
+
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    refute logs =~ "owner_forward_timeout"
+    refute Jason.encode!(safe_payload) =~ "owner_forward_timeout"
+
+    assert_receive {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, :complete} =
+                     owner_complete
+
+    assert {:ok, completed_state} =
+             CodexResponsesSocket.handle_info(owner_complete, socket_state)
+
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert %{active_turn: nil} = :sys.get_state(owner)
+
+    assert {:ok, final_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, owner_turn_id,
+                {:response_task_result, interrupted_result(), true}},
+               completed_state
+             )
+
+    assert final_state.public_response_task_pid == nil
+    refute final_state.public_turn_output_committed?
+
+    refute_received {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id,
+                     {:error, :owner_forward_timeout, _payload}}
+
+    refute_received {:websocket_owner_frame, "socket-overflow", 1, ^owner_turn_id, _payload}
+
+    assert is_reference(active_turn_ref)
+    assert is_reference(probe_ref)
+  end
+
+  test "public interrupted turn pins probe ref and times out with a safe error", context do
+    upstream = interrupted_upstream(self(), "visible-timeout")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("commit-timeout"))
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:websocket_owner_frame, correlation_id, epoch, ^owner_turn_id,
+                    {:data, "visible-timeout"}}
+
+    assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, ^epoch, ^owner_turn_id,
+                    active_turn_ref, ^owner, probe_ref}
+
+    send(
+      owner,
+      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref,
+       make_ref(), true}
+    )
+
+    assert Task.yield(submit_task, 0) == nil
+
+    %{active_turn: %{output_commit_probe: probe_state}} = :sys.get_state(owner)
+    Process.cancel_timer(probe_state.timer_ref)
+    send(owner, {:websocket_owner_output_commit_timeout, active_turn_ref, probe_ref})
+
+    assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id,
+                    {:error, :owner_forward_timeout, timeout_payload}}
+
+    assert timeout_payload.code == "owner_forward_timeout"
+    assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, :complete}
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+
+    send(
+      owner,
+      {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id, active_turn_ref,
+       probe_ref, true}
+    )
+
+    refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, _payload}
+  end
+
+  test "reconnect while probing settles the old turn without downstream delivery", context do
+    upstream = interrupted_upstream(self(), "visible-reconnect")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, first} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("commit-reconnect-old"))
+
+    downstream = Map.put(first, :owner_turn_id, self())
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:websocket_owner_frame, "commit-reconnect-old", 1, _owner_turn_id,
+                    {:data, "visible-reconnect"}}
+
+    assert_receive {:websocket_owner_output_commit_probe, "commit-reconnect-old", 1,
+                    _owner_turn_id, _active_turn_ref, ^owner, _probe_ref}
+
+    assert {:ok, second} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("commit-reconnect-new")
+             )
+
+    assert second.epoch == 2
+    refute second.active_turn_reconnect?
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+    refute_received {:websocket_owner_frame, "commit-reconnect-old", 1, _owner_turn_id, :complete}
+    refute_received {:websocket_owner_frame, "commit-reconnect-new", 2, _payload}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
+  test "probing turn stays busy and graceful drain lets the acknowledgement finish", context do
+    probe = start_output_commit_probe(context, "probe-busy")
+
+    assert WebsocketOwnerSession.submit_frame(
+             probe.owner,
+             probe.downstream,
+             "overlapping-request"
+           ) == {:error, :owner_busy}
+
+    assert :ok = WebsocketOwnerSession.begin_drain(probe.owner)
+
+    send(
+      probe.owner,
+      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id,
+       probe.active_turn_ref, probe.probe_ref, false}
+    )
+
+    assert_receive {:websocket_owner_frame, "probe-busy", 1, _owner_turn_id, :complete}
+    assert Task.await(probe.submit_task, 1_000) == interrupted_result()
+    assert %{active_turn: nil, draining?: true} = :sys.get_state(probe.owner)
+  end
+
+  test "explicit detach cancels a probe and ignores its late acknowledgement", context do
+    probe = start_output_commit_probe(context, "probe-detach")
+    %{active_turn: %{output_commit_probe: %{timer_ref: timer_ref}}} = :sys.get_state(probe.owner)
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(probe.owner, probe.stable_downstream)
+    assert Task.await(probe.submit_task, 1_000) == {:error, :client_disconnected}
+    assert Process.read_timer(timer_ref) == false
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(probe.owner)
+
+    send(
+      probe.owner,
+      {:websocket_owner_output_commit_ack, probe.correlation_id, probe.epoch, probe.owner_turn_id,
+       probe.active_turn_ref, probe.probe_ref, true}
+    )
+
+    refute_received {:websocket_owner_frame, "probe-detach", 1, _owner_turn_id, _payload}
+  end
+
+  test "downstream death settles the retained interruption without delivery", context do
+    parent = self()
+
+    downstream_pid =
+      spawn(fn ->
+        receive_probe_messages(parent)
+      end)
+
+    upstream = interrupted_upstream(self(), "visible-downstream-death")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, %{
+        pid: downstream_pid,
+        correlation_id: "probe-downstream-death"
+      })
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:probe_downstream_message,
+                    {:websocket_owner_frame, "probe-downstream-death", 1, ^owner_turn_id,
+                     {:data, "visible-downstream-death"}}}
+
+    assert_receive {:probe_downstream_message,
+                    {:websocket_owner_output_commit_probe, "probe-downstream-death", 1,
+                     ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref}}
+
+    downstream_ref = Process.monitor(downstream_pid)
+    Process.exit(downstream_pid, :shutdown)
+    assert_receive {:DOWN, ^downstream_ref, :process, ^downstream_pid, :shutdown}
+
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
+    refute_received {:probe_downstream_message, {:websocket_owner_frame, _, _, _, :complete}}
   end
 
   test "exact terminal timeout invalidates upstream and emits one committed failure", context do
@@ -2221,6 +2567,70 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
        headers: [],
        websocket_frame_headers: %{}
      }}
+  end
+
+  defp interrupted_upstream(parent, frame) do
+    %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, writer ->
+        send(parent, {:interrupted_upstream_writer, frame})
+        _message = writer.(frame)
+        interrupted_result()
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
+    }
+  end
+
+  defp interrupted_result do
+    {:error,
+     %{
+       body: "",
+       forward_error_body?: true,
+       reason: :upstream_stream_error,
+       transport_failure: %{"reason" => "upstream_stream_error"}
+     }}
+  end
+
+  defp start_output_commit_probe(context, label) do
+    upstream = interrupted_upstream(self(), "visible-#{label}")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target(label))
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:websocket_owner_frame, ^label, epoch, ^owner_turn_id,
+                    {:data, "visible-" <> ^label}}
+
+    assert_receive {:websocket_owner_output_commit_probe, ^label, ^epoch, ^owner_turn_id,
+                    active_turn_ref, ^owner, probe_ref}
+
+    %{
+      owner: owner,
+      stable_downstream: stable_downstream,
+      downstream: downstream,
+      owner_turn_id: owner_turn_id,
+      correlation_id: label,
+      epoch: epoch,
+      active_turn_ref: active_turn_ref,
+      probe_ref: probe_ref,
+      submit_task: submit_task
+    }
+  end
+
+  defp receive_probe_messages(parent) do
+    receive do
+      message ->
+        send(parent, {:probe_downstream_message, message})
+        receive_probe_messages(parent)
+    end
   end
 
   defp collector(parent, label) do

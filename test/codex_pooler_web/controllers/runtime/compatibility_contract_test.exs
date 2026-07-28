@@ -900,7 +900,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~
                "synthetic SSE terminals to OpenAI-compatible HTTP SSE surfaces"
 
-      assert feature.contract =~ "preserve backend raw/websocket stream behavior"
+      assert feature.contract =~
+               "owner-forwarded GET /v1/responses per-call turn is interrupted after committed public output"
+
+      assert feature.contract =~
+               "preserve native backend raw Responses streams and all other websocket behavior"
 
       assert fixture.stream_interruption_contract == %{
                applies_to: "POST /v1/responses HTTP SSE after public Responses data",
@@ -917,7 +921,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                client_disconnect: "unchanged",
                non_drain_interruptions: "byte_identical",
                backend_raw_streams: "unchanged",
-               websocket_streams: "unchanged",
+               public_owner_forwarded_websocket_interruption: %{
+                 applies_to:
+                   "GET /v1/responses owner-forwarded per-call turns after committed public output",
+                 terminal_event: "error",
+                 status: 502,
+                 wire_error_code: "server_error",
+                 accounting_error_code: "upstream_stream_error",
+                 safe_message:
+                   "upstream request failed: stream interrupted before terminal response event"
+               },
+               other_websocket_streams: "unchanged",
                raw_error_details: false
              }
 

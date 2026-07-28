@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
     :owner_forwarding_disabled,
     :owner_busy,
     :client_disconnected,
+    :upstream_stream_error,
     :upstream_websocket_terminal_delivery_timeout
   ]
 
@@ -81,6 +82,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       assert payload.attempt_status == "failed"
       assert payload.metadata.reason == "upstream_websocket_terminal_delivery_timeout"
       assert payload.metadata.owner_error == "upstream_stream_error"
+      refute inspect(payload) =~ @sentinel
+    end
+
+    test "maps upstream stream interruption to the public websocket failure contract" do
+      assert {:ok, payload} =
+               WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, @sentinel)
+
+      assert payload.status == 502
+      assert payload.code == "server_error"
+
+      assert payload.message ==
+               "upstream request failed: stream interrupted before terminal response event"
+
+      assert payload.request_status == "failed"
+      assert payload.attempt_status == "failed"
+      assert payload.metadata.reason == "upstream_stream_error"
+      assert payload.metadata.owner_error == "server_error"
       refute inspect(payload) =~ @sentinel
     end
 
@@ -241,6 +259,76 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
       refute inspect(
                WebsocketOwnerContract.accept_downstream_message(wrong_payload_type, 3, "corr-1")
              ) =~ @sentinel
+    end
+  end
+
+  describe "output commitment barrier messages" do
+    test "validates a probe and returns the carried reply pid and opaque refs" do
+      active_turn_ref = make_ref()
+      probe_ref = make_ref()
+      owner_turn_id = self()
+
+      probe =
+        {:websocket_owner_output_commit_probe, "corr-probe", 3, owner_turn_id, active_turn_ref,
+         self(), probe_ref}
+
+      assert WebsocketOwnerContract.output_commit_probe?(probe)
+
+      assert WebsocketOwnerContract.accept_output_commit_probe(
+               probe,
+               3,
+               "corr-probe",
+               owner_turn_id
+             ) == {:ok, active_turn_ref, self(), probe_ref}
+
+      assert WebsocketOwnerContract.accept_output_commit_probe(
+               probe,
+               4,
+               "corr-probe",
+               owner_turn_id
+             ) == :drop
+    end
+
+    test "matches every acknowledgement identity including the probe ref" do
+      active_turn_ref = make_ref()
+      probe_ref = make_ref()
+      owner_turn_id = self()
+
+      ack =
+        {:websocket_owner_output_commit_ack, "corr-ack", 5, owner_turn_id, active_turn_ref,
+         probe_ref, true}
+
+      assert WebsocketOwnerContract.output_commit_ack?(ack)
+
+      assert WebsocketOwnerContract.accept_output_commit_ack(
+               ack,
+               5,
+               "corr-ack",
+               owner_turn_id,
+               active_turn_ref,
+               probe_ref
+             ) == {:ok, true}
+
+      assert WebsocketOwnerContract.accept_output_commit_ack(
+               ack,
+               5,
+               "corr-ack",
+               owner_turn_id,
+               active_turn_ref,
+               make_ref()
+             ) == :drop
+    end
+
+    test "rejects malformed probe and acknowledgement values" do
+      refute WebsocketOwnerContract.output_commit_probe?(
+               {:websocket_owner_output_commit_probe, "corr", 1, self(), :not_ref, self(),
+                make_ref()}
+             )
+
+      refute WebsocketOwnerContract.output_commit_ack?(
+               {:websocket_owner_output_commit_ack, "corr", 1, self(), make_ref(), make_ref(),
+                :not_boolean}
+             )
     end
   end
 end

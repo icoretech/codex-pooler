@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -17,6 +18,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
@@ -216,6 +218,97 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "owner-forwarded GET /v1/responses emits one safe interruption after visible output" do
+    enable_owner_forwarding!()
+
+    visible_event =
+      {"response.output_text.delta",
+       %{"type" => "response.output_text.delta", "delta" => "synthetic visible output"}}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close([visible_event],
+          code: 1001,
+          reason: "synthetic interrupted stream"
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "w2-interruption-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic interruption input",
+            "stream" => true
+          })
+        )
+
+      {conn, websocket, visible_frame} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(visible_frame)["type"] == "response.output_text.delta"
+
+      {conn, websocket, error_frame} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(error_frame) == %{
+               "type" => "error",
+               "status" => 502,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "server_error",
+                 "message" =>
+                   "upstream request failed: stream interrupted before terminal response event",
+                 "param" => nil
+               }
+             }
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "failed"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_stream_error"
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.transport == "websocket"
+      assert attempt.status == "failed"
+      assert attempt.network_error_code == "upstream_stream_error"
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   defp public_v1_websocket_connect!(port, setup, turn_state) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 
@@ -229,6 +322,35 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
     {conn, websocket, ref}
+  end
+
+  defp enable_owner_forwarding! do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      stop_registered_websocket_owner_sessions()
+
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+  end
+
+  defp stop_registered_websocket_owner_sessions do
+    capture_log(fn ->
+      WebsocketOwnerSession.Registry
+      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.each(&stop_registered_websocket_owner_session/1)
+    end)
+  end
+
+  defp stop_registered_websocket_owner_session(session_id) do
+    case WebsocketOwnerSession.lookup(session_id) do
+      {:ok, owner_pid} -> GenServer.stop(owner_pid, :shutdown, 1_000)
+      _other -> :ok
+    end
   end
 
   defp receive_websocket_until_terminal!(conn, websocket, ref, frames) do
