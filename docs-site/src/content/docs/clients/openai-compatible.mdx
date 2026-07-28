@@ -194,6 +194,16 @@ Upstream error messages are replaced with `upstream request failed`, and upstrea
 `server_error`. Clients must therefore treat `error.code` as an open string: handle the values they understand and
 keep an unknown-code fallback rather than validating against the platform enum.
 
+Public relays construct each `response.failed` envelope from a named-field projection. Unknown event, response,
+error, and usage siblings are excluded. The response identifier is retained only when it is a valid `resp_`
+identifier; otherwise it becomes `resp_failed`. Usage is either `null` or a bounded projection of the declared token
+counters. Content-bearing response fields are empty or `null`: `output` and `tools` are empty arrays, `output_text`
+is an empty string, and `instructions`, `metadata`, `temperature`, and `top_p` are `null`.
+
+Top-level and nested errors are sanitized independently and are never copied between locations. A safe code remains
+unchanged at its original location, while every invalid code becomes `upstream_error`; message and type remain the
+fixed `upstream request failed` and `server_error` values.
+
 Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
 `openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.
 

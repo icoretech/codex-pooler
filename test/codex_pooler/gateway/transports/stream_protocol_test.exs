@@ -421,7 +421,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute chunk =~ "event: response.output_text.delta\n"
     end
 
-    test "keeps a top-level context overflow error independent from a missing nested error" do
+    test "keeps a top-level context overflow error independent from the projected nested fallback" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       failed =
@@ -442,7 +442,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["error"]["code"] == "context_length_exceeded"
       assert data["error"]["message"] == "upstream request failed"
 
-      refute Map.has_key?(data["response"], "error")
+      assert data["response"] == %{
+               "id" => "resp_context_overflow",
+               "created_at" => 0,
+               "status" => "failed",
+               "error" => %{
+                 "code" => "upstream_error",
+                 "message" => "upstream request failed",
+                 "type" => "server_error"
+               },
+               "incomplete_details" => nil,
+               "model" => "unknown",
+               "object" => "response",
+               "output" => [],
+               "output_text" => "",
+               "instructions" => nil,
+               "metadata" => nil,
+               "parallel_tool_calls" => false,
+               "tool_choice" => "auto",
+               "tools" => [],
+               "usage" => nil,
+               "temperature" => nil,
+               "top_p" => nil
+             }
     end
 
     test "emits early top-level error without synthetic success prefix" do

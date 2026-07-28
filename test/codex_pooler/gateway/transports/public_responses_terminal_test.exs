@@ -150,22 +150,26 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       observations =
         for location <- [:top_level, :nested],
             transport <- [:sse, :websocket] do
-          terminal = malformed_terminal(location, @malformed_error)
-          {wire, decoded} = normalize_public_wire(transport, terminal)
+          {_wire, decoded} =
+            normalize_public_wire(transport, malformed_terminal(location, @malformed_error))
 
           {
             location,
             transport,
             terminal_errors(decoded),
-            String.contains?(wire, Jason.encode!(@malformed_error))
+            decoded["response"]
           }
         end
 
       assert observations == [
-               {:top_level, :sse, %{top_level: fallback, nested: :absent}, false},
-               {:top_level, :websocket, %{top_level: fallback, nested: :absent}, false},
-               {:nested, :sse, %{top_level: :absent, nested: fallback}, false},
-               {:nested, :websocket, %{top_level: :absent, nested: fallback}, false}
+               {:top_level, :sse, %{top_level: fallback, nested: fallback},
+                expected_failed_response(id: "resp_non_map_top_level")},
+               {:top_level, :websocket, %{top_level: fallback, nested: fallback},
+                expected_failed_response(id: "resp_non_map_top_level")},
+               {:nested, :sse, %{top_level: :absent, nested: fallback},
+                expected_failed_response(id: "resp_non_map_nested")},
+               {:nested, :websocket, %{top_level: :absent, nested: fallback},
+                expected_failed_response(id: "resp_non_map_nested")}
              ]
     end
   end
@@ -427,7 +431,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert state.max_seen == 0
   end
 
-  test "public failed-envelope repair preserves siblings, repairs response, and is idempotent" do
+  test "public failed-envelope repair projects exact safe fields and is idempotent" do
     terminal = %{
       "type" => "response.failed",
       "headers" => %{
@@ -435,33 +439,127 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
         "x-provider-debug" => "provider-header-sentinel"
       },
       "sequence_number" => 7,
-      "ordinary_sibling" => %{"kept" => true},
+      "code" => "flat_code_sentinel",
+      "message" => "flat message sentinel",
+      "param" => "flat.param.sentinel",
+      "debug" => %{"trace" => "debug-sentinel"},
+      "prompt" => "prompt-sentinel",
+      "ordinary_sibling" => %{"credential" => "ordinary-sibling-sentinel"},
       "error" => %{
-        "code" => "same_explicit_code",
-        "type" => "same_explicit_code",
-        "message" => "provider message sentinel"
+        "code" => "top_safe_code",
+        "type" => "top_provider_type",
+        "message" => "top provider message",
+        "custom" => "top-error-sentinel"
       },
-      "response" => "not-a-map"
+      "response" => %{
+        "id" => "resp_safe_123",
+        "created_at" => 123,
+        "status" => "inconsistent",
+        "error" => %{
+          "code" => "nested_safe_code",
+          "type" => "nested_provider_type",
+          "message" => "nested provider message",
+          "custom" => "nested-error-sentinel"
+        },
+        "incomplete_details" => %{
+          "reason" => "content_filter",
+          "provider_detail" => "incomplete-detail-sentinel"
+        },
+        "model" => "provider-model-sentinel",
+        "object" => "provider-object-sentinel",
+        "output" => [%{"type" => "message", "content" => "output-sentinel"}],
+        "output_text" => "output-text-sentinel",
+        "instructions" => "instructions-sentinel",
+        "metadata" => %{"credential" => "metadata-sentinel"},
+        "parallel_tool_calls" => true,
+        "tool_choice" => %{"type" => "provider-tool-choice"},
+        "tools" => [%{"name" => "tool-sentinel"}],
+        "usage" => %{
+          "input_tokens" => 11,
+          "input_tokens_details" => %{
+            "cache_write_tokens" => 2,
+            "cached_tokens" => 3,
+            "provider_cache_field" => 4
+          },
+          "output_tokens" => 5,
+          "output_tokens_details" => %{
+            "reasoning_tokens" => 4,
+            "provider_reasoning_field" => 6
+          },
+          "total_tokens" => 16,
+          "provider_usage_field" => "usage-sentinel"
+        },
+        "temperature" => 0.7,
+        "top_p" => 0.9,
+        "prompt" => "response-prompt-sentinel",
+        "user" => "response-user-sentinel",
+        "safety_identifier" => "response-safety-sentinel",
+        "service_tier" => "response-tier-sentinel",
+        "ordinary_response_sibling" => %{"credential" => "response-sibling-sentinel"}
+      }
     }
 
     expected = %{
       "type" => "response.failed",
       "sequence_number" => 7,
-      "ordinary_sibling" => %{"kept" => true},
       "error" => %{
-        "code" => "same_explicit_code",
+        "code" => "top_safe_code",
         "type" => "server_error",
         "message" => "upstream request failed"
       },
-      "response" => %{"status" => "failed"}
+      "response" =>
+        expected_failed_response(
+          id: "resp_safe_123",
+          code: "nested_safe_code",
+          incomplete_details: %{"reason" => "content_filter"},
+          usage: %{
+            "input_tokens" => 11,
+            "input_tokens_details" => %{
+              "cache_write_tokens" => 2,
+              "cached_tokens" => 3
+            },
+            "output_tokens" => 5,
+            "output_tokens_details" => %{"reasoning_tokens" => 4},
+            "total_tokens" => 16
+          }
+        )
     }
 
     for transport <- [:sse, :websocket] do
       {wire, decoded} = normalize_public_wire(transport, terminal)
       assert decoded == expected
-      refute wire =~ "provider-secret-sentinel"
-      refute wire =~ "provider-header-sentinel"
-      refute wire =~ "provider message sentinel"
+
+      for sentinel <- [
+            "provider-secret-sentinel",
+            "provider-header-sentinel",
+            "flat_code_sentinel",
+            "flat message sentinel",
+            "flat.param.sentinel",
+            "debug-sentinel",
+            "prompt-sentinel",
+            "ordinary-sibling-sentinel",
+            "top provider message",
+            "top-error-sentinel",
+            "nested provider message",
+            "nested-error-sentinel",
+            "incomplete-detail-sentinel",
+            "provider-model-sentinel",
+            "provider-object-sentinel",
+            "output-sentinel",
+            "output-text-sentinel",
+            "instructions-sentinel",
+            "metadata-sentinel",
+            "provider-tool-choice",
+            "tool-sentinel",
+            "usage-sentinel",
+            "response-prompt-sentinel",
+            "response-user-sentinel",
+            "response-safety-sentinel",
+            "response-tier-sentinel",
+            "response-sibling-sentinel"
+          ] do
+        refute wire =~ sentinel
+      end
 
       {_wire, twice} = normalize_public_wire(transport, decoded)
       assert twice == expected
@@ -503,13 +601,116 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
                "message" => "upstream request failed"
              }
 
-      assert decoded["response"]["id"] == "resp_distinct_codes"
-      assert decoded["response"]["ordinary_response_sibling"] == %{"kept" => true}
-      assert decoded["response"]["status"] == "failed"
+      assert decoded["response"] ==
+               expected_failed_response(id: "resp_distinct_codes", code: "nested_safe_code")
+
       refute wire =~ "top_provider_type"
       refute wire =~ "nested_provider_type"
       refute wire =~ "top provider message"
       refute wire =~ "nested provider message"
+    end
+  end
+
+  test "public failed-envelope repair synthesizes the complete response for absent and non-map sources" do
+    for response <- [:absent, nil, "scalar", ["list"]] do
+      terminal =
+        %{"type" => "response.failed"}
+        |> then(fn terminal ->
+          if response == :absent, do: terminal, else: Map.put(terminal, "response", response)
+        end)
+
+      for transport <- [:sse, :websocket] do
+        {_wire, decoded} = normalize_public_wire(transport, terminal)
+
+        assert decoded == %{
+                 "type" => "response.failed",
+                 "sequence_number" => 0,
+                 "response" => expected_failed_response()
+               }
+      end
+    end
+  end
+
+  test "public failed-envelope repair validates ids, incomplete reasons, and usage leaves" do
+    max_safe_integer = 9_007_199_254_740_991
+
+    cases = [
+      {%{}, expected_failed_response()},
+      {%{"id" => "resp_valid-id_9"}, expected_failed_response(id: "resp_valid-id_9")},
+      {%{"id" => "invalid"}, expected_failed_response()},
+      {%{"id" => "resp_" <> String.duplicate("a", 251)}, expected_failed_response()},
+      {%{"incomplete_details" => %{"reason" => "max_output_tokens", "extra" => true}},
+       expected_failed_response(incomplete_details: %{"reason" => "max_output_tokens"})},
+      {%{"incomplete_details" => %{"reason" => "content_filter"}},
+       expected_failed_response(incomplete_details: %{"reason" => "content_filter"})},
+      {%{"incomplete_details" => %{"reason" => "other"}}, expected_failed_response()},
+      {%{"usage" => "invalid"}, expected_failed_response()},
+      {%{
+         "usage" => %{
+           "input_tokens" => 8,
+           "input_tokens_details" => %{"cached_tokens" => 2},
+           "output_tokens" => 5
+         }
+       },
+       expected_failed_response(
+         usage: %{
+           "input_tokens" => 8,
+           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 2},
+           "output_tokens" => 5,
+           "output_tokens_details" => %{"reasoning_tokens" => 0},
+           "total_tokens" => 13
+         }
+       )},
+      {%{
+         "usage" => %{
+           "input_tokens" => -1,
+           "input_tokens_details" => %{
+             "cache_write_tokens" => 1.5,
+             "cached_tokens" => max_safe_integer + 1
+           },
+           "output_tokens" => 7,
+           "output_tokens_details" => %{"reasoning_tokens" => "invalid"},
+           "total_tokens" => -1,
+           "unknown" => "usage-unknown-sentinel"
+         }
+       },
+       expected_failed_response(
+         usage: %{
+           "input_tokens" => 0,
+           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 0},
+           "output_tokens" => 7,
+           "output_tokens_details" => %{"reasoning_tokens" => 0},
+           "total_tokens" => 7
+         }
+       )},
+      {%{
+         "usage" => %{
+           "input_tokens" => max_safe_integer,
+           "output_tokens" => max_safe_integer,
+           "total_tokens" => nil
+         }
+       },
+       expected_failed_response(
+         usage: %{
+           "input_tokens" => max_safe_integer,
+           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 0},
+           "output_tokens" => max_safe_integer,
+           "output_tokens_details" => %{"reasoning_tokens" => 0},
+           "total_tokens" => max_safe_integer
+         }
+       )}
+    ]
+
+    for {response, expected} <- cases,
+        transport <- [:sse, :websocket] do
+      {wire, decoded} =
+        normalize_public_wire(transport, %{
+          "type" => "response.failed",
+          "response" => response
+        })
+
+      assert decoded["response"] == expected
+      refute wire =~ "usage-unknown-sentinel"
     end
   end
 
@@ -631,7 +832,8 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
              "code" => "upstream_error"
            }
 
-    refute Map.has_key?(decoded["response"], "error")
+    assert decoded["response"] ==
+             expected_failed_response(id: "resp_top_map_error")
 
     for sentinel <- [top_message, top_type, top_param, top_extra] do
       refute wire =~ sentinel
@@ -670,15 +872,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     decoded = Jason.decode!(wire)
 
     assert decoded == %{
-             "response" => %{
-               "error" => %{
-                 "message" => "upstream request failed",
-                 "type" => "server_error",
-                 "code" => "upstream_error"
-               },
-               "id" => "resp_nested_missing_code",
-               "status" => "failed"
-             },
+             "response" => expected_failed_response(id: "resp_nested_missing_code"),
              "sequence_number" => 0,
              "type" => "response.failed"
            }
@@ -740,6 +934,32 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       )
 
     {wire, Jason.decode!(wire)}
+  end
+
+  defp expected_failed_response(overrides \\ []) do
+    %{
+      "id" => Keyword.get(overrides, :id, "resp_failed"),
+      "created_at" => 0,
+      "status" => "failed",
+      "error" => %{
+        "code" => Keyword.get(overrides, :code, "upstream_error"),
+        "message" => "upstream request failed",
+        "type" => "server_error"
+      },
+      "incomplete_details" => Keyword.get(overrides, :incomplete_details),
+      "model" => "unknown",
+      "object" => "response",
+      "output" => [],
+      "output_text" => "",
+      "instructions" => nil,
+      "metadata" => nil,
+      "parallel_tool_calls" => false,
+      "tool_choice" => "auto",
+      "tools" => [],
+      "usage" => Keyword.get(overrides, :usage),
+      "temperature" => nil,
+      "top_p" => nil
+    }
   end
 
   defp malformed_terminal(:top_level, error) do

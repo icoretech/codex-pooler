@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   @max_safe_integer 9_007_199_254_740_991
 
@@ -85,6 +86,97 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
     File.write!(Path.join(probe_dir, "pre-output-failure.sse"), pre_output)
     File.write!(Path.join(probe_dir, "post-output-failure.sse"), post_output)
     File.write!(Path.join(probe_dir, "invalid-sequence.sse"), invalid_sequence)
+
+    relayed_source =
+      sse_event("response.failed", %{
+        "type" => "response.failed",
+        "sequence_number" => 9,
+        "headers" => %{"authorization" => "Bearer relayed-header-sentinel"},
+        "ordinary_sibling" => %{"credential" => "relayed-event-sentinel"},
+        "error" => %{
+          "code" => "top_relayed_code",
+          "message" => "top relayed message sentinel",
+          "type" => "top_relayed_type"
+        },
+        "response" => %{
+          "id" => "resp_relayed_failed",
+          "status" => "failed",
+          "error" => %{
+            "code" => "nested_relayed_code",
+            "message" => "nested relayed message sentinel",
+            "type" => "nested_relayed_type"
+          },
+          "output" => [%{"content" => "relayed-output-sentinel"}],
+          "usage" => %{
+            "input_tokens" => 7,
+            "input_tokens_details" => %{
+              "cache_write_tokens" => 1,
+              "cached_tokens" => 2,
+              "unknown" => "relayed-usage-detail-sentinel"
+            },
+            "output_tokens" => 3,
+            "output_tokens_details" => %{
+              "reasoning_tokens" => 2,
+              "unknown" => "relayed-usage-output-detail-sentinel"
+            },
+            "total_tokens" => 10,
+            "unknown" => "relayed-usage-sentinel"
+          },
+          "ordinary_response_sibling" => %{"credential" => "relayed-response-sentinel"}
+        }
+      })
+
+    assert {relayed_failed, _state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(
+               relayed_source,
+               StreamProtocol.public_openai_responses_stream_state()
+             )
+
+    assert [relayed_event] = sse_events(relayed_failed)
+
+    assert relayed_event == %{
+             "type" => "response.failed",
+             "sequence_number" => 9,
+             "error" => %{
+               "code" => "top_relayed_code",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             },
+             "response" => %{
+               "id" => "resp_relayed_failed",
+               "created_at" => 0,
+               "status" => "failed",
+               "error" => %{
+                 "code" => "nested_relayed_code",
+                 "message" => "upstream request failed",
+                 "type" => "server_error"
+               },
+               "incomplete_details" => nil,
+               "model" => "unknown",
+               "object" => "response",
+               "output" => [],
+               "output_text" => "",
+               "instructions" => nil,
+               "metadata" => nil,
+               "parallel_tool_calls" => false,
+               "tool_choice" => "auto",
+               "tools" => [],
+               "usage" => %{
+                 "input_tokens" => 7,
+                 "input_tokens_details" => %{
+                   "cache_write_tokens" => 1,
+                   "cached_tokens" => 2
+                 },
+                 "output_tokens" => 3,
+                 "output_tokens_details" => %{"reasoning_tokens" => 2},
+                 "total_tokens" => 10
+               },
+               "temperature" => nil,
+               "top_p" => nil
+             }
+           }
+
+    File.write!(Path.join(probe_dir, "relayed-failed.sse"), relayed_failed)
   end
 
   defp update_terminal(stream, update) do

@@ -40,15 +40,53 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
          "authorization" => "Bearer provider-secret-sentinel",
          "x-provider-debug" => "provider-header-sentinel"
        },
+       "code" => "flat-code-sentinel",
+       "message" => "flat-message-sentinel",
+       "param" => "flat.param.sentinel",
+       "debug" => %{"credential" => "event-debug-sentinel"},
+       "prompt" => "event-prompt-sentinel",
        "response" => %{
          "id" => "resp_terminal_failed",
+         "created_at" => 123,
          "status" => "failed",
          "error" => %{
            "message" => "synthetic upstream detail",
            "type" => "provider_type_must_not_become_public_code"
-         }
+         },
+         "incomplete_details" => %{"reason" => "content_filter", "extra" => true},
+         "model" => "provider-model-sentinel",
+         "object" => "provider-object-sentinel",
+         "output" => [%{"content" => "response-output-sentinel"}],
+         "output_text" => "response-output-text-sentinel",
+         "instructions" => "response-instructions-sentinel",
+         "metadata" => %{"credential" => "response-metadata-sentinel"},
+         "parallel_tool_calls" => true,
+         "tool_choice" => %{"type" => "provider-tool-choice"},
+         "tools" => [%{"name" => "provider-tool-sentinel"}],
+         "usage" => %{
+           "input_tokens" => 9,
+           "input_tokens_details" => %{
+             "cache_write_tokens" => 1,
+             "cached_tokens" => 2,
+             "unknown" => "usage-detail-sentinel"
+           },
+           "output_tokens" => 4,
+           "output_tokens_details" => %{
+             "reasoning_tokens" => 3,
+             "unknown" => "usage-output-detail-sentinel"
+           },
+           "total_tokens" => 13,
+           "unknown" => "usage-sentinel"
+         },
+         "temperature" => 0.5,
+         "top_p" => 0.8,
+         "prompt" => "response-prompt-sentinel",
+         "user" => "response-user-sentinel",
+         "safety_identifier" => "response-safety-sentinel",
+         "service_tier" => "response-tier-sentinel",
+         "ordinary_response_sibling" => %{"credential" => "response-sibling-sentinel"}
        },
-       "ordinary_sibling" => %{"kept" => true}
+       "ordinary_sibling" => %{"credential" => "event-sibling-sentinel"}
      }, "upstream_error"},
     {:typeless_detail, %{"detail" => "synthetic upstream detail"}, "upstream_terminal_failure"}
   ]
@@ -180,6 +218,11 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       assert terminal_error_code(terminal) == post_terminal_error_code(shape, expected_code)
       refute response.resp_body =~ "synthetic upstream detail"
+
+      if shape == :failed_without_nested_code do
+        assert terminal == expected_failed_terminal()
+        assert_hostile_failed_sentinels_absent(response.resp_body)
+      end
     end
   end
 
@@ -201,22 +244,8 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
              "unexpected websocket terminal for #{shape}: #{inspect(terminal)}"
 
       if shape == :failed_without_nested_code do
-        assert terminal == %{
-                 "response" => %{
-                   "error" => %{
-                     "code" => "upstream_error",
-                     "message" => "upstream request failed",
-                     "type" => "server_error"
-                   },
-                   "id" => "resp_terminal_failed",
-                   "status" => "failed"
-                 },
-                 "ordinary_sibling" => %{"kept" => true},
-                 "sequence_number" => 0,
-                 "type" => "response.failed"
-               }
-
-        refute Map.has_key?(terminal, "headers")
+        assert terminal == expected_failed_terminal()
+        assert_hostile_failed_sentinels_absent(Jason.encode!(terminal))
       end
     end
   end
@@ -311,6 +340,74 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     do: "upstream_error"
 
   defp post_terminal_error_code(_shape, shared_code), do: shared_code
+
+  defp expected_failed_terminal do
+    %{
+      "type" => "response.failed",
+      "sequence_number" => 0,
+      "response" => %{
+        "id" => "resp_terminal_failed",
+        "created_at" => 0,
+        "status" => "failed",
+        "error" => %{
+          "code" => "upstream_error",
+          "message" => "upstream request failed",
+          "type" => "server_error"
+        },
+        "incomplete_details" => %{"reason" => "content_filter"},
+        "model" => "unknown",
+        "object" => "response",
+        "output" => [],
+        "output_text" => "",
+        "instructions" => nil,
+        "metadata" => nil,
+        "parallel_tool_calls" => false,
+        "tool_choice" => "auto",
+        "tools" => [],
+        "usage" => %{
+          "input_tokens" => 9,
+          "input_tokens_details" => %{"cache_write_tokens" => 1, "cached_tokens" => 2},
+          "output_tokens" => 4,
+          "output_tokens_details" => %{"reasoning_tokens" => 3},
+          "total_tokens" => 13
+        },
+        "temperature" => nil,
+        "top_p" => nil
+      }
+    }
+  end
+
+  defp assert_hostile_failed_sentinels_absent(wire) do
+    for sentinel <- [
+          "provider-secret-sentinel",
+          "provider-header-sentinel",
+          "flat-code-sentinel",
+          "flat-message-sentinel",
+          "flat.param.sentinel",
+          "event-debug-sentinel",
+          "event-prompt-sentinel",
+          "event-sibling-sentinel",
+          "provider_type_must_not_become_public_code",
+          "provider-model-sentinel",
+          "provider-object-sentinel",
+          "response-output-sentinel",
+          "response-output-text-sentinel",
+          "response-instructions-sentinel",
+          "response-metadata-sentinel",
+          "provider-tool-choice",
+          "provider-tool-sentinel",
+          "usage-detail-sentinel",
+          "usage-output-detail-sentinel",
+          "usage-sentinel",
+          "response-prompt-sentinel",
+          "response-user-sentinel",
+          "response-safety-sentinel",
+          "response-tier-sentinel",
+          "response-sibling-sentinel"
+        ] do
+      refute wire =~ sentinel
+    end
+  end
 
   defp cleanup_owner_sessions do
     capture_log(fn ->

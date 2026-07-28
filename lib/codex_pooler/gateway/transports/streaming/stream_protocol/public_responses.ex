@@ -69,6 +69,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     ~s("type":"error"),
     ~s("type": "error")
   ]
+  @max_safe_integer 9_007_199_254_740_991
+  @failed_response_id_pattern ~r/^resp_[A-Za-z0-9_-]+$/
+
   @spec normalize_data(binary(), state()) :: {binary(), state()}
   def normalize_data(data, state) when is_binary(data) do
     state = record_source_chunk(state, data)
@@ -267,15 +270,30 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
+    source_type = effective_source_public_type(event_type, decoded)
+    source_terminal_outcome = source_terminal_outcome(source_type, decoded)
     decoded = normalize_matching_terminal_errors(event_type, decoded)
 
     case PublicResponsesSequence.public_shape(event_type, decoded) do
       {:ok, type, decoded} ->
         decoded = normalize_public_event(type, decoded)
-        normalize_public_block(type, decoded, state)
+
+        if type in ["response.completed", "response.failed", "response.incomplete", "error"] do
+          normalize_public_terminal_block(type, decoded, source_terminal_outcome, state)
+        else
+          normalize_public_block(type, decoded, state)
+        end
 
       :drop ->
         {[], state}
+    end
+  end
+
+  defp effective_source_public_type(event_type, %{} = decoded) do
+    data_type = clean_string(Map.get(decoded, "type"))
+
+    if public_types_agree?(event_type, data_type) do
+      event_type || data_type
     end
   end
 
@@ -299,14 +317,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {block, if(emitted?, do: record_item_done(state), else: state)}
   end
 
-  defp normalize_public_block(type, decoded, state)
-       when type in ["response.completed", "response.failed", "response.incomplete", "error"] do
-    {prefix, state} = terminal_prefix(type, decoded, state)
-    {terminal, state, emitted?} = emit_public_sse(type, decoded, state)
-    state = if emitted?, do: record_terminal(state, type, decoded), else: state
-    {[prefix, terminal], state}
-  end
-
   defp normalize_public_block(type, decoded, state) when is_binary(type) do
     if codex_public_event?(type) do
       {[], state}
@@ -317,6 +327,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_public_block(_type, _decoded, state), do: {[], state}
+
+  defp normalize_public_terminal_block(type, decoded, source_terminal_outcome, state) do
+    {prefix, state} = terminal_prefix(type, decoded, state)
+    {terminal, state, emitted?} = emit_public_sse(type, decoded, state)
+
+    state =
+      if emitted?,
+        do: record_terminal(state, type, decoded, source_terminal_outcome),
+        else: state
+
+    {[prefix, terminal], state}
+  end
 
   defp terminal_prefix(type, _decoded, %{created?: false, text_delta?: false} = state)
        when type in ["response.failed", "response.incomplete", "error"],
@@ -436,11 +458,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         _value -> %{}
       end
 
-    decoded
-    |> Map.drop(["headers"])
-    |> Map.put("type", "response.failed")
-    |> normalize_present_error()
-    |> Map.put("response", response |> Map.put("status", "failed") |> normalize_present_error())
+    event = %{
+      "type" => "response.failed",
+      "response" => project_failed_response(response)
+    }
+
+    event =
+      case Map.fetch(decoded, "sequence_number") do
+        {:ok, sequence_number} -> Map.put(event, "sequence_number", sequence_number)
+        :error -> event
+      end
+
+    maybe_put_failed_top_level_error(event, decoded)
   end
 
   def normalize_terminal_errors(type, %{} = decoded)
@@ -486,13 +515,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
-  defp normalize_present_error(container) do
-    case Map.fetch(container, "error") do
-      {:ok, error} -> Map.put(container, "error", normalize_terminal_error(error))
-      :error -> container
-    end
-  end
-
   defp normalize_matching_terminal_errors(event_type, decoded) do
     if public_types_agree?(event_type, clean_string(Map.get(decoded, "type"))) do
       decoded = suppress_incomplete_provider_error_types(decoded)
@@ -501,6 +523,35 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       decoded
     end
   end
+
+  defp source_terminal_outcome("response.failed", %{} = decoded) do
+    nested_error =
+      case Map.get(decoded, "response") do
+        %{} = response -> Map.get(response, "error")
+        _response -> nil
+      end
+
+    classification =
+      %{"type" => "response.failed", "response" => %{}}
+      |> maybe_put_source_top_level_error(Map.get(decoded, "error"))
+      |> maybe_put_source_nested_error(nested_error)
+
+    StreamProtocol.terminal_outcome("response.failed", classification)
+  end
+
+  defp source_terminal_outcome(_event_type, _decoded), do: nil
+
+  defp maybe_put_source_top_level_error(classification, %{} = error) do
+    Map.put(classification, "error", normalize_terminal_error(error))
+  end
+
+  defp maybe_put_source_top_level_error(classification, _error), do: classification
+
+  defp maybe_put_source_nested_error(classification, %{} = error) do
+    put_in(classification, ["response", "error"], normalize_terminal_error(error))
+  end
+
+  defp maybe_put_source_nested_error(classification, _error), do: classification
 
   defp normalize_top_level_error(%{"error" => error} = decoded),
     do: Map.put(decoded, "error", normalize_terminal_error(error))
@@ -528,6 +579,97 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_terminal_error(error), do: PublicResponse.normalize_error(error, status: 502)
+
+  defp project_failed_response(response) do
+    %{
+      "id" => safe_failed_response_id(Map.get(response, "id")),
+      "created_at" => 0,
+      "status" => "failed",
+      "error" => normalize_terminal_error(Map.get(response, "error")),
+      "incomplete_details" =>
+        project_failed_incomplete_details(Map.get(response, "incomplete_details")),
+      "model" => "unknown",
+      "object" => "response",
+      "output" => [],
+      "output_text" => "",
+      "instructions" => nil,
+      "metadata" => nil,
+      "parallel_tool_calls" => false,
+      "tool_choice" => "auto",
+      "tools" => [],
+      "usage" => project_failed_usage(Map.get(response, "usage")),
+      "temperature" => nil,
+      "top_p" => nil
+    }
+  end
+
+  defp project_failed_incomplete_details(%{"reason" => reason})
+       when reason in ["max_output_tokens", "content_filter"],
+       do: %{"reason" => reason}
+
+  defp project_failed_incomplete_details(_details), do: nil
+
+  defp project_failed_usage(%{} = usage) do
+    input_details =
+      case Map.get(usage, "input_tokens_details") do
+        %{} = details -> details
+        _details -> %{}
+      end
+
+    output_details =
+      case Map.get(usage, "output_tokens_details") do
+        %{} = details -> details
+        _details -> %{}
+      end
+
+    input_tokens = bounded_usage_integer(Map.get(usage, "input_tokens"))
+    output_tokens = bounded_usage_integer(Map.get(usage, "output_tokens"))
+
+    total_tokens =
+      case Map.get(usage, "total_tokens") do
+        value when is_integer(value) and value >= 0 and value <= @max_safe_integer ->
+          value
+
+        _value ->
+          min(input_tokens + output_tokens, @max_safe_integer)
+      end
+
+    %{
+      "input_tokens" => input_tokens,
+      "input_tokens_details" => %{
+        "cache_write_tokens" =>
+          bounded_usage_integer(Map.get(input_details, "cache_write_tokens")),
+        "cached_tokens" => bounded_usage_integer(Map.get(input_details, "cached_tokens"))
+      },
+      "output_tokens" => output_tokens,
+      "output_tokens_details" => %{
+        "reasoning_tokens" => bounded_usage_integer(Map.get(output_details, "reasoning_tokens"))
+      },
+      "total_tokens" => total_tokens
+    }
+  end
+
+  defp project_failed_usage(_usage), do: nil
+
+  defp safe_failed_response_id(value)
+       when is_binary(value) and byte_size(value) >= 1 and byte_size(value) <= 255 do
+    if Regex.match?(@failed_response_id_pattern, value), do: value, else: "resp_failed"
+  end
+
+  defp safe_failed_response_id(_value), do: "resp_failed"
+
+  defp bounded_usage_integer(value)
+       when is_integer(value) and value >= 0 and value <= @max_safe_integer,
+       do: value
+
+  defp bounded_usage_integer(_value), do: 0
+
+  defp maybe_put_failed_top_level_error(event, source) do
+    case Map.fetch(source, "error") do
+      {:ok, error} -> Map.put(event, "error", normalize_terminal_error(error))
+      :error -> event
+    end
+  end
 
   defp normalize_terminal_output_items(%{"response" => %{} = response} = decoded) do
     Map.put(decoded, "response", normalize_response_output_items(response))
@@ -665,7 +807,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp record_terminal(state, type, decoded) do
-    case StreamProtocol.terminal_outcome(type, decoded) do
+    record_terminal(state, type, decoded, nil)
+  end
+
+  defp record_terminal(state, type, decoded, source_terminal_outcome) do
+    case source_terminal_outcome || StreamProtocol.terminal_outcome(type, decoded) do
       {:ok, %{kind: kind} = outcome} ->
         state
         |> Map.put(:terminal_kind, kind)

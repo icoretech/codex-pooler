@@ -4891,7 +4891,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
-  test "POST /v1/responses streaming fails oversized failure-coded response.incomplete",
+  test "POST /v1/responses streaming projects an unsupported oversized incomplete reason to nil",
        %{conn: conn} do
     terminal_padding = String.duplicate("oversized failed incomplete output ", 4_000)
 
@@ -4948,8 +4948,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert data["response"]["status"] == "failed"
     assert data["error"]["code"] == "context_length_exceeded"
 
-    assert get_in(data, ["response", "incomplete_details", "reason"]) ==
-             "context_length_exceeded"
+    assert is_nil(data["response"]["incomplete_details"])
 
     refute conn.resp_body =~ "upstream_stream_error"
 

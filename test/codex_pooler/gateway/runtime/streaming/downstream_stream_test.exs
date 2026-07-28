@@ -669,7 +669,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert failure.event_type == "response.failed"
     end
 
-    test "keeps a top-level public Responses terminal error independent from the response" do
+    test "keeps a top-level public Responses terminal error independent from the nested fallback" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -701,8 +701,154 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.event_type == "response.failed"
 
-      refute Map.has_key?(data["response"], "error")
+      assert data["response"]["error"] == %{
+               "code" => "upstream_error",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             }
+
       assert failure.code == "context_length_exceeded"
+    end
+
+    test "keeps a headerless top-level public Responses terminal error independent from the nested fallback" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      failed =
+        "data: " <>
+          Jason.encode!(%{
+            "type" => "response.failed",
+            "response" => %{
+              "id" => "resp_public_failed_headerless_top_level_error",
+              "status" => "failed"
+            },
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => "context_length_exceeded"
+            }
+          }) <> "\n\n"
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(failed, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
+
+      assert data == %{
+               "type" => "response.failed",
+               "sequence_number" => 0,
+               "error" => %{
+                 "code" => "context_length_exceeded",
+                 "message" => "upstream request failed",
+                 "type" => "server_error"
+               },
+               "response" => %{
+                 "id" => "resp_public_failed_headerless_top_level_error",
+                 "created_at" => 0,
+                 "status" => "failed",
+                 "error" => %{
+                   "code" => "upstream_error",
+                   "message" => "upstream request failed",
+                   "type" => "server_error"
+                 },
+                 "incomplete_details" => nil,
+                 "model" => "unknown",
+                 "object" => "response",
+                 "output" => [],
+                 "output_text" => "",
+                 "instructions" => nil,
+                 "metadata" => nil,
+                 "parallel_tool_calls" => false,
+                 "tool_choice" => "auto",
+                 "tools" => [],
+                 "usage" => nil,
+                 "temperature" => nil,
+                 "top_p" => nil
+               }
+             }
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.code == "context_length_exceeded"
+      assert failure.upstream_code == "context_length_exceeded"
+    end
+
+    test "keeps nested-only public Responses failure classification nested-first" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      failed =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_public_failed_nested_only",
+            "status" => "failed",
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => "nested_safe_code"
+            }
+          }
+        })
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(failed, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
+      refute Map.has_key?(data, "error")
+      assert data["response"]["error"]["code"] == "nested_safe_code"
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.code == "nested_safe_code"
+      assert failure.upstream_code == "nested_safe_code"
+    end
+
+    test "keeps genuine dual public Responses failure classification nested-first" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_responses_stream: true},
+          "/v1/responses",
+          %{"stream" => true}
+        )
+
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      failed =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "error" => %{
+            "type" => "invalid_request_error",
+            "code" => "top_safe_code"
+          },
+          "response" => %{
+            "id" => "resp_public_failed_dual",
+            "status" => "failed",
+            "error" => %{
+              "type" => "invalid_request_error",
+              "code" => "nested_safe_code"
+            }
+          }
+        })
+
+      assert {chunk, state} =
+               DownstreamStream.normalize_data(failed, "/v1/responses", opts, state)
+
+      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
+      assert data["error"]["code"] == "top_safe_code"
+      assert data["response"]["error"]["code"] == "nested_safe_code"
+
+      assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
+      assert failure.code == "nested_safe_code"
+      assert failure.upstream_code == "nested_safe_code"
     end
 
     test "synthesizes a sanitized terminal failure without a public response object" do

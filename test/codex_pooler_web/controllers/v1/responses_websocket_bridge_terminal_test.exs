@@ -34,13 +34,35 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
          "authorization" => "Bearer bridge-provider-secret-sentinel",
          "x-provider-debug" => "bridge-provider-header-sentinel"
        },
+       "code" => "bridge-flat-code-sentinel",
+       "message" => "bridge-flat-message-sentinel",
+       "param" => "bridge.flat.param.sentinel",
+       "ordinary_sibling" => %{"credential" => "bridge-event-sibling-sentinel"},
        "response" => %{
          "id" => "resp_terminal_failed",
          "status" => "failed",
          "error" => %{
            "type" => "bridge_provider_type_must_not_become_public_code",
            "message" => "synthetic terminal failure"
-         }
+         },
+         "output" => [%{"content" => "bridge-output-sentinel"}],
+         "metadata" => %{"credential" => "bridge-metadata-sentinel"},
+         "usage" => %{
+           "input_tokens" => 6,
+           "input_tokens_details" => %{
+             "cached_tokens" => 2,
+             "unknown" => "bridge-usage-detail-sentinel"
+           },
+           "output_tokens" => 4,
+           "output_tokens_details" => %{
+             "reasoning_tokens" => 1,
+             "unknown" => "bridge-usage-output-detail-sentinel"
+           },
+           "total_tokens" => 10,
+           "unknown" => "bridge-usage-sentinel"
+         },
+         "user" => "bridge-user-sentinel",
+         "ordinary_response_sibling" => %{"credential" => "bridge-response-sibling-sentinel"}
        }
      }, "response.failed"},
     {"response.incomplete",
@@ -297,12 +319,27 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
             _event -> nil
           end)
 
-        assert failed["response"]["error"]["code"] == "upstream_error"
-        refute Map.has_key?(failed, "headers")
-        refute response.resp_body =~ "bridge_provider_type_must_not_become_public_code"
-        refute response.resp_body =~ "bridge-provider-secret-sentinel"
-        refute response.resp_body =~ "bridge-provider-header-sentinel"
-        refute response.resp_body =~ "synthetic terminal failure"
+        assert failed == expected_relayed_failed_terminal()
+
+        for sentinel <- [
+              "bridge_provider_type_must_not_become_public_code",
+              "bridge-provider-secret-sentinel",
+              "bridge-provider-header-sentinel",
+              "synthetic terminal failure",
+              "bridge-flat-code-sentinel",
+              "bridge-flat-message-sentinel",
+              "bridge.flat.param.sentinel",
+              "bridge-event-sibling-sentinel",
+              "bridge-output-sentinel",
+              "bridge-metadata-sentinel",
+              "bridge-usage-detail-sentinel",
+              "bridge-usage-output-detail-sentinel",
+              "bridge-usage-sentinel",
+              "bridge-user-sentinel",
+              "bridge-response-sibling-sentinel"
+            ] do
+          refute response.resp_body =~ sentinel
+        end
       end
 
       assert [upstream_request] = FakeUpstream.requests(upstream)
@@ -577,6 +614,42 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
         _missing -> nil
       end
     end)
+  end
+
+  defp expected_relayed_failed_terminal do
+    %{
+      "type" => "response.failed",
+      "sequence_number" => 0,
+      "response" => %{
+        "id" => "resp_terminal_failed",
+        "created_at" => 0,
+        "status" => "failed",
+        "error" => %{
+          "code" => "upstream_error",
+          "message" => "upstream request failed",
+          "type" => "server_error"
+        },
+        "incomplete_details" => nil,
+        "model" => "unknown",
+        "object" => "response",
+        "output" => [],
+        "output_text" => "",
+        "instructions" => nil,
+        "metadata" => nil,
+        "parallel_tool_calls" => false,
+        "tool_choice" => "auto",
+        "tools" => [],
+        "usage" => %{
+          "input_tokens" => 6,
+          "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 2},
+          "output_tokens" => 4,
+          "output_tokens_details" => %{"reasoning_tokens" => 1},
+          "total_tokens" => 10
+        },
+        "temperature" => nil,
+        "top_p" => nil
+      }
+    }
   end
 
   defp await_committed_turn(pool_id, attempts_left \\ 1_000)

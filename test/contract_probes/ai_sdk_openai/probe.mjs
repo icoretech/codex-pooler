@@ -7,29 +7,36 @@ import { applyOpenCodeErrorAdapter } from "./opencode_error_adapter.generated.mj
 import { parseStreamError } from "./opencode_stream_error_classifier.generated.mjs";
 
 const [mode, ssePath] = process.argv.slice(2);
-assert.ok(mode === "pre-output" || mode === "post-output");
+assert.ok(mode === "pre-output" || mode === "post-output" || mode === "relayed-failed");
 assert.ok(ssePath);
 
 const sse = await readFile(ssePath, "utf8");
 const events = parseEvents(sse);
 validateSequence(events, mode);
 const terminal = events.at(-1);
-assert.equal(terminal?.type, "error");
-assert.equal(terminal?.error?.code, "server_error");
-assert.equal(
-  terminal?.error?.message,
-  "upstream request failed: stream interrupted before terminal response event",
-);
 
-const classifiedTerminal = parseStreamError(terminal);
-assert.ok(classifiedTerminal);
-assert.equal(classifiedTerminal.type, "api_error");
-assert.equal(
-  classifiedTerminal.message,
-  "upstream request failed: stream interrupted before terminal response event",
-);
-assert.equal(classifiedTerminal.isRetryable, true);
-assert.equal(classifiedTerminal.responseBody, JSON.stringify(terminal));
+if (mode === "relayed-failed") {
+  assert.equal(terminal?.type, "response.failed");
+  assert.equal(terminal?.error?.code, "top_relayed_code");
+  assert.equal(terminal?.response?.error?.code, "nested_relayed_code");
+} else {
+  assert.equal(terminal?.type, "error");
+  assert.equal(terminal?.error?.code, "server_error");
+  assert.equal(
+    terminal?.error?.message,
+    "upstream request failed: stream interrupted before terminal response event",
+  );
+
+  const classifiedTerminal = parseStreamError(terminal);
+  assert.ok(classifiedTerminal);
+  assert.equal(classifiedTerminal.type, "api_error");
+  assert.equal(
+    classifiedTerminal.message,
+    "upstream request failed: stream interrupted before terminal response event",
+  );
+  assert.equal(classifiedTerminal.isRetryable, true);
+  assert.equal(classifiedTerminal.responseBody, JSON.stringify(terminal));
+}
 
 let fetchCount = 0;
 const requestedURLs = [];
@@ -76,7 +83,44 @@ const meaningfulTextParts = parts.filter(
   (part) => part.type === "text-delta" && typeof part.text === "string" && part.text.length > 0,
 );
 
-if (mode === "pre-output") {
+if (mode === "relayed-failed") {
+  assert.equal(callbackErrors.length, 1);
+  assert.equal(callbackErrors[0]?.name, "AI_APICallError");
+  assert.equal(thrownError, undefined);
+  assert.equal(meaningfulTextParts.length, 0);
+
+  const errorParts = parts.filter((part) => part.type === "error");
+  assert.equal(errorParts.length, 1);
+  assert.strictEqual(errorParts[0].error, callbackErrors[0]);
+  assert.equal(parts.some((part) => part.type === "finish"), false);
+
+  const data = callbackErrors[0]?.data;
+  assert.deepEqual(Object.keys(data ?? {}).sort(), ["response", "sequence_number", "type"]);
+  assert.equal(data?.type, "response.failed");
+  assert.equal(data?.sequence_number, 9);
+  assert.deepEqual(Object.keys(data?.response ?? {}).sort(), [
+    "error",
+    "incomplete_details",
+    "usage",
+  ]);
+  assert.deepEqual(Object.keys(data?.response?.error ?? {}).sort(), ["code", "message"]);
+  assert.equal(data?.response?.error?.code, "nested_relayed_code");
+  assert.equal(data?.response?.error?.message, "upstream request failed");
+  assert.deepEqual(Object.keys(data?.response?.usage ?? {}).sort(), [
+    "input_tokens",
+    "input_tokens_details",
+    "output_tokens",
+    "output_tokens_details",
+  ]);
+  assert.deepEqual(Object.keys(data?.response?.usage?.input_tokens_details ?? {}).sort(), [
+    "cache_write_tokens",
+    "cached_tokens",
+  ]);
+  assert.deepEqual(Object.keys(data?.response?.usage?.output_tokens_details ?? {}).sort(), [
+    "reasoning_tokens",
+  ]);
+  assert.equal(data?.error, undefined);
+} else if (mode === "pre-output") {
   assert.equal(callbackErrors.length, 1);
   assertAPIError(callbackErrors[0]);
   assert.equal(thrownError, undefined);
@@ -164,9 +208,18 @@ function sequenceValid(parsed, expectedMode) {
     if (sequences[index] <= sequences[index - 1]) return false;
   }
 
-  if (parsed.at(-1)?.type !== "error") return false;
   if (parsed.some((event) => event.type === "response.completed")) return false;
 
+  if (expectedMode === "relayed-failed") {
+    return (
+      sequences.length === 1 &&
+      sequences[0] === 9 &&
+      parsed[0]?.type === "response.failed" &&
+      !parsed.some((event) => event.type === "response.completed")
+    );
+  }
+
+  if (parsed.at(-1)?.type !== "error") return false;
   if (expectedMode === "pre-output") return sequences.length === 1 && sequences[0] === 0;
 
   return (
