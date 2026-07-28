@@ -137,6 +137,41 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
              )
   end
 
+  test "blank public SSE labels use the data type while nonblank mismatches remain rejected" do
+    failed =
+      failed_without_nested_code("resp_blank_label")
+      |> Map.put("prompt", "private-prompt-sentinel")
+      |> put_in(["response", "hostile_sibling"], "private-response-sentinel")
+
+    for event_line <- ["", "event:\n", "event: \t \n"] do
+      {output, state} = normalize_sse(event_line <> "data: " <> Jason.encode!(failed) <> "\n\n")
+
+      assert [%{event: "response.failed", data: decoded}] = public_events(output)
+      assert decoded["response"]["status"] == "failed"
+      assert decoded["response"]["error"]["message"] == "upstream request failed"
+      refute output =~ "private-prompt-sentinel"
+      refute output =~ "private-response-sentinel"
+      assert state.sequence.terminal_latched?
+      assert state.terminal_kind == :failed
+
+      late = sse_event("response.completed", completed("resp_late_after_blank"))
+
+      assert {"", late_state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(
+                 IO.iodata_to_binary(late),
+                 state
+               )
+
+      assert late_state.sequence == state.sequence
+      assert late_state.terminal_kind == state.terminal_kind
+    end
+
+    mismatch = "event: response.completed\ndata: " <> Jason.encode!(failed) <> "\n\n"
+    {output, state} = normalize_sse(mismatch)
+    assert output == ""
+    refute state.sequence.terminal_latched?
+  end
+
   for {value_class, malformed_error} <- @non_map_terminal_errors do
     @malformed_error malformed_error
 
@@ -174,61 +209,99 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
-  @tag :task_1_fix_red
-  test "oversized separator-free public POST terminals use structural normalization" do
-    valid_cases = [
-      {"response.done", done("resp_oversized_done")},
-      {"response.completed", completed("resp_oversized_completed")}
-    ]
+  test "public POST emits one bounded local failure at byte 65,537 and drops the source tail" do
+    limit = StreamProtocol.max_incomplete_sse_block_bytes()
 
-    for {event_type, decoded} <- valid_cases do
-      {first, second} = oversized_separator_free_sse(event_type, decoded)
+    for marker_position <- [:early, :late] do
+      stream = oversized_incomplete_sse(marker_position)
+      first = binary_part(stream, 0, limit + 1)
+      rest = binary_part(stream, limit + 1, byte_size(stream) - limit - 1)
       state = StreamProtocol.public_openai_responses_stream_state()
 
-      assert {first_output, state} =
+      assert {"", exact_state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(
+                 binary_part(stream, 0, limit),
+                 state
+               )
+
+      assert byte_size(exact_state.buffer) == limit
+      refute exact_state.sequence.terminal_latched?
+
+      assert {output, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
 
-      assert byte_size(first_output) == 0
-      refute state.sequence.terminal_latched?
-
-      assert {second_output, state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
-
-      terminals = Enum.filter(public_events(second_output), &terminal_event?/1)
-      assert Enum.map(terminals, & &1.event) == ["response.completed"]
+      assert [%{event: "error", data: decoded}] = public_events(output)
+      assert decoded["error"]["code"] == "server_error"
+      assert decoded["sequence_number"] == 0
+      assert byte_size(output) < 1_024
+      refute output =~ "private-oversized-sentinel"
+      assert state.buffer == ""
+      refute state.passthrough?
       assert state.sequence.terminal_latched?
-      assert state.terminal_kind == :completed
+      assert state.terminal_kind == :failed
+      assert state.summary.synthetic_terminal_sent
+
+      late =
+        IO.iodata_to_binary([rest, "\n\n", sse_event("response.completed", completed("late"))])
+
+      assert {"", late_state} =
+               StreamProtocol.normalize_public_openai_responses_sse_data(late, state)
+
+      assert late_state.sequence == state.sequence
+      assert late_state.terminal_kind == state.terminal_kind
     end
   end
 
-  @tag :task_1_fix_red
-  test "oversized separator-free malformed public POST terminals stay malformed" do
-    malformed_cases = [
-      {"response.completed",
-       %{
-         "type" => "response.completed",
-         "response" => %{"id" => "resp_oversized_conflict", "status" => "failed"}
-       }},
-      {"response.done", completed("resp_oversized_mismatch")},
-      {"response.completed", %{"type" => "response.completed"}}
-    ]
+  test "public POST parses complete blocks before failing an oversized incomplete block" do
+    complete = response_event("response.created", nil)
+    oversized = oversized_incomplete_sse(:late)
+    oversized = binary_part(oversized, 0, StreamProtocol.max_incomplete_sse_block_bytes() + 1)
+    state = StreamProtocol.public_openai_responses_stream_state()
 
-    for {event_type, decoded} <- malformed_cases do
-      {first, second} = oversized_separator_free_sse(event_type, decoded)
-      state = StreamProtocol.public_openai_responses_stream_state()
+    assert {output, state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(
+               IO.iodata_to_binary([complete, oversized]),
+               state
+             )
 
-      assert {first_output, state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
+    assert Enum.map(public_events(output), & &1.event) == ["response.created", "error"]
+    assert state.sequence.max_seen == 1
+    assert state.sequence.terminal_latched?
+  end
 
-      assert byte_size(first_output) == 0
+  test "complete oversized public POST blocks remain normally classified" do
+    padding = String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1)
 
-      assert {second_output, state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
+    completed =
+      completed("resp_complete_oversized")
+      |> put_in(["response", "metadata"], %{"padding" => padding})
 
-      assert byte_size(second_output) == 0
-      refute state.sequence.terminal_latched?
-      assert state.terminal_kind == nil
-    end
+    {output, state} = normalize_sse(sse_event("response.completed", completed))
+
+    events = public_events(output)
+    assert Enum.map(events, & &1.event) == ["response.created", "response.completed"]
+    decoded = List.last(events).data
+    assert decoded["response"]["status"] == "completed"
+    assert state.terminal_kind == :completed
+  end
+
+  test "ordinary oversized incomplete public POST blocks fail without passthrough" do
+    state = StreamProtocol.public_openai_responses_stream_state()
+
+    source =
+      "data: " <>
+        String.duplicate("private-ordinary-oversized-sentinel", 2_100)
+
+    assert byte_size(source) > StreamProtocol.max_incomplete_sse_block_bytes()
+
+    assert {output, state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(source, state)
+
+    assert [%{event: "error", data: decoded}] = public_events(output)
+    assert decoded["sequence_number"] == 0
+    refute output =~ "private-ordinary-oversized-sentinel"
+    assert state.buffer == ""
+    assert state.sequence.terminal_latched?
   end
 
   @tag :task_1_fix_red
@@ -408,6 +481,33 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
              "sequence_number" => 0,
              "response" => Map.put(legacy, "status", "completed")
            }
+  end
+
+  test "public websocket drops invalid JSON and JSON non-objects without advancing state" do
+    invalid_frames = [
+      "{",
+      Jason.encode!("string"),
+      Jason.encode!([]),
+      Jason.encode!(42),
+      Jason.encode!(nil)
+    ]
+
+    for frame <- invalid_frames do
+      state = StreamProtocol.public_openai_responses_websocket_state()
+
+      assert {:drop, ^state} =
+               StreamProtocol.normalize_public_openai_responses_websocket_data(frame, state)
+
+      assert {:push, payload, next_state} =
+               StreamProtocol.normalize_public_openai_responses_websocket_data(
+                 Jason.encode!(response_event_map("response.created")),
+                 state
+               )
+
+      assert Jason.decode!(payload)["sequence_number"] == 0
+      assert next_state.max_seen == 0
+      refute next_state.terminal_latched?
+    end
   end
 
   test "public websocket canonicalizes direct incomplete errors before sequence agreement" do
@@ -1044,23 +1144,25 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     %{"type" => type, "error" => %{"code" => "server_error"}}
   end
 
-  defp oversized_separator_free_sse(event_type, decoded) do
-    padding = String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1_024)
-
-    decoded =
-      case Map.get(decoded, "response") do
-        %{} = response -> Map.put(decoded, "response", Map.put(response, "padding", padding))
-        _response -> Map.put(decoded, "padding", padding)
-      end
-
-    stream = IO.iodata_to_binary(["event: ", event_type, "\n", "data: ", Jason.encode!(decoded)])
-    split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
-
-    {
-      binary_part(stream, 0, split_at),
-      binary_part(stream, split_at, byte_size(stream) - split_at)
-    }
+  defp oversized_incomplete_sse(:early) do
+    IO.iodata_to_binary([
+      "event: response.failed\n",
+      ~s(data: {"type":"response.failed","private":"private-oversized-sentinel",),
+      ~s("padding":"),
+      String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1_024),
+      ~s(","response":{"id":"resp_oversized_early","status":"failed"}})
+    ])
   end
+
+  defp oversized_incomplete_sse(:late) do
+    IO.iodata_to_binary([
+      ~s(data: {"private":"private-oversized-sentinel","padding":"),
+      String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1_024),
+      ~s(","type":"response.failed","response":{"id":"resp_oversized_late","status":"failed"}})
+    ])
+  end
+
+  defp response_event_map(type), do: %{"type" => type}
 
   defp response_event(type, sequence, extra \\ %{}) do
     decoded = Map.merge(%{"type" => type}, extra)

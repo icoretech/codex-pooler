@@ -4295,6 +4295,68 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
+  test "POST /v1/responses treats whitespace event labels as absent and drops late frames", %{
+    conn: conn
+  } do
+    failed =
+      %{
+        "type" => "response.failed",
+        "prompt" => "private-responses-blank-label-sentinel",
+        "response" => %{
+          "id" => "resp_v1_blank_label",
+          "status" => "failed",
+          "hostile" => "private-response-sibling",
+          "error" => %{
+            "code" => "context_length_exceeded",
+            "message" => "private provider detail"
+          }
+        }
+      }
+
+    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+
+    late_completed =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_v1_late_completed", "status" => "completed"}
+       }}
+
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([raw_failed, late_completed], done: false))
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic blank-label Responses request",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
+    assert data["sequence_number"] == 0
+    assert data["response"]["status"] == "failed"
+    assert data["response"]["error"]["code"] == "context_length_exceeded"
+    assert data["response"]["error"]["message"] == "upstream request failed"
+    refute conn.resp_body =~ "private-responses-blank-label-sentinel"
+    refute conn.resp_body =~ "private-response-sibling"
+    refute conn.resp_body =~ "private provider detail"
+    refute conn.resp_body =~ "resp_v1_late_completed"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "context_length_exceeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "context_length_exceeded"
+  end
+
+  @tag :streaming_sequence
   test "POST /v1/responses streaming emits early top-level error as the first event", %{
     conn: conn
   } do
@@ -4808,7 +4870,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
-  test "POST /v1/responses streaming accepts oversized terminal response without trailing separator",
+  test "POST /v1/responses streaming fails an oversized incomplete terminal at byte 65,537",
        %{conn: conn} do
     terminal_padding = String.duplicate("oversized terminal output ", 4_000)
 
@@ -4869,21 +4931,31 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     events = public_sse_events(conn.resp_body)
     event_names = Enum.map(events, & &1["event"])
 
-    assert "response.completed" in event_names
-    refute "response.failed" in event_names
-    assert conn.resp_body =~ "resp_v1_large_terminal_without_separator"
+    assert event_names == ["error"]
+    assert [%{"data" => data}] = events
+    assert data["type"] == "error"
+    assert data["sequence_number"] == 0
+    assert data["error"]["code"] == "server_error"
+    refute conn.resp_body =~ "resp_v1_large_terminal_without_separator"
+    refute conn.resp_body =~ terminal_padding
     refute conn.resp_body =~ "upstream_stream_error"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.usage_status == "usage_known"
-    assert is_nil(request.last_error_code)
+    assert request.last_error_code == "upstream_stream_error"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.status == "succeeded"
+    assert attempt.status == "failed"
     assert attempt.usage_status == "usage_known"
-    assert is_nil(attempt.network_error_code)
+    assert attempt.network_error_code == "upstream_stream_error"
+
+    assert %{
+             "mode" => "normalized",
+             "synthetic_terminal_sent" => true,
+             "terminal_kind" => "failed"
+           } = attempt.response_metadata["public_openai_responses_stream"]
 
     persistence_text = inspect({request.request_metadata, attempt.response_metadata})
     refute persistence_text =~ "synthetic oversized terminal-buffer stream request"
@@ -4891,7 +4963,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
-  test "POST /v1/responses streaming projects an unsupported oversized incomplete reason to nil",
+  test "POST /v1/responses streaming hides oversized incomplete provider failure details",
        %{conn: conn} do
     terminal_padding = String.duplicate("oversized failed incomplete output ", 4_000)
 
@@ -4942,33 +5014,34 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert conn.status == 200
 
-    assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
+    assert [%{"event" => "error", "data" => data}] = public_sse_events(conn.resp_body)
 
-    assert data["type"] == "response.failed"
-    assert data["response"]["status"] == "failed"
-    assert data["error"]["code"] == "context_length_exceeded"
-
-    assert is_nil(data["response"]["incomplete_details"])
+    assert data["type"] == "error"
+    assert data["sequence_number"] == 0
+    assert data["error"]["code"] == "server_error"
 
     refute conn.resp_body =~ "upstream_stream_error"
+    refute conn.resp_body =~ "context_length_exceeded"
+    refute conn.resp_body =~ "resp_v1_large_failed_incomplete_without_separator"
+    refute conn.resp_body =~ terminal_padding
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
     assert request.status == "failed"
     assert request.usage_status == "usage_unknown"
-    assert request.last_error_code == "context_length_exceeded"
+    assert request.last_error_code == "upstream_stream_error"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
     assert attempt.usage_status == "usage_unknown"
-    assert attempt.network_error_code == "context_length_exceeded"
+    assert attempt.network_error_code == "upstream_stream_error"
 
     assert %{items: [log], total: 1} =
              RequestLogs.list(setup.pool, filters: %{request_id: request.id})
 
     assert log.status == "failed"
     assert log.usage_status == "usage_unknown"
-    assert log.denial_reason == "context_length_exceeded"
+    assert log.denial_reason == "upstream_stream_error"
     assert log.token_counts.usage_status == "usage_unknown"
     assert log.cost.status == "unpriced"
     assert is_nil(log.cost.usd)

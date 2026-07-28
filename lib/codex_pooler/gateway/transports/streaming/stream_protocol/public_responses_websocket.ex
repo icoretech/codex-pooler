@@ -34,7 +34,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         end
 
       _invalid ->
-        {:push, data, state}
+        {:drop, state}
     end
   end
 

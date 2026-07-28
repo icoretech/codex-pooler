@@ -102,9 +102,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
-  defp normalize_data_chunk(data, %{passthrough?: true} = state) do
-    normalize_passthrough_data(data, state)
-  end
+  defp normalize_data_chunk(_data, %{sequence: %{terminal_latched?: true}} = state),
+    do: {"", %{state | buffer: "", passthrough?: false}}
 
   defp normalize_data_chunk(data, state) do
     buffered_data = state.buffer <> data
@@ -114,41 +113,31 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       structurally_complete_terminal_buffer?(buffer) ->
         normalize_blocks(blocks ++ [buffer], "", state)
 
-      terminal_buffer_candidate?(buffer) and
-          StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
-        record_oversized_incomplete(byte_size(buffered_data))
-        {"", %{state | buffer: buffer}}
-
-      blocks == [] and StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
-        record_oversized_incomplete(byte_size(buffered_data))
-        {buffered_data, enter_passthrough(buffered_data, state)}
-
       StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
-        record_oversized_incomplete(byte_size(buffered_data))
-        {iodata, state} = normalize_complete_blocks(blocks, state)
-        {[iodata, buffer] |> IO.iodata_to_binary(), enter_passthrough(buffer, state)}
+        record_oversized_incomplete(byte_size(buffer))
+        fail_oversized_incomplete(blocks, state)
 
       true ->
         normalize_blocks(blocks, buffer, state)
     end
   end
 
-  defp normalize_passthrough_data(data, state) do
-    case sse_block_separator(data) do
-      {index, separator_size} ->
-        passthrough_size = index + separator_size
-        passthrough = binary_part(data, 0, passthrough_size)
-        rest = binary_part(data, passthrough_size, byte_size(data) - passthrough_size)
+  defp fail_oversized_incomplete(blocks, state) do
+    {iodata, state} =
+      normalize_complete_blocks(blocks, %{state | buffer: "", passthrough?: false})
 
-        state =
-          %{state | passthrough?: false, buffer: "", passthrough_terminal: nil}
+    if state.sequence.terminal_latched? do
+      {IO.iodata_to_binary(iodata), state}
+    else
+      {sequence_number, state} = track_synthetic_terminal_failure(state)
 
-        {normalized_rest, state} = normalize_data_chunk(rest, state)
+      terminal =
+        StreamProtocol.synthetic_public_openai_responses_error_sse(
+          :upstream_stream_error,
+          sequence_number
+        )
 
-        {[passthrough, normalized_rest] |> IO.iodata_to_binary(), state}
-
-      nil ->
-        {data, state}
+      {[iodata, terminal] |> IO.iodata_to_binary(), state}
     end
   end
 
@@ -229,12 +218,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {sequence_number, state}
   end
 
-  defp enter_passthrough(_data, state) do
-    state
-    |> then(&%{&1 | buffer: "", passthrough?: true, passthrough_terminal: nil})
-    |> mark_passthrough_seen()
-  end
-
   defp record_oversized_incomplete(bytes) do
     BufferTelemetry.record_oversized_incomplete(
       "public_openai_responses_sse",
@@ -290,6 +273,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp effective_source_public_type(event_type, %{} = decoded) do
+    event_type = StreamProtocol.normalize_sse_event_label(event_type)
     data_type = clean_string(Map.get(decoded, "type"))
 
     if public_types_agree?(event_type, data_type) do
@@ -516,6 +500,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_matching_terminal_errors(event_type, decoded) do
+    event_type = StreamProtocol.normalize_sse_event_label(event_type)
+
     if public_types_agree?(event_type, clean_string(Map.get(decoded, "type"))) do
       decoded = suppress_incomplete_provider_error_types(decoded)
       normalize_terminal_errors(event_type || clean_string(Map.get(decoded, "type")), decoded)
@@ -749,12 +735,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     update_summary(state, :relay_bytes, &(&1 + byte_size(data)))
   end
 
-  defp mark_passthrough_seen(state) do
-    state
-    |> put_summary(:mode, "passthrough")
-    |> put_summary(:passthrough_seen, true)
-  end
-
   defp reset_parser_after_terminal(state) do
     %{
       state
@@ -921,16 +901,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp codex_public_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
 
-  defp sse_block_separator(data) do
-    ["\n\n", "\r\n\r\n"]
-    |> Enum.map(fn separator -> {separator, :binary.match(data, separator)} end)
-    |> Enum.flat_map(fn
-      {separator, {index, _size}} -> [{index, byte_size(separator)}]
-      {_separator, :nomatch} -> []
-    end)
-    |> Enum.min_by(fn {index, _size} -> index end, fn -> nil end)
-  end
-
   defp stream_block_event(block) do
     data = StreamProtocol.sse_field(block, "data")
 
@@ -939,7 +909,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         do: StreamProtocol.decode_sse_data(data),
         else: StreamProtocol.decode_sse_data(block)
 
-    event_type = StreamProtocol.sse_field(block, "event")
+    event_type =
+      block
+      |> StreamProtocol.sse_field("event")
+      |> StreamProtocol.normalize_sse_event_label()
 
     {event_type, decoded}
   end

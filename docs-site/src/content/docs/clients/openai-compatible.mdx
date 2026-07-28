@@ -184,6 +184,10 @@ Streaming `/v1/responses` clients must also handle a terminal `type: "error"` SS
 
 Streaming `/v1/chat/completions` clients must separately handle a terminal `data: {"error":{...}}` chunk with nested `server_error` fields and no top-level `type`; no `[DONE]` chunk follows that terminal.
 
+For public SSE, an absent, blank, or whitespace-only `event:` label is treated as absent before the label is compared with the JSON `type`. A nonblank mismatch is still rejected. If an incomplete `POST /v1/responses` SSE block grows beyond 65,536 bytes, Codex Pooler sends one bounded sanitized `type: "error"` event, does not relay that source block, and drops later source frames.
+
+On narrow `GET /v1/responses` websocket compatibility, malformed JSON and JSON values that are not objects are ignored without consuming a sequence number or creating a local terminal. This applies to direct and accepted owner-forwarded public clients; native backend websocket behavior is unchanged.
+
 ### Relayed terminal errors
 
 When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when

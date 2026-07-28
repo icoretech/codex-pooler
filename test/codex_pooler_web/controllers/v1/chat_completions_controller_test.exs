@@ -795,6 +795,57 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert attempt.status == "failed"
   end
 
+  @tag :streaming_chat
+  test "POST /v1/chat/completions treats whitespace event labels as absent and drops late frames",
+       %{conn: conn} do
+    failed =
+      %{
+        "type" => "response.failed",
+        "prompt" => "private-chat-blank-label-sentinel",
+        "response" => %{
+          "id" => "resp_chat_blank_label",
+          "status" => "failed",
+          "error" => %{"code" => "server_error", "message" => "private provider detail"}
+        }
+      }
+
+    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+
+    late_completed =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_chat_late_completed", "status" => "completed"}
+       }}
+
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([raw_failed, late_completed], done: false))
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", chat_payload(setup) |> Map.put("stream", true))
+
+    assert conn.status == 200
+    assert [%{"error" => error}] = chat_chunks(conn.resp_body)
+    assert error["message"] == "upstream request failed"
+    assert error["code"] == "server_error"
+    refute conn.resp_body =~ "private-chat-blank-label-sentinel"
+    refute conn.resp_body =~ "private provider detail"
+    refute conn.resp_body =~ "resp_chat_late_completed"
+    refute conn.resp_body =~ "data: [DONE]"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "server_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "server_error"
+  end
+
   test "POST /v1/chat/completions streaming emits early incomplete as length finish", %{
     conn: conn
   } do

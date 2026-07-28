@@ -317,7 +317,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td>Backend Codex websocket response session</td>
       <td>Partial</td>
       <td>Partial</td>
-      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. It uses the same downstream idle and frame guardrails as backend Codex websockets.</td>
+      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. It uses the same downstream idle and frame guardrails as backend Codex websockets. Malformed JSON and JSON non-object provider frames are dropped without consuming a public sequence number or creating a local terminal, including on accepted owner-forwarded turns.</td>
     </tr>
     <tr>
       <td><code>POST /v1/chat/completions</code></td>
@@ -648,7 +648,13 @@ and legacy typeless success payloads. Public `POST /v1/responses` SSE and
 OpenAI-compatible HTTP SSE surfaces and never appear on native backend raw
 Responses streams or websocket surfaces. On `POST /v1/responses`, the
 sequence-valid synthetic `error` event uses the hybrid flat-and-nested
-`type: "error"` / `server_error` shape. A post-budget owner-drain abort emits
+`type: "error"` / `server_error` shape. Absent, blank, and whitespace-only SSE
+event labels are treated as absent before event/data type precedence; nonblank
+mismatches remain rejected. An incomplete public Responses SSE block may retain
+at most 65,536 bytes. Byte 65,537 emits one bounded sanitized `error` event,
+relays none of the overflowing source block, and latches later source frames
+out. Complete blocks are still parsed before that overflow decision. A
+post-budget owner-drain abort emits
 the same wire frame byte-for-byte while accounting records `owner_drained`
 instead of `upstream_stream_error`. On `POST /v1/chat/completions` and its
 translated `POST /backend-api/codex/v1/chat/completions` alias, the terminal is

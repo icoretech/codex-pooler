@@ -218,6 +218,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "direct GET /v1/responses drops malformed and non-object provider frames" do
+    assert_invalid_provider_frames_dropped(false)
+  end
+
+  test "owner-forwarded GET /v1/responses drops malformed and non-object provider frames" do
+    assert_invalid_provider_frames_dropped(true)
+  end
+
   test "owner-forwarded GET /v1/responses emits one safe interruption after visible output" do
     enable_owner_forwarding!()
 
@@ -322,6 +330,75 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
     {conn, websocket, ref}
+  end
+
+  defp assert_invalid_provider_frames_dropped(owner_forwarding?) do
+    if owner_forwarding?, do: enable_owner_forwarding!()
+
+    completion =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_after_invalid_frames", "status" => "completed"}
+      })
+
+    invalid_frames = ["{", Jason.encode!("string"), Jason.encode!([]), Jason.encode!(42), "null"]
+    upstream = start_upstream(FakeUpstream.websocket_text_frames(invalid_frames ++ [completion]))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "h8-invalid-provider-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic invalid provider frame input",
+            "stream" => true
+          })
+        )
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "sequence_number" => 0,
+               "response" => %{"status" => "completed"}
+             } = Jason.decode!(frame)
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.status == "succeeded"
+      assert is_nil(request.last_error_code)
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.status == "succeeded"
+      assert is_nil(attempt.network_error_code)
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
   end
 
   defp enable_owner_forwarding! do

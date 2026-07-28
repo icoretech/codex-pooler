@@ -148,6 +148,45 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       assert Enum.map(tool_calls, &get_in(&1, ["function", "arguments"])) == [arguments]
       assert Enum.map(tool_calls, & &1["id"]) == ["call_terminal_only"]
     end
+
+    test "blank event labels use the data type while nonblank mismatches remain rejected" do
+      failed = %{
+        "type" => "response.failed",
+        "prompt" => "private-chat-prompt-sentinel",
+        "response" => %{
+          "id" => "resp_chat_blank",
+          "status" => "failed",
+          "error" => %{"code" => "server_error", "message" => "provider detail"}
+        }
+      }
+
+      for event_line <- ["", "event:\n", "event: \t \n"] do
+        state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+
+        stream =
+          IO.iodata_to_binary([
+            event_line,
+            "data: ",
+            Jason.encode!(failed),
+            "\n\n",
+            sse_event("response.completed", %{
+              "type" => "response.completed",
+              "response" => %{"id" => "resp_chat_late", "status" => "completed"}
+            })
+          ])
+
+        assert {output, state} = ChatCompletions.normalize_stream_data(stream, state)
+        assert [%{"error" => error}] = normalized_sse_payloads(output)
+        assert error["message"] == "upstream request failed"
+        refute output =~ "private-chat-prompt-sentinel"
+        assert state.terminal_seen?
+      end
+
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+      mismatch = "event: response.completed\ndata: " <> Jason.encode!(failed) <> "\n\n"
+      assert {"", state} = ChatCompletions.normalize_stream_data(mismatch, state)
+      refute state.terminal_seen?
+    end
   end
 
   describe "synthetic_terminal_failure_chunk/2" do

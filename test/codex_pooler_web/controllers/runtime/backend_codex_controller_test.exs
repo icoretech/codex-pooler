@@ -3425,6 +3425,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
+  test "POST /backend-api/codex/v1/chat/completions treats whitespace event labels as absent",
+       %{conn: conn} do
+    failed =
+      %{
+        "type" => "response.failed",
+        "prompt" => "private-backend-chat-blank-label-sentinel",
+        "response" => %{
+          "id" => "resp_backend_chat_blank_label",
+          "status" => "failed",
+          "error" => %{
+            "code" => "context_length_exceeded",
+            "message" => "private backend provider detail"
+          }
+        }
+      }
+
+    raw_failed = "event: \t \ndata: " <> Jason.encode!(failed) <> "\n\n"
+
+    late_completed =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_backend_chat_late", "status" => "completed"}
+       }}
+
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([raw_failed, late_completed], done: false))
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [%{"role" => "user", "content" => "Synthetic user"}],
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+
+    assert [%{"error" => error}] =
+             conn.resp_body
+             |> String.split("\n\n", trim: true)
+             |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
+             |> Enum.map(&Jason.decode!/1)
+
+    assert error["code"] == "context_length_exceeded"
+    assert error["message"] == "upstream request failed"
+    refute conn.resp_body =~ "private-backend-chat-blank-label-sentinel"
+    refute conn.resp_body =~ "private backend provider detail"
+    refute conn.resp_body =~ "resp_backend_chat_late"
+    refute conn.resp_body =~ "data: [DONE]"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "context_length_exceeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "context_length_exceeded"
+  end
+
   test "POST /backend-api/codex/responses keeps instruction-role input messages backend-native",
        %{conn: conn} do
     upstream =

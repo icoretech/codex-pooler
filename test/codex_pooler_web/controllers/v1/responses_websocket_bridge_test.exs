@@ -108,18 +108,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   end
 
   defp event_types(body) do
-    body
-    |> String.split("\n\n", trim: true)
-    |> Enum.flat_map(&block_event_type/1)
+    Enum.map(event_payloads(body), & &1["type"])
   end
 
-  defp block_event_type(block) do
-    with [_line, data] <- Regex.run(~r/^data: (.+)$/m, block),
-         {:ok, %{"type" => type}} <- Jason.decode(data) do
-      [type]
-    else
-      _no_event -> []
-    end
+  defp event_payloads(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.flat_map(fn block ->
+      with [_line, data] <- Regex.run(~r/^data: (.+)$/m, block),
+           {:ok, %{"type" => _type} = decoded} <- Jason.decode(data) do
+        [decoded]
+      else
+        _no_event -> []
+      end
+    end)
   end
 
   defp stream_payload(setup, input) do
@@ -1310,6 +1312,54 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement.usage_status == "usage_known"
     assert settlement.details["usage_source"] == "upstream_usage"
     assert settlement_count(request) == 1
+  end
+
+  test "websocket bridge drops malformed and non-object provider frames before completion", %{
+    conn: conn
+  } do
+    sentinel = "BRIDGE_INVALID_FRAME_SENTINEL"
+
+    completed =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_bridge_after_invalid", "status" => "completed"}
+      })
+
+    invalid_frames = [
+      ~s({"private":"#{sentinel}"),
+      Jason.encode!(sentinel),
+      Jason.encode!([sentinel]),
+      Jason.encode!(42),
+      "null"
+    ]
+
+    upstream =
+      start_upstream(FakeUpstream.websocket_text_frames(invalid_frames ++ [completed]))
+
+    setup = gateway_setup(upstream)
+    session = "bridge-invalid-provider-#{System.unique_integer([:positive])}"
+
+    response =
+      post_stream(conn, setup, session, stream_payload(setup, "bridge invalid provider frames"))
+
+    assert response.status == 200
+    assert event_types(response.resp_body) == ["response.created", "response.completed"]
+    refute response.resp_body =~ sentinel
+
+    assert response.resp_body
+           |> event_payloads()
+           |> Enum.map(& &1["sequence_number"]) == [0, 1]
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert is_nil(request.last_error_code)
+
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert is_nil(attempt.network_error_code)
   end
 
   test "a websocket bridge preflight timeout before public data fails without HTTP replay",

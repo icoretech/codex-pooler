@@ -909,6 +909,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.stream_interruption_contract == %{
                applies_to: "POST /v1/responses HTTP SSE after public Responses data",
+               event_label_normalization: %{
+                 absent_blank_whitespace: "absent",
+                 nonblank_mismatch: "drop"
+               },
+               oversized_incomplete_sse: %{
+                 max_buffered_bytes: 65_536,
+                 overflow_byte: 65_537,
+                 source_bytes_relayed: false,
+                 terminal_event: "error",
+                 accounting_error_code: "upstream_stream_error"
+               },
                terminal_event: "error",
                wire_error_code: "server_error",
                accounting_error_code: "upstream_stream_error",
@@ -931,6 +942,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  accounting_error_code: "upstream_stream_error",
                  safe_message:
                    "upstream request failed: stream interrupted before terminal response event"
+               },
+               public_websocket_invalid_provider_frames: %{
+                 forms: ["invalid_json", "string", "array", "number", "null"],
+                 direct: "drop_without_state_advance",
+                 accepted_owner_forwarded: "drop_without_state_advance",
+                 wrong_owner_metadata: "drop",
+                 local_terminal: false
                },
                other_websocket_streams: "unchanged",
                raw_error_details: false

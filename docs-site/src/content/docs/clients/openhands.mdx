@@ -56,8 +56,6 @@ Use `LLM_MODEL=openai/gpt-5.6-terra` for OpenHands. The `openai/` prefix makes O
 
 Define only models that your Pool can serve. If your Pool exposes a different model, keep the `openai/` prefix and change the model id after the slash.
 
-The audited OpenHands app source delegates authoritative LLM limit parsing to `openhands-sdk`; the local app checkout does not expose source-verifiable `gpt-5.6-terra` context or output limit fields. Keep this example to model/base URL environment overrides unless the SDK source is audited too.
-
 ## Boundaries
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK and agent routes. It doesn't provide full OpenAI API parity.

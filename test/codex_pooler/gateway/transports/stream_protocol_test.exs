@@ -15,6 +15,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "normalize_sse_event_label/1" do
+    test "treats absent, blank, and whitespace-only labels identically" do
+      assert StreamProtocol.normalize_sse_event_label(nil) == nil
+      assert StreamProtocol.normalize_sse_event_label("") == nil
+      assert StreamProtocol.normalize_sse_event_label(" \t ") == nil
+      assert StreamProtocol.normalize_sse_event_label("response.failed") == "response.failed"
+      assert StreamProtocol.normalize_sse_event_label(" response.failed ") == "response.failed"
+    end
+  end
+
   describe "terminal_outcome/1" do
     test "classifies ordinary response.incomplete as success-like incomplete" do
       frame =
@@ -78,7 +88,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "normalize_public_openai_responses_sse_data/2" do
-    test "preserves oversized split reasoning events until the SSE block is complete" do
+    test "fails an oversized incomplete reasoning event without publishing source bytes" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       event =
@@ -104,16 +114,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       {second_out, _state} =
         StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
 
-      combined = first_out <> second_out
-
-      assert combined == event
-      assert [block] = StreamProtocol.complete_sse_blocks(combined, bounded?: false) |> elem(0)
-      assert "response.output_item.added" == StreamProtocol.sse_field(block, "event")
-
-      assert %{"item" => %{"type" => "reasoning"}} =
-               block
-               |> StreamProtocol.sse_field("data")
-               |> StreamProtocol.decode_sse_data()
+      assert [%{"event" => "error", "data" => error}] = public_sse_events(first_out)
+      assert error["error"]["code"] == "server_error"
+      assert error["sequence_number"] == 0
+      refute first_out =~ "synthetic-obfuscated-content"
+      assert second_out == ""
     end
 
     test "preserves safety-buffering metadata on public Responses stream events" do
@@ -293,7 +298,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       refute Jason.encode!(state.summary) =~ raw_status
     end
 
-    test "structurally normalizes oversized terminal without trailing SSE separator" do
+    test "fails an oversized terminal that is incomplete at the byte boundary" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       terminal =
@@ -329,21 +334,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert {first_output, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
 
-      assert first_output == ""
-      assert byte_size(state.buffer) == byte_size(first)
+      assert [%{"event" => "error", "data" => error}] = public_sse_events(first_output)
+      assert error["sequence_number"] == 0
+      refute first_output =~ "terminal passthrough text"
+      assert state.buffer == ""
       refute state.passthrough?
-      assert StreamProtocol.public_openai_responses_passthrough_terminal_kind(state) == nil
+      assert state.terminal_kind == :failed
+      assert state.sequence.terminal_latched?
 
       assert {second_output, state} =
                StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
 
-      events = public_sse_events(second_output)
-      assert List.last(events)["event"] == "response.completed"
-      assert List.last(events)["data"]["sequence_number"] == 2
-      assert state.terminal_kind == :completed
+      assert second_output == ""
+      assert state.terminal_kind == :failed
       assert state.sequence.terminal_latched?
-      refute state.passthrough?
-      assert StreamProtocol.public_openai_responses_passthrough_terminal_kind(state) == nil
     end
 
     test "accepts SSE fields without a space after the colon" do

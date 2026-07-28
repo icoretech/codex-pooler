@@ -52,6 +52,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
     end
   end
 
+  @spec normalize_sse_event_label(term()) :: binary() | nil
+  def normalize_sse_event_label(label) when is_binary(label) do
+    case String.trim(label) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  def normalize_sse_event_label(_label), do: nil
+
   @spec decode_sse_data(term()) :: map()
   def decode_sse_data(data) when is_binary(data) do
     case Jason.decode(data) do
@@ -70,7 +80,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   def stream_block_event(block) do
     data = sse_field(block, "data")
     decoded = if is_binary(data), do: decode_sse_data(data), else: decode_sse_data(block)
-    event_type = sse_field(block, "event") || decoded_string(decoded, "type")
+
+    event_type =
+      normalize_sse_event_label(sse_field(block, "event")) || decoded_string(decoded, "type")
 
     {event_type, decoded}
   end

@@ -132,12 +132,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     end)
   end
 
+  defp normalize_stream_block(_block, %{terminal_seen?: true} = state), do: {[], state}
   defp normalize_stream_block("data: [DONE]", state), do: {[], state}
 
   defp normalize_stream_block(block, state) do
-    event_type = StreamProtocol.sse_field(block, "event")
+    event_type =
+      block
+      |> StreamProtocol.sse_field("event")
+      |> StreamProtocol.normalize_sse_event_label()
+
     decoded = block |> StreamProtocol.sse_field("data") |> StreamProtocol.decode_sse_data()
-    type = event_type || decoded_string(decoded, "type")
+    type = effective_stream_type(event_type, decoded_string(decoded, "type"))
 
     normalize_stream_event(type, decoded, state)
   end
@@ -514,11 +519,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         true
 
       block ->
-        event_type = StreamProtocol.sse_field(block, "event")
+        event_type =
+          block
+          |> StreamProtocol.sse_field("event")
+          |> StreamProtocol.normalize_sse_event_label()
+
         decoded = block |> StreamProtocol.sse_field("data") |> StreamProtocol.decode_sse_data()
-        terminal_event?(event_type || decoded_string(decoded, "type"))
+        terminal_event?(effective_stream_type(event_type, decoded_string(decoded, "type")))
     end)
   end
+
+  defp effective_stream_type(event_type, data_type)
+       when is_binary(event_type) and is_binary(data_type) and event_type != data_type,
+       do: nil
+
+  defp effective_stream_type(event_type, data_type), do: event_type || data_type
 
   defp terminal_event?(type),
     do: type in ["response.completed", "response.failed", "response.incomplete", "error"]
