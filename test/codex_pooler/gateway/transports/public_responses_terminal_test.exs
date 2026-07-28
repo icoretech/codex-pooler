@@ -406,6 +406,26 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
            }
   end
 
+  test "public websocket canonicalizes direct incomplete errors before sequence agreement" do
+    raw =
+      ~s({"type":"response.incomplete","response":{"id":"resp_direct_canonicalization","status":"incomplete","incomplete_details":{"reason":"context_length_exceeded"}}})
+
+    state = StreamProtocol.public_openai_responses_websocket_state()
+
+    assert {:push, wire, state} =
+             StreamProtocol.normalize_public_openai_responses_websocket_data(raw, state)
+
+    decoded = Jason.decode!(wire)
+
+    assert decoded["type"] == "response.failed"
+    assert decoded["response"]["status"] == "failed"
+    assert decoded["error"]["code"] == "context_length_exceeded"
+    assert decoded["response"]["error"]["code"] == "context_length_exceeded"
+    assert decoded["sequence_number"] == 0
+    assert state.terminal_latched?
+    assert state.max_seen == 0
+  end
+
   test "public websocket tracker emits one overflow error result then drops" do
     max_safe = PublicResponsesSequence.max_safe_integer()
 
