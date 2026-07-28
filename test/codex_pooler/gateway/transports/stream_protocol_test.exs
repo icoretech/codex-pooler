@@ -257,7 +257,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
 
       assert state.terminal_kind == :completed
-      assert state.response_id == "resp_explicit_state"
       assert state.summary.created_seen == true
       assert state.summary.visible_seen == true
       assert state.summary.terminal_seen == true
@@ -370,7 +369,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                StreamProtocol.normalize_public_openai_responses_sse_data(terminal, state)
 
       assert state.terminal_kind == :completed
-      assert state.response_id == "resp_no_space_sse_fields"
       assert state.summary.created_seen == true
       assert state.summary.visible_seen == true
       assert state.summary.terminal_seen == true
@@ -471,73 +469,68 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
-  describe "synthetic_public_openai_responses_failure_sse/2" do
-    test "generates a sanitized response.failed SSE body with a reused response id" do
-      raw_reason = "Bearer synthetic-token raw upstream exception should not leak"
-
-      body =
-        StreamProtocol.synthetic_public_openai_responses_failure_sse(
-          "resp_known_interrupted",
-          raw_reason
-        )
-
-      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(body)
-      assert data["type"] == "response.failed"
-      assert data["response"]["id"] == "resp_known_interrupted"
-      assert data["response"]["status"] == "failed"
-      assert data["error"]["code"] == "upstream_stream_error"
-      assert data["response"]["error"]["code"] == "upstream_stream_error"
-
-      serialized = Jason.encode!(data)
-
-      assert serialized =~
+  describe "synthetic_public_openai_responses_error_sse/2" do
+    test "exposes the single synthetic public failure message" do
+      assert StreamProtocol.synthetic_public_openai_responses_failure_message() ==
                "upstream request failed: stream interrupted before terminal response event"
-
-      refute serialized =~ "upstream stream interrupted before terminal response event"
-      refute serialized =~ "Bearer"
-      refute serialized =~ "synthetic-token"
-      refute serialized =~ "raw upstream exception"
     end
 
-    test "maps only a committed websocket bridge owner drain to owner_drained" do
-      owner_drained =
-        StreamProtocol.synthetic_public_openai_responses_failure_sse(
-          "resp_owner_drained",
-          {:upstream_websocket_bridge, :owner_drained}
+    test "emits the hybrid public error frame with exact decoded key sets" do
+      body =
+        StreamProtocol.synthetic_public_openai_responses_error_sse(
+          {:upstream_websocket_bridge, :upstream_websocket_error},
+          17
         )
 
-      assert [%{"event" => "response.failed", "data" => drained_data}] =
-               public_sse_events(owner_drained)
+      assert [%{"event" => "error", "data" => data}] = public_sse_events(body)
 
-      assert drained_data["error"] == %{
-               "code" => "owner_drained",
-               "message" => "websocket owner is draining"
+      assert MapSet.new(Map.keys(data)) ==
+               MapSet.new(~w(type sequence_number code message param error))
+
+      assert MapSet.new(Map.keys(data["error"])) ==
+               MapSet.new(~w(type code message param))
+
+      assert data["type"] == "error"
+      assert data["sequence_number"] == 17
+      assert data["code"] == "server_error"
+
+      assert data["message"] ==
+               "upstream request failed: stream interrupted before terminal response event"
+
+      assert data["param"] == nil
+
+      assert data["error"] == %{
+               "type" => "server_error",
+               "code" => "server_error",
+               "message" =>
+                 "upstream request failed: stream interrupted before terminal response event",
+               "param" => nil
              }
 
-      assert drained_data["response"]["error"] == drained_data["error"]
+      refute Map.has_key?(data, "response")
+    end
 
-      ordinary =
-        StreamProtocol.synthetic_public_openai_responses_failure_sse(
-          "resp_owner_drained",
-          {:upstream_websocket_bridge, :upstream_websocket_error}
+    test "emits byte-identical public error frames for interruption and owner-drain reasons" do
+      ordinary_interruption =
+        StreamProtocol.synthetic_public_openai_responses_error_sse(
+          {:upstream_websocket_bridge, :upstream_websocket_error},
+          17
+        )
+
+      owner_drain =
+        StreamProtocol.synthetic_public_openai_responses_error_sse(
+          {:upstream_websocket_bridge, :owner_drained},
+          17
         )
 
       generic_owner_drained =
-        StreamProtocol.synthetic_public_openai_responses_failure_sse(
-          "resp_owner_drained",
-          :owner_drained
+        StreamProtocol.synthetic_public_openai_responses_error_sse(
+          :owner_drained,
+          17
         )
 
-      assert ordinary == generic_owner_drained
-
-      assert [%{"event" => "response.failed", "data" => ordinary_data}] =
-               public_sse_events(ordinary)
-
-      assert ordinary_data["error"] == %{
-               "code" => "upstream_stream_error",
-               "message" =>
-                 "upstream request failed: stream interrupted before terminal response event"
-             }
+      assert ordinary_interruption == generic_owner_drained
+      assert ordinary_interruption == owner_drain
     end
   end
 

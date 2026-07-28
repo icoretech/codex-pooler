@@ -4,6 +4,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import { Effect } from "effect";
 import { applyOpenCodeErrorAdapter } from "./opencode_error_adapter.generated.mjs";
+import { parseStreamError } from "./opencode_stream_error_classifier.generated.mjs";
 
 const [mode, ssePath] = process.argv.slice(2);
 assert.ok(mode === "pre-output" || mode === "post-output");
@@ -12,6 +13,23 @@ assert.ok(ssePath);
 const sse = await readFile(ssePath, "utf8");
 const events = parseEvents(sse);
 validateSequence(events, mode);
+const terminal = events.at(-1);
+assert.equal(terminal?.type, "error");
+assert.equal(terminal?.error?.code, "server_error");
+assert.equal(
+  terminal?.error?.message,
+  "upstream request failed: stream interrupted before terminal response event",
+);
+
+const classifiedTerminal = parseStreamError(terminal);
+assert.ok(classifiedTerminal);
+assert.equal(classifiedTerminal.type, "api_error");
+assert.equal(
+  classifiedTerminal.message,
+  "upstream request failed: stream interrupted before terminal response event",
+);
+assert.equal(classifiedTerminal.isRetryable, true);
+assert.equal(classifiedTerminal.responseBody, JSON.stringify(terminal));
 
 let fetchCount = 0;
 const requestedURLs = [];
@@ -83,7 +101,6 @@ if (mode === "pre-output") {
   assert.ok(meaningfulTextParts.length >= 1);
   assert.ok(parts.indexOf(meaningfulTextParts[0]) < parts.indexOf(errorParts[0]));
 
-  const terminal = events.at(-1);
   const invalidFixtures = [
     events.map((event, index) => (index === events.length - 1 ? omitSequence(event) : event)),
     events.map((event, index) =>
@@ -104,6 +121,7 @@ if (mode === "pre-output") {
     [...events.slice(0, -1), { ...terminal, type: "response.completed" }],
   ];
 
+  assert.equal(invalidFixtures.length, 7);
   assert.ok(invalidFixtures.every((fixture) => !sequenceValid(fixture, mode)));
 }
 
@@ -146,7 +164,7 @@ function sequenceValid(parsed, expectedMode) {
     if (sequences[index] <= sequences[index - 1]) return false;
   }
 
-  if (parsed.at(-1)?.type !== "response.failed") return false;
+  if (parsed.at(-1)?.type !== "error") return false;
   if (parsed.some((event) => event.type === "response.completed")) return false;
 
   if (expectedMode === "pre-output") return sequences.length === 1 && sequences[0] === 0;

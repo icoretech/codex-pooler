@@ -880,9 +880,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "accept Responses truncation auto and disabled locally"
       assert feature.contract =~ "accept Codex-native Responses web_search hosted tool shapes"
       assert feature.contract =~ "keeping web_search_preview type-only"
-      assert feature.contract =~ "emit sanitized response.failed upstream_stream_error"
-      assert feature.contract =~ "emit response.failed owner_drained"
-      assert feature.contract =~ "websocket owner is draining"
+
+      assert feature.contract =~
+               "emit a sanitized type:error terminal with wire code server_error while accounting records upstream_stream_error"
+
+      assert feature.contract =~ "accounting records owner_drained"
+
+      assert feature.contract =~
+               "emitted wire frame is byte-identical to the ordinary synthetic terminal"
+
       assert feature.contract =~ "only when a committed websocket-bridge turn is aborted"
 
       assert feature.contract =~
@@ -891,18 +897,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~
                "keep client disconnect and non-drain interruption mappings unchanged"
 
+      assert feature.contract =~
+               "synthetic SSE terminals to OpenAI-compatible HTTP SSE surfaces"
+
       assert feature.contract =~ "preserve backend raw/websocket stream behavior"
 
       assert fixture.stream_interruption_contract == %{
                applies_to: "POST /v1/responses HTTP SSE after public Responses data",
-               terminal_event: "response.failed",
-               error_code: "upstream_stream_error",
+               terminal_event: "error",
+               wire_error_code: "server_error",
+               accounting_error_code: "upstream_stream_error",
                safe_message:
                  "upstream request failed: stream interrupted before terminal response event",
                post_budget_owner_drain: %{
                  applies_to: "committed websocket bridge turn aborted after rollout drain budget",
-                 error_code: "owner_drained",
-                 safe_message: "websocket owner is draining"
+                 accounting_error_code: "owner_drained"
                },
                precommit_drain: "existing_fallback_or_refusal",
                client_disconnect: "unchanged",
@@ -925,6 +934,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "without forwarding it upstream"
       assert feature.contract =~ "lift Responses system/developer input-message text"
       assert feature.contract =~ "early public streaming terminal errors"
+
       assert feature.contract =~ "accept safe Hermes assistant replay status values"
       assert feature.contract =~ "drop known OMP function_call replay status fields"
       assert feature.contract =~ "translate OpenClaw assistant thinking replays before validation"
@@ -1248,6 +1258,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "explicit authenticated backend routes"
       assert feature.contract =~ "chat alias fallback limited to top-level input"
       assert feature.contract =~ "messages is absent or empty"
+
+      assert feature.contract =~
+               "translated chat alias emits the nested server_error terminal after visible output"
+
       assert fixture.auth == "required_bearer_api_key"
       assert fixture.default_enabled == true
 

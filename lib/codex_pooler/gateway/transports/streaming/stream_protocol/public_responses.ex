@@ -30,7 +30,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:buffer) => binary(),
           required(:created?) => boolean(),
           required(:text_delta?) => boolean(),
-          required(:response_id) => String.t() | nil,
           required(:terminal_kind) => atom() | nil,
           required(:terminal_failure) => StreamProtocol.terminal_failure() | nil,
           required(:sequence) => PublicResponsesSequence.state(),
@@ -48,7 +47,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       buffer: "",
       created?: false,
       text_delta?: false,
-      response_id: nil,
       terminal_kind: nil,
       terminal_failure: nil,
       sequence: PublicResponsesSequence.new_state(),
@@ -145,10 +143,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   @spec terminal_failure(state()) :: StreamProtocol.terminal_failure() | nil
   def terminal_failure(%{terminal_failure: %{} = failure}), do: failure
   def terminal_failure(_state), do: nil
-
-  @spec response_id(state()) :: String.t() | nil
-  def response_id(%{response_id: response_id}) when is_binary(response_id), do: response_id
-  def response_id(_state), do: nil
 
   @spec visible_seen?(state()) :: boolean()
   def visible_seen?(%{summary: %{visible_seen: visible_seen?}}), do: visible_seen?
@@ -256,7 +250,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     case PublicResponsesSequence.public_shape(event_type, decoded) do
       {:ok, type, decoded} ->
         decoded = normalize_public_event(type, decoded)
-        state = maybe_put_response_id(state, decoded)
         normalize_public_block(type, decoded, state)
 
       :drop ->
@@ -537,16 +530,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         passthrough?: false,
         passthrough_terminal: nil
     }
-  end
-
-  defp maybe_put_response_id(state, decoded) do
-    case nested_string(decoded, ["response", "id"]) || decoded_string(decoded, "id") do
-      response_id when is_binary(response_id) and response_id != "" ->
-        %{state | response_id: response_id}
-
-      _response_id ->
-        state
-    end
   end
 
   defp record_created(state) do

@@ -548,7 +548,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   end
 
   @tag :streaming_chat
-  test "POST /v1/chat/completions keeps post-content upstream interruption health-neutral", %{
+  test "POST /v1/chat/completions emits a terminal error after visible abrupt close", %{
     conn: conn
   } do
     upstream =
@@ -574,15 +574,16 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert conn.status == 200
     assert conn.resp_body =~ "\"role\":\"assistant\""
     assert conn.resp_body =~ "\"content\":\"visible-before-abrupt-close\""
-    refute conn.resp_body =~ "\"error\""
     refute conn.resp_body =~ "data: [DONE]\n\n"
     refute conn.resp_body =~ "response.output_text.delta"
 
     assert [
              %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
-             %{"choices" => [%{"delta" => %{"content" => "visible-before-abrupt-close"}}]}
-           ] =
-             chat_chunks(conn.resp_body)
+             %{"choices" => [%{"delta" => %{"content" => "visible-before-abrupt-close"}}]},
+             terminal
+           ] = chat_chunks(conn.resp_body)
+
+    assert terminal == synthetic_terminal_error()
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -601,7 +602,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   end
 
   @tag :streaming_chat
-  test "POST /v1/chat/completions keeps clean no-terminal EOF successful", %{conn: conn} do
+  test "POST /v1/chat/completions fails clean no-terminal EOF after visible output", %{conn: conn} do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream(
@@ -628,17 +629,24 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert conn.status == 200
     assert conn.resp_body =~ "\"role\":\"assistant\""
     assert conn.resp_body =~ "\"content\":\"visible-before-clean-eof\""
-    refute conn.resp_body =~ "\"error\""
     refute conn.resp_body =~ "data: [DONE]\n\n"
+
+    assert [
+             %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
+             %{"choices" => [%{"delta" => %{"content" => "visible-before-clean-eof"}}]},
+             terminal
+           ] = chat_chunks(conn.resp_body)
+
+    assert terminal == synthetic_terminal_error()
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
-    assert request.status == "succeeded"
-    assert is_nil(request.last_error_code)
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.status == "succeeded"
-    assert is_nil(attempt.network_error_code)
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
 
     assert Repo.all(from(d in BridgeDemotion)) == []
     assert Repo.all(from(c in RoutingCircuitState)) == []
@@ -646,7 +654,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   end
 
   @tag :streaming_chat
-  test "POST /v1/chat/completions keeps post-tool-call interruption health-neutral", %{
+  test "POST /v1/chat/completions emits a terminal error after a visible tool call", %{
     conn: conn
   } do
     upstream =
@@ -686,7 +694,6 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       assert content_type =~ "text/event-stream"
       assert response.status == 200
       refute response.resp_body =~ "\"role\":\"assistant\""
-      refute response.resp_body =~ "\"error\""
       refute response.resp_body =~ "data: [DONE]\n\n"
       refute response.resp_body =~ "response.output_item.added"
 
@@ -705,8 +712,11 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
                      }
                    }
                  ]
-               }
+               },
+               terminal
              ] = chat_chunks(response.resp_body)
+
+      assert terminal == synthetic_terminal_error()
     end
 
     requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -2229,5 +2239,16 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
     |> Enum.reject(&(&1 == "[DONE]"))
     |> Enum.map(&Jason.decode!/1)
+  end
+
+  defp synthetic_terminal_error do
+    %{
+      "error" => %{
+        "message" => "upstream request failed: stream interrupted before terminal response event",
+        "type" => "server_error",
+        "code" => "server_error",
+        "param" => nil
+      }
+    }
   end
 end

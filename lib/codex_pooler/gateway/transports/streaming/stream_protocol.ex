@@ -85,19 +85,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   def public_openai_responses_passthrough_terminal_failure(state),
     do: PublicResponses.passthrough_terminal_failure(state)
 
-  @spec synthetic_public_openai_responses_failure_sse(String.t() | nil, term()) :: binary()
-  defdelegate synthetic_public_openai_responses_failure_sse(response_id, reason),
+  @spec synthetic_public_openai_responses_error_sse(term(), non_neg_integer()) :: binary()
+  defdelegate synthetic_public_openai_responses_error_sse(reason, sequence_number),
     to: ErrorCanonicalization,
-    as: :synthetic_public_openai_responses_failure_sse
+    as: :synthetic_public_openai_responses_error_sse
 
-  @spec synthetic_public_openai_responses_failure_sse(
-          String.t() | nil,
-          term(),
-          non_neg_integer()
-        ) :: binary()
-  defdelegate synthetic_public_openai_responses_failure_sse(response_id, reason, sequence_number),
-    to: ErrorCanonicalization,
-    as: :synthetic_public_openai_responses_failure_sse
+  @spec synthetic_public_openai_responses_failure_message() :: String.t()
+  defdelegate synthetic_public_openai_responses_failure_message(),
+    to: ErrorCanonicalization
 
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   defdelegate canonicalize_codex_responses_json_message(data), to: ErrorCanonicalization

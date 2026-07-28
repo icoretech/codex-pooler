@@ -5,13 +5,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
-  @synthetic_public_openai_responses_failure_code "upstream_stream_error"
   @synthetic_public_openai_responses_failure_message "upstream request failed: stream interrupted before terminal response event"
-  @owner_drained_public_openai_responses_failure_code "owner_drained"
-  @owner_drained_public_openai_responses_failure_message "websocket owner is draining"
   @native_previous_response_not_found_message "Previous response was not found. Retrying the full request."
 
   @type event_summary :: EventSummary.t()
+
+  @spec synthetic_public_openai_responses_failure_message() :: String.t()
+  def synthetic_public_openai_responses_failure_message,
+    do: @synthetic_public_openai_responses_failure_message
 
   @spec normalize_data(binary()) :: binary()
   def normalize_data(data) do
@@ -45,60 +46,37 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     end
   end
 
-  @spec synthetic_public_openai_responses_failure_sse(String.t() | nil, term()) :: binary()
-  def synthetic_public_openai_responses_failure_sse(response_id, reason) do
-    synthetic_public_openai_responses_failure_sse(response_id, reason, nil)
-  end
-
-  @spec synthetic_public_openai_responses_failure_sse(
-          String.t() | nil,
-          term(),
-          non_neg_integer() | nil
-        ) :: binary()
-  def synthetic_public_openai_responses_failure_sse(response_id, reason, sequence_number) do
-    {code, message} = synthetic_public_openai_responses_failure(reason)
-
+  # D6 hazard 1: Wire code "server_error" belongs to the health-neutral and
+  # retryable classifier sets. Current consumers use accounting/dispatch reason
+  # values instead of rereading emitted bytes, so there is no behavior test;
+  # keep that distinction explicit if a future consumer reads this frame.
+  @spec synthetic_public_openai_responses_error_sse(term(), non_neg_integer()) :: binary()
+  def synthetic_public_openai_responses_error_sse(_reason, sequence_number)
+      when is_integer(sequence_number) and sequence_number >= 0 do
     error = %{
-      "code" => code,
-      "message" => message
+      "type" => "server_error",
+      "code" => "server_error",
+      "message" => @synthetic_public_openai_responses_failure_message,
+      "param" => nil
     }
 
-    response =
-      %{"status" => "failed", "error" => error}
-      |> put_synthetic_response_id(response_id)
-
-    event =
-      %{
-        "type" => "response.failed",
-        "error" => error,
-        "response" => response
-      }
-      |> put_synthetic_sequence_number(sequence_number)
+    event = %{
+      "type" => "error",
+      "sequence_number" => sequence_number,
+      "code" => "server_error",
+      "message" => @synthetic_public_openai_responses_failure_message,
+      "param" => nil,
+      "error" => error
+    }
 
     [
-      "event: response.failed\n",
+      "event: error\n",
       "data: ",
       Jason.encode!(event),
       "\n\n"
     ]
     |> IO.iodata_to_binary()
   end
-
-  defp synthetic_public_openai_responses_failure({:upstream_websocket_bridge, :owner_drained}) do
-    {@owner_drained_public_openai_responses_failure_code,
-     @owner_drained_public_openai_responses_failure_message}
-  end
-
-  defp synthetic_public_openai_responses_failure(_reason) do
-    {@synthetic_public_openai_responses_failure_code,
-     @synthetic_public_openai_responses_failure_message}
-  end
-
-  defp put_synthetic_sequence_number(event, sequence_number)
-       when is_integer(sequence_number) and sequence_number >= 0,
-       do: Map.put(event, "sequence_number", sequence_number)
-
-  defp put_synthetic_sequence_number(event, _sequence_number), do: event
 
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   def canonicalize_codex_responses_json_message(data) when is_binary(data) do
@@ -167,18 +145,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
   @spec nested_string(map(), [String.t()]) :: String.t() | nil
   defdelegate nested_string(map, keys), to: ErrorCodes
-
-  defp put_synthetic_response_id(response, response_id) when is_binary(response_id) do
-    response_id = String.trim(response_id)
-
-    if response_id == "" do
-      response
-    else
-      Map.put(response, "id", response_id)
-    end
-  end
-
-  defp put_synthetic_response_id(response, _response_id), do: response
 
   defp codex_responses_error_needs_canonical_response?("error", decoded),
     do: not is_nil(ErrorCodes.sse_error_code(decoded))

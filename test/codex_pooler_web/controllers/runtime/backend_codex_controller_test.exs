@@ -2990,8 +2990,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert conn.status == 200
-    assert conn.resp_body =~ "event: response.failed\n"
-    assert conn.resp_body =~ ~s("code":"upstream_stream_error")
+
+    assert [error_block] =
+             conn.resp_body
+             |> String.split("\n\n", trim: true)
+             |> Enum.filter(&String.starts_with?(&1, "event: error\n"))
+
+    assert ["event: error", "data: " <> data] = String.split(error_block, "\n")
+
+    decoded = Jason.decode!(data)
+
+    assert Map.keys(decoded) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(decoded["error"]) |> Enum.sort() == ~w(code message param type)
+
+    assert %{
+             "code" => "server_error",
+             "error" => %{
+               "code" => "server_error",
+               "message" => message,
+               "param" => nil,
+               "type" => "server_error"
+             },
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "type" => "error"
+           } = decoded
+
+    assert is_integer(sequence_number)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -3284,6 +3312,68 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.status == "succeeded"
+  end
+
+  test "POST /backend-api/codex/v1/chat/completions emits a terminal error after visible upstream interruption",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.abrupt_close_mid_stream([
+          {"response.output_text.delta",
+           %{
+             "type" => "response.output_text.delta",
+             "delta" => "visible backend alias answer"
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [%{"role" => "user", "content" => "Synthetic user"}],
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+    refute conn.resp_body =~ "data: [DONE]\n\n"
+
+    chunks =
+      conn.resp_body
+      |> String.split("\n\n", trim: true)
+      |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
+      |> Enum.map(&Jason.decode!/1)
+
+    assert [
+             %{"choices" => [%{"delta" => %{"role" => "assistant"}}]},
+             %{"choices" => [%{"delta" => %{"content" => "visible backend alias answer"}}]},
+             terminal
+           ] = chunks
+
+    assert terminal == %{
+             "error" => %{
+               "message" =>
+                 "upstream request failed: stream interrupted before terminal response event",
+               "type" => "server_error",
+               "code" => "server_error",
+               "param" => nil
+             }
+           }
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+    assert FakeUpstream.count(upstream) == 1
   end
 
   test "POST /backend-api/codex/responses keeps instruction-role input messages backend-native",

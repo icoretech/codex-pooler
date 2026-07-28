@@ -55,6 +55,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   def terminal_seen?(_state), do: false
 
+  @spec synthetic_terminal_failure_chunk(stream_state(), String.t()) ::
+          {binary(), stream_state()}
+  def synthetic_terminal_failure_chunk(state, message) when is_binary(message) do
+    payload = %{
+      "error" => %{
+        "message" => message,
+        "type" => "server_error",
+        "code" => "server_error",
+        "param" => nil
+      }
+    }
+
+    chunk = ["data: ", Jason.encode!(payload), "\n\n"] |> IO.iodata_to_binary()
+
+    {chunk, %{state | terminal_seen?: true}}
+  end
+
   @spec normalize_stream_data(binary(), stream_state()) :: {binary(), stream_state()}
   def normalize_stream_data(data, %{discarding_oversized?: true} = state) when is_binary(data) do
     discard_oversized_data(data, state)

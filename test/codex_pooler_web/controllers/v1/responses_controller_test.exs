@@ -1186,9 +1186,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert Enum.map(requests, & &1.endpoint) == ["/v1/responses", "/v1/responses"]
@@ -2146,10 +2147,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [settlement] =
              Repo.all(
-               from l in LedgerEntry,
+               from(l in LedgerEntry,
                  where:
                    l.request_id == ^request.id and l.entry_kind == "settlement" and
                      l.amount_status == "recorded"
+               )
              )
 
     assert settlement.usage_status == "usage_known"
@@ -3344,9 +3346,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert Enum.map(requests, & &1.endpoint) == [
@@ -3466,20 +3469,22 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [session] =
              unboxed_run(fn ->
                Repo.all(
-                 from session in CodexSession,
+                 from(session in CodexSession,
                    where:
                      session.pool_id == ^setup.pool.id and
                        fragment("lower(?)", session.session_key) == ^String.downcase(session_key) and
                        session.status in ["active", "interrupted"]
+                 )
                )
              end)
 
     requests =
       unboxed_run(fn ->
         Repo.all(
-          from request in Request,
+          from(request in Request,
             where: request.pool_id == ^setup.pool.id,
             order_by: [asc: request.admitted_at]
+          )
         )
       end)
 
@@ -4403,7 +4408,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
-  test "POST /v1/responses streaming emits terminal response.failed when upstream closes after visible output",
+  test "POST /v1/responses streaming emits one hybrid error after visible output when upstream closes without a terminal",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -4439,25 +4444,45 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert body =~ "visible-before-upstream-close"
     refute body =~ "event: response.completed\n"
     refute body =~ "event: response.incomplete\n"
-
-    assert body =~ "event: response.failed"
-    assert body =~ ~s("type":"response.failed")
-    assert body =~ ~s("status":"failed")
-    assert body =~ ~s("code":"upstream_stream_error")
     assert body =~ "upstream request failed: stream interrupted before terminal response event"
     refute body =~ "upstream stream interrupted before terminal response event"
 
-    assert [%{"event" => "response.failed", "data" => data}] =
-             public_sse_events(body)
-             |> Enum.filter(&(&1["event"] == "response.failed"))
+    assert [
+             %{
+               "event" => "response.output_text.delta",
+               "data" => %{"delta" => "visible-before-upstream-close"}
+             },
+             %{"event" => "error", "data" => data}
+           ] = public_sse_events(body)
 
-    assert data["type"] == "response.failed"
-    assert data["response"]["status"] == "failed"
-    assert data["response"]["id"] == "resp_visible_before_close"
-    assert data["error"]["code"] == "upstream_stream_error"
+    assert MapSet.new(Map.keys(data)) ==
+             MapSet.new(["code", "error", "message", "param", "sequence_number", "type"])
 
-    assert data["error"]["message"] ==
-             "upstream request failed: stream interrupted before terminal response event"
+    assert %{
+             "code" => "server_error",
+             "error" => nested_error,
+             "message" =>
+               "upstream request failed: stream interrupted before terminal response event",
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "type" => "error"
+           } = data
+
+    assert is_integer(sequence_number)
+    assert sequence_number >= 0
+    refute Map.has_key?(data, "response")
+
+    assert MapSet.new(Map.keys(nested_error)) == MapSet.new(["code", "message", "param", "type"])
+
+    assert nested_error == %{
+             "code" => "server_error",
+             "message" =>
+               "upstream request failed: stream interrupted before terminal response event",
+             "param" => nil,
+             "type" => "server_error"
+           }
+
+    refute Enum.any?(public_sse_events(body), &(&1["event"] == "response.failed"))
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
@@ -4558,18 +4583,38 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert response.status == 200
     assert response.resp_body =~ "visible before controller drain"
 
-    assert [%{"data" => data}] =
+    assert [%{"event" => "error", "data" => data}] =
              response.resp_body
              |> public_sse_events()
-             |> Enum.filter(&(&1["event"] == "response.failed"))
+             |> Enum.filter(&(&1["event"] == "error"))
 
-    assert data["error"] == %{
-             "code" => "owner_drained",
-             "message" => "websocket owner is draining"
+    assert Map.keys(data) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(data["error"]) |> Enum.sort() == ~w(code message param type)
+
+    assert %{
+             "code" => "server_error",
+             "error" => nested_error,
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "type" => "error"
+           } = data
+
+    assert is_integer(sequence_number)
+
+    assert nested_error == %{
+             "code" => "server_error",
+             "message" => message,
+             "param" => nil,
+             "type" => "server_error"
            }
 
-    assert get_in(data, ["response", "error"]) == data["error"]
-    refute response.resp_body =~ "upstream_stream_error"
+    assert message ==
+             "upstream request failed: stream interrupted before terminal response event"
+
+    refute Map.has_key?(data, "response")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -4620,8 +4665,31 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert conn.resp_body =~ "visible-before-abrupt-close"
-    assert conn.resp_body =~ "event: response.failed\n"
-    assert conn.resp_body =~ ~s("code":"upstream_stream_error")
+
+    assert [%{"event" => "response.output_text.delta"}, %{"event" => "error", "data" => data}] =
+             public_sse_events(conn.resp_body)
+
+    assert Map.keys(data) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(data["error"]) |> Enum.sort() == ~w(code message param type)
+
+    assert %{
+             "code" => "server_error",
+             "error" => %{
+               "code" => "server_error",
+               "message" => message,
+               "param" => nil,
+               "type" => "server_error"
+             },
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "type" => "error"
+           } = data
+
+    assert is_integer(sequence_number)
+    refute Map.has_key?(data, "response")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -5963,7 +6031,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :v1_websocket
-  test "GET /v1/responses websocket reports idle timeout after visible output" do
+  test "GET /v1/responses websocket keeps HTTP synthetic terminals isolated after visible timeout" do
     release_ref = make_ref()
     setup_runtime_ingress_override(%OperationalSettings{upstream_receive_timeout_ms: 150})
 
@@ -6014,7 +6082,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                "type" => "error",
                "status" => 502,
                "error" => %{"code" => "stream_idle_timeout"}
-             } = Jason.decode!(terminal_frame)
+             } = terminal = Jason.decode!(terminal_frame)
+
+      refute Map.has_key?(terminal, "code")
+      refute Map.has_key?(terminal, "param")
+      refute Map.has_key?(terminal, "sequence_number")
 
       assert total_elapsed_ms >= 150
 
@@ -6027,6 +6099,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert attempt.status == "failed"
       assert attempt.network_error_code == "stream_idle_timeout"
+
+      assert is_map(request.request_metadata)
+      assert is_map(attempt.response_metadata)
+
+      persistence_text = inspect({request.request_metadata, attempt.response_metadata})
+      refute persistence_text =~ "hello"
+      refute persistence_text =~ setup.authorization
+      refute persistence_text =~ setup.raw_key
 
       conn
     after
@@ -7322,12 +7402,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   defp await_committed_public_turn(pool_id, attempts_left) do
     turn =
       Repo.one(
-        from turn in CodexTurn,
+        from(turn in CodexTurn,
           join: request in Request,
           on: request.id == turn.request_id,
           where: request.pool_id == ^pool_id,
           order_by: [desc: turn.started_at],
           limit: 1
+        )
       )
 
     case turn do

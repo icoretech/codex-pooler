@@ -150,6 +150,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
     end
   end
 
+  describe "synthetic_terminal_failure_chunk/2" do
+    test "emits the nested chat error payload and latches the terminal" do
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+      message = "synthetic public stream failure"
+
+      assert {chunk, state} =
+               ChatCompletions.synthetic_terminal_failure_chunk(state, message)
+
+      assert state.terminal_seen?
+
+      assert normalized_sse_payloads(chunk) == [
+               %{
+                 "error" => %{
+                   "message" => message,
+                   "type" => "server_error",
+                   "code" => "server_error",
+                   "param" => nil
+                 }
+               }
+             ]
+
+      refute chunk =~ "data: [DONE]"
+      refute chunk =~ "finish_reason"
+    end
+  end
+
   defp sse_event(type, data), do: ["event: ", type, "\n", "data: ", Jason.encode!(data), "\n\n"]
 
   defp normalized_sse_payloads(normalized) do

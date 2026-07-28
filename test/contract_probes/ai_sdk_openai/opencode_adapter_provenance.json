@@ -1,13 +1,39 @@
 {
   "opencode_version": "1.18.3",
-  "source_commit": "67caf894e0843ee370e72839e8265e483233479b",
-  "source_file": "packages/opencode/src/session/llm/ai-sdk.ts",
-  "source_file_sha256": "b6d7f65fa6c4506e59ce8426b4c7a3eb89298b3a530b6d040fdc7ad32e2a836b",
-  "byte_span": {
-    "start": 8773,
-    "end": 8824
-  },
-  "byte_span_sha256": "9ab7d8be57f7e177b1034df8dd018009bb1ebc469bab43f9bbe3021b50f24478",
-  "normalized_ast_sha256": "808ed4d8a4ac51d47d6088b60311964159b831e5650298d12fe2b9fa2ab9b465",
-  "generated_file_sha256": "f684904ef53a0f4df798d8aa0d1e6846d8fa97f6185bea121d7bf67b013714f4"
+  "sources": [
+    {
+      "source_file": "packages/opencode/src/session/llm/ai-sdk.ts",
+      "source_commit": "67caf894e0843ee370e72839e8265e483233479b",
+      "source_file_sha256": "b6d7f65fa6c4506e59ce8426b4c7a3eb89298b3a530b6d040fdc7ad32e2a836b",
+      "byte_span": {
+        "start": 8773,
+        "end": 8824
+      },
+      "byte_span_sha256": "9ab7d8be57f7e177b1034df8dd018009bb1ebc469bab43f9bbe3021b50f24478",
+      "normalized_ast_sha256": "808ed4d8a4ac51d47d6088b60311964159b831e5650298d12fe2b9fa2ab9b465",
+      "generated_file": "opencode_error_adapter.generated.mjs",
+      "generated_file_sha256": "f684904ef53a0f4df798d8aa0d1e6846d8fa97f6185bea121d7bf67b013714f4",
+      "exported_symbol": "applyOpenCodeErrorAdapter"
+    },
+    {
+      "source_file": "packages/opencode/src/provider/error.ts",
+      "source_commit": "67caf894e0843ee370e72839e8265e483233479b",
+      "source_file_sha256": "e2c87611d8cb331a509580dc0cea5d37a5d0677df1c9646d99cba03595eaf27b",
+      "byte_span": [
+        {
+          "start": 2475,
+          "end": 2817
+        },
+        {
+          "start": 3056,
+          "end": 4492
+        }
+      ],
+      "byte_span_sha256": "708c4c4f4f2339a35d920362dbefcc54bd04a6cf716acd13a2b5456f69e69e89",
+      "normalized_ast_sha256": "38b3b756c9a174e50ac4da57ddf770f27b806190770ea0ee9e758d4f5d26180d",
+      "generated_file": "opencode_stream_error_classifier.generated.mjs",
+      "generated_file_sha256": "935e315a996be94228fb28ff4e11a6e441ffd2de7ec4baa1f3411a55c560508f",
+      "exported_symbol": "parseStreamError"
+    }
+  ]
 }

@@ -128,6 +128,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> StreamLifecycle.lifecycle_handlers(callbacks,
       first_event_retry: StreamLifecycle.fail_first_event_handler(response_context)
     )
+    # D7 surface isolation: absence of `before_finalize_failure` and
+    # `before_finalize_success` keys prevents the HTTP synthetic terminal from
+    # leaking onto the GET /v1/responses websocket. Do not add either key here.
     |> Map.merge(%{
       keepalive_interval_ms: 0,
       write_keepalive: fn state -> {:ok, state} end,
@@ -322,6 +325,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         {:ok, state, ""}
 
       {data, state} ->
+        # D6 hazard 2: Synthetic bytes must go straight to Plug.Conn.chunk/2,
+        # never through normalize_block/2, because their own server_error frame
+        # would canonicalize back to response.failed.
         case update_relay_target(state, &Plug.Conn.chunk(&1, data)) do
           {:ok, state} -> {:ok, state, data}
           {:error, _reason} = error -> error

@@ -324,7 +324,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td><code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>Chat Completions payloads are coerced to Codex Responses work and normalized back to Chat Completions shape. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. Early streaming terminal errors emit one public error chunk before any assistant role chunk.</td>
+      <td>Chat Completions payloads are coerced to Codex Responses work and normalized back to Chat Completions shape. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. Early streaming terminal errors emit one public error chunk before any assistant role chunk. After visible output, a stream that ends without an upstream terminal emits one nested <code>data: &#123;"error":&#123;...&#125;&#125;</code> chunk with no following <code>[DONE]</code>; the translated <code>POST /backend-api/codex/v1/chat/completions</code> alias has the same OpenAI-compatible HTTP SSE behavior.</td>
     </tr>
     <tr>
       <td><code>GET /v1/usage</code></td>
@@ -644,10 +644,18 @@ its original payload.
 Backend Responses SSE and websocket routes preserve upstream `response.done`
 and legacy typeless success payloads. Public `POST /v1/responses` SSE and
 `GET /v1/responses` websocket normalize those successful terminals to
-`response.completed`. A sequence-valid synthetic `response.failed` for a stream
-that ends without a terminal belongs only to public POST SSE. Public GET keeps
-its websocket error/close behavior, and backend GET or POST does not synthesize
-a terminal. Once hidden bridge traffic has committed the handoff, the request is
+`response.completed`. Synthetic missing-terminal frames are limited to
+OpenAI-compatible HTTP SSE surfaces and never appear on native backend raw
+Responses streams or websocket surfaces. On `POST /v1/responses`, the
+sequence-valid synthetic `error` event uses the hybrid flat-and-nested
+`type: "error"` / `server_error` shape. A post-budget owner-drain abort emits
+the same wire frame byte-for-byte while accounting records `owner_drained`
+instead of `upstream_stream_error`. On `POST /v1/chat/completions` and its
+translated `POST /backend-api/codex/v1/chat/completions` alias, the terminal is
+one `data: {"error":{...}}` chunk with nested `server_error` fields, no top-level
+`type`, and no following `[DONE]`. Public GET keeps its websocket error/close
+behavior, and native backend raw Responses GET or POST does not synthesize a
+terminal. Once hidden bridge traffic has committed the handoff, the request is
 not replayed over HTTP.
 
 During a mixed-release transition, native websocket attachment keeps its two-argument compatibility path against a previous-release owner. The bridge's option-carrying three-argument attachment is unavailable there and fails closed to HTTP before commit. Previous-release owners also retain the legacy five-minute post-detach window and omit connection lifecycle metadata; new or recovered owners use the current 30-minute default.

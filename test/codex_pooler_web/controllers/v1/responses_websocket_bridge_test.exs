@@ -233,7 +233,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     body
     |> String.split("\n\n", trim: true)
     |> Enum.find_value(fn block ->
-      with ["response.failed"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
+      with ["error"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
            [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
         Jason.decode!(data)
       else
@@ -797,23 +797,36 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     assert failed.status == 200
-    assert event_types(failed.resp_body) == ["response.reasoning", "response.failed"]
+    assert event_types(failed.resp_body) == ["response.reasoning", "error"]
     assert failed.resp_body =~ reasoning_frame_sentinel
 
-    assert %{
-             "type" => "response.failed",
-             "error" => %{
-               "code" => "upstream_stream_error",
-               "message" =>
-                 "upstream request failed: stream interrupted before terminal response event"
-             },
-             "response" => %{
-               "status" => "failed",
-               "error" => %{"code" => "upstream_stream_error"}
-             }
-           } = response_failed_data(failed.resp_body)
+    data = response_failed_data(failed.resp_body)
 
-    assert Enum.count(event_types(failed.resp_body), &(&1 == "response.failed")) == 1
+    assert Map.keys(data) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(data["error"]) |> Enum.sort() == ~w(code message param type)
+
+    assert %{
+             "type" => "error",
+             "code" => "server_error",
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "error" => %{
+               "type" => "server_error",
+               "code" => "server_error",
+               "message" => message,
+               "param" => nil
+             }
+           } = data
+
+    assert is_integer(sequence_number)
+
+    assert message ==
+             "upstream request failed: stream interrupted before terminal response event"
+
+    assert Enum.count(event_types(failed.resp_body), &(&1 == "error")) == 1
     refute failed.resp_body =~ private_close_reason
     refute failed.resp_body =~ "previous_response_not_found"
     refute failed.resp_body =~ "previous_response_generation_mismatch"
@@ -985,28 +998,36 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert event_types(response.resp_body) == [
              "response.created",
              "response.output_text.delta",
-             "response.failed"
+             "error"
            ]
 
     assert response.resp_body =~ "visible before rollout drain"
 
-    assert %{
-             "type" => "response.failed",
-             "error" => %{
-               "code" => "owner_drained",
-               "message" => "websocket owner is draining"
-             },
-             "response" => %{
-               "id" => "resp_owner_drained",
-               "status" => "failed",
-               "error" => %{
-                 "code" => "owner_drained",
-                 "message" => "websocket owner is draining"
-               }
-             }
-           } = response_failed_data(response.resp_body)
+    data = response_failed_data(response.resp_body)
 
-    refute response.resp_body =~ "upstream_stream_error"
+    assert Map.keys(data) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(data["error"]) |> Enum.sort() == ~w(code message param type)
+
+    assert %{
+             "type" => "error",
+             "code" => "server_error",
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "error" => %{
+               "type" => "server_error",
+               "code" => "server_error",
+               "message" => message,
+               "param" => nil
+             }
+           } = data
+
+    assert is_integer(sequence_number)
+
+    assert message ==
+             "upstream request failed: stream interrupted before terminal response event"
 
     request = latest_request(setup.pool)
     assert request.status == "failed"
@@ -1315,12 +1336,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     response = post_stream(conn, setup, session, stream_payload(setup, "timeout fallback"))
     assert response.status == 200
-    assert event_types(response.resp_body) == ["response.failed"]
+    assert event_types(response.resp_body) == ["error"]
     refute response.resp_body =~ "resp_timeout_fallback"
 
     request = latest_request(setup.pool)
     assert request.status == "failed"
     assert request.transport == "http_sse"
+    assert request.last_error_code == "upstream_stream_error"
     assert [attempt] = attempts_for(request)
     assert attempt.status == "failed"
     assert attempt.transport == "websocket"

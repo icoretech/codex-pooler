@@ -36,9 +36,73 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {failure, state} =
                DownstreamStream.synthetic_terminal_failure(initial_state, :upstream_interrupted)
 
-      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(failure)
-      assert data["type"] == "response.failed"
+      assert [%{"event" => "error", "data" => data}] = public_sse_events(failure)
+      assert data["type"] == "error"
+      assert data["code"] == "server_error"
+      assert data["error"]["code"] == "server_error"
+      refute Map.has_key?(data, "response")
       assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+    end
+
+    test "emits one unnormalized D1 hybrid error SSE block for a synthetic terminal failure" do
+      opts = public_responses_stream_opts()
+      initial_state = DownstreamStream.initial_state(:relay, opts, :websocket_bridge)
+
+      assert {failure, _state} =
+               DownstreamStream.synthetic_terminal_failure(initial_state, :upstream_interrupted)
+
+      assert [block] = String.split(failure, "\n\n", trim: true)
+      assert failure == block <> "\n\n"
+      assert ["event: error", "data: " <> data] = String.split(block, "\n")
+
+      assert %{
+               "code" => "server_error",
+               "error" => nested_error,
+               "message" => message,
+               "param" => nil,
+               "sequence_number" => sequence_number,
+               "type" => "error"
+             } = payload = Jason.decode!(data)
+
+      assert Enum.sort(Map.keys(payload)) == [
+               "code",
+               "error",
+               "message",
+               "param",
+               "sequence_number",
+               "type"
+             ]
+
+      assert is_integer(sequence_number)
+
+      assert %{
+               "code" => "server_error",
+               "message" => ^message,
+               "param" => nil,
+               "type" => "server_error"
+             } = nested_error
+
+      assert Enum.sort(Map.keys(nested_error)) == ["code", "message", "param", "type"]
+
+      stream_dispatch_source =
+        Path.expand(
+          "../../../../../lib/codex_pooler/gateway/runtime/streaming/stream_dispatch.ex",
+          __DIR__
+        )
+        |> File.read!()
+
+      [_before_terminal_writer, terminal_writer] =
+        String.split(
+          stream_dispatch_source,
+          "defp write_public_openai_responses_terminal_failure",
+          parts: 2
+        )
+
+      [terminal_writer | _after_terminal_writer] =
+        String.split(terminal_writer, "defp http_sse_keepalive_writer", parts: 2)
+
+      assert terminal_writer =~ "update_relay_target(state, &Plug.Conn.chunk(&1, data))"
+      refute terminal_writer =~ "normalize_block("
     end
 
     test "keep public OpenAI chat stream parser state beside the relay target" do
@@ -641,7 +705,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                {"context_length_exceeded", "context_length_exceeded"}
     end
 
-    test "synthesizes a sanitized terminal failure with the observed public response id" do
+    test "synthesizes a sanitized terminal failure without a public response object" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -668,11 +732,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                  "cookie=raw-upstream-reason"
                )
 
-      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(failure)
-      assert data["type"] == "response.failed"
-      assert data["response"]["id"] == "resp_public_interrupted"
-      assert data["response"]["status"] == "failed"
-      assert data["error"]["code"] == "upstream_stream_error"
+      assert [%{"event" => "error", "data" => data}] = public_sse_events(failure)
+      assert data["type"] == "error"
+      assert data["code"] == "server_error"
+      assert data["error"]["type"] == "server_error"
+      assert data["error"]["code"] == "server_error"
+      assert data["param"] == nil
+      assert data["error"]["param"] == nil
+      refute Map.has_key?(data, "response")
 
       assert data["error"]["message"] ==
                "upstream request failed: stream interrupted before terminal response event"
@@ -843,6 +910,64 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                {:upstream_stream_interrupted, reason}
     end
 
+    test "synthesizes one nested public Chat terminal after visible data" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      delta =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => "visible chat answer"
+        })
+
+      assert {_chunk, state} =
+               DownstreamStream.normalize_data(delta, "/v1/chat/completions", opts, state)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) ==
+               {:upstream_stream_interrupted, reason}
+
+      assert {failure, state} =
+               DownstreamStream.synthetic_terminal_failure(state, reason)
+
+      assert chat_sse_chunks(failure) == [
+               %{
+                 "error" => %{
+                   "message" =>
+                     "upstream request failed: stream interrupted before terminal response event",
+                   "type" => "server_error",
+                   "code" => "server_error",
+                   "param" => nil
+                 }
+               }
+             ]
+
+      refute failure =~ "data: [DONE]"
+      refute failure =~ "finish_reason"
+      assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, reason)
+    end
+
+    test "does not synthesize public Chat terminals before visible data even with bridge state" do
+      opts =
+        RequestOptions.build(
+          %{public_openai_chat_stream: true, openai_chat_payload: %{"model" => "gpt-example"}},
+          "/v1/chat/completions",
+          %{"stream" => true}
+        )
+
+      reason = %Finch.TransportError{reason: :closed}
+      state = DownstreamStream.initial_state(:relay, opts, :websocket_bridge)
+
+      assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
+      assert {nil, ^state} = DownstreamStream.synthetic_terminal_failure(state, reason)
+    end
+
     test "tags terminal-missing interruptions after public Chat tool and moderation chunks" do
       opts =
         RequestOptions.build(
@@ -907,7 +1032,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert DownstreamStream.terminal_missing_interruption_reason(state, reason) == reason
     end
 
-    test "reuses a response id observed on a response-bearing nonterminal event" do
+    test "does not reuse a response id observed on a response-bearing nonterminal event" do
       opts =
         RequestOptions.build(
           %{public_openai_responses_stream: true},
@@ -930,10 +1055,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert {failure, _state} =
                DownstreamStream.synthetic_terminal_failure(state, :upstream_interrupted)
 
-      assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(failure)
-      assert data["response"]["id"] == "resp_from_delta"
-      assert data["error"]["code"] == "upstream_stream_error"
-      assert data["error"]["message"] =~ "upstream request failed"
+      assert [%{"event" => "error", "data" => data}] = public_sse_events(failure)
+      assert data["type"] == "error"
+      assert data["code"] == "server_error"
+      assert data["error"]["code"] == "server_error"
+      refute Map.has_key?(data, "response")
+      refute Jason.encode!(data) =~ "resp_from_delta"
+
+      assert data["error"]["message"] ==
+               "upstream request failed: stream interrupted before terminal response event"
     end
 
     test "does not synthesize after an upstream terminal has already been observed" do

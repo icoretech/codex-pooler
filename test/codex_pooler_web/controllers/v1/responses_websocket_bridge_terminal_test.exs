@@ -10,7 +10,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.CodexTurn
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -75,12 +74,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     :ok
   end
 
-  test "hidden websocket bridge commitment emits one public synthetic failure and never replays HTTP",
+  test "bridge commitment with zero visible output emits one hybrid error without HTTP replay",
        %{conn: conn} do
-    set_upstream_receive_timeout!(1_000)
-
-    hidden_event =
-      Jason.encode!(%{"type" => "codex.future_event", "detail" => %{"count" => 1}})
+    release_ref = make_ref()
 
     replay_event =
       {"response.completed",
@@ -93,43 +89,111 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       start_upstream(
         {:sequence,
          [
-           FakeUpstream.websocket_text_frames([hidden_event]),
+           FakeUpstream.websocket_terminal_then_close_barrier(
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_dropped_before_bridge_close",
+                 "status" => "in_progress"
+               }
+             },
+             notify: self(),
+             release_ref: release_ref
+           ),
            FakeUpstream.sse_stream([replay_event])
          ]}
       )
 
     setup = gateway_setup(upstream)
-    session_id = "hidden-bridge-#{System.unique_integer([:positive])}"
+    session_id = "zero-visible-bridge-#{System.unique_integer([:positive])}"
+    parent = self()
 
-    response =
-      conn
-      |> auth(setup)
-      |> put_req_header("x-session-id", session_id)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "input" => "synthetic hidden bridge turn",
-        "stream" => true
-      })
+    request_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
 
+        conn
+        |> auth(setup)
+        |> put_req_header("x-session-id", session_id)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic zero-visible bridge turn",
+          "stream" => true
+        })
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_close, close_barrier_pid,
+                    ^release_ref},
+                   1_000
+
+    send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})
+    response = Task.await(request_task, 1_000)
+
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
     assert response.status == 200
-    assert stream_event_types(response.resp_body) == ["response.failed"]
+    assert stream_event_types(response.resp_body) == ["error"]
+    refute response.resp_body =~ "data: [DONE]"
+
+    assert [%{"event" => "error", "data" => error_data}] =
+             public_sse_events(response.resp_body)
+
+    assert MapSet.new(Map.keys(error_data)) ==
+             MapSet.new(["code", "error", "message", "param", "sequence_number", "type"])
+
+    assert %{
+             "code" => "server_error",
+             "error" => nested_error,
+             "message" =>
+               "upstream request failed: stream interrupted before terminal response event",
+             "param" => nil,
+             "sequence_number" => sequence_number,
+             "type" => "error"
+           } = error_data
+
+    assert is_integer(sequence_number)
+    assert sequence_number >= 0
+    refute Map.has_key?(error_data, "response")
+
+    assert nested_error == %{
+             "code" => "server_error",
+             "message" =>
+               "upstream request failed: stream interrupted before terminal response event",
+             "param" => nil,
+             "type" => "server_error"
+           }
+
+    refute response.resp_body =~ "resp_dropped_before_bridge_close"
+    refute response.resp_body =~ "unexpected_http_replay"
 
     assert [upstream_request] = FakeUpstream.requests(upstream)
     assert upstream_request.method == "WEBSOCKET"
+    assert FakeUpstream.http_request_count(upstream) == 0
 
-    request =
-      Repo.one!(
-        from request in Request,
-          where: request.pool_id == ^setup.pool.id,
-          order_by: [desc: request.admitted_at],
-          limit: 1
-      )
-
+    request = latest_request(setup.pool.id)
     assert request.status == "failed"
+    assert request.transport == "http_sse"
+    assert request.last_error_code == "upstream_stream_error"
+
     assert [attempt] = Repo.all(from attempt in Attempt, where: attempt.request_id == ^request.id)
+    assert attempt.status == "failed"
     assert attempt.transport == "websocket"
+    assert attempt.network_error_code == "upstream_stream_error"
     assert attempt.response_metadata["bridge_committed"] == true
-    refute inspect(attempt.response_metadata) =~ "codex.future_event"
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+
+    assert %{
+             "visible_seen" => false,
+             "synthetic_terminal_sent" => true
+           } = attempt.response_metadata["public_openai_responses_stream"]
+
+    assert settlement_count(request.id) == 1
   end
 
   for {terminal_type, terminal, public_type} <- @terminal_cases do
@@ -396,27 +460,37 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     assert stream_event_types(response.resp_body) == [
              "response.created",
              "response.output_text.delta",
-             "response.failed"
+             "error"
            ]
 
     assert response.resp_body =~ "visible before terminal drain"
-    refute response.resp_body =~ "upstream_stream_error"
     refute response.resp_body =~ "unexpected_http_replay"
 
+    data = response_failed_data(response.resp_body)
+
+    assert Map.keys(data) |> Enum.sort() ==
+             ~w(code error message param sequence_number type)
+
+    assert Map.keys(data["error"]) |> Enum.sort() == ~w(code message param type)
+
     assert %{
-             "type" => "response.failed",
+             "type" => "error",
+             "code" => "server_error",
+             "message" => message,
+             "param" => nil,
+             "sequence_number" => sequence_number,
              "error" => %{
-               "code" => "owner_drained",
-               "message" => "websocket owner is draining"
-             },
-             "response" => %{
-               "status" => "failed",
-               "error" => %{
-                 "code" => "owner_drained",
-                 "message" => "websocket owner is draining"
-               }
+               "type" => "server_error",
+               "code" => "server_error",
+               "message" => message,
+               "param" => nil
              }
-           } = response_failed_data(response.resp_body)
+           } = data
+
+    assert is_integer(sequence_number)
+
+    assert message ==
+             "upstream request failed: stream interrupted before terminal response event"
 
     assert [upstream_request] = FakeUpstream.requests(upstream)
     assert upstream_request.method == "WEBSOCKET"
@@ -452,11 +526,24 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
     end)
   end
 
+  defp public_sse_events(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.flat_map(fn block ->
+      with [event] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
+           [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
+        [%{"event" => event, "data" => Jason.decode!(data)}]
+      else
+        _missing -> []
+      end
+    end)
+  end
+
   defp response_failed_data(body) do
     body
     |> String.split("\n\n", trim: true)
     |> Enum.find_value(fn block ->
-      with ["response.failed"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
+      with ["error"] <- Regex.run(~r/^event: (.+)$/m, block, capture: :all_but_first),
            [data] <- Regex.run(~r/^data: (.+)$/m, block, capture: :all_but_first) do
         Jason.decode!(data)
       else
@@ -522,17 +609,5 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
              ])
 
     owner_pid
-  end
-
-  defp set_upstream_receive_timeout!(timeout_ms) do
-    previous = Application.get_env(:codex_pooler, OperationalSettings, [])
-    settings = %{OperationalSettings.current() | upstream_receive_timeout_ms: timeout_ms}
-
-    Application.put_env(:codex_pooler, OperationalSettings,
-      settings: settings,
-      use_instance_settings?: false
-    )
-
-    on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 end

@@ -22,7 +22,7 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
                :upstream_interrupted
              )
 
-    assert [%{"sequence_number" => 0, "type" => "response.failed"}] =
+    assert [%{"sequence_number" => 0, "type" => "error"}] =
              sse_events(pre_output)
 
     assert pre_output_state.public_openai_responses.sequence.max_seen == 0
@@ -53,7 +53,7 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
     post_output = post_output_prefix <> terminal
     post_events = sse_events(post_output)
     assert Enum.map(post_events, & &1["sequence_number"]) == [0, 2, 3]
-    assert List.last(post_events)["type"] == "response.failed"
+    assert List.last(post_events)["type"] == "error"
     assert state.public_openai_responses.sequence.max_seen == 3
 
     invalid_sequence =
