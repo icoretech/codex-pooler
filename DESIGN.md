@@ -363,9 +363,12 @@ pools panel renders per-assignment route chevrons:
   lifecycle is retained across replicas, but current blocking is determined
   only by `CircuitHealth.blocked?/3` and its `blocked_reason/3`; a persisted
   active lifecycle row is not automatically current blocking. A blocked lane
-  is not ready. A probe-eligible active lane, or closed lane with recent
-  eligible evidence, is recovering and currently ready. Recent evidence is
-  never current blocking. Circuit rows are limited to current served models:
+  is not ready. Among non-blocked rows, an eligible `half_open` lane, or a lane
+  with eligible `opened_at`/`last_failure_at` evidence inside the inclusive
+  recovery window, is recovering and currently ready. A non-blocked `open` lane
+  recovers only with that evidence; stale, future, or absent evidence leaves it
+  clear. Recent evidence is never current blocking. Circuit rows are limited to
+  current served models:
   retired or non-serving models are ignored before classification or recovery.
   For each exact lane, the latest row is selected by `updated_at DESC`, then
   `created_at DESC`, before history and recovery evidence are considered. The
