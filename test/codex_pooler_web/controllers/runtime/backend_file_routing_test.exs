@@ -852,7 +852,10 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
     assert_receive {:upload_put, ^file_id, "PUT", ^path, ^body, headers}, 1_000
     assert header!(headers, "content-type") == content_type
     assert header!(headers, "x-ms-blob-type") == "BlockBlob"
-    refute Enum.any?(headers, fn {name, _value} -> name in ["authorization", "cookie"] end)
+
+    refute Enum.any?(headers, fn {name, _value} ->
+             name in ["authorization", "cookie", "user-agent"]
+           end)
   end
 
   defp header!(headers, name) do

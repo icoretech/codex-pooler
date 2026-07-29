@@ -8,6 +8,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  @nested_finch_timeout_options? Version.match?(
+                                   to_string(Application.spec(:req, :vsn)),
+                                   ">= 0.7.0"
+                                 )
+
   @type timeout_settings :: %{
           required(:connect_timeout_ms) => non_neg_integer(),
           required(:pool_timeout_ms) => non_neg_integer(),
@@ -25,12 +30,24 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
   end
 
   @spec req_timeout_options(TimeoutConfig.t() | timeout_settings()) :: keyword()
-  def req_timeout_options(timeouts) do
-    [
-      receive_timeout: timeouts.receive_timeout_ms,
-      pool_timeout: timeouts.pool_timeout_ms,
-      connect_options: [timeout: timeouts.connect_timeout_ms]
-    ]
+  if @nested_finch_timeout_options? do
+    def req_timeout_options(timeouts) do
+      [
+        receive_timeout: timeouts.receive_timeout_ms,
+        finch: [
+          pool_timeout: timeouts.pool_timeout_ms,
+          conn_opts: [transport_opts: [timeout: timeouts.connect_timeout_ms]]
+        ]
+      ]
+    end
+  else
+    def req_timeout_options(timeouts) do
+      [
+        receive_timeout: timeouts.receive_timeout_ms,
+        pool_timeout: timeouts.pool_timeout_ms,
+        connect_options: [timeout: timeouts.connect_timeout_ms]
+      ]
+    end
   end
 
   @spec headers(UpstreamIdentity.t(), String.t(), [{String.t(), String.t()}], keyword()) :: [

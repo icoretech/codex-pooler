@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureIO
+
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
@@ -30,11 +32,48 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         receive_timeout_ms: 30
       }
 
-      assert TransportEnvelope.req_timeout_options(timeouts) == [
-               receive_timeout: 30,
-               pool_timeout: 20,
-               connect_options: [timeout: 10]
-             ]
+      if Version.match?(to_string(Application.spec(:req, :vsn)), ">= 0.7.0") do
+        assert TransportEnvelope.req_timeout_options(timeouts) == [
+                 receive_timeout: 30,
+                 finch: [
+                   pool_timeout: 20,
+                   conn_opts: [transport_opts: [timeout: 10]]
+                 ]
+               ]
+      else
+        assert TransportEnvelope.req_timeout_options(timeouts) == [
+                 receive_timeout: 30,
+                 pool_timeout: 20,
+                 connect_options: [timeout: 10]
+               ]
+      end
+    end
+
+    test "executes the configured Req transport without deprecation warnings" do
+      url = start_http_server!()
+
+      timeouts = %TimeoutConfig{
+        connect_timeout_ms: 1_000,
+        pool_timeout_ms: 1_000,
+        receive_timeout_ms: 1_000
+      }
+
+      test_pid = self()
+
+      warnings =
+        capture_io(:stderr, fn ->
+          result =
+            Req.get(
+              url,
+              [decode_body: false, retry: false] ++
+                TransportEnvelope.req_timeout_options(timeouts)
+            )
+
+          send(test_pid, {:req_timeout_result, result})
+        end)
+
+      assert_receive {:req_timeout_result, {:ok, %Req.Response{status: 204}}}, 1_000
+      assert warnings == ""
     end
   end
 
@@ -352,5 +391,35 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
 
   defp identity do
     %UpstreamIdentity{chatgpt_account_id: "acct_test"}
+  end
+
+  defp start_http_server! do
+    {:ok, listen_socket} =
+      :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+
+    {:ok, port} = :inet.port(listen_socket)
+
+    server_pid =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen_socket)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+
+        :ok =
+          :gen_tcp.send(socket, [
+            "HTTP/1.1 204 No Content\r\n",
+            "content-length: 0\r\n",
+            "connection: close\r\n\r\n"
+          ])
+
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listen_socket)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(server_pid), do: Process.exit(server_pid, :kill)
+      :gen_tcp.close(listen_socket)
+    end)
+
+    "http://127.0.0.1:#{port}/"
   end
 end

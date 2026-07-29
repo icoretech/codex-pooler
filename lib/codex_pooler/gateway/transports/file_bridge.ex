@@ -283,18 +283,20 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   defp upload_request(upload_url) do
     [url: upload_url]
     |> Req.new()
-    |> without_request_steps(@upload_request_step_denylist)
+    |> disable_request_steps(@upload_request_step_denylist)
   end
 
-  @spec without_request_steps(Req.Request.t(), [atom()]) :: Req.Request.t()
-  defp without_request_steps(%Req.Request{} = request, step_names) when is_list(step_names) do
-    %{
-      request
-      | request_steps: Keyword.drop(request.request_steps, step_names),
-        current_request_steps:
-          Enum.reject(request.current_request_steps, fn step_name -> step_name in step_names end)
-    }
+  @spec disable_request_steps(Req.Request.t(), [atom()]) :: Req.Request.t()
+  defp disable_request_steps(%Req.Request{} = request, step_names) when is_list(step_names) do
+    request_steps =
+      Enum.reduce(step_names, request.request_steps, fn step_name, request_steps ->
+        Keyword.replace!(request_steps, step_name, &passthrough_request_step/1)
+      end)
+
+    %{request | request_steps: request_steps}
   end
+
+  defp passthrough_request_step(request), do: request
 
   defp configured_upload_req_options do
     case Keyword.get(config(), :upload_req_options, []) do
