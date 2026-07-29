@@ -914,8 +914,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  nonblank_mismatch: "drop"
                },
                oversized_incomplete_sse: %{
-                 max_buffered_bytes: 65_536,
-                 overflow_byte: 65_537,
+                 ordinary_max_buffered_bytes: 65_536,
+                 terminal_candidate_max_buffered_bytes: 67_108_864,
                  source_bytes_relayed: false,
                  terminal_event: "error",
                  accounting_error_code: "upstream_stream_error"
