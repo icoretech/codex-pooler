@@ -4620,7 +4620,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       receive do
       after
-        max(DateTime.diff(expires_at, DateTime.utc_now(), :millisecond) + 50, 0) -> :ok
+        max(
+          DateTime.diff(DateTime.add(expires_at, 1, :second), DateTime.utc_now(), :millisecond) +
+              50,
+          0
+        ) ->
+          :ok
       end
 
       send(lock_holder.pid, release_ref)

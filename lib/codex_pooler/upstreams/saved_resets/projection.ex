@@ -344,7 +344,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
     with next_expires_at when is_binary(next_expires_at) <- snapshot.next_expires_at,
          {:ok, expires_at, _offset} <- DateTime.from_iso8601(next_expires_at) do
-      seconds_until_expiration = DateTime.diff(expires_at, timestamp, :second)
+      seconds_until_expiration = whole_second_diff(expires_at, timestamp)
 
       seconds_until_expiration >= 0 and seconds_until_expiration <= within_seconds
     else

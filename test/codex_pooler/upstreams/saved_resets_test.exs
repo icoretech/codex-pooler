@@ -112,6 +112,29 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       end
     end
 
+    test "expires soon compares the horizon at whole-second precision" do
+      timestamp = ~U[2026-07-29 12:00:00.900000Z]
+      whole_second_timestamp = DateTime.truncate(timestamp, :second)
+
+      for {expires_in_seconds, expected?} <- [
+            {86_399, true},
+            {86_400, true},
+            {86_401, false}
+          ] do
+        expires_at =
+          whole_second_timestamp
+          |> DateTime.add(expires_in_seconds, :second)
+          |> DateTime.add(100_000, :microsecond)
+
+        metadata = %{
+          "saved_resets" => %{"next_expires_at" => DateTime.to_iso8601(expires_at)}
+        }
+
+        assert SavedResets.expires_soon?(metadata, timestamp, 86_400) == expected?,
+               "expires_in_seconds=#{expires_in_seconds}"
+      end
+    end
+
     test "applies adaptive failed-refresh backoff at exact equality" do
       timestamp = ~U[2026-07-29 12:00:00.500000Z]
 

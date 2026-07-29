@@ -1976,7 +1976,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assert holder_backend_pid in observation.blocking_pids
         assert observation.wait_event_type == "Lock"
 
-        await_after!(expires_at)
+        await_after!(DateTime.add(expires_at, 1, :second))
         send(assignment_holder.pid, {barrier, :release_assignment})
 
         assert {:ok, :released} = Task.await(assignment_holder, 5_000)
