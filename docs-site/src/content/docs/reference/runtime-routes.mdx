@@ -650,10 +650,13 @@ Responses streams or websocket surfaces. On `POST /v1/responses`, the
 sequence-valid synthetic `error` event uses the hybrid flat-and-nested
 `type: "error"` / `server_error` shape. Absent, blank, and whitespace-only SSE
 event labels are treated as absent before event/data type precedence; nonblank
-mismatches remain rejected. An incomplete public Responses SSE block may retain
-at most 65,536 bytes. Byte 65,537 emits one bounded sanitized `error` event,
-relays none of the overflowing source block, and latches later source frames
-out. Complete blocks are still parsed before that overflow decision. A
+mismatches remain rejected. An ordinary incomplete public Responses SSE block
+may retain at most 65,536 bytes. A structurally recognizable terminal candidate
+may retain up to 64 MiB so large completed responses split across upstream
+chunks can finish decoding. Crossing the applicable bound emits one bounded
+sanitized `error` event, relays none of the overflowing source block, and
+latches later source frames out. Complete blocks are still parsed before that
+overflow decision. A
 post-budget owner-drain abort emits
 the same wire frame byte-for-byte while accounting records `owner_drained`
 instead of `upstream_stream_error`. On `POST /v1/chat/completions` and its
