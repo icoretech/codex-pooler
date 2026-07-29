@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.5.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.8...codex-pooler-v0.5.9) (2026-07-29)
+
+
+### Features
+
+* **admin:** batch circuit evidence for upstream accounts ([9ce0021](https://github.com/icoretech/codex-pooler/commit/9ce0021860ef26dca58e1c44f8418c56be9c8e20))
+* **admin:** carry circuit visibility into the upstream cockpit ([e052e5d](https://github.com/icoretech/codex-pooler/commit/e052e5df45add33b289562761e2839f2cef2ac6b))
+* **admin:** project upstream circuit readiness ([8b42c53](https://github.com/icoretech/codex-pooler/commit/8b42c53bebd9d5dea77557f40b84a72942c8a994))
+* **admin:** show the circuit gate on route paths ([f85fb82](https://github.com/icoretech/codex-pooler/commit/f85fb8209fb5b54193e4b95572b7cc8892b23e5b))
+* **admin:** surface circuit evidence in account verdicts ([a4f6d92](https://github.com/icoretech/codex-pooler/commit/a4f6d920c0b7af50614927a39c235e055d8ca9a7))
+* **alerts:** count circuit-blocked assignments as unusable ([d7bd593](https://github.com/icoretech/codex-pooler/commit/d7bd59359e1225dda9b8083dc301b3f414247ad7))
+* **alerts:** scope alert rules to a route class ([71ce0f8](https://github.com/icoretech/codex-pooler/commit/71ce0f8344de4d3b755546bc8621d1053f14c5ba))
+* **gateway:** emit routing circuit transition telemetry ([f8e9d8b](https://github.com/icoretech/codex-pooler/commit/f8e9d8bec4f30d1cf71bb14c71605d2c0759a434))
+* **saved-resets:** defer scheduled expiry rescue to burn conditions ([e031d11](https://github.com/icoretech/codex-pooler/commit/e031d11fe0387820e0e92c6beceacf8375e3c6f8))
+* **saved-resets:** record scheduled expiry decision metadata ([fda590d](https://github.com/icoretech/codex-pooler/commit/fda590df8512078ad6488779de266427baf3af81))
+
+
+### Bug Fixes
+
+* **admin:** bound stale open circuit recovery ([7ab841e](https://github.com/icoretech/codex-pooler/commit/7ab841e50625493b3c7a42eab46b1ec62f676232))
+* **admin:** eliminate assignment gate overflow ([50030d8](https://github.com/icoretech/codex-pooler/commit/50030d871e41e3d72581ec7b4f24a35a4ff5335f))
+* **admin:** fit assignment route gate labels ([73339b9](https://github.com/icoretech/codex-pooler/commit/73339b96192ee037517b864f8044ccc01a65d42c))
+* **admin:** keep circuit route paths readable ([146cbb9](https://github.com/icoretech/codex-pooler/commit/146cbb9cf254a42d220caa51b790e9bc7e5cd227))
+* **admin:** keep circuit route paths readable ([45054ee](https://github.com/icoretech/codex-pooler/commit/45054eec44dec9c821f0402969d09f1a5da50e36))
+* **admin:** present unknown model weekly resets ([bc5afe6](https://github.com/icoretech/codex-pooler/commit/bc5afe6c3c8bb919e43f45412ef7c207dcc2b710))
+* **admin:** preserve distinct circuit display lanes ([3b48496](https://github.com/icoretech/codex-pooler/commit/3b4849650552365384df31fc401dbb6d668c4cd8))
+* **deps:** update astro monorepo ([#216](https://github.com/icoretech/codex-pooler/issues/216)) ([94ee6ec](https://github.com/icoretech/codex-pooler/commit/94ee6ec7c5173009795d85071f2263660f8b36ca))
+* **deps:** update dependency @astrojs/starlight to v0.41.5 ([#218](https://github.com/icoretech/codex-pooler/issues/218)) ([faa0723](https://github.com/icoretech/codex-pooler/commit/faa0723553f349dfcd8867ed9b9b52385989ad92))
+* **deps:** update dependency daisyui to v5.7.4 ([#212](https://github.com/icoretech/codex-pooler/issues/212)) ([533d28a](https://github.com/icoretech/codex-pooler/commit/533d28afae9787eeacb3c4fa7176afc43861d3f8))
+* **dev:** keep circuit seed states stable ([48db2df](https://github.com/icoretech/codex-pooler/commit/48db2df23601f275de6f6cfb242d29dde1ecbe43))
+* **dev:** stabilize circuit demo route counts ([29f54d8](https://github.com/icoretech/codex-pooler/commit/29f54d8db21f1b94aa335caf451ddc2128c7036e))
+* **gateway:** handle multipart rejection parts ([8f2b982](https://github.com/icoretech/codex-pooler/commit/8f2b98278be5ebfa4125c0156c5ef7db3b9a831a))
+* **gateway:** omit code mode tools from direct metadata ([9b874da](https://github.com/icoretech/codex-pooler/commit/9b874dadd60660afa3b4fc6264fcc6a557357c17))
+* **gateway:** remove stale req timeout branch ([9b228e6](https://github.com/icoretech/codex-pooler/commit/9b228e661083fe90038bb615186594f1f65bb945))
+* **gateway:** retain bounded upstream rejection metadata ([7817bdf](https://github.com/icoretech/codex-pooler/commit/7817bdfd502b9161d0ed700cdc85186697400cb9))
+* **gateway:** support req 0.7 transport changes ([f2e5452](https://github.com/icoretech/codex-pooler/commit/f2e54528085fc9fa115e60dcc9640b4525c5a1c3))
+* **jobs:** read reconciliation pause from database ([1b1744e](https://github.com/icoretech/codex-pooler/commit/1b1744e32935694a7d4450d89e1aa861d60b29cf))
+* **quota:** classify model weekly reset evidence ([62893ba](https://github.com/icoretech/codex-pooler/commit/62893bad616e0eb23bf278ca33ed07fc9e5247f9))
+* **quota:** synchronize quota selection timestamps ([75611bc](https://github.com/icoretech/codex-pooler/commit/75611bcb9a18bc4e8d56b5d565cec424a01a3ae2))
+* **saved-resets:** compare expiry horizon at whole seconds ([8b562e6](https://github.com/icoretech/codex-pooler/commit/8b562e65e1e9c8c005980d20b85748c5e08e8af4))
+* **saved-resets:** compare reset buffer at whole seconds ([3668d77](https://github.com/icoretech/codex-pooler/commit/3668d77eae91377226226b5f53a487ada41d8413))
+* **saved-resets:** rescue expiring credits without traffic ([10e96fd](https://github.com/icoretech/codex-pooler/commit/10e96fd953e1cdf0ca1fdbf72e446dc63c94f32e))
+* **streaming:** bound public terminal stream failures ([ea2bd04](https://github.com/icoretech/codex-pooler/commit/ea2bd0411cf830fa8c758b3ed0e0038c9a75213c))
+* **streaming:** preserve chunk errors and state in first-event flush ([e189931](https://github.com/icoretech/codex-pooler/commit/e189931570bde009a29662f253dfcb3c33ef804d))
+* **streaming:** project public failed response envelopes ([834c1e8](https://github.com/icoretech/codex-pooler/commit/834c1e82b2cc5439f4137ad7c6387525ab92cd24))
+* **streaming:** raise ordinary incomplete SSE block bound to 8 MiB ([a586178](https://github.com/icoretech/codex-pooler/commit/a586178fcb427b2352457c4dbada904e0171deed))
+* **streaming:** record applicable overflow buffer limit ([8ca588a](https://github.com/icoretech/codex-pooler/commit/8ca588a4a00fbfdefb037022603e02131d52528f))
+* **streaming:** retain large terminal candidates ([2fcef24](https://github.com/icoretech/codex-pooler/commit/2fcef242c1351846c50b2df40a2d9dea77658c42))
+* **streaming:** sanitize malformed terminal errors ([4c94d76](https://github.com/icoretech/codex-pooler/commit/4c94d76c804a71d7f04c374d6a612d63819e6598))
+* **streaming:** sanitize public terminal envelopes ([1f3deab](https://github.com/icoretech/codex-pooler/commit/1f3deab9b81119f0bb2e5ea14799c6af194de65c))
+* **streaming:** surface interrupted public stream failures ([ef057dc](https://github.com/icoretech/codex-pooler/commit/ef057dc733ab09ec93c790817dc1839ab3648f70))
+* **verification:** assert model weekly routing winner ([88d36bf](https://github.com/icoretech/codex-pooler/commit/88d36bf6f9181ae9b67fd73e6a19a098131ccbd1))
+* **websocket:** preserve canonical terminal events ([e60fca0](https://github.com/icoretech/codex-pooler/commit/e60fca0052f507d92a174e4646827463b55d995b))
+* **websocket:** surface owner-forwarded turn failures ([0443580](https://github.com/icoretech/codex-pooler/commit/04435806a3fe45cf852ff1d58774bceb4b56474b))
+
+
+### Performance Improvements
+
+* **streaming:** parse accumulated SSE incrementally without rescans ([b866e36](https://github.com/icoretech/codex-pooler/commit/b866e363225c9d6346f17766147fa7bf5ab5f7bc))
+
 ## [0.5.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.7...codex-pooler-v0.5.8) (2026-07-25)
 
 
