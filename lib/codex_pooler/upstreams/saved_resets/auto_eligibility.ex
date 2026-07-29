@@ -14,6 +14,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
+  @last_call_seconds 90 * 60
   @assignment_active PoolUpstreamAssignment.active_status()
   @identity_active UpstreamIdentity.active_status()
   @type trigger :: Context.trigger()
@@ -123,8 +124,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       SavedResets.expires_soon?(identity, timestamp) and
       identity
       |> Windows.list_evidence()
-      |> scheduled_weekly_eligibility(snapshot, timestamp)
-      |> scheduled_weekly_compatibility(policy, timestamp) == :eligible
+      |> scheduled_burn(snapshot, policy, timestamp)
+      |> burn_ready?()
   end
 
   @spec validate_locked_scheduled_expiry(
@@ -555,16 +556,248 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     if usable_windows == [], do: :unavailable, else: {:eligible, usable_windows}
   end
 
-  defp scheduled_weekly_compatibility({:eligible, windows}, policy, timestamp) do
-    if Enum.any?(
-         windows,
-         &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
-       ),
-       do: :eligible,
-       else: :natural_reset_buffer
+  @spec scheduled_burn_condition(
+          [AccountQuotaWindow.t()],
+          SavedResets.auto_policy_projection(),
+          SavedResets.snapshot_projection(),
+          DateTime.t()
+        ) :: scheduled_burn_result()
+  def scheduled_burn_condition(windows, policy, snapshot, %DateTime{} = timestamp)
+      when is_list(windows) and is_map(policy) and is_map(snapshot) do
+    credit_expires_at = scheduled_credit_expires_at(snapshot.next_expires_at)
+    expiration_fresh? = SavedResets.expiration_observation_fresh?(snapshot, timestamp)
+    comparison_timestamp = DateTime.truncate(timestamp, :second)
+    future_expiration? = future_expiration?(credit_expires_at, comparison_timestamp)
+
+    conditions = %{
+      exhausted:
+        exhausted_burn_windows(
+          windows,
+          policy,
+          credit_expires_at,
+          expiration_fresh?,
+          future_expiration?,
+          comparison_timestamp
+        ),
+      threshold:
+        threshold_burn_windows(windows, policy, future_expiration?, comparison_timestamp),
+      last_call:
+        last_call_burn_windows(
+          windows,
+          credit_expires_at,
+          expiration_fresh?,
+          comparison_timestamp
+        )
+    }
+
+    case winning_burn_condition(conditions) do
+      {trigger_detail, qualifying_windows} ->
+        burn_context(trigger_detail, qualifying_windows, credit_expires_at, timestamp)
+
+      nil ->
+        {:not_ready,
+         burn_not_ready_reason(
+           windows,
+           policy,
+           credit_expires_at,
+           expiration_fresh?,
+           future_expiration?,
+           comparison_timestamp
+         )}
+    end
   end
 
-  defp scheduled_weekly_compatibility(:unavailable, _policy, _timestamp), do: :unavailable
+  defp exhausted_burn_windows(
+         windows,
+         policy,
+         credit_expires_at,
+         expiration_fresh?,
+         true,
+         timestamp
+       ) do
+    Enum.filter(windows, fn window ->
+      used_percent_exhausted?(window.used_percent) and
+        (natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) or
+           expiration_before_reset?(credit_expires_at, window.reset_at, expiration_fresh?))
+    end)
+  end
+
+  defp exhausted_burn_windows(
+         _windows,
+         _policy,
+         _credit_expires_at,
+         _expiration_fresh?,
+         false,
+         _timestamp
+       ),
+       do: []
+
+  defp threshold_burn_windows(
+         windows,
+         %{trigger_mode: "threshold"} = policy,
+         true,
+         timestamp
+       ) do
+    Enum.filter(windows, fn window ->
+      used_percent_at_or_above?(window.used_percent, policy.quota_threshold_percent) and
+        natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+    end)
+  end
+
+  defp threshold_burn_windows(_windows, _policy, _future_expiration?, _timestamp), do: []
+
+  defp last_call_burn_windows(windows, credit_expires_at, expiration_fresh?, timestamp) do
+    Enum.filter(windows, fn window ->
+      used_percent_above_zero?(window.used_percent) and
+        last_call_expiration?(credit_expires_at, timestamp) and
+        expiration_before_reset?(credit_expires_at, window.reset_at, expiration_fresh?)
+    end)
+  end
+
+  defp winning_burn_condition(%{exhausted: [_window | _rest] = windows}),
+    do: {"exhausted", windows}
+
+  defp winning_burn_condition(%{threshold: [_window | _rest] = windows}),
+    do: {"threshold", windows}
+
+  defp winning_burn_condition(%{last_call: [_window | _rest] = windows}),
+    do: {"last_call", windows}
+
+  defp winning_burn_condition(_conditions), do: nil
+
+  defp burn_context(trigger_detail, windows, {:ok, credit_expires_at}, timestamp) do
+    evidence_window = select_scheduled_evidence_window(windows)
+
+    {:burn,
+     %{
+       trigger_detail: trigger_detail,
+       used_percent_at_decision: evidence_window.used_percent,
+       credit_expires_at_at_decision: credit_expires_at,
+       natural_reset_at_decision: evidence_window.reset_at,
+       decided_at: timestamp
+     }}
+  end
+
+  defp burn_context(_trigger_detail, _windows, :error, _timestamp),
+    do: {:not_ready, :expiration_stale}
+
+  defp burn_not_ready_reason(
+         windows,
+         policy,
+         credit_expires_at,
+         expiration_fresh?,
+         future_expiration?,
+         timestamp
+       ) do
+    cond do
+      future_expiration? and
+          expiration_stale_blocker?(
+            windows,
+            policy,
+            credit_expires_at,
+            expiration_fresh?,
+            timestamp
+          ) ->
+        :expiration_stale
+
+      future_expiration? and
+          natural_reset_blocker?(windows, policy, credit_expires_at, timestamp) ->
+        :natural_reset_buffer
+
+      true ->
+        :burn_condition_absent
+    end
+  end
+
+  defp expiration_stale_blocker?(
+         windows,
+         policy,
+         credit_expires_at,
+         expiration_fresh?,
+         timestamp
+       ) do
+    not expiration_fresh? and
+      (possible_exhausted_bypass?(windows, policy, credit_expires_at, timestamp) or
+         possible_last_call_burn?(windows, credit_expires_at, timestamp))
+  end
+
+  defp possible_exhausted_bypass?(_windows, _policy, :error, _timestamp), do: false
+
+  defp possible_exhausted_bypass?(windows, policy, {:ok, credit_expires_at}, timestamp) do
+    Enum.any?(windows, fn window ->
+      used_percent_exhausted?(window.used_percent) and
+        not natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp) and
+        expiration_before_reset?(credit_expires_at, window.reset_at)
+    end)
+  end
+
+  defp possible_last_call_burn?(_windows, :error, _timestamp), do: false
+
+  defp possible_last_call_burn?(windows, {:ok, credit_expires_at}, timestamp) do
+    last_call_expiration?({:ok, credit_expires_at}, timestamp) and
+      Enum.any?(windows, fn window ->
+        used_percent_above_zero?(window.used_percent) and
+          expiration_before_reset?(credit_expires_at, window.reset_at)
+      end)
+  end
+
+  defp natural_reset_blocker?(windows, policy, credit_expires_at, timestamp) do
+    exhausted_or_threshold_buffer_blocked?(windows, policy, timestamp) or
+      last_call_reset_first?(windows, credit_expires_at, timestamp)
+  end
+
+  defp exhausted_or_threshold_buffer_blocked?(windows, policy, timestamp) do
+    Enum.any?(windows, fn window ->
+      (used_percent_exhausted?(window.used_percent) or
+         threshold_candidate?(window, policy)) and
+        not natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
+    end)
+  end
+
+  defp threshold_candidate?(window, %{trigger_mode: "threshold"} = policy),
+    do: used_percent_at_or_above?(window.used_percent, policy.quota_threshold_percent)
+
+  defp threshold_candidate?(_window, _policy), do: false
+
+  defp last_call_reset_first?(windows, {:ok, credit_expires_at}, timestamp) do
+    last_call_expiration?({:ok, credit_expires_at}, timestamp) and
+      Enum.any?(windows, fn window ->
+        used_percent_above_zero?(window.used_percent) and
+          not expiration_before_reset?(credit_expires_at, window.reset_at)
+      end)
+  end
+
+  defp last_call_reset_first?(_windows, _credit_expires_at, _timestamp), do: false
+
+  defp last_call_expiration?({:ok, credit_expires_at}, timestamp) do
+    seconds_until_expiration = whole_second_diff(credit_expires_at, timestamp)
+    seconds_until_expiration > 0 and seconds_until_expiration <= @last_call_seconds
+  end
+
+  defp last_call_expiration?(_credit_expires_at, _timestamp), do: false
+
+  defp future_expiration?({:ok, credit_expires_at}, timestamp),
+    do: whole_second_diff(credit_expires_at, timestamp) > 0
+
+  defp future_expiration?(_credit_expires_at, _timestamp), do: false
+
+  defp expiration_before_reset?({:ok, credit_expires_at}, reset_at, true),
+    do: expiration_before_reset?(credit_expires_at, reset_at)
+
+  defp expiration_before_reset?(_credit_expires_at, _reset_at, _expiration_fresh?), do: false
+
+  defp expiration_before_reset?(%DateTime{} = credit_expires_at, %DateTime{} = reset_at),
+    do:
+      DateTime.before?(
+        DateTime.truncate(credit_expires_at, :second),
+        DateTime.truncate(reset_at, :second)
+      )
+
+  defp expiration_before_reset?(_credit_expires_at, _reset_at), do: false
+
+  defp whole_second_diff(left, right) do
+    DateTime.diff(DateTime.truncate(left, :second), DateTime.truncate(right, :second), :second)
+  end
 
   @spec scheduled_burn(
           [AccountQuotaWindow.t()],
@@ -575,35 +808,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp scheduled_burn(windows, snapshot, policy, timestamp) do
     case scheduled_weekly_eligibility(windows, snapshot, timestamp) do
       {:eligible, eligible_windows} ->
-        burn_from_eligible_windows(eligible_windows, snapshot, policy, timestamp)
+        scheduled_burn_condition(eligible_windows, policy, snapshot, timestamp)
 
       :unavailable ->
         {:not_ready, :burn_condition_absent}
-    end
-  end
-
-  defp burn_from_eligible_windows(windows, snapshot, policy, timestamp) do
-    compatible_windows =
-      Enum.filter(
-        windows,
-        &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
-      )
-
-    with [_window | _rest] <- compatible_windows,
-         {:ok, credit_expires_at} <- scheduled_credit_expires_at(snapshot.next_expires_at) do
-      evidence_window = select_scheduled_evidence_window(windows)
-
-      {:burn,
-       %{
-         trigger_detail: "immediate_expiry",
-         used_percent_at_decision: evidence_window.used_percent,
-         credit_expires_at_at_decision: credit_expires_at,
-         natural_reset_at_decision: evidence_window.reset_at,
-         decided_at: timestamp
-       }}
-    else
-      [] -> {:not_ready, :natural_reset_buffer}
-      :error -> {:not_ready, :expiration_stale}
     end
   end
 
@@ -636,10 +844,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     do: {:noop, "scheduled_expiry_burn_not_ready"}
 
   defp scheduled_burn_result({:not_ready, :expiration_stale}),
-    do: {:noop, "scheduled_expiry_not_expiring"}
+    do: {:noop, "scheduled_expiry_expiration_stale"}
 
   defp scheduled_burn_result({:not_ready, :natural_reset_buffer}),
     do: {:noop, "scheduled_expiry_natural_reset_buffer"}
+
+  defp burn_ready?({:burn, _context}), do: true
+  defp burn_ready?({:not_ready, _reason}), do: false
 
   defp weekly_usable_window?(window, timestamp) do
     WindowClassifier.weekly_secondary?(window) and

@@ -19,7 +19,13 @@ defmodule CodexPooler.Upstreams.SavedResets do
   @default_trigger_mode "blocked"
   @default_quota_threshold_percent 95
   @expiration_refresh_ttl_seconds 6 * 60 * 60
+  @near_expiration_refresh_ttl_seconds 30 * 60
   @expiring_soon_seconds 24 * 60 * 60
+  @last_call_seconds 90 * 60
+  @near_expiration_seconds 15 * 60
+  @distant_failed_refresh_backoff_seconds 15 * 60
+  @approaching_failed_refresh_backoff_seconds 5 * 60
+  @last_call_failed_refresh_backoff_seconds 60
   @redemption_receive_timeout_ms 15_000
   @redemption_stale_grace_ms 60_000
   @detail_status_marker :saved_reset_detail_status
@@ -275,19 +281,16 @@ defmodule CodexPooler.Upstreams.SavedResets do
       available_count <= 0 ->
         false
 
+      failed_expiration_refresh_suppressed?(snapshot, timestamp) ->
+        false
+
       snapshot.available_count != available_count ->
         true
 
       grant_bootstrap_due?(snapshot.available_expirations) ->
         true
 
-      expiration_refresh_recent?(snapshot.expires_refresh_attempted_at, timestamp) ->
-        false
-
-      snapshot.expires_observed_at == nil ->
-        true
-
-      expiration_observation_stale?(snapshot.expires_observed_at, timestamp) ->
+      not expiration_observation_fresh?(snapshot, timestamp) ->
         true
 
       not next_expiration_future?(snapshot.next_expires_at, timestamp) ->
@@ -300,6 +303,17 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   def reset_credit_list_refresh_due?(_identity_or_metadata, _available_count, _timestamp),
     do: false
+
+  @spec expiration_observation_fresh?(snapshot_projection(), DateTime.t()) :: boolean()
+  def expiration_observation_fresh?(snapshot, %DateTime{} = timestamp) do
+    with {:ok, observed_at} <- parse_iso8601_datetime(snapshot.expires_observed_at),
+         false <- DateTime.after?(observed_at, timestamp) do
+      observation_age = whole_second_diff(timestamp, observed_at)
+      observation_age >= 0 and observation_age < expiration_observation_ttl(snapshot, timestamp)
+    else
+      _invalid_or_future -> false
+    end
+  end
 
   @spec reuse_expiration_metadata(term(), UpstreamIdentity.t() | map()) :: term()
   @spec reuse_expiration_metadata(term(), UpstreamIdentity.t() | map(), DateTime.t() | nil) ::
@@ -612,41 +626,85 @@ defmodule CodexPooler.Upstreams.SavedResets do
   defp expiration_refresh_attempted_at(snapshot, _attempted_at),
     do: snapshot.expires_refresh_attempted_at
 
-  defp expiration_refresh_recent?(attempted_at, timestamp) when is_binary(attempted_at) do
-    case DateTime.from_iso8601(attempted_at) do
-      {:ok, attempted_at, _offset} ->
-        DateTime.diff(timestamp, attempted_at, :second) < @expiration_refresh_ttl_seconds
-
-      _invalid ->
-        false
+  defp failed_expiration_refresh_suppressed?(snapshot, timestamp) do
+    with {:ok, attempted_at} <- parse_iso8601_datetime(snapshot.expires_refresh_attempted_at),
+         false <- DateTime.after?(attempted_at, timestamp),
+         true <- failed_attempt_after_observation?(attempted_at, snapshot.expires_observed_at) do
+      attempt_age = whole_second_diff(timestamp, attempted_at)
+      attempt_age >= 0 and attempt_age < failed_refresh_backoff(snapshot, timestamp)
+    else
+      _invalid_future_or_not_failed -> false
     end
   end
 
-  defp expiration_refresh_recent?(_attempted_at, _timestamp), do: false
+  defp failed_attempt_after_observation?(attempted_at, observed_at) do
+    case parse_iso8601_datetime(observed_at) do
+      {:ok, observed_at} -> DateTime.after?(attempted_at, observed_at)
+      :error -> true
+    end
+  end
+
+  defp failed_refresh_backoff(snapshot, timestamp) do
+    snapshot.next_expires_at
+    |> seconds_until_expiration(timestamp)
+    |> failed_refresh_backoff_for_expiration()
+  end
+
+  defp failed_refresh_backoff_for_expiration(seconds)
+       when is_integer(seconds) and seconds in 0..@near_expiration_seconds,
+       do: @last_call_failed_refresh_backoff_seconds
+
+  defp failed_refresh_backoff_for_expiration(seconds)
+       when is_integer(seconds) and seconds > @near_expiration_seconds and
+              seconds <= @last_call_seconds,
+       do: @approaching_failed_refresh_backoff_seconds
+
+  defp failed_refresh_backoff_for_expiration(seconds)
+       when is_integer(seconds) and seconds > @last_call_seconds and
+              seconds <= @expiring_soon_seconds,
+       do: @distant_failed_refresh_backoff_seconds
+
+  defp failed_refresh_backoff_for_expiration(_outside_adaptive_horizon),
+    do: @expiration_refresh_ttl_seconds
 
   defp grant_bootstrap_due?(available_expirations) do
     Enum.any?(available_expirations, &(not Map.has_key?(&1, :granted_at)))
   end
 
-  defp expiration_observation_stale?(observed_at, timestamp) when is_binary(observed_at) do
-    case DateTime.from_iso8601(observed_at) do
-      {:ok, observed_at, _offset} ->
-        DateTime.diff(timestamp, observed_at, :second) >= @expiration_refresh_ttl_seconds
+  defp expiration_observation_ttl(snapshot, timestamp) do
+    case seconds_until_expiration(snapshot.next_expires_at, timestamp) do
+      seconds when is_integer(seconds) and seconds in 0..@expiring_soon_seconds ->
+        @near_expiration_refresh_ttl_seconds
 
-      _invalid ->
-        true
+      _outside_near_expiration_horizon ->
+        @expiration_refresh_ttl_seconds
     end
   end
 
-  defp expiration_observation_stale?(_observed_at, _timestamp), do: true
+  defp seconds_until_expiration(expires_at, timestamp) do
+    case parse_iso8601_datetime(expires_at) do
+      {:ok, expires_at} -> whole_second_diff(expires_at, timestamp)
+      :error -> :invalid
+    end
+  end
+
+  defp whole_second_diff(left, right) do
+    DateTime.diff(DateTime.truncate(left, :second), DateTime.truncate(right, :second), :second)
+  end
+
+  defp parse_iso8601_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      _invalid -> :error
+    end
+  end
+
+  defp parse_iso8601_datetime(_value), do: :error
 
   defp next_expiration_future?(expires_at, timestamp) when is_binary(expires_at) do
-    case DateTime.from_iso8601(expires_at) do
-      {:ok, expires_at, _offset} ->
-        DateTime.compare(expires_at, timestamp) == :gt
-
-      _invalid ->
-        false
+    case seconds_until_expiration(expires_at, timestamp) do
+      seconds when is_integer(seconds) -> seconds > 0
+      _invalid -> false
     end
   end
 

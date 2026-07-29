@@ -143,7 +143,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     receive_timeout =
       Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
 
-    started_at = Keyword.get_lazy(opts, :started_at, &now/0)
+    started_at_override = Keyword.get(opts, :started_at)
 
     opts =
       opts
@@ -155,7 +155,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     |> claim_scheduled_attempt(
       expected_identity_id,
       receive_timeout,
-      started_at
+      started_at_override
     )
     |> redeem_claim(opts)
   end
@@ -297,7 +297,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment_id,
          expected_identity_id,
          receive_timeout,
-         started_at
+         started_at_override
        ) do
     Repo.transaction(fn ->
       case lock_scheduled_identity(expected_identity_id) do
@@ -307,7 +307,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
             assignment_id,
             expected_identity_id,
             receive_timeout,
-            started_at
+            started_at_override
           )
 
         nil ->
@@ -326,15 +326,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment_id,
          expected_identity_id,
          receive_timeout,
-         started_at
+         started_at_override
        ) do
     case lock_scheduled_assignment(assignment_id) do
       %PoolUpstreamAssignment{} = locked_assignment ->
+        decision_at = started_at_override || now()
+
         case AutoEligibility.validate_locked_scheduled_expiry(
                locked_identity,
                locked_assignment,
                expected_identity_id,
-               started_at,
+               decision_at,
                receive_timeout
              ) do
           {:ok, scheduled_burn_context} ->
@@ -344,7 +346,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               locked_assignment,
               @scheduled_expiry_trigger,
               receive_timeout,
-              started_at,
+              decision_at,
               scheduled_burn_context
             )
 

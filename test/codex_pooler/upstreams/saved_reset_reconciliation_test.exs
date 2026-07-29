@@ -255,13 +255,22 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   end
 
   test "refresh_quota_from_usage reuses fresh expiration metadata without polling every time" do
+    expiration =
+      DateTime.utc_now()
+      |> DateTime.add(5, :day)
+      |> DateTime.truncate(:microsecond)
+      |> DateTime.to_iso8601()
+
     {:ok, fake} =
       FakeUpstream.start_link({:path_json, %{"/api/codex/usage" => {200, usage_payload(2)}}})
 
     %{identity: identity, assignment: assignment} =
       active_upstream_assignment_fixture(pool_fixture(), %{
         metadata:
-          Map.merge(%{"usage_base_url" => FakeUpstream.url(fake)}, fresh_expiration_metadata(2))
+          Map.merge(
+            %{"usage_base_url" => FakeUpstream.url(fake)},
+            fresh_expiration_metadata(2, expiration)
+          )
       })
 
     assert {:ok, updated_identity} =
@@ -270,15 +279,15 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert %{
              available_count: 2,
              expires_reported?: true,
-             available_expires_at: ["2026-07-18T00:40:11.968726Z"],
+             available_expires_at: [^expiration],
              available_expirations: [
                %{
-                 expires_at: "2026-07-18T00:40:11.968726Z",
+                 expires_at: ^expiration,
                  first_seen_at: "2026-06-21T09:00:00Z",
                  granted_at: nil
                }
              ],
-             next_expires_at: "2026-07-18T00:40:11.968726Z"
+             next_expires_at: ^expiration
            } = SavedResets.snapshot(Repo.reload!(updated_identity))
 
     assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
@@ -506,6 +515,125 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              previous_saved_resets["expires_refresh_attempted_at"]
 
     assert updated_identity.saved_reset_first_seen_ledger == ledger
+  end
+
+  test "failed detail refreshes use adaptive backoff without changing expiration state or URL order" do
+    for {expires_in, backoff} <- [
+          {2 * 60 * 60, 15 * 60},
+          {45 * 60, 5 * 60},
+          {10 * 60, 60},
+          {5 * 24 * 60 * 60, 6 * 60 * 60}
+        ] do
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:second)
+      expiration = timestamp |> DateTime.add(expires_in, :second) |> DateTime.to_iso8601()
+      observed_at = timestamp |> DateTime.add(-7, :hour) |> DateTime.to_iso8601()
+
+      {:ok, fake} =
+        FakeUpstream.start_link({:path_json, %{"/api/codex/usage" => {200, usage_payload(2)}}})
+
+      metadata =
+        expiration
+        |> saved_reset_metadata(observed_at,
+          available_count: 1,
+          observed_at: observed_at,
+          expires_observed_at: observed_at,
+          expires_refresh_attempted_at: observed_at
+        )
+        |> Map.merge(%{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        })
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool_fixture(), %{metadata: metadata})
+
+      previous_saved_resets = identity.metadata["saved_resets"]
+
+      assert {:ok, failed_identity} =
+               PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+
+      failed_identity = Repo.reload!(failed_identity)
+      failed_saved_resets = failed_identity.metadata["saved_resets"]
+
+      assert Map.take(failed_saved_resets, [
+               "available_expirations",
+               "available_expires_at",
+               "next_expires_at",
+               "expires_observed_at"
+             ]) ==
+               Map.take(previous_saved_resets, [
+                 "available_expirations",
+                 "available_expires_at",
+                 "next_expires_at",
+                 "expires_observed_at"
+               ])
+
+      assert failed_saved_resets["expires_refresh_attempted_at"] != observed_at
+
+      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+               "/api/codex/usage",
+               "/backend-api/wham/rate-limit-reset-credits",
+               "/wham/rate-limit-reset-credits"
+             ]
+
+      assert {:ok, suppressed_identity} =
+               PoolReconciliation.refresh_quota_from_usage(failed_identity, assignment)
+
+      suppressed_saved_resets = Repo.reload!(suppressed_identity).metadata["saved_resets"]
+
+      assert Map.take(suppressed_saved_resets, [
+               "available_expirations",
+               "available_expires_at",
+               "next_expires_at",
+               "expires_observed_at",
+               "expires_refresh_attempted_at"
+             ]) ==
+               Map.take(failed_saved_resets, [
+                 "available_expirations",
+                 "available_expires_at",
+                 "next_expires_at",
+                 "expires_observed_at",
+                 "expires_refresh_attempted_at"
+               ])
+
+      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+               "/api/codex/usage",
+               "/backend-api/wham/rate-limit-reset-credits",
+               "/wham/rate-limit-reset-credits",
+               "/api/codex/usage"
+             ]
+
+      due_attempted_at =
+        DateTime.utc_now()
+        |> DateTime.truncate(:second)
+        |> DateTime.add(-backoff, :second)
+        |> DateTime.to_iso8601()
+
+      due_identity =
+        suppressed_identity
+        |> Ecto.Changeset.change(%{
+          metadata:
+            put_in(
+              suppressed_identity.metadata,
+              ["saved_resets", "expires_refresh_attempted_at"],
+              due_attempted_at
+            )
+        })
+        |> Repo.update!()
+
+      assert {:ok, _retried_identity} =
+               PoolReconciliation.refresh_quota_from_usage(due_identity, assignment)
+
+      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+               "/api/codex/usage",
+               "/backend-api/wham/rate-limit-reset-credits",
+               "/wham/rate-limit-reset-credits",
+               "/api/codex/usage",
+               "/api/codex/usage",
+               "/backend-api/wham/rate-limit-reset-credits",
+               "/wham/rate-limit-reset-credits"
+             ]
+    end
   end
 
   test "declared oversized detail follows incomplete preservation behavior" do
@@ -810,7 +938,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     end
   end
 
-  defp fresh_expiration_metadata(available_count) do
+  defp fresh_expiration_metadata(available_count, expiration) do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
 
     %{
@@ -821,15 +949,15 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
         "path_style" => "codex_api",
         "observed_at" => observed_at,
         "usage_path" => "/api/codex/usage",
-        "available_expires_at" => ["2026-07-18T00:40:11.968726Z"],
+        "available_expires_at" => [expiration],
         "available_expirations" => [
           %{
-            "expires_at" => "2026-07-18T00:40:11.968726Z",
+            "expires_at" => expiration,
             "first_seen_at" => "2026-06-21T09:00:00Z",
             "granted_at" => nil
           }
         ],
-        "next_expires_at" => "2026-07-18T00:40:11.968726Z",
+        "next_expires_at" => expiration,
         "expires_observed_at" => observed_at,
         "expires_refresh_attempted_at" => observed_at,
         "reason" => nil

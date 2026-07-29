@@ -25,10 +25,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
+  alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
@@ -4326,9 +4328,82 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :scheduled_expiry_reconciliation
-    test "fresh canonical scheduled identity reconciliation enqueues after committed evidence" do
+    test "fresh canonical scheduled identity reconciliation enqueues B1, B2, and B3" do
+      scenarios = [
+        {:b1, [weekly_used_percent: 100], "exhausted"},
+        {:b2,
+         [
+           weekly_used_percent: 95,
+           policy_attrs: %{saved_reset_auto_redeem_trigger_mode: "threshold"}
+         ], "threshold"},
+        {:b3, [weekly_used_percent: 25], "last_call"}
+      ]
+
+      for {scenario, opts, expected_detail} <- scenarios do
+        Repo.delete_all(Oban.Job)
+
+        %{pool: pool, assignment: assignment, identity: identity, upstream: upstream} =
+          scheduled_expiry_reconciliation_fixture(opts)
+
+        assert :ok =
+                 perform_job(
+                   AccountReconciliationWorker,
+                   scheduled_identity_reconciliation_args(pool, assignment, identity)
+                 )
+
+        persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+
+        assert {:ok, observed_at, _offset} =
+                 persisted_identity.metadata["saved_resets"]["observed_at"]
+                 |> DateTime.from_iso8601()
+
+        assert AutoEligibility.scheduled_expiry_candidate?(persisted_identity, DateTime.utc_now())
+        assert [job] = scheduled_saved_reset_redemption_jobs()
+
+        assert job.args == %{
+                 "pool_upstream_assignment_id" => assignment.id,
+                 "upstream_identity_id" => identity.id,
+                 "target_kind" => "upstream_identity",
+                 "trigger_kind" => "scheduled_expiry_rescue"
+               }
+
+        windows = QuotaWindows.list_evidence(persisted_identity)
+        policy = SavedResets.auto_policy(persisted_identity)
+        snapshot = SavedResets.snapshot(persisted_identity, observed_at)
+
+        assert {:burn, %{trigger_detail: ^expected_detail}} =
+                 AutoEligibility.scheduled_burn_condition(
+                   windows,
+                   policy,
+                   snapshot,
+                   observed_at
+                 ),
+               Atom.to_string(scenario)
+
+        assert DateTime.compare(observed_at, DateTime.add(DateTime.utc_now(), -60, :second)) !=
+                 :lt
+
+        assert Repo.aggregate(Request, :count) == 0
+
+        provider_requests = FakeUpstream.requests(upstream)
+
+        assert Enum.any?(
+                 provider_requests,
+                 &(&1.method == "GET" and &1.path == "/backend-api/wham/usage")
+               )
+
+        assert Enum.all?(provider_requests, &(&1.method == "GET"))
+        refute Enum.any?(provider_requests, &String.contains?(&1.path, "/consume"))
+      end
+    end
+
+    @tag :scheduled_expiry_reconciliation
+    test "queued B2 condition flip completes as noop without provider consume" do
       %{pool: pool, assignment: assignment, identity: identity, upstream: upstream} =
-        scheduled_expiry_reconciliation_fixture()
+        scheduled_expiry_reconciliation_fixture(
+          weekly_used_percent: 95,
+          policy_attrs: %{saved_reset_auto_redeem_trigger_mode: "threshold"}
+        )
 
       assert :ok =
                perform_job(
@@ -4336,34 +4411,57 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                  scheduled_identity_reconciliation_args(pool, assignment, identity)
                )
 
-      persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
-
-      assert {:ok, observed_at, _offset} =
-               persisted_identity.metadata["saved_resets"]["observed_at"]
-               |> DateTime.from_iso8601()
-
-      assert AutoEligibility.scheduled_expiry_candidate?(persisted_identity, DateTime.utc_now())
       assert [job] = scheduled_saved_reset_redemption_jobs()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      assert job.args == %{
-               "pool_upstream_assignment_id" => assignment.id,
-               "upstream_identity_id" => identity.id,
-               "target_kind" => "upstream_identity",
-               "trigger_kind" => "scheduled_expiry_rescue"
-             }
+      identity
+      |> QuotaWindows.list_evidence()
+      |> Enum.each(fn window ->
+        window
+        |> AccountQuotaWindow.changeset(%{
+          used_percent: Decimal.new("0"),
+          observed_at: observed_at,
+          last_sync_at: observed_at
+        })
+        |> Repo.update!()
+      end)
 
-      assert DateTime.compare(observed_at, DateTime.add(DateTime.utc_now(), -60, :second)) != :lt
-      assert Repo.aggregate(Request, :count) == 0
+      persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+      persisted_windows = QuotaWindows.list_evidence(persisted_identity)
+      snapshot = SavedResets.snapshot(persisted_identity, observed_at)
+      policy = SavedResets.auto_policy(persisted_identity)
 
-      provider_requests = FakeUpstream.requests(upstream)
-
-      assert Enum.any?(
-               provider_requests,
-               &(&1.method == "GET" and &1.path == "/backend-api/wham/usage")
+      assert {:not_ready, :burn_condition_absent} =
+               AutoEligibility.scheduled_burn_condition(
+                 persisted_windows,
+                 policy,
+                 snapshot,
+                 observed_at
+               ),
+             inspect(
+               Enum.map(
+                 persisted_windows,
+                 &Map.take(&1, [:quota_key, :source, :used_percent, :reset_at, :observed_at])
+               )
              )
 
-      assert Enum.all?(provider_requests, &(&1.method == "GET"))
-      refute Enum.any?(provider_requests, &String.contains?(&1.path, "/consume"))
+      refute AutoEligibility.scheduled_expiry_candidate?(persisted_identity, observed_at)
+
+      consume_count_before = scheduled_consume_count(upstream)
+
+      drain_result = Oban.drain_queue(queue: :jobs)
+      drained_job = Repo.get!(Oban.Job, job.id)
+
+      assert drain_result ==
+               %{cancelled: 0, discard: 0, failure: 0, snoozed: 0, success: 1},
+             inspect(%{drain_result: drain_result, job: drained_job})
+
+      assert drained_job.state == "completed"
+      assert scheduled_consume_count(upstream) == consume_count_before
+      assert Repo.aggregate(Request, :count) == 0
+
+      persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+      refute Map.has_key?(persisted_identity.metadata || %{}, "saved_reset_redemption")
     end
 
     @tag :scheduled_expiry_zero_traffic

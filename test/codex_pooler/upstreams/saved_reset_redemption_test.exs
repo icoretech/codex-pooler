@@ -1112,6 +1112,298 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    test "pure burn decision applies exhausted, threshold, and last-call precedence" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+      snapshot = scheduled_burn_snapshot(as_of, 60 * 60)
+
+      scenarios = [
+        {"exhausted alone", [scheduled_burn_window(as_of, "100", 2 * 60 * 60)],
+         scheduled_burn_policy(), "exhausted"},
+        {"threshold over last call", [scheduled_burn_window(as_of, "95", 2 * 60 * 60)],
+         scheduled_burn_policy(%{trigger_mode: "threshold"}), "threshold"},
+        {"last call alone", [scheduled_burn_window(as_of, "25", 2 * 60 * 60)],
+         scheduled_burn_policy(), "last_call"},
+        {"exhausted over threshold and last call",
+         [scheduled_burn_window(as_of, "100", 2 * 60 * 60)],
+         scheduled_burn_policy(%{trigger_mode: "threshold"}), "exhausted"}
+      ]
+
+      for {label, windows, policy, expected_detail} <- scenarios do
+        assert {:burn, %{trigger_detail: ^expected_detail}} =
+                 AutoEligibility.scheduled_burn_condition(windows, policy, snapshot, as_of),
+               label
+      end
+
+      assert {:burn, %{trigger_detail: "last_call"}} =
+               AutoEligibility.scheduled_burn_condition(
+                 [scheduled_burn_window(as_of, "99.999", 2 * 60 * 60)],
+                 scheduled_burn_policy(),
+                 snapshot,
+                 as_of
+               )
+
+      for {used_percent, expected} <- [
+            {"94", "last_call"},
+            {"95", "threshold"},
+            {"96", "threshold"}
+          ] do
+        assert {:burn, %{trigger_detail: ^expected}} =
+                 AutoEligibility.scheduled_burn_condition(
+                   [scheduled_burn_window(as_of, used_percent, 2 * 60 * 60)],
+                   scheduled_burn_policy(%{trigger_mode: "threshold"}),
+                   snapshot,
+                   as_of
+                 )
+      end
+
+      assert {:burn, %{trigger_detail: "last_call"}} =
+               AutoEligibility.scheduled_burn_condition(
+                 [scheduled_burn_window(as_of, "95", 2 * 60 * 60)],
+                 scheduled_burn_policy(%{trigger_mode: "blocked"}),
+                 snapshot,
+                 as_of
+               )
+    end
+
+    test "pure last-call decision uses exact expiry and reset ordering boundaries" do
+      as_of = ~U[2026-07-29 12:00:00.900000Z]
+      policy = scheduled_burn_policy()
+
+      for {expires_in_seconds, expected} <- [
+            {90 * 60 + 1, {:not_ready, :burn_condition_absent}},
+            {90 * 60, :burn},
+            {1, :burn},
+            {0, {:not_ready, :burn_condition_absent}},
+            {-1, {:not_ready, :burn_condition_absent}}
+          ] do
+        snapshot = scheduled_burn_snapshot(as_of, expires_in_seconds)
+        windows = [scheduled_burn_window(as_of, "25", 3 * 60 * 60)]
+        result = AutoEligibility.scheduled_burn_condition(windows, policy, snapshot, as_of)
+
+        case expected do
+          :burn -> assert {:burn, %{trigger_detail: "last_call"}} = result
+          not_ready -> assert ^not_ready = result
+        end
+      end
+
+      snapshot = scheduled_burn_snapshot(as_of, 60 * 60)
+
+      for {reset_delta, expected} <- [
+            {1, :burn},
+            {0, {:not_ready, :natural_reset_buffer}},
+            {-1, {:not_ready, :natural_reset_buffer}}
+          ] do
+        windows = [scheduled_burn_window(as_of, "25", 60 * 60 + reset_delta)]
+        result = AutoEligibility.scheduled_burn_condition(windows, policy, snapshot, as_of)
+
+        case expected do
+          :burn -> assert {:burn, %{trigger_detail: "last_call"}} = result
+          not_ready -> assert ^not_ready = result
+        end
+      end
+    end
+
+    test "pure burn decision shares successful expiration freshness at every horizon edge" do
+      as_of = ~U[2026-07-29 12:00:00.900000Z]
+      policy = scheduled_burn_policy(%{min_blocked_minutes: 50 * 60})
+      window = scheduled_burn_window(as_of, "100", 49 * 60 * 60)
+
+      scenarios = [
+        {86_399, 29 * 60 + 59, true},
+        {86_400, 29 * 60 + 59, true},
+        {86_400, 30 * 60, false},
+        {86_401, 30 * 60, true}
+      ]
+
+      for {expires_in_seconds, observed_age_seconds, fresh?} <- scenarios do
+        snapshot =
+          scheduled_burn_snapshot(as_of, expires_in_seconds,
+            observed_age_seconds: observed_age_seconds
+          )
+
+        assert SavedResets.expiration_observation_fresh?(snapshot, as_of) == fresh?
+
+        result = AutoEligibility.scheduled_burn_condition([window], policy, snapshot, as_of)
+
+        if fresh? do
+          assert {:burn, %{trigger_detail: "exhausted"}} = result
+        else
+          assert {:not_ready, :expiration_stale} = result
+        end
+      end
+    end
+
+    test "pure burn decision keeps B1 normal buffer independent from expiration freshness" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+      window = scheduled_burn_window(as_of, "100", 60 * 60)
+      policy = scheduled_burn_policy(%{min_blocked_minutes: 60})
+
+      for observed_age_seconds <- [30 * 60, 6 * 60 * 60] do
+        snapshot =
+          scheduled_burn_snapshot(as_of, 60 * 60, observed_age_seconds: observed_age_seconds)
+
+        refute SavedResets.expiration_observation_fresh?(snapshot, as_of)
+
+        assert {:burn, %{trigger_detail: "exhausted"}} =
+                 AutoEligibility.scheduled_burn_condition([window], policy, snapshot, as_of)
+      end
+
+      for reset_in_seconds <- [60 * 60 - 1, 60 * 60, 60 * 60 + 1] do
+        result =
+          AutoEligibility.scheduled_burn_condition(
+            [scheduled_burn_window(as_of, "100", reset_in_seconds)],
+            policy,
+            scheduled_burn_snapshot(as_of, 2 * 60 * 60, observed_age_seconds: 30 * 60),
+            as_of
+          )
+
+        if reset_in_seconds < 60 * 60 do
+          assert {:not_ready, :natural_reset_buffer} = result
+        else
+          assert {:burn, %{trigger_detail: "exhausted"}} = result
+        end
+      end
+    end
+
+    test "pure burn decision selects evidence only within the winning qualifying set" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      threshold_result =
+        AutoEligibility.scheduled_burn_condition(
+          [
+            scheduled_burn_window(as_of, "99", 30 * 60),
+            scheduled_burn_window(as_of, "95", 2 * 60 * 60)
+          ],
+          scheduled_burn_policy(%{trigger_mode: "threshold"}),
+          scheduled_burn_snapshot(as_of, 2 * 60 * 60),
+          as_of
+        )
+
+      assert {:burn,
+              %{
+                trigger_detail: "threshold",
+                used_percent_at_decision: threshold_percent,
+                natural_reset_at_decision: threshold_reset
+              }} = threshold_result
+
+      assert Decimal.equal?(threshold_percent, Decimal.new("95"))
+      assert threshold_reset == DateTime.add(as_of, 2, :hour)
+
+      last_call_result =
+        AutoEligibility.scheduled_burn_condition(
+          [
+            scheduled_burn_window(as_of, "99", 30 * 60),
+            scheduled_burn_window(as_of, "70", 2 * 60 * 60)
+          ],
+          scheduled_burn_policy(),
+          scheduled_burn_snapshot(as_of, 60 * 60),
+          as_of
+        )
+
+      assert {:burn,
+              %{
+                trigger_detail: "last_call",
+                used_percent_at_decision: last_call_percent,
+                natural_reset_at_decision: last_call_reset
+              }} = last_call_result
+
+      assert Decimal.equal?(last_call_percent, Decimal.new("70"))
+      assert last_call_reset == DateTime.add(as_of, 2, :hour)
+
+      ranked_result =
+        AutoEligibility.scheduled_burn_condition(
+          [
+            scheduled_burn_window(as_of, "80", 2 * 60 * 60),
+            scheduled_burn_window(as_of, "90", 90 * 60),
+            scheduled_burn_window(as_of, "90.000", 3 * 60 * 60)
+          ],
+          scheduled_burn_policy(%{trigger_mode: "threshold", quota_threshold_percent: 80}),
+          scheduled_burn_snapshot(as_of, 4 * 60 * 60),
+          as_of
+        )
+
+      assert {:burn,
+              %{
+                trigger_detail: "threshold",
+                used_percent_at_decision: ranked_percent,
+                natural_reset_at_decision: ranked_reset
+              }} = ranked_result
+
+      assert Decimal.equal?(ranked_percent, Decimal.new("90"))
+      assert ranked_reset == DateTime.add(as_of, 3, :hour)
+    end
+
+    test "pure burn decision returns only bounded deterministic not-ready reasons" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+      policy = scheduled_burn_policy()
+
+      scenarios = [
+        {[], scheduled_burn_snapshot(as_of, 60 * 60), :burn_condition_absent},
+        {[scheduled_burn_window(as_of, "0", 2 * 60 * 60)],
+         scheduled_burn_snapshot(as_of, 60 * 60), :burn_condition_absent},
+        {[scheduled_burn_window(as_of, "25", 2 * 60 * 60)],
+         scheduled_burn_snapshot(as_of, 60 * 60, observed_at: "invalid"), :expiration_stale},
+        {[scheduled_burn_window(as_of, "25", 30 * 60)], scheduled_burn_snapshot(as_of, 60 * 60),
+         :natural_reset_buffer},
+        {[scheduled_burn_window(as_of, "100", 30 * 60)],
+         scheduled_burn_snapshot(as_of, 60 * 60, observed_age_seconds: 30 * 60),
+         :natural_reset_buffer}
+      ]
+
+      for {windows, snapshot, reason} <- scenarios do
+        assert {:not_ready, ^reason} =
+                 AutoEligibility.scheduled_burn_condition(windows, policy, snapshot, as_of)
+      end
+    end
+
+    test "pure burn decision requires a valid future credit expiration for every branch" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      for snapshot <- [
+            scheduled_burn_snapshot(as_of, 0),
+            scheduled_burn_snapshot(as_of, -1),
+            scheduled_burn_snapshot(as_of, 60 * 60)
+            |> Map.put(:next_expires_at, "invalid"),
+            scheduled_burn_snapshot(as_of, 60 * 60)
+            |> Map.put(:next_expires_at, nil)
+          ],
+          {window, policy} <- [
+            {scheduled_burn_window(as_of, "100", 2 * 60 * 60), scheduled_burn_policy()},
+            {scheduled_burn_window(as_of, "95", 2 * 60 * 60),
+             scheduled_burn_policy(%{trigger_mode: "threshold"})},
+            {scheduled_burn_window(as_of, "25", 2 * 60 * 60), scheduled_burn_policy()}
+          ] do
+        assert {:not_ready, :burn_condition_absent} =
+                 AutoEligibility.scheduled_burn_condition([window], policy, snapshot, as_of)
+      end
+    end
+
+    test "pure burn decision compares whole seconds but preserves decision evidence precision" do
+      as_of = ~U[2026-07-29 12:00:00.900000Z]
+      expires_at = ~U[2026-07-29 13:00:00.800000Z]
+      reset_at = ~U[2026-07-29 14:00:00.700000Z]
+
+      snapshot =
+        scheduled_burn_snapshot(as_of, 60 * 60)
+        |> Map.put(:next_expires_at, DateTime.to_iso8601(expires_at))
+
+      window = %{scheduled_burn_window(as_of, "25", 2 * 60 * 60) | reset_at: reset_at}
+
+      assert {:burn,
+              %{
+                trigger_detail: "last_call",
+                credit_expires_at_at_decision: ^expires_at,
+                natural_reset_at_decision: ^reset_at,
+                decided_at: ^as_of
+              }} =
+               AutoEligibility.scheduled_burn_condition(
+                 [window],
+                 scheduled_burn_policy(),
+                 snapshot,
+                 as_of
+               )
+    end
+
     test "eligible scheduled rescue consumes once through the shared redemption pipeline" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture()
@@ -1140,7 +1432,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert redemption["trigger_kind"] == "scheduled_expiry_rescue"
 
       assert Map.take(redemption, scheduled_decision_metadata_keys()) == %{
-               "trigger_detail" => "immediate_expiry",
+               "trigger_detail" => "last_call",
                "used_percent_at_decision" => "25",
                "credit_expires_at_at_decision" =>
                  DateTime.to_iso8601(DateTime.add(as_of, 1, :hour)),
@@ -1253,7 +1545,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         assert Map.keys(Map.take(redemption, scheduled_decision_metadata_keys())) |> Enum.sort() ==
                  Enum.sort(scheduled_decision_metadata_keys())
 
-        assert redemption["trigger_detail"] == "immediate_expiry"
+        assert redemption["trigger_detail"] == "last_call"
         assert redemption["used_percent_at_decision"] == "25"
       end
     end
@@ -1565,6 +1857,153 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
 
       assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "pure, pre-lock, and locked scheduled decisions agree on bounded reasons" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      scenarios = [
+        {:burn_condition_absent, "scheduled_expiry_burn_not_ready",
+         [quota_used_percent: Decimal.new("0")]},
+        {:expiration_stale, "scheduled_expiry_expiration_stale", [stale_expiration?: true]},
+        {:natural_reset_buffer, "scheduled_expiry_natural_reset_buffer",
+         [quota_overrides: %{reset_at: DateTime.add(as_of, 30, :minute)}]}
+      ]
+
+      for {expected_reason, expected_code, opts} <- scenarios do
+        %{fake: fake, identity: identity, assignment: assignment} =
+          scheduled_expiry_fixture(Keyword.put(opts, :as_of, as_of))
+
+        identity =
+          if Keyword.get(opts, :stale_expiration?, false) do
+            update_saved_resets!(identity, %{
+              "expires_observed_at" => DateTime.to_iso8601(DateTime.add(as_of, -30, :minute))
+            })
+          else
+            identity
+          end
+
+        policy = SavedResets.auto_policy(identity)
+        snapshot = SavedResets.snapshot(identity, as_of)
+        windows = QuotaWindows.list_evidence(identity)
+
+        assert {:not_ready, ^expected_reason} =
+                 AutoEligibility.scheduled_burn_condition(windows, policy, snapshot, as_of)
+
+        refute AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
+
+        assert {:noop, ^expected_code} =
+                 AutoEligibility.validate_locked_scheduled_expiry(
+                   identity,
+                   assignment,
+                   identity.id,
+                   as_of,
+                   SavedResets.redemption_receive_timeout_ms()
+                 )
+
+        assert [] = FakeUpstream.requests(fake)
+      end
+    end
+
+    @tag :separate_backend_scheduled_expiry_lock_time
+    test "production default resolves scheduled decision time after both row locks" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_scheduled_expiry_race_fixture!(fake)
+      on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(fixture) end)
+
+      decision_before = DateTime.utc_now() |> DateTime.add(3, :second)
+      expires_at = DateTime.add(decision_before, 1, :second)
+      assignment_id = List.first(fixture.assignment_ids)
+
+      run_unboxed(fn ->
+        identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        metadata = identity.metadata || %{}
+
+        identity
+        |> UpstreamIdentity.changeset(%{
+          metadata:
+            Map.put(
+              metadata,
+              "saved_resets",
+              scheduled_saved_resets(decision_before, 1)
+            )
+        })
+        |> Repo.update!()
+      end)
+
+      parent = self()
+      barrier = make_ref()
+
+      assignment_holder =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              backend_pid = backend_pid!()
+
+              Repo.one!(
+                from assignment in PoolUpstreamAssignment,
+                  where: assignment.id == ^assignment_id,
+                  lock: "FOR UPDATE"
+              )
+
+              send(parent, {barrier, :assignment_locked, backend_pid})
+
+              receive do
+                {^barrier, :release_assignment} -> :released
+              after
+                10_000 -> raise "timed out waiting to release scheduled assignment lock"
+              end
+            end)
+          end)
+        end)
+
+      try do
+        assert_receive {^barrier, :assignment_locked, holder_backend_pid}, 5_000
+
+        redemption_task =
+          Task.async(fn ->
+            Sandbox.unboxed_run(Repo, fn ->
+              send(parent, {barrier, :redemption_backend, backend_pid!()})
+              SavedResetRedemption.redeem_scheduled_expiry(assignment_id, fixture.identity_id)
+            end)
+          end)
+
+        assert_receive {^barrier, :redemption_backend, redemption_backend_pid}, 5_000
+
+        observation = observe_blocked_probe_claim!(redemption_backend_pid, holder_backend_pid)
+        assert holder_backend_pid in observation.blocking_pids
+        assert observation.wait_event_type == "Lock"
+
+        await_after!(expires_at)
+        send(assignment_holder.pid, {barrier, :release_assignment})
+
+        assert {:ok, :released} = Task.await(assignment_holder, 5_000)
+
+        assert {:ok, %{status: :noop, code: "scheduled_expiry_not_expiring"}} =
+                 Task.await(redemption_task, 5_000)
+
+        persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
+        refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
+        assert [] = FakeUpstream.requests(fake)
+
+        assert {:ok, %{status: :succeeded, identity: explicit_identity}} =
+                 run_unboxed(fn ->
+                   SavedResetRedemption.redeem_scheduled_expiry(
+                     assignment_id,
+                     fixture.identity_id,
+                     started_at: decision_before
+                   )
+                 end)
+
+        assert explicit_identity.metadata["saved_reset_redemption"]["decided_at"] ==
+                 DateTime.to_iso8601(decision_before)
+
+        assert Enum.any?(FakeUpstream.requests(fake), &(&1.method == "POST"))
+      after
+        send(assignment_holder.pid, {barrier, :release_assignment})
+      end
     end
 
     test "fresh competing automatic claim remains in progress" do
@@ -2697,6 +3136,44 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     }
   end
 
+  defp scheduled_burn_snapshot(as_of, expires_in_seconds, opts \\ []) do
+    saved_resets = scheduled_saved_resets(as_of, expires_in_seconds)
+
+    observed_at =
+      case Keyword.fetch(opts, :observed_at) do
+        {:ok, observed_at} ->
+          observed_at
+
+        :error ->
+          DateTime.to_iso8601(
+            DateTime.add(as_of, -Keyword.get(opts, :observed_age_seconds, 0), :second)
+          )
+      end
+
+    saved_resets = Map.put(saved_resets, "expires_observed_at", observed_at)
+    SavedResets.snapshot(%{"saved_resets" => saved_resets}, as_of)
+  end
+
+  defp scheduled_burn_policy(overrides \\ %{}) do
+    Map.merge(
+      %{
+        enabled?: true,
+        min_blocked_minutes: 60,
+        keep_credits: 0,
+        trigger_mode: "blocked",
+        quota_threshold_percent: 95
+      },
+      overrides
+    )
+  end
+
+  defp scheduled_burn_window(as_of, used_percent, reset_in_seconds) do
+    %AccountQuotaWindow{
+      used_percent: Decimal.new(used_percent),
+      reset_at: DateTime.add(as_of, reset_in_seconds, :second)
+    }
+  end
+
   defp assignment_with_fake(fake, usage_path, path_style, opts \\ []) do
     saved_resets =
       Keyword.get(opts, :saved_resets, %{
@@ -3249,6 +3726,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp backend_pid! do
     %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
     backend_pid
+  end
+
+  defp await_after!(%DateTime{} = timestamp) do
+    wait_ms = max(DateTime.diff(timestamp, DateTime.utc_now(), :millisecond) + 50, 0)
+
+    receive do
+    after
+      wait_ms -> :ok
+    end
   end
 
   defp probe_identity_lock_query?(metadata) do

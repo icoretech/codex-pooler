@@ -63,6 +63,153 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
       assert SavedResets.reset_credit_list_refresh_due?(metadata, 1, timestamp)
     end
 
+    test "uses the inclusive expiration horizon for successful observation freshness" do
+      timestamp = ~U[2026-07-29 12:00:00.500000Z]
+
+      for {expires_in, observation_age, expected_fresh?} <- [
+            {86_399, 1_799, true},
+            {86_399, 1_800, false},
+            {86_399, 1_801, false},
+            {86_400, 1_799, true},
+            {86_400, 1_800, false},
+            {86_400, 1_801, false},
+            {86_401, 1_800, true},
+            {86_401, 21_599, true},
+            {86_401, 21_600, false},
+            {86_401, 21_601, false},
+            {-1, 21_599, true},
+            {-1, 21_600, false},
+            {nil, 21_599, true},
+            {nil, 21_600, false},
+            {:invalid, 21_599, true},
+            {:invalid, 21_600, false}
+          ] do
+        snapshot =
+          expiration_snapshot(timestamp,
+            expires_in: expires_in,
+            observed_at: DateTime.add(timestamp, -observation_age, :second)
+          )
+
+        assert SavedResets.expiration_observation_fresh?(snapshot, timestamp) ==
+                 expected_fresh?,
+               "expires_in=#{inspect(expires_in)} observation_age=#{observation_age}"
+      end
+    end
+
+    test "rejects missing invalid and strictly future successful observations" do
+      timestamp = ~U[2026-07-29 12:00:00.500000Z]
+
+      for observed_at <- [
+            nil,
+            "not-a-timestamp",
+            DateTime.add(timestamp, 1, :microsecond),
+            DateTime.add(timestamp, 1, :second)
+          ] do
+        snapshot = expiration_snapshot(timestamp, observed_at: observed_at)
+
+        refute SavedResets.expiration_observation_fresh?(snapshot, timestamp),
+               "observed_at=#{inspect(observed_at)}"
+      end
+    end
+
+    test "applies adaptive failed-refresh backoff at exact equality" do
+      timestamp = ~U[2026-07-29 12:00:00.500000Z]
+
+      for {expires_in, backoff} <- [
+            {2 * 60 * 60, 15 * 60},
+            {90 * 60 + 1, 15 * 60},
+            {90 * 60, 5 * 60},
+            {90 * 60 - 1, 5 * 60},
+            {15 * 60 + 1, 5 * 60},
+            {15 * 60, 60},
+            {15 * 60 - 1, 60},
+            {0, 60},
+            {86_400, 15 * 60},
+            {86_401, 6 * 60 * 60},
+            {-1, 6 * 60 * 60},
+            {nil, 6 * 60 * 60},
+            {:invalid, 6 * 60 * 60}
+          ] do
+        for {attempt_age, expected_due?} <- [
+              {backoff - 1, false},
+              {backoff, true},
+              {backoff + 1, true}
+            ] do
+          metadata =
+            expiration_metadata(timestamp,
+              expires_in: expires_in,
+              observed_at: DateTime.add(timestamp, -(backoff + 60), :second),
+              attempted_at: DateTime.add(timestamp, -attempt_age, :second)
+            )
+
+          assert SavedResets.reset_credit_list_refresh_due?(metadata, 2, timestamp) ==
+                   expected_due?,
+                 "expires_in=#{inspect(expires_in)} attempt_age=#{attempt_age}"
+        end
+      end
+    end
+
+    test "failed-refresh suppression precedes positive-count structural triggers" do
+      timestamp = ~U[2026-07-29 12:00:00Z]
+
+      for {expires_in, backoff} <- [
+            {2 * 60 * 60, 15 * 60},
+            {45 * 60, 5 * 60},
+            {10 * 60, 60},
+            {5 * 24 * 60 * 60, 6 * 60 * 60}
+          ],
+          structural_trigger <- [:count_mismatch, :missing_granted_at] do
+        for {attempt_age, expected_due?} <- [{backoff - 1, false}, {backoff, true}] do
+          metadata =
+            expiration_metadata(timestamp,
+              expires_in: expires_in,
+              observed_at: DateTime.add(timestamp, -(backoff + 60), :second),
+              attempted_at: DateTime.add(timestamp, -attempt_age, :second),
+              granted_at?: structural_trigger != :missing_granted_at
+            )
+
+          available_count = if structural_trigger == :count_mismatch, do: 2, else: 1
+
+          assert SavedResets.reset_credit_list_refresh_due?(
+                   metadata,
+                   available_count,
+                   timestamp
+                 ) == expected_due?,
+                 "expires_in=#{expires_in} trigger=#{structural_trigger} age=#{attempt_age}"
+        end
+      end
+    end
+
+    test "only a valid failed attempt newer than success suppresses refresh" do
+      timestamp = ~U[2026-07-29 12:00:00.500000Z]
+      observed_at = DateTime.add(timestamp, -120, :second)
+
+      for attempted_at <- [
+            DateTime.add(observed_at, -1, :second),
+            observed_at,
+            DateTime.add(timestamp, 1, :microsecond),
+            "not-a-timestamp"
+          ] do
+        metadata =
+          expiration_metadata(timestamp,
+            observed_at: observed_at,
+            attempted_at: attempted_at
+          )
+
+        assert SavedResets.reset_credit_list_refresh_due?(metadata, 2, timestamp),
+               "attempted_at=#{inspect(attempted_at)}"
+      end
+
+      metadata =
+        expiration_metadata(timestamp,
+          observed_at: nil,
+          attempted_at: DateTime.add(timestamp, -59, :second),
+          expires_in: 10 * 60
+        )
+
+      refute SavedResets.reset_credit_list_refresh_due?(metadata, 1, timestamp)
+    end
+
     test "parses reported saved reset counts" do
       assert {:reported, 2} =
                SavedResets.count_from_usage_payload(%{
@@ -688,6 +835,51 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
                |> SavedResets.snapshot(timestamp)
     end
   end
+
+  defp expiration_snapshot(timestamp, opts) do
+    timestamp
+    |> expiration_metadata(opts)
+    |> SavedResets.snapshot(timestamp)
+  end
+
+  defp expiration_metadata(timestamp, opts) do
+    expires_at = expiration_value(timestamp, Keyword.get(opts, :expires_in, 60 * 60))
+    observed_at = timestamp_value(Keyword.get(opts, :observed_at, timestamp))
+    attempted_at = timestamp_value(Keyword.get(opts, :attempted_at, observed_at))
+
+    expiration = %{
+      "expires_at" => expires_at || "2026-08-01T00:00:00Z",
+      "first_seen_at" => "2026-07-01T00:00:00Z"
+    }
+
+    expiration =
+      if Keyword.get(opts, :granted_at?, true) do
+        Map.put(expiration, "granted_at", "2026-07-01T00:00:00Z")
+      else
+        expiration
+      end
+
+    %{
+      "saved_resets" => %{
+        "status" => "reported",
+        "available_count" => 1,
+        "available_expires_at" => if(is_binary(expires_at), do: [expires_at], else: []),
+        "available_expirations" => [expiration],
+        "next_expires_at" => expires_at,
+        "expires_observed_at" => observed_at,
+        "expires_refresh_attempted_at" => attempted_at
+      }
+    }
+  end
+
+  defp expiration_value(_timestamp, nil), do: nil
+  defp expiration_value(_timestamp, :invalid), do: "not-a-timestamp"
+
+  defp expiration_value(timestamp, seconds),
+    do: timestamp |> DateTime.add(seconds, :second) |> DateTime.to_iso8601()
+
+  defp timestamp_value(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
+  defp timestamp_value(value), do: value
 
   defp saved_reset_snapshot_metadata(started_at) do
     %{
