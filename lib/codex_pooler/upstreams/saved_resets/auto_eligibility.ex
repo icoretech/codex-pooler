@@ -864,7 +864,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   end
 
   defp future_reset_within_weekly_horizon?(%DateTime{} = reset_at, timestamp) do
-    seconds_until_reset = DateTime.diff(reset_at, timestamp, :second)
+    seconds_until_reset = whole_second_diff(reset_at, timestamp)
     seconds_until_reset > 0 and seconds_until_reset <= @max_weekly_reset_seconds
   end
 
@@ -898,7 +898,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   defp used_percent_exhausted?(_value), do: false
 
   defp natural_reset_far_enough?(%DateTime{} = reset_at, min_blocked_minutes, timestamp) do
-    seconds_until_reset = DateTime.diff(reset_at, timestamp, :second)
+    seconds_until_reset = whole_second_diff(reset_at, timestamp)
 
     seconds_until_reset >= min_blocked_minutes * 60 and
       seconds_until_reset <= @max_weekly_reset_seconds

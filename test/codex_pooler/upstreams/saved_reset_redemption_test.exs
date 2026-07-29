@@ -1265,6 +1265,63 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    test "pure threshold decision compares the natural reset buffer at whole-second precision" do
+      as_of = ~U[2026-07-29 12:00:00.900000Z]
+      whole_second_as_of = DateTime.truncate(as_of, :second)
+      policy = scheduled_burn_policy(%{trigger_mode: "threshold"})
+      snapshot = scheduled_burn_snapshot(as_of, 2 * 60 * 60)
+
+      for {reset_in_seconds, expected} <- [
+            {60 * 60 - 1, {:not_ready, :natural_reset_buffer}},
+            {60 * 60, :burn},
+            {60 * 60 + 1, :burn}
+          ] do
+        reset_at =
+          whole_second_as_of
+          |> DateTime.add(reset_in_seconds, :second)
+          |> DateTime.add(100_000, :microsecond)
+
+        window = %{scheduled_burn_window(as_of, "95", reset_in_seconds) | reset_at: reset_at}
+        result = AutoEligibility.scheduled_burn_condition([window], policy, snapshot, as_of)
+
+        case expected do
+          :burn -> assert {:burn, %{trigger_detail: "threshold"}} = result
+          not_ready -> assert ^not_ready = result
+        end
+      end
+
+      exhausted_window = %AccountQuotaWindow{
+        quota_key: "account",
+        quota_scope: "account",
+        quota_family: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        freshness_state: "fresh",
+        observed_at: as_of
+      }
+
+      for {reset_in_seconds, expected?} <- [
+            {60 * 60 - 1, false},
+            {60 * 60, true},
+            {60 * 60 + 1, true}
+          ] do
+        reset_at =
+          whole_second_as_of
+          |> DateTime.add(reset_in_seconds, :second)
+          |> DateTime.add(100_000, :microsecond)
+
+        assert AutoEligibility.blocked_weekly_exhaustion?(
+                 [%{exhausted_window | reset_at: reset_at}],
+                 policy,
+                 as_of
+               ) == expected?,
+               "reset_in_seconds=#{reset_in_seconds}"
+      end
+    end
+
     test "pure burn decision selects evidence only within the winning qualifying set" do
       as_of = ~U[2026-07-29 12:00:00Z]
 
@@ -1731,6 +1788,58 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              end)
 
       assert Enum.all?(selected_windows, &(&1 in persisted_windows))
+    end
+
+    test "scheduled weekly eligibility compares reset horizons at whole-second precision" do
+      as_of = ~U[2026-07-29 12:00:00.900000Z]
+      whole_second_as_of = DateTime.truncate(as_of, :second)
+      max_reset_seconds = 7 * 24 * 60 * 60 + 60 * 60
+
+      for {scenario, reset_at, expected} <- [
+            {:same_second, DateTime.add(whole_second_as_of, 950_000, :microsecond), :unavailable},
+            {:next_second,
+             whole_second_as_of
+             |> DateTime.add(1, :second)
+             |> DateTime.add(100_000, :microsecond), {:eligible, 1}},
+            {:maximum,
+             whole_second_as_of
+             |> DateTime.add(max_reset_seconds, :second)
+             |> DateTime.add(100_000, :microsecond), {:eligible, 1}},
+            {:beyond_maximum,
+             whole_second_as_of
+             |> DateTime.add(max_reset_seconds + 1, :second)
+             |> DateTime.add(100_000, :microsecond), :unavailable}
+          ] do
+        %{identity: identity} = scheduled_expiry_fixture(as_of: as_of, quota?: false)
+
+        attrs =
+          scheduled_weekly_quota_attrs(as_of, Decimal.new("25"), reset_at: reset_at)
+
+        assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+        windows = QuotaWindows.list_evidence(identity)
+
+        case expected do
+          {:eligible, expected_count} ->
+            assert {:eligible, selected_windows} =
+                     AutoEligibility.scheduled_weekly_eligibility(
+                       windows,
+                       SavedResets.snapshot(identity, as_of),
+                       as_of
+                     ),
+                   "scenario=#{scenario}"
+
+            assert length(selected_windows) == expected_count
+
+          :unavailable ->
+            assert :unavailable =
+                     AutoEligibility.scheduled_weekly_eligibility(
+                       windows,
+                       SavedResets.snapshot(identity, as_of),
+                       as_of
+                     ),
+                   "scenario=#{scenario}"
+        end
+      end
     end
 
     test "scheduled weekly eligibility is unavailable for empty or unusable evidence" do
