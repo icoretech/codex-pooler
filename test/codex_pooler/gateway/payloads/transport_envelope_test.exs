@@ -32,21 +32,13 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
         receive_timeout_ms: 30
       }
 
-      if Version.match?(to_string(Application.spec(:req, :vsn)), ">= 0.7.0") do
-        assert TransportEnvelope.req_timeout_options(timeouts) == [
-                 receive_timeout: 30,
-                 finch: [
-                   pool_timeout: 20,
-                   conn_opts: [transport_opts: [timeout: 10]]
-                 ]
-               ]
-      else
-        assert TransportEnvelope.req_timeout_options(timeouts) == [
-                 receive_timeout: 30,
+      assert TransportEnvelope.req_timeout_options(timeouts) == [
+               receive_timeout: 30,
+               finch: [
                  pool_timeout: 20,
-                 connect_options: [timeout: 10]
+                 conn_opts: [transport_opts: [timeout: 10]]
                ]
-      end
+             ]
     end
 
     test "executes the configured Req transport without deprecation warnings" do
