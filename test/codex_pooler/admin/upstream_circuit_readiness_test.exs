@@ -99,6 +99,23 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
            }
   end
 
+  @tag :stale_probe_ready_circuit_verdict
+  test "stale probe-ready open lane is clear" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    insert_state!(pool, assignment, "gpt-stale-open", "proxy_http",
+      status: "open",
+      next_probe_at: @observed_at,
+      opened_at: DateTime.add(@observed_at, -601, :second),
+      last_failure_at: DateTime.add(@observed_at, -601, :second)
+    )
+
+    summary = project(%{assignment.id => ["gpt-stale-open"]}) |> Map.fetch!(assignment.id)
+
+    assert summary == UpstreamCircuitReadiness.clear()
+  end
+
   test "probe-eligible open and available or stale half-open lanes are recovering while fresh saturated half-open remains blocked" do
     pool = pool_fixture()
     %{assignment: elapsed_open} = upstream_assignment_fixture(pool)

@@ -668,7 +668,12 @@ defmodule CodexPooler.Dev.SeedsTest do
              "Dev Circuit Absent Assignment" => :closed
            }
 
-    assert states_later == states_at_seed
+    assert states_later == %{
+             "Dev Active Assignment" => :blocked,
+             "Dev Ready Assignment" => :closed,
+             "Dev Circuit Clear Assignment" => :closed,
+             "Dev Circuit Absent Assignment" => :closed
+           }
 
     blocked = Map.fetch!(fixtures, "Dev Active Assignment")
     recovering = Map.fetch!(fixtures, "Dev Ready Assignment")
@@ -681,6 +686,7 @@ defmodule CodexPooler.Dev.SeedsTest do
     assert circuit_at_seed[absent.assignment.id] == UpstreamCircuitReadiness.clear()
     assert circuit_at_seed[recovering.assignment.id].blocked_lane_count == 0
     assert circuit_at_seed[recovering.assignment.id].recovering_lane_count == 1
+    assert circuit_later[recovering.assignment.id] == UpstreamCircuitReadiness.clear()
 
     assert Repo.aggregate(
              from(state in RoutingCircuitState,

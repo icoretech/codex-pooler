@@ -9,7 +9,6 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
   alias CodexPooler.{Repo, RouteClass}
 
   @blocked_reasons ~w(open_cooldown open_no_probe probe_saturated)
-  @active_statuses ~w(open half_open)
   @unknown_model "unknown model"
   @unknown_route "unknown route"
 
@@ -230,7 +229,7 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadiness do
     state =
       cond do
         blocked? -> :blocked
-        latest.status in @active_statuses -> :recovering
+        latest.status == "half_open" -> :recovering
         match?(%DateTime{}, evidence_at) -> :recovering
         true -> :closed
       end
