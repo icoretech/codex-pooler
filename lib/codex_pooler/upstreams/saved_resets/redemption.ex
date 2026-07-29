@@ -23,8 +23,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   @assignment_active PoolUpstreamAssignment.active_status()
   @identity_deleted UpstreamIdentity.deleted_status()
   @identity_disabled UpstreamIdentity.disabled_status()
-  @default_receive_timeout 15_000
-  @stale_grace_ms 60_000
   @scheduled_expiry_trigger "scheduled_expiry_rescue"
   @known_noop_codes ~w(already_redeemed no_credit nothing_to_reset)
 
@@ -53,6 +51,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           optional(:identity) => UpstreamIdentity.t()
         }
 
+  @type scheduled_redeem_result ::
+          {:ok, redeem_result() | scheduled_noop_result()}
+          | {:error, lifecycle_error() | :redemption_in_progress}
+
+  @type scheduled_decision_evidence :: %{
+          required(:trigger_detail) => String.t(),
+          required(:used_percent_at_decision) => String.t(),
+          required(:credit_expires_at_at_decision) => String.t(),
+          required(:natural_reset_at_decision) => String.t(),
+          required(:decided_at) => String.t()
+        }
+
   @type saved_reset_observation_intent :: %{
           required(:available_count) => non_neg_integer(),
           required(:authoritative_zero?) => boolean(),
@@ -66,7 +76,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           {:ok, PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
           | {:error, lifecycle_error() | :redemption_in_progress}
   def ensure_manual_available(assignment_or_id, opts \\ []) do
-    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    receive_timeout =
+      Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
+
     timestamp = Keyword.get_lazy(opts, :started_at, &now/0)
 
     with {:ok, assignment, identity} <- load_assignment_identity(assignment_or_id),
@@ -84,14 +96,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           required(:generation) => non_neg_integer(),
           required(:trigger_kind) => trigger_kind(),
           required(:started_at) => DateTime.t(),
-          required(:receive_timeout) => non_neg_integer()
+          required(:receive_timeout) => non_neg_integer(),
+          optional(:scheduled_decision_evidence) => scheduled_decision_evidence()
         }
 
   @spec redeem(PoolUpstreamAssignment.t() | Ecto.UUID.t(), keyword()) ::
           {:ok, redeem_result()} | {:error, lifecycle_error() | :redemption_in_progress}
   def redeem(assignment_or_id, opts \\ []) do
     trigger_kind = Keyword.get(opts, :trigger_kind, "admin_manual")
-    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+
+    receive_timeout =
+      Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
+
     started_at = Keyword.get_lazy(opts, :started_at, &now/0)
 
     opts =
@@ -122,11 +138,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           PoolUpstreamAssignment.t() | Ecto.UUID.t(),
           Ecto.UUID.t(),
           keyword()
-        ) ::
-          {:ok, redeem_result() | scheduled_noop_result()}
-          | {:error, lifecycle_error() | :redemption_in_progress}
+        ) :: scheduled_redeem_result()
   def redeem_scheduled_expiry(assignment_or_id, expected_identity_id, opts \\ []) do
-    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    receive_timeout =
+      Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
+
     started_at = Keyword.get_lazy(opts, :started_at, &now/0)
 
     opts =
@@ -321,14 +337,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
                started_at,
                receive_timeout
              ) do
-          :ok ->
+          {:ok, scheduled_burn_context} ->
             build_redemption_claim!(
               locked_identity.metadata || %{},
               locked_identity,
               locked_assignment,
               @scheduled_expiry_trigger,
               receive_timeout,
-              started_at
+              started_at,
+              scheduled_burn_context
             )
 
           {:noop, code} ->
@@ -515,37 +532,48 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          assignment,
          trigger_kind,
          receive_timeout,
-         started_at
+         started_at,
+         scheduled_burn_context \\ nil
        ) do
-    {attempt_id, generation} = claim_attempt_identity(metadata)
+    case encode_claim_scheduled_decision_evidence(scheduled_burn_context) do
+      {:ok, scheduled_decision_evidence} ->
+        {attempt_id, generation} = claim_attempt_identity(metadata)
 
-    # The claim replaces the whole redemption record, so the prior applied
-    # consume's timestamp must ride along or an unapplied attempt would
-    # disarm the gateway_auto cooldown inside the same staleness window.
-    claim =
-      %{
-        "status" => "redeeming",
-        "phase" => RedemptionLifecycle.consuming(),
-        "attempt_id" => attempt_id,
-        "generation" => generation,
-        "trigger_kind" => trigger_kind,
-        "started_at" => DateTime.to_iso8601(started_at),
-        "finished_at" => nil,
-        "result" => nil
-      }
-      |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
+        claim =
+          %{
+            "status" => "redeeming",
+            "phase" => RedemptionLifecycle.consuming(),
+            "attempt_id" => attempt_id,
+            "generation" => generation,
+            "trigger_kind" => trigger_kind,
+            "started_at" => DateTime.to_iso8601(started_at),
+            "finished_at" => nil,
+            "result" => nil
+          }
+          |> put_scheduled_decision_evidence(scheduled_decision_evidence)
+          |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
 
-    claimed_identity = update_redemption_metadata!(locked_identity, metadata, claim)
+        claimed_identity = update_redemption_metadata!(locked_identity, metadata, claim)
 
-    %{
-      identity: claimed_identity,
-      assignment: assignment,
-      attempt_id: attempt_id,
-      generation: generation,
-      trigger_kind: trigger_kind,
-      started_at: started_at,
-      receive_timeout: receive_timeout
-    }
+        %{
+          identity: claimed_identity,
+          assignment: assignment,
+          attempt_id: attempt_id,
+          generation: generation,
+          trigger_kind: trigger_kind,
+          started_at: started_at,
+          receive_timeout: receive_timeout
+        }
+        |> maybe_put_claim_scheduled_decision_evidence(scheduled_decision_evidence)
+
+      {:error, :invalid_decision_evidence} ->
+        {:noop,
+         noop_result(
+           locked_identity,
+           assignment,
+           "scheduled_expiry_decision_evidence_invalid"
+         )}
+    end
   end
 
   defp do_redeem(%{identity: identity, assignment: assignment} = claim, opts) do
@@ -899,7 +927,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           "result" => metadata_result(result)
         }
 
-        base = put_carried_applied_consume(base, redemption)
+        base =
+          base
+          |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
+          |> put_carried_applied_consume(redemption)
 
         redemption = Map.merge(base, redemption_lifecycle_fields(result))
 
@@ -1001,6 +1032,106 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     do: Map.put(result, :identity, identity)
 
   defp maybe_put_result_identity(result, _identity), do: result
+
+  @doc false
+  @spec encode_scheduled_decision_evidence(term()) ::
+          {:ok, scheduled_decision_evidence()} | {:error, :invalid_decision_evidence}
+  def encode_scheduled_decision_evidence(
+        %{
+          trigger_detail: trigger_detail,
+          used_percent_at_decision: used_percent,
+          credit_expires_at_at_decision: credit_expires_at,
+          natural_reset_at_decision: natural_reset_at,
+          decided_at: decided_at
+        } = context
+      )
+      when map_size(context) == 5 do
+    with {:ok, trigger_detail} <- encode_trigger_detail(trigger_detail),
+         {:ok, used_percent} <- encode_used_percent(used_percent),
+         {:ok, credit_expires_at} <- encode_evidence_timestamp(credit_expires_at),
+         {:ok, natural_reset_at} <- encode_evidence_timestamp(natural_reset_at),
+         {:ok, decided_at} <- encode_evidence_timestamp(decided_at) do
+      {:ok,
+       %{
+         trigger_detail: trigger_detail,
+         used_percent_at_decision: used_percent,
+         credit_expires_at_at_decision: credit_expires_at,
+         natural_reset_at_decision: natural_reset_at,
+         decided_at: decided_at
+       }}
+    else
+      _invalid -> {:error, :invalid_decision_evidence}
+    end
+  end
+
+  def encode_scheduled_decision_evidence(_context),
+    do: {:error, :invalid_decision_evidence}
+
+  defp encode_claim_scheduled_decision_evidence(nil), do: {:ok, nil}
+
+  defp encode_claim_scheduled_decision_evidence(context),
+    do: encode_scheduled_decision_evidence(context)
+
+  defp encode_trigger_detail(value)
+       when value in ["immediate_expiry", "exhausted", "threshold", "last_call"],
+       do: {:ok, value}
+
+  defp encode_trigger_detail(_value), do: :error
+
+  defp encode_used_percent(%Decimal{coef: coefficient, exp: exponent} = value)
+       when is_integer(coefficient) and is_integer(exponent) do
+    cond do
+      Decimal.compare(value, Decimal.new(0)) == :lt ->
+        :error
+
+      Decimal.compare(value, Decimal.new(100)) == :gt ->
+        :error
+
+      fractional_digits(value) > 3 ->
+        :error
+
+      true ->
+        encoded = value |> Decimal.normalize() |> Decimal.to_string(:normal)
+        if byte_size(encoded) in 1..6, do: {:ok, encoded}, else: :error
+    end
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp encode_used_percent(_value), do: :error
+
+  defp fractional_digits(%Decimal{} = value) do
+    value = Decimal.normalize(value)
+    max(-value.exp, 0)
+  end
+
+  defp encode_evidence_timestamp(%DateTime{} = value) do
+    with {:ok, value} <- DateTime.shift_zone(value, "Etc/UTC") do
+      encoded = value |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
+
+      if byte_size(encoded) in 20..27 and String.ends_with?(encoded, "Z"),
+        do: {:ok, encoded},
+        else: :error
+    end
+  end
+
+  defp encode_evidence_timestamp(_value), do: :error
+
+  defp put_scheduled_decision_evidence(record, nil), do: record
+
+  defp put_scheduled_decision_evidence(record, evidence) do
+    record
+    |> Map.put("trigger_detail", evidence.trigger_detail)
+    |> Map.put("used_percent_at_decision", evidence.used_percent_at_decision)
+    |> Map.put("credit_expires_at_at_decision", evidence.credit_expires_at_at_decision)
+    |> Map.put("natural_reset_at_decision", evidence.natural_reset_at_decision)
+    |> Map.put("decided_at", evidence.decided_at)
+  end
+
+  defp maybe_put_claim_scheduled_decision_evidence(claim, nil), do: claim
+
+  defp maybe_put_claim_scheduled_decision_evidence(claim, evidence),
+    do: Map.put(claim, :scheduled_decision_evidence, evidence)
 
   @spec no_credit_observation_intent(
           SavedResets.snapshot_projection(),
@@ -1177,7 +1308,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
        ) do
     case parse_datetime(started_at) do
       %DateTime{} = started_at ->
-        DateTime.diff(now, started_at, :millisecond) < receive_timeout + @stale_grace_ms
+        DateTime.diff(now, started_at, :millisecond) <
+          receive_timeout + SavedResets.redemption_stale_grace_ms()
 
       nil ->
         false

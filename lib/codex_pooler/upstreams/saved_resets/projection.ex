@@ -20,8 +20,8 @@ defmodule CodexPooler.Upstreams.SavedResets do
   @default_quota_threshold_percent 95
   @expiration_refresh_ttl_seconds 6 * 60 * 60
   @expiring_soon_seconds 24 * 60 * 60
-  @redemption_projection_receive_timeout_ms 15_000
-  @redemption_projection_stale_grace_ms 60_000
+  @redemption_receive_timeout_ms 15_000
+  @redemption_stale_grace_ms 60_000
   @detail_status_marker :saved_reset_detail_status
   @detail_payload_max_bytes 1_048_576
 
@@ -83,6 +83,12 @@ defmodule CodexPooler.Upstreams.SavedResets do
 
   @spec detail_payload_max_bytes() :: pos_integer()
   def detail_payload_max_bytes, do: @detail_payload_max_bytes
+
+  @spec redemption_receive_timeout_ms() :: pos_integer()
+  def redemption_receive_timeout_ms, do: @redemption_receive_timeout_ms
+
+  @spec redemption_stale_grace_ms() :: pos_integer()
+  def redemption_stale_grace_ms, do: @redemption_stale_grace_ms
 
   @spec count_from_usage_payload(term()) :: count_parse_result()
   def count_from_usage_payload(%{"rate_limit_reset_credits" => %{} = reset_credits}) do
@@ -970,7 +976,7 @@ defmodule CodexPooler.Upstreams.SavedResets do
   @spec fresh_redemption?(DateTime.t(), DateTime.t()) :: boolean()
   defp fresh_redemption?(%DateTime{} = started_at, %DateTime{} = timestamp) do
     DateTime.diff(timestamp, started_at, :millisecond) <
-      @redemption_projection_receive_timeout_ms + @redemption_projection_stale_grace_ms
+      redemption_receive_timeout_ms() + redemption_stale_grace_ms()
   end
 
   @spec now() :: DateTime.t()

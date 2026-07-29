@@ -4,6 +4,7 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
   import CodexPooler.PoolerFixtures
 
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Jobs
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -71,6 +72,48 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
 
   describe "scheduled expiry rescue" do
     @describetag :scheduled_expiry_worker
+
+    test "maps malformed scheduled decision evidence to one terminal cancellation" do
+      assert {:cancel, :scheduled_expiry_decision_evidence_invalid} =
+               SavedResetRedemptionWorker.map_scheduled_result(
+                 {:ok,
+                  %{
+                    status: :noop,
+                    applied?: false,
+                    code: "scheduled_expiry_decision_evidence_invalid"
+                  }}
+               )
+
+      assert :ok =
+               SavedResetRedemptionWorker.map_scheduled_result(
+                 {:ok,
+                  %{
+                    status: :noop,
+                    applied?: false,
+                    code: "scheduled_expiry_burn_not_ready"
+                  }}
+               )
+    end
+
+    test "cancelled scheduled job releases the incomplete-only unique slot" do
+      Repo.delete_all(Oban.Job)
+      %{fake: fake, assignment: assignment} = scheduled_expiry_fixture()
+
+      assert {:ok, first_job} = Jobs.enqueue_scheduled_saved_reset_redemption(assignment)
+      refute first_job.conflict?
+
+      assert :ok = Oban.cancel_job(first_job)
+
+      first_job = Repo.reload!(first_job)
+      assert first_job.state == "cancelled"
+      assert %DateTime{} = first_job.cancelled_at
+
+      assert {:ok, second_job} = Jobs.enqueue_scheduled_saved_reset_redemption(assignment)
+      refute second_job.conflict?
+      assert second_job.id != first_job.id
+      assert second_job.state == "available"
+      assert FakeUpstream.requests(fake) == []
+    end
 
     test "completes eligible scheduled rescue after one consume without a probe" do
       %{fake: fake, identity: identity, assignment: assignment} = scheduled_expiry_fixture()

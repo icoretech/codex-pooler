@@ -71,34 +71,46 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
       {:error, :saved_reset_persistence_failed}
   end
 
-  defp map_scheduled_result({:ok, %{status: :succeeded}}), do: :ok
+  @doc false
+  @spec map_scheduled_result(SavedResetRedemption.scheduled_redeem_result()) ::
+          Oban.Worker.result()
+  def map_scheduled_result({:ok, %{status: :succeeded}}), do: :ok
 
-  defp map_scheduled_result({:ok, %{status: :noop, code: code}})
-       when code in [
-              "scheduled_expiry_identity_unavailable",
-              "scheduled_expiry_assignment_unavailable",
-              "scheduled_expiry_identity_mismatch"
-            ],
-       do: {:cancel, scheduled_target_error(code)}
+  def map_scheduled_result(
+        {:ok,
+         %{
+           status: :noop,
+           code: "scheduled_expiry_decision_evidence_invalid"
+         }}
+      ),
+      do: {:cancel, :scheduled_expiry_decision_evidence_invalid}
 
-  defp map_scheduled_result({:ok, %{status: :noop}}), do: :ok
+  def map_scheduled_result({:ok, %{status: :noop, code: code}})
+      when code in [
+             "scheduled_expiry_identity_unavailable",
+             "scheduled_expiry_assignment_unavailable",
+             "scheduled_expiry_identity_mismatch"
+           ],
+      do: {:cancel, scheduled_target_error(code)}
 
-  defp map_scheduled_result({:ok, %{status: :failed, code: "transport_error"}}),
+  def map_scheduled_result({:ok, %{status: :noop}}), do: :ok
+
+  def map_scheduled_result({:ok, %{status: :failed, code: "transport_error"}}),
     do: {:error, :saved_reset_redemption_request_failed}
 
-  defp map_scheduled_result({:ok, %{status: :failed, code: "missing_access_token"}}),
+  def map_scheduled_result({:ok, %{status: :failed, code: "missing_access_token"}}),
     do: {:error, :saved_reset_access_token_unavailable}
 
-  defp map_scheduled_result({:ok, %{status: :failed}}),
+  def map_scheduled_result({:ok, %{status: :failed}}),
     do: {:error, "saved reset redemption failed"}
 
-  defp map_scheduled_result({:error, :redemption_in_progress}), do: {:snooze, 5}
+  def map_scheduled_result({:error, :redemption_in_progress}), do: {:snooze, 5}
 
-  defp map_scheduled_result({:error, %{code: code}})
-       when code in [:pool_assignment_not_found, :upstream_identity_not_found],
-       do: {:cancel, code}
+  def map_scheduled_result({:error, %{code: code}})
+      when code in [:pool_assignment_not_found, :upstream_identity_not_found],
+      do: {:cancel, code}
 
-  defp map_scheduled_result({:error, _reason}), do: {:error, :saved_reset_redemption_failed}
+  def map_scheduled_result({:error, _reason}), do: {:error, :saved_reset_redemption_failed}
 
   defp scheduled_target_error("scheduled_expiry_identity_unavailable"),
     do: :scheduled_expiry_identity_unavailable

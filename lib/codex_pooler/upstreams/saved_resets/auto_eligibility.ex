@@ -16,11 +16,24 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
   @assignment_active PoolUpstreamAssignment.active_status()
   @identity_active UpstreamIdentity.active_status()
-  @redemption_stale_grace_ms 60_000
-
   @type trigger :: Context.trigger()
   @type context :: Context.t()
   @type validation_result :: :ok | {:noop, String.t()} | {:error, :redemption_in_progress}
+  @type scheduled_burn_context :: %{
+          required(:trigger_detail) => String.t(),
+          required(:used_percent_at_decision) => Decimal.t(),
+          required(:credit_expires_at_at_decision) => DateTime.t(),
+          required(:natural_reset_at_decision) => DateTime.t(),
+          required(:decided_at) => DateTime.t()
+        }
+  @type scheduled_burn_reason ::
+          :burn_condition_absent | :expiration_stale | :natural_reset_buffer
+  @type scheduled_burn_result ::
+          {:burn, scheduled_burn_context()} | {:not_ready, scheduled_burn_reason()}
+  @type scheduled_validation_result ::
+          {:ok, scheduled_burn_context()}
+          | {:noop, String.t()}
+          | {:error, :redemption_in_progress}
 
   @spec normalize_context(term()) :: {:ok, context()} | {:error, :invalid_gateway_auto_context}
   defdelegate normalize_context(context), to: Context, as: :normalize
@@ -100,14 +113,18 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     snapshot = SavedResets.snapshot(identity, timestamp)
 
     identity.status == @identity_active and policy.enabled? and
-      scheduled_redemption_state(identity, snapshot, timestamp, 0) == :clear and
+      scheduled_redemption_state(
+        identity,
+        snapshot,
+        timestamp,
+        SavedResets.redemption_receive_timeout_ms()
+      ) == :clear and
       scheduled_saved_reset_state(snapshot, policy) == :available and
       SavedResets.expires_soon?(identity, timestamp) and
-      scheduled_weekly_eligibility(
-        scheduled_identity_windows(identity, snapshot, timestamp),
-        policy,
-        timestamp
-      ) == :eligible
+      identity
+      |> Windows.list_evidence()
+      |> scheduled_weekly_eligibility(snapshot, timestamp)
+      |> scheduled_weekly_compatibility(policy, timestamp) == :eligible
   end
 
   @spec validate_locked_scheduled_expiry(
@@ -116,7 +133,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           Ecto.UUID.t(),
           DateTime.t(),
           non_neg_integer()
-        ) :: validation_result()
+        ) :: scheduled_validation_result()
   def validate_locked_scheduled_expiry(
         %UpstreamIdentity{} = identity,
         %PoolUpstreamAssignment{} = assignment,
@@ -138,9 +155,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
              snapshot |> scheduled_saved_reset_state(policy) |> scheduled_saved_reset_result(),
            :ok <- scheduled_expiry_result(identity, timestamp) do
         identity
-        |> scheduled_identity_windows(snapshot, timestamp)
-        |> scheduled_weekly_eligibility(policy, timestamp)
-        |> scheduled_weekly_result()
+        |> Windows.list_evidence()
+        |> scheduled_burn(snapshot, policy, timestamp)
+        |> scheduled_burn_result()
       end
     end
   end
@@ -155,12 +172,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     Map.new(windows_by_identity_id, fn {identity_id, windows} ->
       {identity_id, effective_source_windows(windows, snapshot, timestamp)}
     end)
-  end
-
-  defp scheduled_identity_windows(identity, snapshot, timestamp) do
-    identity
-    |> Windows.list_evidence()
-    |> effective_source_windows(snapshot, timestamp)
   end
 
   defp effective_source_windows(windows, snapshot, timestamp) do
@@ -518,7 +529,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     case DateTime.from_iso8601(started_at) do
       {:ok, started_at, _offset} ->
         DateTime.diff(timestamp, started_at, :millisecond) <
-          receive_timeout + @redemption_stale_grace_ms
+          receive_timeout + SavedResets.redemption_stale_grace_ms()
 
       _invalid ->
         false
@@ -527,37 +538,126 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
 
   defp fresh_claim?(_redemption, _timestamp, _receive_timeout), do: false
 
-  defp scheduled_weekly_eligibility(windows, policy, timestamp) do
-    used_windows = Enum.filter(windows, &weekly_used_window?(&1, timestamp))
+  @doc false
+  @spec scheduled_weekly_eligibility(
+          [AccountQuotaWindow.t()],
+          SavedResets.snapshot_projection(),
+          DateTime.t()
+        ) :: {:eligible, [AccountQuotaWindow.t()]} | :unavailable
+  def scheduled_weekly_eligibility(windows, snapshot, %DateTime{} = timestamp)
+      when is_list(windows) do
+    usable_windows =
+      windows
+      |> Windows.reject_superseded_primary_windows(timestamp)
+      |> compatible_source_windows(snapshot)
+      |> Enum.filter(&scheduled_usable_weekly_window?(&1, timestamp))
 
-    cond do
-      used_windows == [] ->
-        :unavailable
+    if usable_windows == [], do: :unavailable, else: {:eligible, usable_windows}
+  end
 
-      Enum.any?(
-        used_windows,
-        &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
-      ) ->
-        :eligible
+  defp scheduled_weekly_compatibility({:eligible, windows}, policy, timestamp) do
+    if Enum.any?(
+         windows,
+         &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
+       ),
+       do: :eligible,
+       else: :natural_reset_buffer
+  end
 
-      true ->
-        :natural_reset_buffer
+  defp scheduled_weekly_compatibility(:unavailable, _policy, _timestamp), do: :unavailable
+
+  @spec scheduled_burn(
+          [AccountQuotaWindow.t()],
+          SavedResets.snapshot_projection(),
+          SavedResets.auto_policy_projection(),
+          DateTime.t()
+        ) :: scheduled_burn_result()
+  defp scheduled_burn(windows, snapshot, policy, timestamp) do
+    case scheduled_weekly_eligibility(windows, snapshot, timestamp) do
+      {:eligible, eligible_windows} ->
+        burn_from_eligible_windows(eligible_windows, snapshot, policy, timestamp)
+
+      :unavailable ->
+        {:not_ready, :burn_condition_absent}
     end
   end
 
-  defp scheduled_weekly_result(:eligible), do: :ok
+  defp burn_from_eligible_windows(windows, snapshot, policy, timestamp) do
+    compatible_windows =
+      Enum.filter(
+        windows,
+        &natural_reset_far_enough?(&1.reset_at, policy.min_blocked_minutes, timestamp)
+      )
 
-  defp scheduled_weekly_result(:natural_reset_buffer),
+    with [_window | _rest] <- compatible_windows,
+         {:ok, credit_expires_at} <- scheduled_credit_expires_at(snapshot.next_expires_at) do
+      evidence_window = select_scheduled_evidence_window(windows)
+
+      {:burn,
+       %{
+         trigger_detail: "immediate_expiry",
+         used_percent_at_decision: evidence_window.used_percent,
+         credit_expires_at_at_decision: credit_expires_at,
+         natural_reset_at_decision: evidence_window.reset_at,
+         decided_at: timestamp
+       }}
+    else
+      [] -> {:not_ready, :natural_reset_buffer}
+      :error -> {:not_ready, :expiration_stale}
+    end
+  end
+
+  defp scheduled_credit_expires_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, credit_expires_at, _offset} -> {:ok, credit_expires_at}
+      _invalid -> :error
+    end
+  end
+
+  defp scheduled_credit_expires_at(_value), do: :error
+
+  defp select_scheduled_evidence_window([window | windows]) do
+    Enum.reduce(windows, window, fn candidate, selected ->
+      case Decimal.compare(candidate.used_percent, selected.used_percent) do
+        :gt -> candidate
+        :lt -> selected
+        :eq -> select_latest_reset(candidate, selected)
+      end
+    end)
+  end
+
+  defp select_latest_reset(candidate, selected) do
+    if DateTime.after?(candidate.reset_at, selected.reset_at), do: candidate, else: selected
+  end
+
+  defp scheduled_burn_result({:burn, context}), do: {:ok, context}
+
+  defp scheduled_burn_result({:not_ready, :burn_condition_absent}),
+    do: {:noop, "scheduled_expiry_burn_not_ready"}
+
+  defp scheduled_burn_result({:not_ready, :expiration_stale}),
+    do: {:noop, "scheduled_expiry_not_expiring"}
+
+  defp scheduled_burn_result({:not_ready, :natural_reset_buffer}),
     do: {:noop, "scheduled_expiry_natural_reset_buffer"}
-
-  defp scheduled_weekly_result(:unavailable),
-    do: {:noop, "scheduled_expiry_weekly_evidence_unavailable"}
 
   defp weekly_usable_window?(window, timestamp) do
     WindowClassifier.weekly_secondary?(window) and
       window.source_precision in ["observed", "authoritative"] and
       Windows.fresh_window?(window, timestamp) and match?(%DateTime{}, window.reset_at)
   end
+
+  defp scheduled_usable_weekly_window?(window, timestamp) do
+    weekly_usable_window?(window, timestamp) and used_percent_above_zero?(window.used_percent) and
+      future_reset_within_weekly_horizon?(window.reset_at, timestamp)
+  end
+
+  defp future_reset_within_weekly_horizon?(%DateTime{} = reset_at, timestamp) do
+    seconds_until_reset = DateTime.diff(reset_at, timestamp, :second)
+    seconds_until_reset > 0 and seconds_until_reset <= @max_weekly_reset_seconds
+  end
+
+  defp future_reset_within_weekly_horizon?(_reset_at, _timestamp), do: false
 
   defp weekly_exhausted_window?(window, timestamp) do
     WindowClassifier.weekly_secondary?(window) and match?(%DateTime{}, window.reset_at) and

@@ -67,6 +67,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       persisted = Repo.reload!(identity)
       assert get_in(persisted.metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
+      redemption = persisted.metadata["saved_reset_redemption"]
+
+      for key <- scheduled_decision_metadata_keys() do
+        refute Map.has_key?(redemption, key)
+      end
+
       metadata_json = Jason.encode!(persisted.metadata)
       refute metadata_json =~ "credit_1"
       refute metadata_json =~ redeem_request_id
@@ -1027,6 +1033,85 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   describe "scheduled expiry rescue" do
     @describetag :scheduled_expiry_rescue
 
+    test "encodes exactly five bounded scheduled decision fields" do
+      utc_seconds = ~U[2026-07-29 12:00:00Z]
+      utc_microseconds = ~U[2026-07-29 12:00:00.123456Z]
+      {:ok, non_utc, _offset} = DateTime.from_iso8601("2026-07-29T13:00:00+01:00")
+
+      for trigger_detail <- ["immediate_expiry", "exhausted", "threshold", "last_call"],
+          used_percent <- [
+            Decimal.new("0"),
+            Decimal.new("0.001"),
+            Decimal.new("99.999"),
+            Decimal.new("100"),
+            Decimal.new("1.2300"),
+            Decimal.new("123E-2")
+          ] do
+        assert {:ok, evidence} =
+                 SavedResetRedemption.encode_scheduled_decision_evidence(%{
+                   trigger_detail: trigger_detail,
+                   used_percent_at_decision: used_percent,
+                   credit_expires_at_at_decision: utc_seconds,
+                   natural_reset_at_decision: non_utc,
+                   decided_at: utc_microseconds
+                 })
+
+        assert Map.keys(evidence) |> Enum.sort() == scheduled_decision_atom_keys()
+        assert evidence.trigger_detail == trigger_detail
+
+        assert evidence.used_percent_at_decision ==
+                 used_percent |> Decimal.normalize() |> Decimal.to_string(:normal)
+
+        assert evidence.credit_expires_at_at_decision == "2026-07-29T12:00:00Z"
+        assert evidence.natural_reset_at_decision == "2026-07-29T12:00:00Z"
+        assert evidence.decided_at == "2026-07-29T12:00:00.123456Z"
+
+        assert byte_size(evidence.trigger_detail) in 9..16
+        assert byte_size(evidence.used_percent_at_decision) in 1..6
+
+        for timestamp_key <- [
+              :credit_expires_at_at_decision,
+              :natural_reset_at_decision,
+              :decided_at
+            ] do
+          assert byte_size(Map.fetch!(evidence, timestamp_key)) in 20..27
+          assert String.ends_with?(Map.fetch!(evidence, timestamp_key), "Z")
+        end
+      end
+    end
+
+    test "rejects malformed scheduled decision contexts without coercion or rounding" do
+      valid = %{
+        trigger_detail: "immediate_expiry",
+        used_percent_at_decision: Decimal.new("25"),
+        credit_expires_at_at_decision: ~U[2026-07-29 13:00:00Z],
+        natural_reset_at_decision: ~U[2026-07-29 14:00:00Z],
+        decided_at: ~U[2026-07-29 12:00:00Z]
+      }
+
+      invalid_contexts = [
+        nil,
+        %{},
+        Map.put(valid, :extra, "not-persisted"),
+        Map.put(valid, :trigger_detail, " immediate_expiry"),
+        Map.put(valid, :trigger_detail, "other"),
+        Map.put(valid, :used_percent_at_decision, 25),
+        Map.put(valid, :used_percent_at_decision, Decimal.new("-0.001")),
+        Map.put(valid, :used_percent_at_decision, Decimal.new("100.001")),
+        Map.put(valid, :used_percent_at_decision, Decimal.new("0.0001")),
+        Map.put(valid, :used_percent_at_decision, Decimal.new("NaN")),
+        Map.put(valid, :used_percent_at_decision, Decimal.new("Infinity")),
+        Map.put(valid, :credit_expires_at_at_decision, "2026-07-29T13:00:00Z"),
+        Map.put(valid, :natural_reset_at_decision, nil),
+        Map.put(valid, :decided_at, ~N[2026-07-29 12:00:00])
+      ]
+
+      for context <- invalid_contexts do
+        assert {:error, :invalid_decision_evidence} =
+                 SavedResetRedemption.encode_scheduled_decision_evidence(context)
+      end
+    end
+
     test "eligible scheduled rescue consumes once through the shared redemption pipeline" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture()
@@ -1053,7 +1138,146 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       redemption = persisted_identity.metadata["saved_reset_redemption"]
       assert redemption["trigger_kind"] == "scheduled_expiry_rescue"
+
+      assert Map.take(redemption, scheduled_decision_metadata_keys()) == %{
+               "trigger_detail" => "immediate_expiry",
+               "used_percent_at_decision" => "25",
+               "credit_expires_at_at_decision" =>
+                 DateTime.to_iso8601(DateTime.add(as_of, 1, :hour)),
+               "natural_reset_at_decision" => DateTime.to_iso8601(DateTime.add(as_of, 2, :hour)),
+               "decided_at" => DateTime.to_iso8601(as_of)
+             }
+
       refute Map.has_key?(redemption, "probe")
+    end
+
+    test "persists scheduled fields in the consuming claim before provider I/O" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          FakeUpstream.barrier_json_response(%{"code" => "nothing_to_reset"},
+            notify: parent,
+            release_ref: release_ref
+          )
+        )
+
+      %{as_of: as_of, identity: identity, assignment: assignment} =
+        scheduled_expiry_fixture(as_of: ~U[2026-07-29 12:00:00Z], fake: fake)
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+
+          SavedResetRedemption.redeem_scheduled_expiry(
+            assignment,
+            identity.id,
+            started_at: as_of
+          )
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      consuming = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert consuming["status"] == "redeeming"
+      assert consuming["phase"] == "consuming"
+
+      assert Map.keys(Map.take(consuming, scheduled_decision_metadata_keys())) |> Enum.sort() ==
+               Enum.sort(scheduled_decision_metadata_keys())
+
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+      assert {:ok, %{status: :noop, code: "nothing_to_reset"}} = Task.await(task, 5_000)
+    end
+
+    test "selects highest usage then latest reset for scheduled decision evidence" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      %{fake: fake, identity: identity, assignment: assignment} =
+        scheduled_expiry_fixture(as_of: as_of, quota?: false)
+
+      identity = update_saved_resets!(identity, %{"source" => nil})
+
+      assert {:ok, [_lower, _earlier, _selected]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 scheduled_weekly_quota_attrs(as_of, Decimal.new("70"), quota_key: "lower"),
+                 scheduled_weekly_quota_attrs(as_of, Decimal.new("80"),
+                   source: "codex_response_headers",
+                   reset_at: DateTime.add(as_of, 3, :hour)
+                 ),
+                 scheduled_weekly_quota_attrs(as_of, Decimal.new("80.000"),
+                   source: "runtime",
+                   reset_at: DateTime.add(as_of, 4, :hour)
+                 )
+               ])
+
+      assert {:ok, %{status: :succeeded, identity: persisted_identity}} =
+               SavedResetRedemption.redeem_scheduled_expiry(
+                 assignment,
+                 identity.id,
+                 started_at: as_of
+               )
+
+      redemption = persisted_identity.metadata["saved_reset_redemption"]
+      assert redemption["used_percent_at_decision"] == "80"
+
+      assert redemption["natural_reset_at_decision"] ==
+               as_of
+               |> DateTime.add(4, :hour)
+               |> Map.put(:microsecond, {0, 6})
+               |> DateTime.to_iso8601()
+
+      assert Enum.any?(FakeUpstream.requests(fake), &(&1.method == "POST"))
+    end
+
+    test "preserves scheduled evidence on provider noop and failure finalization" do
+      for {scenario, consume_response, expected_status} <- [
+            {:noop, {200, %{"code" => "nothing_to_reset"}}, :noop},
+            {:failure, {502, %{"code" => "provider_rejected"}}, :failed}
+          ] do
+        %{as_of: as_of, identity: identity, assignment: assignment} =
+          scheduled_expiry_fixture(consume_response: consume_response)
+
+        assert {:ok, %{status: ^expected_status, identity: persisted_identity}} =
+                 SavedResetRedemption.redeem_scheduled_expiry(
+                   assignment,
+                   identity.id,
+                   started_at: as_of
+                 ),
+               "scenario=#{scenario}"
+
+        redemption = persisted_identity.metadata["saved_reset_redemption"]
+
+        assert Map.keys(Map.take(redemption, scheduled_decision_metadata_keys())) |> Enum.sort() ==
+                 Enum.sort(scheduled_decision_metadata_keys())
+
+        assert redemption["trigger_detail"] == "immediate_expiry"
+        assert redemption["used_percent_at_decision"] == "25"
+      end
+    end
+
+    test "legacy redemption records remain readable without scheduled evidence fields" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+      legacy = redemption_metadata("scheduled_expiry_rescue", DateTime.add(as_of, -5, :minute))
+
+      for key <- scheduled_decision_metadata_keys() do
+        refute Map.has_key?(legacy, key)
+      end
+
+      %{fake: fake, identity: identity, assignment: assignment} =
+        scheduled_expiry_fixture(as_of: as_of, redemption: legacy)
+
+      assert {:ok, %{status: :noop, code: "scheduled_expiry_redemption_stale"}} =
+               SavedResetRedemption.redeem_scheduled_expiry(
+                 assignment,
+                 identity.id,
+                 started_at: as_of
+               )
+
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == legacy
+      assert FakeUpstream.requests(fake) == []
     end
 
     test "scheduled rescue noops when policy is disabled under lock" do
@@ -1110,7 +1334,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
-    test "scheduled rescue noops without fresh used source-compatible weekly evidence" do
+    test "scheduled rescue noops when the burn condition is absent" do
       scenarios = [
         {:absent, [quota?: false]},
         {:unused, [quota_used_percent: Decimal.new("0")]},
@@ -1132,7 +1356,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                 %{
                   status: :noop,
                   applied?: false,
-                  code: "scheduled_expiry_weekly_evidence_unavailable"
+                  code: "scheduled_expiry_burn_not_ready"
                 }} =
                  SavedResetRedemption.redeem_scheduled_expiry(
                    assignment,
@@ -1143,6 +1367,127 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         assert FakeUpstream.requests(fake) == [], "scenario=#{scenario}"
       end
+    end
+
+    test "scheduled weekly eligibility returns every usable window with its evidence" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      %{identity: identity} = scheduled_expiry_fixture(as_of: as_of, quota?: false)
+
+      first_reset_at = DateTime.add(as_of, 2, :hour)
+      second_reset_at = DateTime.add(as_of, 3, :hour)
+      stale_at = DateTime.add(as_of, -Evidence.freshness_ttl_seconds(), :second)
+
+      windows = [
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("25"), reset_at: first_reset_at),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("50"),
+          source: "codex_response_headers",
+          reset_at: second_reset_at
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("0"), quota_key: "zero-use"),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "stale",
+          observed_at: stale_at,
+          last_sync_at: stale_at
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "missing-reset",
+          reset_at: nil
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "past-reset",
+          reset_at: DateTime.add(as_of, -1, :second)
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "far-reset",
+          reset_at: DateTime.add(as_of, 7 * 24 * 60 * 60 + 60 * 60 + 1, :second)
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "source-mismatch",
+          source: "codex_response_headers"
+        ),
+        scheduled_weekly_quota_attrs(as_of, Decimal.new("10"),
+          quota_key: "primary",
+          window_kind: "primary",
+          window_minutes: 300
+        )
+      ]
+
+      assert {:ok, persisted_windows} = QuotaWindows.upsert_quota_windows(identity, windows)
+      snapshot = identity |> SavedResets.snapshot(as_of) |> Map.put(:source, nil)
+
+      assert {:eligible, selected_windows} =
+               AutoEligibility.scheduled_weekly_eligibility(persisted_windows, snapshot, as_of)
+
+      assert Enum.map(selected_windows, & &1.id) ==
+               persisted_windows
+               |> Enum.filter(
+                 &(&1.source in ["codex_usage_api", "codex_response_headers"] and
+                     (Decimal.equal?(&1.used_percent, Decimal.new("25")) or
+                        Decimal.equal?(&1.used_percent, Decimal.new("50"))))
+               )
+               |> Enum.map(& &1.id)
+
+      assert Enum.any?(selected_windows, fn window ->
+               Decimal.equal?(window.used_percent, Decimal.new("25")) and
+                 DateTime.compare(window.reset_at, first_reset_at) == :eq
+             end)
+
+      assert Enum.any?(selected_windows, fn window ->
+               Decimal.equal?(window.used_percent, Decimal.new("50")) and
+                 DateTime.compare(window.reset_at, second_reset_at) == :eq
+             end)
+
+      assert Enum.all?(selected_windows, &(&1 in persisted_windows))
+    end
+
+    test "scheduled weekly eligibility is unavailable for empty or unusable evidence" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
+      for {scenario, overrides} <- [
+            zero_use: [used_percent: Decimal.new("0")],
+            stale: [
+              observed_at: DateTime.add(as_of, -20, :minute),
+              last_sync_at: DateTime.add(as_of, -20, :minute)
+            ],
+            invalid_reset: [reset_at: nil],
+            past_reset: [reset_at: DateTime.add(as_of, -1, :second)],
+            far_future_reset: [
+              reset_at: DateTime.add(as_of, 7 * 24 * 60 * 60 + 60 * 60 + 1, :second)
+            ],
+            source_incompatible: [source: "codex_response_headers"],
+            inferred_precision: [source_precision: "inferred"],
+            unknown_precision: [source_precision: "unknown"]
+          ] do
+        %{identity: identity} = scheduled_expiry_fixture(as_of: as_of, quota?: false)
+
+        attrs =
+          scheduled_weekly_quota_attrs(
+            as_of,
+            Keyword.get(overrides, :used_percent, Decimal.new("25")),
+            Keyword.drop(overrides, [:used_percent])
+          )
+
+        assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+        windows = QuotaWindows.list_evidence(identity)
+
+        assert :unavailable =
+                 AutoEligibility.scheduled_weekly_eligibility(
+                   windows,
+                   SavedResets.snapshot(identity, as_of),
+                   as_of
+                 ),
+               "scenario=#{scenario}"
+      end
+
+      %{identity: identity} = scheduled_expiry_fixture(as_of: as_of, quota?: false)
+
+      assert :unavailable =
+               AutoEligibility.scheduled_weekly_eligibility(
+                 QuotaWindows.list_evidence(identity),
+                 SavedResets.snapshot(identity, as_of),
+                 as_of
+               )
     end
 
     test "scheduled rescue rejects a superseded legacy weekly source before source filtering" do
@@ -1169,7 +1514,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
               %{
                 status: :noop,
                 applied?: false,
-                code: "scheduled_expiry_weekly_evidence_unavailable"
+                code: "scheduled_expiry_burn_not_ready"
               }} =
                SavedResetRedemption.redeem_scheduled_expiry(
                  assignment,
@@ -1181,10 +1526,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
 
     test "scheduled rescue noops when the natural reset is inside the configured buffer" do
+      as_of = ~U[2026-07-29 12:00:00Z]
+
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture(
-          quota_overrides: %{reset_at: DateTime.add(DateTime.utc_now(), 59, :minute)}
+          as_of: as_of,
+          quota?: false
         )
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 scheduled_weekly_quota_attrs(
+                   as_of,
+                   Decimal.new("25"),
+                   reset_at: DateTime.add(as_of, 59, :minute)
+                 )
+               ])
+
+      assert {:eligible, [_window]} =
+               AutoEligibility.scheduled_weekly_eligibility(
+                 QuotaWindows.list_evidence(identity),
+                 SavedResets.snapshot(identity, as_of),
+                 as_of
+               )
+
+      refute AutoEligibility.scheduled_expiry_candidate?(identity, as_of)
 
       assert {:ok,
               %{
@@ -1218,6 +1584,49 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
 
       assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "legacy scheduled claim freshness is strict before and under lock" do
+      as_of = ~U[2026-07-29 12:00:00.000000Z]
+
+      for {age_ms, expected_candidate?, expected_state} <- [
+            {74_999, false, :in_progress},
+            {75_000, false, :stale}
+          ] do
+        %{fake: fake, identity: identity, assignment: assignment} =
+          scheduled_expiry_fixture(
+            as_of: as_of,
+            redemption:
+              redemption_metadata(
+                "scheduled_expiry_rescue",
+                DateTime.add(as_of, -age_ms, :millisecond)
+              )
+          )
+
+        assert AutoEligibility.scheduled_expiry_candidate?(identity, as_of) == expected_candidate?
+
+        result =
+          SavedResetRedemption.redeem_scheduled_expiry(
+            assignment,
+            identity.id,
+            started_at: as_of
+          )
+
+        case expected_state do
+          :in_progress ->
+            assert {:error, :redemption_in_progress} = result
+
+          :stale ->
+            assert {:ok,
+                    %{
+                      status: :noop,
+                      applied?: false,
+                      code: "scheduled_expiry_redemption_stale"
+                    }} = result
+        end
+
+        assert [] = FakeUpstream.requests(fake)
+      end
     end
 
     test "stale automatic claim stays fail-closed for manual recovery" do
@@ -2194,7 +2603,24 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         DateTime.utc_now() |> DateTime.truncate(:microsecond)
       end)
 
-    {:ok, fake} = codex_reset_fake(0)
+    fake =
+      case Keyword.fetch(opts, :fake) do
+        {:ok, fake} ->
+          fake
+
+        :error ->
+          {:ok, fake} =
+            FakeUpstream.start_link(
+              {:path_json,
+               %{
+                 "/api/codex/rate-limit-reset-credits/consume" =>
+                   Keyword.get(opts, :consume_response, {200, %{"code" => "reset"}}),
+                 "/api/codex/usage" => Keyword.get(opts, :usage_response, {200, usage_payload(0)})
+               }}
+            )
+
+          fake
+      end
 
     saved_resets =
       scheduled_saved_resets(
@@ -2444,6 +2870,40 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         freshness_state: "fresh"
       },
       Map.new(overrides)
+    )
+  end
+
+  defp scheduled_weekly_quota_attrs(as_of, used_percent, overrides) do
+    weekly_quota_attrs(
+      used_percent,
+      Keyword.merge(
+        [
+          observed_at: as_of,
+          last_sync_at: as_of,
+          reset_at: DateTime.add(as_of, 2, :hour)
+        ],
+        overrides
+      )
+    )
+  end
+
+  defp scheduled_decision_atom_keys do
+    [
+      :credit_expires_at_at_decision,
+      :decided_at,
+      :natural_reset_at_decision,
+      :trigger_detail,
+      :used_percent_at_decision
+    ]
+  end
+
+  defp scheduled_decision_metadata_keys do
+    ~w(
+      credit_expires_at_at_decision
+      decided_at
+      natural_reset_at_decision
+      trigger_detail
+      used_percent_at_decision
     )
   end
 

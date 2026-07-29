@@ -192,6 +192,48 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     assert Enum.map(projection.explorer.items, & &1.id) == [job.id]
   end
 
+  @tag :scheduled_expiry_worker
+  test "projects bounded cancelled scheduled evidence diagnostics" do
+    job =
+      insert_job(1,
+        worker: SavedResetRedemptionWorker,
+        state: "cancelled",
+        attempt: 1,
+        max_attempts: 1,
+        inserted_at: ~U[2026-07-29 12:00:00Z],
+        cancelled_at: ~U[2026-07-29 12:00:01Z],
+        args: %{"trigger_kind" => "scheduled_expiry_rescue"},
+        errors: [
+          %{
+            "attempt" => 1,
+            "at" => "2026-07-29T12:00:01Z",
+            "error" =>
+              "CodexPooler.Jobs.SavedResetRedemptionWorker cancelled with :scheduled_expiry_decision_evidence_invalid"
+          }
+        ]
+      )
+
+    projection =
+      JobsReadModel.load(:system,
+        params: %{"job_id" => Integer.to_string(job.id)},
+        now: ~U[2026-07-29 12:30:00Z]
+      )
+
+    assert %{
+             id: job_id,
+             state: "cancelled",
+             trigger_kind: "scheduled_expiry_rescue",
+             failure_summary: %{
+               title: "Attempt 1",
+               message: diagnostic
+             }
+           } = projection.selected_job
+
+    assert job_id == job.id
+    assert diagnostic =~ "scheduled_expiry_decision_evidence_invalid"
+    refute Map.has_key?(projection.selected_job, :errors)
+  end
+
   test "default projection excludes discarded jobs resolved by a later target success" do
     resolved_target_id = Ecto.UUID.generate()
     unresolved_target_id = Ecto.UUID.generate()

@@ -668,6 +668,25 @@ defmodule CodexPooler.Upstreams.SavedResetsTest do
                |> saved_reset_snapshot_metadata()
                |> SavedResets.snapshot()
     end
+
+    test "projects legacy redemption freshness at the strict timeout boundary" do
+      timestamp = ~U[2026-07-29 12:00:00.000000Z]
+
+      assert SavedResets.redemption_receive_timeout_ms() == 15_000
+      assert SavedResets.redemption_stale_grace_ms() == 60_000
+
+      assert %{in_progress?: true, redemption_stale?: false} =
+               timestamp
+               |> DateTime.add(-74_999, :millisecond)
+               |> saved_reset_snapshot_metadata()
+               |> SavedResets.snapshot(timestamp)
+
+      assert %{in_progress?: false, redemption_stale?: true} =
+               timestamp
+               |> DateTime.add(-75_000, :millisecond)
+               |> saved_reset_snapshot_metadata()
+               |> SavedResets.snapshot(timestamp)
+    end
   end
 
   defp saved_reset_snapshot_metadata(started_at) do
