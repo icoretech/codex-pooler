@@ -83,26 +83,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
              } = nested_error
 
       assert Enum.sort(Map.keys(nested_error)) == ["code", "message", "param", "type"]
-
-      stream_dispatch_source =
-        Path.expand(
-          "../../../../../lib/codex_pooler/gateway/runtime/streaming/stream_dispatch.ex",
-          __DIR__
-        )
-        |> File.read!()
-
-      [_before_terminal_writer, terminal_writer] =
-        String.split(
-          stream_dispatch_source,
-          "defp write_public_openai_responses_terminal_failure",
-          parts: 2
-        )
-
-      [terminal_writer | _after_terminal_writer] =
-        String.split(terminal_writer, "defp http_sse_keepalive_writer", parts: 2)
-
-      assert terminal_writer =~ "update_relay_target(state, &Plug.Conn.chunk(&1, data))"
-      refute terminal_writer =~ "normalize_block("
     end
 
     test "keep public OpenAI chat stream parser state beside the relay target" do

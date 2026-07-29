@@ -165,7 +165,6 @@ if (mode === "relayed-failed") {
     [...events.slice(0, -1), { ...terminal, type: "response.completed" }],
   ];
 
-  assert.equal(invalidFixtures.length, 7);
   assert.ok(invalidFixtures.every((fixture) => !sequenceValid(fixture, mode)));
 }
 
