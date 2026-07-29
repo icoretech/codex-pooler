@@ -322,14 +322,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   test "owner lifecycle logs start reuse lookup miss and terminate metadata", context do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
     request_id = "req-owner-lifecycle-#{System.unique_integer([:positive])}"
-    previous_level = Logger.level()
-
-    Logger.configure(level: :info)
-
-    on_exit(fn -> Logger.configure(level: previous_level) end)
 
     logs =
-      capture_log([level: :info], fn ->
+      capture_info_log(fn ->
         assert {:ok, owner} = start_owner(context, upstream: upstream, request_id: request_id)
         assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
 
@@ -1491,10 +1486,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   @tag :owner_exit_reason_label_baseline
   test "idle expiry and rollout deadline cut retain existing owner-exit metadata" do
-    previous_level = Logger.level()
-    Logger.configure(level: :info)
-    on_exit(fn -> Logger.configure(level: previous_level) end)
-
     idle_context = db_owner_context()
     drain_context = db_owner_context()
 
@@ -1515,10 +1506,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   @tag :owner_exit_reason_label_red
   test "owner exit metadata adds a bounded cause without replacing owner_drained" do
-    previous_level = Logger.level()
-    Logger.configure(level: :info)
-    on_exit(fn -> Logger.configure(level: previous_level) end)
-
     idle_context = db_owner_context()
     drain_context = db_owner_context()
 
@@ -2310,6 +2297,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     })
   end
 
+  # Raises the primary Logger level only inside the capture window so nothing
+  # emitted outside it (owner startup, on_exit cleanup) can leak to the
+  # console; capture_log's :level option alone does not raise the primary
+  # level, so info-level lines would otherwise never fire.
+  defp capture_info_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+
+    try do
+      Logger.configure(level: :info)
+      capture_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
   defp observe_owner_exit(context, :idle_expiry) do
     upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
 
@@ -2325,7 +2327,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     owner_ref = Process.monitor(owner)
 
     logs =
-      capture_log([level: :info], fn ->
+      capture_info_log(fn ->
         assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
         assert_receive {:DOWN, ^owner_ref, :process, ^owner, :normal}
       end)
@@ -2379,7 +2381,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     deadline = harness.deadline
 
     logs =
-      capture_log([level: :info], fn ->
+      capture_info_log(fn ->
         drain_task =
           Task.async(fn ->
             RolloutDrain.start_drain(

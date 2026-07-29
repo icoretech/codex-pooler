@@ -2,7 +2,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
-  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   describe "normalize_stream_data/2" do
     test "carries split stream parser state explicitly" do

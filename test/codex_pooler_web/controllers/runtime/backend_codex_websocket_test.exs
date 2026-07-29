@@ -4450,17 +4450,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   test "gateway debug mode logs safe continuation decisions and stores request metadata" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
-    previous_logger_level = Logger.level()
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %OperationalSettings{gateway_debug?: true}
     )
 
-    Logger.configure(level: :info)
-
     on_exit(fn ->
-      Logger.configure(level: previous_logger_level)
-
       if previous_env,
         do: Application.put_env(:codex_pooler, OperationalSettings, previous_env),
         else: Application.delete_env(:codex_pooler, OperationalSettings)
@@ -4527,18 +4522,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       })
 
     try do
-      log =
-        ExUnit.CaptureLog.capture_log([level: :info], fn ->
-          assert {:ok, next_state} =
-                   CodexResponsesSocket.handle_in(
-                     {continuation_payload, [opcode: :text]},
-                     state
-                   )
+      previous_logger_level = Logger.level()
 
-          assert {:push, {:text, frame}, next_state} = receive_socket_push(next_state)
-          assert %{"id" => "resp_ws_debug_tool_continuation"} = Jason.decode!(frame)
-          assert {:ok, _state} = receive_socket_done(next_state)
-        end)
+      log =
+        try do
+          Logger.configure(level: :info)
+
+          ExUnit.CaptureLog.capture_log([level: :info], fn ->
+            assert {:ok, next_state} =
+                     CodexResponsesSocket.handle_in(
+                       {continuation_payload, [opcode: :text]},
+                       state
+                     )
+
+            assert {:push, {:text, frame}, next_state} = receive_socket_push(next_state)
+            assert %{"id" => "resp_ws_debug_tool_continuation"} = Jason.decode!(frame)
+            assert {:ok, _state} = receive_socket_done(next_state)
+          end)
+        after
+          Logger.configure(level: previous_logger_level)
+        end
 
       assert log =~ "codex_pooler gateway_debug payload"
       assert log =~ "previous_response_id_action=preserved"

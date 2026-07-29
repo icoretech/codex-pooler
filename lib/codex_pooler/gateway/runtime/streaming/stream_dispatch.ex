@@ -364,23 +364,26 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
       %{buffer: buffer} = first_event ->
         state = put_first_event_state(state, %{first_event | buffer: ""})
+        write_flushed_first_event(response_context, state, buffer)
+    end
+  end
 
-        {downstream_data, state} =
-          normalize_stream_data(
-            response_context,
-            state,
-            buffer,
-            &StreamProtocol.stream_data_visible?/1
-          )
+  defp write_flushed_first_event(%ResponseContext{} = response_context, state, buffer) do
+    {downstream_data, state} =
+      normalize_stream_data(
+        response_context,
+        state,
+        buffer,
+        &StreamProtocol.stream_data_visible?/1
+      )
 
-        if downstream_data == "" do
-          {:ok, state}
-        else
-          case update_relay_target(state, &Plug.Conn.chunk(&1, downstream_data)) do
-            {:ok, state} -> {:ok, state}
-            {:error, reason} -> {:chunk_error, state, reason}
-          end
-        end
+    if downstream_data == "" do
+      {:ok, state}
+    else
+      case update_relay_target(state, &Plug.Conn.chunk(&1, downstream_data)) do
+        {:ok, state} -> {:ok, state}
+        {:error, reason} -> {:chunk_error, state, reason}
+      end
     end
   end
 
