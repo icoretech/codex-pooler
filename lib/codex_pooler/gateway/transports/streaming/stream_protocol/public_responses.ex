@@ -115,14 +115,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
       terminal_buffer_candidate?(buffer) and
           StreamProtocol.oversized_incomplete_terminal_sse_block?(buffer) ->
-        record_oversized_incomplete(byte_size(buffer))
+        record_oversized_incomplete(
+          byte_size(buffer),
+          StreamProtocol.max_incomplete_terminal_sse_block_bytes()
+        )
+
         fail_oversized_incomplete(blocks, state)
 
       terminal_buffer_candidate?(buffer) ->
         normalize_blocks(blocks, buffer, state)
 
       StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
-        record_oversized_incomplete(byte_size(buffer))
+        record_oversized_incomplete(
+          byte_size(buffer),
+          StreamProtocol.max_incomplete_sse_block_bytes()
+        )
+
         fail_oversized_incomplete(blocks, state)
 
       true ->
@@ -226,20 +234,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {sequence_number, state}
   end
 
-  defp record_oversized_incomplete(bytes) do
+  defp record_oversized_incomplete(bytes, max_bytes) do
     BufferTelemetry.record_oversized_incomplete(
       "public_openai_responses_sse",
       bytes,
-      oversized_limit(bytes)
+      max_bytes
     )
-  end
-
-  defp oversized_limit(bytes) do
-    terminal_limit = StreamProtocol.max_incomplete_terminal_sse_block_bytes()
-
-    if bytes > terminal_limit,
-      do: terminal_limit,
-      else: StreamProtocol.max_incomplete_sse_block_bytes()
   end
 
   defp normalize_complete_blocks(blocks, state) do

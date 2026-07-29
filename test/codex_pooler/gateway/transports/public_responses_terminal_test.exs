@@ -209,6 +209,57 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
+  test "public POST overflow telemetry records the applicable incomplete buffer limit" do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    test_pid = self()
+    event = [:codex_pooler, :gateway, :stream_buffer, :oversized]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event,
+           %{bytes: bytes, count: count, max_bytes: max_bytes},
+           %{buffer: buffer},
+           ^test_pid ->
+          if self() == test_pid do
+            send(test_pid, {
+              handler_id,
+              %{buffer: buffer, bytes: bytes, count: count, max_bytes: max_bytes}
+            })
+          end
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    observed_bytes = StreamProtocol.max_incomplete_terminal_sse_block_bytes() + 1
+
+    emit_oversized_incomplete_sse(
+      ~s(event: response.completed\ndata: {"type":"response.completed","response":{),
+      observed_bytes
+    )
+
+    assert_receive {^handler_id,
+                    %{
+                      buffer: "public_openai_responses_sse",
+                      bytes: ^observed_bytes,
+                      count: 1,
+                      max_bytes: 67_108_864
+                    }}
+
+    emit_oversized_incomplete_sse(~s(data: {"ordinary":"), observed_bytes)
+
+    assert_receive {^handler_id,
+                    %{
+                      buffer: "public_openai_responses_sse",
+                      bytes: ^observed_bytes,
+                      count: 1,
+                      max_bytes: 65_536
+                    }}
+  end
+
   test "public POST fails an ordinary incomplete block at byte 65,537 and drops the source tail" do
     limit = StreamProtocol.max_incomplete_sse_block_bytes()
     stream = oversized_incomplete_sse(:late)
@@ -1147,6 +1198,16 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1_024),
       ~s(","type":"response.failed","response":{"id":"resp_oversized_late","status":"failed"}})
     ])
+  end
+
+  defp emit_oversized_incomplete_sse(prefix, observed_bytes) do
+    stream = prefix <> String.duplicate("x", observed_bytes - byte_size(prefix))
+    state = StreamProtocol.public_openai_responses_stream_state()
+
+    {_output, state} =
+      StreamProtocol.normalize_public_openai_responses_sse_data(stream, state)
+
+    assert state.buffer == ""
   end
 
   defp response_event_map(type), do: %{"type" => type}
