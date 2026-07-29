@@ -5060,6 +5060,85 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :streaming_sequence
+  test "classifies a buffered separator-less failed terminal for an already-closed client" do
+    terminal =
+      [
+        "event: response.failed\n",
+        "data: ",
+        Jason.encode!(%{
+          "type" => "response.failed",
+          "response" => %{
+            "id" => "resp_v1_flushed_failed_terminal_closed_client",
+            "status" => "failed",
+            "error" => %{
+              "code" => "context_length_exceeded",
+              "message" => "private provider detail"
+            }
+          }
+        })
+      ]
+      |> IO.iodata_to_binary()
+
+    split_at = div(byte_size(terminal), 2)
+    first = binary_part(terminal, 0, split_at)
+    second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
+
+    upstream = start_upstream(FakeUpstream.sse_stream([first, second], done: false))
+    setup = gateway_setup(upstream)
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic closed-client flushed failed terminal request",
+      "stream" => true
+    }
+
+    assert {:ok, %{stream: stream}} =
+             CodexPooler.Gateway.execute(
+               auth,
+               "/v1/responses",
+               payload,
+               RequestOptions.build(
+                 %{
+                   upstream_endpoint: "/backend-api/codex/responses",
+                   public_openai_responses_stream: true
+                 },
+                 "/v1/responses",
+                 payload
+               )
+             )
+
+    closed_conn = %{
+      Phoenix.ConnTest.build_conn()
+      | adapter: {ClosedChunkAdapter, nil},
+        state: :chunked
+    }
+
+    stream.(closed_conn)
+
+    # A separator-less failed terminal classifies through the first-event
+    # summary, whose coarse event-type code is the inherited accounting for
+    # this shape (the with-separator path extracts the nested error code).
+    # The contract under test: the upstream terminal failure wins over
+    # client_disconnected and no synthetic terminal is fabricated.
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "response.failed"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "response.failed"
+
+    # The relayed-stream summary stays pre-visible on this route (the failed
+    # write drops the advanced relay state), so the load-bearing check is that
+    # no synthetic terminal was fabricated for the dead client.
+    summary = attempt.response_metadata["public_openai_responses_stream"]
+    assert summary["synthetic_terminal_sent"] == false
+    assert summary["visible_seen"] == false
+  end
+
+  @tag :streaming_sequence
   test "POST /v1/responses streaming buffers and sanitizes a large failure-coded incomplete terminal across chunks",
        %{conn: conn} do
     terminal_padding = String.duplicate("oversized failed incomplete output ", 4_000)
