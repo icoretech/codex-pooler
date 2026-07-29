@@ -153,4 +153,17 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert redemption(identity)["status"] == "succeeded"
     refute Map.has_key?(redemption(identity), "phase")
   end
+
+  @tag :scheduled_expiry_stale_claim_residual
+  test "a stale phase-bearing consuming claim is not converged" do
+    started_at =
+      DateTime.utc_now() |> DateTime.add(-5, :minute) |> DateTime.truncate(:microsecond)
+
+    identity = identity_with_pending(started_at, phase: "consuming")
+    before_redemption = redemption(identity)
+
+    refute Convergence.pending_lifecycle?(identity)
+    assert {:ok, :unchanged} = Convergence.converge(identity, DateTime.utc_now())
+    assert redemption(identity) == before_redemption
+  end
 end

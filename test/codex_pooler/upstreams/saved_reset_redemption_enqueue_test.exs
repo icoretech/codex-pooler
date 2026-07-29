@@ -13,6 +13,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
+  setup do
+    Repo.delete_all(Oban.Job)
+    :ok
+  end
+
   describe "enqueue_for_scope/4" do
     test "rejects persisted available_count zero and creates no Oban job" do
       scope = owner_scope()
@@ -112,6 +117,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueueTest do
                Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
 
       assert saved_reset_job_count() == 0
+    end
+
+    @tag :scheduled_expiry_stale_claim_residual
+    test "rejects stale phase-bearing consuming redemption and creates no Oban job" do
+      scope = owner_scope()
+      pool = pool_fixture()
+      started_at = DateTime.utc_now() |> DateTime.add(-5, :minute)
+
+      redemption =
+        started_at
+        |> redemption_metadata()
+        |> Map.put("phase", "consuming")
+
+      %{identity: identity} =
+        assignment_with_saved_resets(pool, 1, %{}, redemption: redemption)
+
+      assert {:error, %{code: :saved_reset_redemption_in_progress}} =
+               Upstreams.enqueue_saved_reset_redemption_for_scope(scope, identity, pool.id)
+
+      assert saved_reset_job_count() == 0
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == redemption
     end
 
     test "allows stale manual in-progress recovery when saved reset count is usable" do

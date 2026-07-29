@@ -68,6 +68,34 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
 
       assert FakeUpstream.requests(fake) == []
     end
+
+    @tag :scheduled_expiry_stale_claim_residual
+    test "discards a generic job for stale phase-bearing consuming redemption" do
+      Repo.delete_all(Oban.Job)
+      {:ok, fake} = codex_reset_fake()
+      started_at = DateTime.utc_now() |> DateTime.add(-5, :minute)
+
+      redemption =
+        started_at
+        |> redemption_metadata()
+        |> Map.put("phase", "consuming")
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, 1, redemption: redemption)
+
+      assert {:error, :saved_reset_redemption_in_progress} =
+               perform_job(SavedResetRedemptionWorker, %{
+                 "pool_upstream_assignment_id" => assignment.id,
+                 "trigger_kind" => "admin_manual"
+               })
+
+      assert {:ok, job} = Jobs.enqueue_saved_reset_redemption(assignment)
+      assert %{discard: 1, success: 0} = Oban.drain_queue(queue: :jobs)
+
+      assert Repo.get!(Oban.Job, job.id).state == "discarded"
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == redemption
+      assert FakeUpstream.requests(fake) == []
+    end
   end
 
   describe "scheduled expiry rescue" do

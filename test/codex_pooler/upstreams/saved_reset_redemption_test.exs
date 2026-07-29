@@ -2068,7 +2068,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
-    test "stale automatic claim stays fail-closed for manual recovery" do
+    @tag :scheduled_expiry_stale_claim_residual
+    test "phase-bearing consuming projects in progress instead of legacy staleness" do
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      %{identity: identity} =
+        scheduled_expiry_fixture(
+          as_of: as_of,
+          redemption:
+            redemption_metadata(
+              "scheduled_expiry_rescue",
+              DateTime.add(as_of, -5, :minute)
+            )
+            |> Map.put("phase", "consuming")
+        )
+
+      assert %{in_progress?: true, redemption_stale?: false} =
+               SavedResets.snapshot(identity, as_of)
+    end
+
+    @tag :scheduled_expiry_stale_claim_residual
+    test "phase-bearing consuming scheduled claim stays fail-closed and unchanged" do
       as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       %{fake: fake, identity: identity, assignment: assignment} =
@@ -2079,7 +2099,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
               "scheduled_expiry_rescue",
               DateTime.add(as_of, -5, :minute)
             )
+            |> Map.put("phase", "consuming")
         )
+
+      before_redemption = identity.metadata["saved_reset_redemption"]
 
       assert {:ok, %{status: :noop, applied?: false, code: "scheduled_expiry_redemption_stale"}} =
                SavedResetRedemption.redeem_scheduled_expiry(
@@ -2089,6 +2112,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
 
       assert [] = FakeUpstream.requests(fake)
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == before_redemption
     end
 
     test "unknown lifecycle remains fail-closed" do
