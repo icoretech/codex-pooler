@@ -4435,6 +4435,79 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ reason_code_sentinel
   end
 
+  @tag :stale_probe_ready_circuit_verdict
+  test "projects stale probe-ready open circuits as routing ready on the fleet", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    stale_at = DateTime.add(now, -3_700, :second)
+    pool = pool_fixture(%{name: "Stale probe-ready fleet Pool"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{account_label: "Stale probe-ready fleet account"})
+
+    model_identifier = "gpt-stale-probe-ready-fleet"
+    advertise_assignment_model!(pool, assignment, model_identifier)
+
+    circuit =
+      insert_account_circuit_state!(
+        pool,
+        assignment,
+        model_identifier,
+        "proxy_http",
+        status: "open",
+        opened_at: stale_at,
+        last_failure_at: stale_at,
+        next_probe_at: DateTime.add(now, -1, :second)
+      )
+
+    assert {:ok, [_window]} = maybe_insert_quota_window(identity, "known")
+
+    persisted_circuit = Repo.get!(RoutingCircuitState, circuit.id)
+    assert persisted_circuit.status == "open"
+    assert DateTime.compare(persisted_circuit.next_probe_at, now) == :lt
+    assert DateTime.diff(now, persisted_circuit.opened_at, :second) > 3_600
+    assert DateTime.diff(now, persisted_circuit.last_failure_at, :second) > 3_600
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    [assignment_snapshot] = account.assignments
+
+    assert %{state: :closed, ready?: true, tone: :success, label: "Circuit clear"} =
+             assignment_snapshot.circuit_readiness
+
+    assert %{routing_ready_now?: true, tone: :success, label: "Routing ready"} =
+             account.routing_readiness
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}[data-routing-tone='success']")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Routing ready"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route[aria-valuenow='4'][aria-valuemax='4']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}-route-circuit[title='Circuit clear']"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{identity.id}-routing-readiness [data-role='upstream-routing-cell']",
+             "Circuit recovery in progress"
+           )
+
+    refute html =~ "Circuit recovery in progress"
+  end
+
   test "ignores blocked circuits on non-routable assignments while preserving their chevrons",
        %{
          conn: conn,

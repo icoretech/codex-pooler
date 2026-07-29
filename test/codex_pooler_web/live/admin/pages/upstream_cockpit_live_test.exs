@@ -3626,6 +3626,75 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
   end
 
+  @tag :stale_probe_ready_circuit_verdict
+  test "projects a stale probe-ready open circuit as routing ready in the cockpit", %{
+    conn: conn,
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    stale_at = DateTime.add(now, -3_700, :second)
+
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "stale-probe-ready-cockpit-#{System.unique_integer([:positive])}",
+        name: "Stale probe-ready cockpit Pool"
+      })
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Stale probe-ready cockpit account",
+        assignment_metadata: %{"quota_priming" => %{"status" => "known"}}
+      })
+
+    model_identifier = "gpt-stale-probe-ready-cockpit"
+    advertise_assignment_model!(pool, assignment, model_identifier)
+
+    circuit =
+      insert_circuit_state!(
+        pool,
+        assignment,
+        model_identifier,
+        "proxy_http",
+        status: "open",
+        opened_at: stale_at,
+        last_failure_at: stale_at,
+        next_probe_at: DateTime.add(now, -1, :second)
+      )
+
+    upsert_fresh_quota!(identity, now)
+
+    persisted_circuit = Repo.get!(RoutingCircuitState, circuit.id)
+    assert persisted_circuit.status == "open"
+    assert DateTime.compare(persisted_circuit.next_probe_at, now) == :lt
+    assert DateTime.diff(now, persisted_circuit.opened_at, :second) > 3_600
+    assert DateTime.diff(now, persisted_circuit.last_failure_at, :second) > 3_600
+
+    assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
+
+    assert [%{circuit_readiness: %{state: :closed, ready?: true, tone: :success}}] =
+             cockpit.assignments.items
+
+    assert %{routing_ready_now?: true, tone: :success, label: "Routing ready"} =
+             cockpit.header.routing_readiness
+
+    {:ok, view, html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+    assert has_element?(view, "#upstream-routing-verdict[data-tone='success']", "Routing ready")
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{assignment.id}-route[aria-valuenow='4'][aria-valuemax='4']"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{assignment.id}-route-circuit.route-chevron.bg-success\\/80[title='Circuit clear']"
+           )
+
+    refute has_element?(view, "#upstream-routing-verdict", "Circuit recovery in progress")
+    refute html =~ "Circuit recovery in progress"
+  end
+
   @tag :circuit_cockpit_projection
   test "cockpit overlays ready refreshing headers and preserves lifecycle blocker precedence", %{
     conn: conn,
