@@ -79,8 +79,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttempt do
     end
   end
 
+  # Keeps the two-arity full parse on purpose: the stored classifier buffer is
+  # the raw joined stream and may retain complete non-matching blocks, so it is
+  # not a residue the incremental complete_sse_blocks/3 contract accepts.
   defp first_retry_window_event(buffer) do
     {blocks, remaining} = StreamProtocol.complete_sse_blocks(buffer, bounded?: false)
+
     leading_blocks = Enum.take(blocks, @max_leading_sse_blocks)
 
     case Enum.find_value(leading_blocks, &retry_window_event/1) do

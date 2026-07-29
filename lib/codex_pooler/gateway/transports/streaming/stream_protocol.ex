@@ -117,6 +117,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec websocket_error_frame_headers(binary()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
 
+  @spec complete_sse_blocks(binary(), binary(), keyword()) :: {[binary()], binary()}
+  defdelegate complete_sse_blocks(residue, data, opts), to: SSEParser
+
   @spec complete_sse_blocks(binary(), keyword()) :: {[binary()], binary()}
   defdelegate complete_sse_blocks(data, opts), to: SSEParser
 

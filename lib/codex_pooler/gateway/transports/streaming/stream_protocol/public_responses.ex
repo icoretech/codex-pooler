@@ -28,6 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         }
   @type state :: %{
           required(:buffer) => binary(),
+          required(:buffer_candidate?) => boolean(),
           required(:created?) => boolean(),
           required(:text_delta?) => boolean(),
           required(:terminal_kind) => atom() | nil,
@@ -45,6 +46,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   def new_state do
     %{
       buffer: "",
+      buffer_candidate?: false,
       created?: false,
       text_delta?: false,
       terminal_kind: nil,
@@ -103,18 +105,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_data_chunk(_data, %{sequence: %{terminal_latched?: true}} = state),
-    do: {"", %{state | buffer: "", passthrough?: false}}
+    do: {"", %{state | buffer: "", buffer_candidate?: false, passthrough?: false}}
 
   defp normalize_data_chunk(data, state) do
-    buffered_data = state.buffer <> data
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
+    previous_buffer = state.buffer
+
+    {blocks, buffer} =
+      StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: false)
+
+    candidate? = incremental_buffer_candidate?(state, previous_buffer, data, blocks, buffer)
+    state = %{state | buffer_candidate?: candidate?}
 
     cond do
-      structurally_complete_terminal_buffer?(buffer) ->
+      structurally_complete_terminal_buffer?(buffer, candidate?) ->
         normalize_blocks(blocks ++ [buffer], "", state)
 
-      terminal_buffer_candidate?(buffer) and
-          StreamProtocol.oversized_incomplete_terminal_sse_block?(buffer) ->
+      candidate? and StreamProtocol.oversized_incomplete_terminal_sse_block?(buffer) ->
         record_oversized_incomplete(
           byte_size(buffer),
           StreamProtocol.max_incomplete_terminal_sse_block_bytes()
@@ -122,7 +128,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
         fail_oversized_incomplete(blocks, state)
 
-      terminal_buffer_candidate?(buffer) ->
+      candidate? ->
         normalize_blocks(blocks, buffer, state)
 
       StreamProtocol.oversized_incomplete_sse_block?(buffer) ->
@@ -138,9 +144,45 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     end
   end
 
+  # Invariant: state.buffer_candidate? always equals
+  # terminal_buffer_candidate?(state.buffer). When the parse provably appended
+  # (`buffer == previous_buffer <> data`, guaranteed by the size match because
+  # neither CRLF collapse nor splitting nor bounding preserves the size), the
+  # flag advances with one scan of the junction window plus the new data
+  # instead of rescanning the whole retained buffer; any restructured result
+  # recomputes from scratch.
+  defp incremental_buffer_candidate?(state, previous_buffer, data, blocks, buffer) do
+    cond do
+      buffer == "" ->
+        false
+
+      blocks == [] and previous_buffer != "" and
+          byte_size(buffer) == byte_size(previous_buffer) + byte_size(data) ->
+        state.buffer_candidate? or junction_window_candidate?(previous_buffer, data)
+
+      true ->
+        terminal_buffer_candidate?(buffer)
+    end
+  end
+
+  # Longest marker is "response.incomplete" (19 bytes), so a marker not fully
+  # inside the previous buffer must start within its last 18 bytes.
+  @terminal_marker_overlap 18
+  defp junction_window_candidate?(previous_buffer, data) do
+    overlap = min(byte_size(previous_buffer), @terminal_marker_overlap)
+
+    window =
+      binary_part(previous_buffer, byte_size(previous_buffer) - overlap, overlap) <> data
+
+    terminal_buffer_candidate?(window)
+  end
+
   defp fail_oversized_incomplete(blocks, state) do
     {iodata, state} =
-      normalize_complete_blocks(blocks, %{state | buffer: "", passthrough?: false})
+      normalize_complete_blocks(
+        blocks,
+        %{state | buffer: "", buffer_candidate?: false, passthrough?: false}
+      )
 
     if state.sequence.terminal_latched? do
       {IO.iodata_to_binary(iodata), state}
@@ -249,7 +291,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp normalize_blocks(blocks, buffer, state) do
-    {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: buffer})
+    {iodata, state} =
+      normalize_complete_blocks(
+        blocks,
+        %{state | buffer: buffer, buffer_candidate?: buffer != "" and state.buffer_candidate?}
+      )
 
     state = if stream_terminal?(blocks), do: reset_parser_after_terminal(state), else: state
 
@@ -755,6 +801,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     %{
       state
       | buffer: "",
+        buffer_candidate?: false,
         created?: false,
         text_delta?: false,
         passthrough?: false,
@@ -853,20 +900,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     %{state | summary: Map.update!(summary, key, fun)}
   end
 
-  @spec structurally_complete_terminal_buffer?(binary()) :: boolean()
-  defp structurally_complete_terminal_buffer?(""), do: false
+  @spec structurally_complete_terminal_buffer?(binary(), boolean()) :: boolean()
+  defp structurally_complete_terminal_buffer?("", _candidate?), do: false
 
-  defp structurally_complete_terminal_buffer?(buffer) when is_binary(buffer) do
-    if terminal_buffer_candidate?(buffer) do
-      done_marker?(buffer) or decoded_sse_buffer?(buffer)
-    else
-      false
-    end
+  defp structurally_complete_terminal_buffer?(buffer, candidate?) when is_binary(buffer) do
+    candidate? and (done_marker?(buffer) or decoded_sse_buffer?(buffer))
   end
 
   @spec terminal_buffer_candidate?(binary()) :: boolean()
   defp terminal_buffer_candidate?(buffer) do
-    Enum.any?(@terminal_buffer_markers, &String.contains?(buffer, &1))
+    String.contains?(buffer, @terminal_buffer_markers)
   end
 
   @spec done_marker?(binary()) :: boolean()
@@ -874,9 +917,36 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec decoded_sse_buffer?(binary()) :: boolean()
   defp decoded_sse_buffer?(buffer) do
-    data = StreamProtocol.sse_field(buffer, "data") || buffer
+    if maybe_decodable_tail?(buffer) do
+      data = StreamProtocol.sse_field(buffer, "data") || buffer
 
-    match?({:ok, %{}}, Jason.decode(data))
+      match?({:ok, %{}}, Jason.decode(data))
+    else
+      false
+    end
+  end
+
+  # A structurally complete buffer must assemble into a JSON object, and an
+  # object closes with "}". While the buffer's trailing line is a data or
+  # payload line still mid-object, the O(buffer) field assembly and JSON
+  # decode cannot succeed, so both are skipped. The backward scan is bounded:
+  # a trailing line longer than the window can only be a payload line (labels
+  # and comments are short), so requiring the "}" tail there stays exact for
+  # object decoding. A short trailing non-data line always attempts the
+  # decode, because earlier data lines may already assemble a complete object.
+  @decode_gate_window 1_024
+  defp maybe_decodable_tail?(buffer) do
+    window_start = max(byte_size(buffer) - @decode_gate_window, 0)
+    window = binary_part(buffer, window_start, byte_size(buffer) - window_start)
+
+    case window |> String.split("\n") |> List.last() do
+      ^window when window_start > 0 ->
+        String.ends_with?(String.trim_trailing(window), "}")
+
+      line ->
+        not String.starts_with?(line, "data:") or
+          String.ends_with?(String.trim_trailing(line), "}")
+    end
   end
 
   defp stream_terminal?(blocks) do

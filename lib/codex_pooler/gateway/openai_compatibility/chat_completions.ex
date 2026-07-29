@@ -78,13 +78,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   def normalize_stream_data(data, state) when is_binary(data) and is_map(state) do
-    buffered_data = state.buffer <> data
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: false)
+    buffered_size = byte_size(state.buffer) + byte_size(data)
+    {blocks, buffer} = StreamProtocol.complete_sse_blocks(state.buffer, data, bounded?: false)
 
     if oversized_incomplete_sse_block?(buffer) do
       BufferTelemetry.record_oversized_incomplete(
         "public_openai_chat_sse",
-        byte_size(buffered_data),
+        buffered_size,
         @max_incomplete_chat_sse_block_bytes
       )
 

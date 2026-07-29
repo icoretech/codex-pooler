@@ -155,13 +155,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def stream_messages(request_id, data, buffer)
       when is_binary(request_id) and is_binary(data) and is_binary(buffer) do
-    buffered_data = buffer <> data
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: true)
+    buffered_size = byte_size(buffer) + byte_size(data)
+    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffer, data, bounded?: true)
 
-    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_data) do
+    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
       BufferTelemetry.record_oversized_incomplete(
         "websocket_sse",
-        byte_size(buffered_data),
+        buffered_size,
         StreamProtocol.max_incomplete_sse_block_bytes()
       )
     end
@@ -177,10 +177,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def stream_messages(_request_id, _data, _buffer), do: {[], ""}
 
-  defp oversized_incomplete_sse_prefix?([], "", data),
-    do: StreamProtocol.oversized_incomplete_sse_block?(data)
+  defp oversized_incomplete_sse_prefix?([], "", buffered_size),
+    do: buffered_size > StreamProtocol.max_incomplete_sse_block_bytes()
 
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _data), do: false
+  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _buffered_size), do: false
 
   defp messages_from_sse_blocks(blocks) do
     blocks

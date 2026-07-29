@@ -221,20 +221,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     if buffer == "" and not codex_responses_sse_chunk?(data) do
       {data, state}
     else
-      buffered_data = buffer <> data
-      {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffered_data, bounded?: true)
+      previous_buffer = buffer
+      buffered_size = byte_size(previous_buffer) + byte_size(data)
+
+      {blocks, buffer} =
+        StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: true)
 
       data =
-        if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_data) do
+        if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
           BufferTelemetry.record_oversized_incomplete(
             "codex_responses_sse",
-            byte_size(buffered_data),
+            buffered_size,
             StreamProtocol.max_incomplete_sse_block_bytes(),
             request_options: opts,
             endpoint: endpoint
           )
 
-          buffered_data
+          previous_buffer <> data
         else
           blocks
           |> Enum.map(&StreamProtocol.normalize_codex_responses_sse_block/1)
@@ -275,10 +278,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       String.contains?(data, "\n\n")
   end
 
-  defp oversized_incomplete_sse_prefix?([], "", data),
-    do: StreamProtocol.oversized_incomplete_sse_block?(data)
+  defp oversized_incomplete_sse_prefix?([], "", buffered_size),
+    do: buffered_size > StreamProtocol.max_incomplete_sse_block_bytes()
 
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _data), do: false
+  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _buffered_size), do: false
 
   defp public_openai_chat_stream?(%RequestOptions{
          openai_compatibility: %{public_openai_chat_stream: true}
