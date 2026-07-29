@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
   describe "complete_sse_blocks/2" do
     test "bounds oversized incomplete SSE blocks when requested" do
-      oversized = String.duplicate("data: unavailable-upstream-prefix", 12_000)
+      oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {[], ""} = StreamProtocol.complete_sse_blocks(oversized, bounded?: true)
     end
@@ -88,6 +88,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   describe "normalize_public_openai_responses_sse_data/2" do
+    test "buffers a reasoning event past 64 KiB across chunks and relays it complete" do
+      state = StreamProtocol.public_openai_responses_stream_state()
+
+      event =
+        sse_event("response.output_item.added", %{
+          "type" => "response.output_item.added",
+          "output_index" => 0,
+          "sequence_number" => 2,
+          "item" => %{
+            "id" => "rs_large_reasoning",
+            "type" => "reasoning",
+            "summary" => [],
+            "encrypted_content" => String.duplicate("synthetic-obfuscated-content", 4_000)
+          }
+        })
+
+      split_at = 65_537
+      assert byte_size(event) > split_at
+      first = binary_part(event, 0, split_at)
+      second = binary_part(event, split_at, byte_size(event) - split_at)
+
+      {first_out, state} =
+        StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
+
+      {second_out, _state} =
+        StreamProtocol.normalize_public_openai_responses_sse_data(second, state)
+
+      assert first_out == ""
+
+      assert [%{"data" => relayed}] = public_sse_events(second_out)
+      assert relayed["type"] == "response.output_item.added"
+      assert relayed["item"]["id"] == "rs_large_reasoning"
+      assert second_out =~ "synthetic-obfuscated-content"
+    end
+
     test "fails an oversized incomplete reasoning event without publishing source bytes" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
@@ -100,7 +135,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
             "id" => "rs_oversized_reasoning",
             "type" => "reasoning",
             "summary" => [],
-            "encrypted_content" => String.duplicate("synthetic-obfuscated-content", 4_000)
+            "encrypted_content" => String.duplicate("synthetic-obfuscated-content", 310_000)
           }
         })
 
@@ -315,7 +350,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                   "content" => [
                     %{
                       "type" => "output_text",
-                      "text" => String.duplicate("large terminal text ", 20_000)
+                      "text" => String.duplicate("large terminal text ", 450_000)
                     }
                   ]
                 }
@@ -330,7 +365,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
       {output, state} =
         terminal
-        |> chunks(8_192)
+        |> chunks(65_536)
         |> Enum.map_reduce(state, fn chunk, state ->
           StreamProtocol.normalize_public_openai_responses_sse_data(chunk, state)
         end)

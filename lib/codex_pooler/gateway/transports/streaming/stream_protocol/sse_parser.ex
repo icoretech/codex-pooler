@@ -1,7 +1,10 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @moduledoc false
 
-  @max_incomplete_sse_block_bytes 65_536
+  # Upstream Responses streams carry single non-terminal SSE events well past
+  # 64 KiB (reasoning items with encrypted content scale with request context),
+  # so the ordinary bound must stay comfortably above real provider event sizes.
+  @max_incomplete_sse_block_bytes 8_388_608
   @max_incomplete_terminal_sse_block_bytes 64 * 1024 * 1024
 
   @spec max_incomplete_sse_block_bytes() :: pos_integer()

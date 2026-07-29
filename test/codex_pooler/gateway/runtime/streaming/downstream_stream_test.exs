@@ -186,7 +186,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
         ]
         |> IO.iodata_to_binary()
 
-      split_at = StreamProtocol.max_incomplete_sse_block_bytes() + 1
+      split_at = div(byte_size(oversized), 2)
       first = binary_part(oversized, 0, split_at)
       second = binary_part(oversized, split_at, byte_size(oversized) - split_at)
 
@@ -299,7 +299,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       attach_stream_buffer_telemetry()
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
       state = DownstreamStream.initial_state(:relay, opts)
-      oversized = String.duplicate("data: unavailable-upstream-prefix", 12_000)
+      oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {^oversized, state} =
                DownstreamStream.normalize_data(
@@ -312,14 +312,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert state.codex_responses_sse_buffer == ""
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 65_536},
+                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
                       %{
                         buffer: "codex_responses_sse",
                         endpoint: "/backend-api/codex/responses",
                         route_class: route_class
                       }}
 
-      assert bytes > 65_536
+      assert bytes > 8_388_608
       assert is_binary(route_class)
     end
 
@@ -388,7 +388,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                 %{
                   "type" => "function",
                   "name" => "synthetic_tool",
-                  "description" => String.duplicate("synthetic description ", 5_000)
+                  "description" => String.duplicate("synthetic description ", 450_000)
                 }
               ]
             }
@@ -444,7 +444,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                   "content" => [
                     %{
                       "type" => "output_text",
-                      "text" => String.duplicate("large terminal text ", 4_000)
+                      "text" => String.duplicate("large terminal text ", 450_000)
                     }
                   ]
                 }
@@ -557,7 +557,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                   "content" => [
                     %{
                       "type" => "output_text",
-                      "text" => String.duplicate("large incomplete text ", 4_000)
+                      "text" => String.duplicate("large incomplete text ", 450_000)
                     }
                   ]
                 }
@@ -618,7 +618,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                   "content" => [
                     %{
                       "type" => "output_text",
-                      "text" => String.duplicate("large failed text ", 4_000)
+                      "text" => String.duplicate("large failed text ", 500_000)
                     }
                   ]
                 }

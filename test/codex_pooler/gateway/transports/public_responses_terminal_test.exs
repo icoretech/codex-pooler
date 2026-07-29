@@ -256,11 +256,11 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
                       buffer: "public_openai_responses_sse",
                       bytes: ^observed_bytes,
                       count: 1,
-                      max_bytes: 65_536
+                      max_bytes: 8_388_608
                     }}
   end
 
-  test "public POST fails an ordinary incomplete block at byte 65,537 and drops the source tail" do
+  test "public POST fails an ordinary incomplete block past the ordinary cap and drops the source tail" do
     limit = StreamProtocol.max_incomplete_sse_block_bytes()
     stream = oversized_incomplete_sse(:late)
     first = binary_part(stream, 0, limit + 1)
@@ -338,7 +338,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
     source =
       "data: " <>
-        String.duplicate("private-ordinary-oversized-sentinel", 2_100)
+        String.duplicate("private-ordinary-oversized-sentinel", 260_000)
 
     assert byte_size(source) > StreamProtocol.max_incomplete_sse_block_bytes()
 

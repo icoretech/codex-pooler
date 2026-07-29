@@ -24,16 +24,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
     test "releases oversized incomplete first events without retaining them" do
       attach_stream_buffer_telemetry()
       state = StreamAttempt.first_event_state()
-      oversized = String.duplicate("data: unavailable-upstream-prefix", 12_000)
+      oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {{:write, ^oversized}, state} = StreamAttempt.classify_first_event(oversized, state)
       assert state == %{classified?: true, buffer: ""}
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 65_536},
+                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
                       %{buffer: "first_event", endpoint: "unknown", route_class: "unknown"}}
 
-      assert bytes > 65_536
+      assert bytes > 8_388_608
     end
 
     test "classifies retryable first terminal failures without writing them" do

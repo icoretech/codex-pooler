@@ -112,8 +112,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> Map.merge(%{
       write_chunk: http_stream_writer(response_context),
       write_keepalive: http_sse_keepalive_writer(response_context.response),
-      before_finalize_failure: http_stream_terminal_failure_writer(),
-      before_finalize_success: http_stream_terminal_success_hook(),
+      before_finalize_failure: http_stream_terminal_failure_writer(response_context),
+      before_finalize_success: http_stream_terminal_success_hook(response_context),
       keepalive_interval_ms: sse_keepalive_interval_ms(response_context.response)
     })
   end
@@ -261,24 +261,35 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp attach_withheld_body(classification, _previous_state, _data), do: classification
 
-  defp http_stream_terminal_failure_writer do
+  # The first-event classifier can hold a large first event until the stream
+  # ends, so both finalize hooks must flush the held bytes through the normal
+  # write path first — a structurally complete trailing terminal without a
+  # final separator is only recoverable from that buffer.
+  defp http_stream_terminal_failure_writer(%ResponseContext{} = response_context) do
     fn state, reason ->
-      case {DownstreamStream.terminal_outcome(state), reason} do
-        {terminal, _reason} when terminal in [:completed, :incomplete] ->
-          {:success, state, ""}
-
-        {{:failed, _failure}, {:terminal_stream_failure, _existing_failure}} ->
-          {:failure, state, "", reason}
-
-        {{:failed, %{} = failure}, _reason} ->
-          {:failure, state, "", {:terminal_stream_failure, failure}}
-
-        {{:failed, _failure}, _reason} ->
-          {:failure, state, "", reason}
-
-        {_missing_terminal, _reason} ->
-          http_stream_missing_terminal_failure_result(state, reason)
+      case flush_buffered_first_event(response_context, state) do
+        {:ok, state} -> finalize_http_stream_failure(state, reason)
+        {:error, _reason} = error -> error
       end
+    end
+  end
+
+  defp finalize_http_stream_failure(state, reason) do
+    case {DownstreamStream.terminal_outcome(state), reason} do
+      {terminal, _reason} when terminal in [:completed, :incomplete] ->
+        {:success, state, ""}
+
+      {{:failed, _failure}, {:terminal_stream_failure, _existing_failure}} ->
+        {:failure, state, "", reason}
+
+      {{:failed, %{} = failure}, _reason} ->
+        {:failure, state, "", {:terminal_stream_failure, failure}}
+
+      {{:failed, _failure}, _reason} ->
+        {:failure, state, "", reason}
+
+      {_missing_terminal, _reason} ->
+        http_stream_missing_terminal_failure_result(state, reason)
     end
   end
 
@@ -293,21 +304,28 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp http_stream_terminal_success_hook do
+  defp http_stream_terminal_success_hook(%ResponseContext{} = response_context) do
     fn state ->
-      case DownstreamStream.terminal_outcome(state) do
-        {:failed, %{} = failure} ->
-          {:failure, state, "", {:terminal_stream_failure, failure}}
-
-        {:failed, _failure} ->
-          {:failure, state, "", :upstream_stream_interrupted}
-
-        terminal when terminal in [:completed, :incomplete] ->
-          {:ok, state, ""}
-
-        _missing_terminal ->
-          missing_public_openai_responses_terminal_result(state)
+      case flush_buffered_first_event(response_context, state) do
+        {:ok, flushed} -> finalize_http_stream_success(flushed)
+        {:error, _reason} -> {:failure, state, "", :upstream_stream_interrupted}
       end
+    end
+  end
+
+  defp finalize_http_stream_success(state) do
+    case DownstreamStream.terminal_outcome(state) do
+      {:failed, %{} = failure} ->
+        {:failure, state, "", {:terminal_stream_failure, failure}}
+
+      {:failed, _failure} ->
+        {:failure, state, "", :upstream_stream_interrupted}
+
+      terminal when terminal in [:completed, :incomplete] ->
+        {:ok, state, ""}
+
+      _missing_terminal ->
+        missing_public_openai_responses_terminal_result(state)
     end
   end
 
@@ -332,6 +350,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
           {:ok, state} -> {:ok, state, data}
           {:error, _reason} = error -> error
         end
+    end
+  end
+
+  defp flush_buffered_first_event(%ResponseContext{} = response_context, state) do
+    case first_event_state(state) do
+      %{buffer: ""} ->
+        {:ok, state}
+
+      %{buffer: buffer} = first_event ->
+        state = put_first_event_state(state, %{first_event | buffer: ""})
+        write_stream_data(response_context, state, buffer)
     end
   end
 

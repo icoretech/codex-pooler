@@ -175,15 +175,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     test "drops oversized incomplete SSE buffers instead of retaining them" do
       attach_stream_buffer_telemetry()
       request_id = "websocket-buffer-oversized"
-      oversized = String.duplicate("data: unavailable-upstream-prefix", 12_000)
+      oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {[], ""} = WebsocketCodec.stream_messages(request_id, oversized, "")
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
-                      %{bytes: bytes, count: 1, max_bytes: 65_536},
+                      %{bytes: bytes, count: 1, max_bytes: 8_388_608},
                       %{buffer: "websocket_sse", endpoint: "unknown", route_class: "unknown"}}
 
-      assert bytes > 65_536
+      assert bytes > 8_388_608
     end
   end
 

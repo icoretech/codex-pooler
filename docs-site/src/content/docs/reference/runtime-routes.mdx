@@ -651,7 +651,9 @@ sequence-valid synthetic `error` event uses the hybrid flat-and-nested
 `type: "error"` / `server_error` shape. Absent, blank, and whitespace-only SSE
 event labels are treated as absent before event/data type precedence; nonblank
 mismatches remain rejected. An ordinary incomplete public Responses SSE block
-may retain at most 65,536 bytes. A structurally recognizable terminal candidate
+may retain at most 8 MiB so single large provider events, such as reasoning
+items carrying encrypted content, can finish decoding. A structurally
+recognizable terminal candidate
 may retain up to 64 MiB so large completed responses split across upstream
 chunks can finish decoding. Crossing the applicable bound emits one bounded
 sanitized `error` event, relays none of the overflowing source block, and
