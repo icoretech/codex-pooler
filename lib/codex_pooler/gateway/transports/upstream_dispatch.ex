@@ -93,21 +93,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       receive do
         {^ref, _part} = message ->
           case Req.parse_message(response, message) do
-            {:ok, [data: data]} when is_binary(data) ->
-              next_seen_bytes = seen_bytes + byte_size(data)
-
-              if next_seen_bytes > @max_bytes do
-                cancel(response)
-                ""
-              else
-                drain(response, ref, deadline, [data | chunks], next_seen_bytes)
-              end
-
-            {:ok, [:done]} ->
-              chunks |> Enum.reverse() |> IO.iodata_to_binary()
-
-            {:ok, [trailers: _trailers]} ->
-              drain(response, ref, deadline, chunks, seen_bytes)
+            {:ok, parts} when is_list(parts) ->
+              drain_parts(response, ref, deadline, parts, chunks, seen_bytes)
 
             {:error, _reason} ->
               cancel(response)
@@ -116,12 +103,52 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             :unknown ->
               cancel(response)
               raise "unexpected Req async rejection message"
+
+            _other ->
+              cancel(response)
+              raise "unexpected Req async rejection message"
           end
       after
         timeout ->
           cancel(response)
           ""
       end
+    end
+
+    defp drain_parts(response, ref, deadline, [], chunks, seen_bytes) do
+      drain(response, ref, deadline, chunks, seen_bytes)
+    end
+
+    defp drain_parts(response, ref, deadline, [{:data, data} | parts], chunks, seen_bytes)
+         when is_binary(data) do
+      next_seen_bytes = seen_bytes + byte_size(data)
+
+      if next_seen_bytes > @max_bytes do
+        cancel(response)
+        ""
+      else
+        drain_parts(response, ref, deadline, parts, [data | chunks], next_seen_bytes)
+      end
+    end
+
+    defp drain_parts(
+           response,
+           ref,
+           deadline,
+           [{:trailers, _trailers} | parts],
+           chunks,
+           seen_bytes
+         ) do
+      drain_parts(response, ref, deadline, parts, chunks, seen_bytes)
+    end
+
+    defp drain_parts(_response, _ref, _deadline, [:done | _parts], chunks, _seen_bytes) do
+      chunks |> Enum.reverse() |> IO.iodata_to_binary()
+    end
+
+    defp drain_parts(response, _ref, _deadline, [_part | _parts], _chunks, _seen_bytes) do
+      cancel(response)
+      raise "unexpected Req async rejection message"
     end
 
     defp cancel(response) do

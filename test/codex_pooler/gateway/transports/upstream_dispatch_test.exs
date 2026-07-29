@@ -222,18 +222,49 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert Metadata.response_body(response) == ""
   end
 
-  test "rejection drain ignores trailers, waits for done, and preserves foreign mailbox messages" do
-    {response, ref} = async_response(self())
+  test "rejection drain processes ordered multipart parsed parts, ignores trailers, and preserves foreign mailbox messages" do
+    {response, ref} =
+      async_response(self(), nil, fn stream_ref, message ->
+        case message do
+          {^stream_ref, :multipart} ->
+            {:ok,
+             [
+               {:data, "first"},
+               {:trailers, [{"x-test", "trailer"}]},
+               {:data, "second"},
+               :done
+             ]}
+
+          _message ->
+            :unknown
+        end
+      end)
+
     other_ref = make_ref()
     send(self(), {other_ref, {:data, "foreign"}})
-    send(self(), {ref, {:data, "first"}})
-    send(self(), {ref, {:trailers, [{"x-test", "trailer"}]}})
-    send(self(), {ref, {:data, "second"}})
-    send(self(), {ref, :done})
+    send(self(), {ref, :multipart})
 
     assert RejectionDrain.drain(response) == "firstsecond"
     assert_receive {^other_ref, {:data, "foreign"}}
     refute_received {:rejection_cancelled, ^ref}
+  end
+
+  test "rejection drain applies the cap across multipart parsed parts and cancels" do
+    {response, ref} =
+      async_response(self(), nil, fn stream_ref, message ->
+        case message do
+          {^stream_ref, :multipart} ->
+            {:ok, [{:data, String.duplicate("x", 65_536)}, {:data, "x"}]}
+
+          _message ->
+            :unknown
+        end
+      end)
+
+    send(self(), {ref, :multipart})
+
+    assert RejectionDrain.drain(response) == ""
+    assert_receive {:rejection_cancelled, ^ref}
   end
 
   test "rejection drain discards over-cap and error prefixes and cancels" do
@@ -461,18 +492,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
   end
 
-  defp async_response(notify, cancel_fun \\ nil) do
+  defp async_response(notify, cancel_fun \\ nil, stream_fun \\ nil) do
     ref = make_ref()
 
-    stream_fun = fn stream_ref, message ->
-      case message do
-        {^stream_ref, {:data, data}} -> {:ok, [data: data]}
-        {^stream_ref, :done} -> {:ok, [:done]}
-        {^stream_ref, {:trailers, trailers}} -> {:ok, [trailers: trailers]}
-        {^stream_ref, {:error, reason}} -> {:error, reason}
-        _message -> :unknown
-      end
-    end
+    stream_fun =
+      stream_fun ||
+        fn stream_ref, message ->
+          case message do
+            {^stream_ref, {:data, data}} -> {:ok, [data: data]}
+            {^stream_ref, :done} -> {:ok, [:done]}
+            {^stream_ref, {:trailers, trailers}} -> {:ok, [trailers: trailers]}
+            {^stream_ref, {:error, reason}} -> {:error, reason}
+            _message -> :unknown
+          end
+        end
 
     cancel_fun =
       cancel_fun ||
