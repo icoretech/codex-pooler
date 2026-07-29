@@ -269,7 +269,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     fn state, reason ->
       case flush_buffered_first_event(response_context, state) do
         {:ok, state} -> finalize_http_stream_failure(state, reason)
-        {:error, _reason} = error -> error
+        {:chunk_error, state, _chunk_reason} -> finalize_http_stream_failure(state, reason)
       end
     end
   end
@@ -307,8 +307,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp http_stream_terminal_success_hook(%ResponseContext{} = response_context) do
     fn state ->
       case flush_buffered_first_event(response_context, state) do
-        {:ok, flushed} -> finalize_http_stream_success(flushed)
-        {:error, _reason} -> {:failure, state, "", :upstream_stream_interrupted}
+        {:ok, state} -> finalize_http_stream_success(state)
+        {:chunk_error, state, reason} -> finalize_flushed_chunk_error(state, reason)
       end
     end
   end
@@ -353,6 +353,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
+  # A flush-time chunk error must keep both the advanced parser/usage state
+  # and the original write reason: `{:chunk, reason}` is the canonical
+  # downstream-write failure shape the finalization layer classifies (for
+  # example `{:chunk, :closed}` becomes client_disconnected).
   defp flush_buffered_first_event(%ResponseContext{} = response_context, state) do
     case first_event_state(state) do
       %{buffer: ""} ->
@@ -360,7 +364,41 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
       %{buffer: buffer} = first_event ->
         state = put_first_event_state(state, %{first_event | buffer: ""})
-        write_stream_data(response_context, state, buffer)
+
+        {downstream_data, state} =
+          normalize_stream_data(
+            response_context,
+            state,
+            buffer,
+            &StreamProtocol.stream_data_visible?/1
+          )
+
+        if downstream_data == "" do
+          {:ok, state}
+        else
+          case update_relay_target(state, &Plug.Conn.chunk(&1, downstream_data)) do
+            {:ok, state} -> {:ok, state}
+            {:error, reason} -> {:chunk_error, state, reason}
+          end
+        end
+    end
+  end
+
+  # Mirrors finalize_http_stream_failure precedence for a flush that parsed
+  # data but could not write it: an upstream terminal decoded from the flushed
+  # buffer still settles the turn, and only a terminal-less flush classifies as
+  # the downstream write failure. No synthetic terminal is attempted because
+  # the downstream connection is already gone.
+  defp finalize_flushed_chunk_error(state, reason) do
+    case DownstreamStream.terminal_outcome(state) do
+      terminal when terminal in [:completed, :incomplete] ->
+        {:ok, state, ""}
+
+      {:failed, %{} = failure} ->
+        {:failure, state, "", {:terminal_stream_failure, failure}}
+
+      _other ->
+        {:failure, state, "", {:chunk, reason}}
     end
   end
 

@@ -45,9 +45,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
+
+  defmodule ClosedChunkAdapter do
+    def chunk(_payload, _chunk), do: {:error, :closed}
+  end
 
   @reasoning_denial_message "reasoning effort is not available for this API key"
 
@@ -4973,6 +4978,85 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute persistence_text =~ "synthetic oversized terminal-buffer stream request"
     refute persistence_text =~ "resp_v1_large_terminal_without_separator"
     refute persistence_text =~ terminal_padding
+  end
+
+  @tag :streaming_sequence
+  test "POST /v1/responses settles a buffered separator-less terminal for an already-closed client" do
+    terminal =
+      [
+        "event: response.completed\n",
+        "data: ",
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => "resp_v1_flushed_terminal_closed_client",
+            "status" => "completed",
+            "output" => [
+              %{
+                "type" => "message",
+                "content" => [%{"type" => "output_text", "text" => "buffered terminal text"}]
+              }
+            ],
+            "usage" => %{"input_tokens" => 7, "output_tokens" => 5, "total_tokens" => 12}
+          }
+        })
+      ]
+      |> IO.iodata_to_binary()
+
+    split_at = div(byte_size(terminal), 2)
+    first = binary_part(terminal, 0, split_at)
+    second = binary_part(terminal, split_at, byte_size(terminal) - split_at)
+
+    upstream = start_upstream(FakeUpstream.sse_stream([first, second], done: false))
+    setup = gateway_setup(upstream)
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic closed-client flushed terminal request",
+      "stream" => true
+    }
+
+    assert {:ok, %{stream: stream}} =
+             CodexPooler.Gateway.execute(
+               auth,
+               "/v1/responses",
+               payload,
+               RequestOptions.build(
+                 %{
+                   upstream_endpoint: "/backend-api/codex/responses",
+                   public_openai_responses_stream: true
+                 },
+                 "/v1/responses",
+                 payload
+               )
+             )
+
+    closed_conn = %{
+      Phoenix.ConnTest.build_conn()
+      | adapter: {ClosedChunkAdapter, nil},
+        state: :chunked
+    }
+
+    assert {:ok, _conn} = stream.(closed_conn)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.usage_status == "usage_known"
+    assert is_nil(request.last_error_code)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.usage_status == "usage_known"
+    assert is_nil(attempt.network_error_code)
+
+    assert %{
+             "finish_class" => "completed",
+             "terminal_seen" => true,
+             "terminal_kind" => "completed",
+             "synthetic_terminal_sent" => false
+           } = attempt.response_metadata["public_openai_responses_stream"]
   end
 
   @tag :streaming_sequence
