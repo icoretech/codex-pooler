@@ -58,6 +58,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec oversized_incomplete_sse_block?(binary()) :: boolean()
   defdelegate oversized_incomplete_sse_block?(buffer), to: SSEParser
 
+  @spec max_incomplete_terminal_sse_block_bytes() :: pos_integer()
+  defdelegate max_incomplete_terminal_sse_block_bytes, to: SSEParser
+
+  @spec oversized_incomplete_terminal_sse_block?(binary()) :: boolean()
+  defdelegate oversized_incomplete_terminal_sse_block?(buffer), to: SSEParser
+
   @spec normalize_sse_event_label(term()) :: binary() | nil
   defdelegate normalize_sse_event_label(label), to: SSEParser
 

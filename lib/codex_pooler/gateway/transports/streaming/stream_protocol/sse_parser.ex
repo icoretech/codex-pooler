@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @moduledoc false
 
   @max_incomplete_sse_block_bytes 65_536
+  @max_incomplete_terminal_sse_block_bytes 64 * 1024 * 1024
 
   @spec max_incomplete_sse_block_bytes() :: pos_integer()
   def max_incomplete_sse_block_bytes, do: @max_incomplete_sse_block_bytes
@@ -9,6 +10,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @spec oversized_incomplete_sse_block?(binary()) :: boolean()
   def oversized_incomplete_sse_block?(buffer) when is_binary(buffer),
     do: byte_size(buffer) > @max_incomplete_sse_block_bytes
+
+  @spec max_incomplete_terminal_sse_block_bytes() :: pos_integer()
+  def max_incomplete_terminal_sse_block_bytes,
+    do: @max_incomplete_terminal_sse_block_bytes
+
+  @spec oversized_incomplete_terminal_sse_block?(binary()) :: boolean()
+  def oversized_incomplete_terminal_sse_block?(buffer) when is_binary(buffer),
+    do: byte_size(buffer) > @max_incomplete_terminal_sse_block_bytes
 
   @spec complete_sse_blocks(binary(), keyword()) :: {[binary()], binary()}
   def complete_sse_blocks(data, opts) do

@@ -209,47 +209,44 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
-  test "public POST emits one bounded local failure at byte 65,537 and drops the source tail" do
+  test "public POST fails an ordinary incomplete block at byte 65,537 and drops the source tail" do
     limit = StreamProtocol.max_incomplete_sse_block_bytes()
+    stream = oversized_incomplete_sse(:late)
+    first = binary_part(stream, 0, limit + 1)
+    rest = binary_part(stream, limit + 1, byte_size(stream) - limit - 1)
+    state = StreamProtocol.public_openai_responses_stream_state()
 
-    for marker_position <- [:early, :late] do
-      stream = oversized_incomplete_sse(marker_position)
-      first = binary_part(stream, 0, limit + 1)
-      rest = binary_part(stream, limit + 1, byte_size(stream) - limit - 1)
-      state = StreamProtocol.public_openai_responses_stream_state()
+    assert {"", exact_state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(
+               binary_part(stream, 0, limit),
+               state
+             )
 
-      assert {"", exact_state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(
-                 binary_part(stream, 0, limit),
-                 state
-               )
+    assert byte_size(exact_state.buffer) == limit
+    refute exact_state.sequence.terminal_latched?
 
-      assert byte_size(exact_state.buffer) == limit
-      refute exact_state.sequence.terminal_latched?
+    assert {output, state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
 
-      assert {output, state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(first, state)
+    assert [%{event: "error", data: decoded}] = public_events(output)
+    assert decoded["error"]["code"] == "server_error"
+    assert decoded["sequence_number"] == 0
+    assert byte_size(output) < 1_024
+    refute output =~ "private-oversized-sentinel"
+    assert state.buffer == ""
+    refute state.passthrough?
+    assert state.sequence.terminal_latched?
+    assert state.terminal_kind == :failed
+    assert state.summary.synthetic_terminal_sent
 
-      assert [%{event: "error", data: decoded}] = public_events(output)
-      assert decoded["error"]["code"] == "server_error"
-      assert decoded["sequence_number"] == 0
-      assert byte_size(output) < 1_024
-      refute output =~ "private-oversized-sentinel"
-      assert state.buffer == ""
-      refute state.passthrough?
-      assert state.sequence.terminal_latched?
-      assert state.terminal_kind == :failed
-      assert state.summary.synthetic_terminal_sent
+    late =
+      IO.iodata_to_binary([rest, "\n\n", sse_event("response.completed", completed("late"))])
 
-      late =
-        IO.iodata_to_binary([rest, "\n\n", sse_event("response.completed", completed("late"))])
+    assert {"", late_state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data(late, state)
 
-      assert {"", late_state} =
-               StreamProtocol.normalize_public_openai_responses_sse_data(late, state)
-
-      assert late_state.sequence == state.sequence
-      assert late_state.terminal_kind == state.terminal_kind
-    end
+    assert late_state.sequence == state.sequence
+    assert late_state.terminal_kind == state.terminal_kind
   end
 
   test "public POST parses complete blocks before failing an oversized incomplete block" do
@@ -1142,16 +1139,6 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
   defp terminal_shape(type, :error) do
     %{"type" => type, "error" => %{"code" => "server_error"}}
-  end
-
-  defp oversized_incomplete_sse(:early) do
-    IO.iodata_to_binary([
-      "event: response.failed\n",
-      ~s(data: {"type":"response.failed","private":"private-oversized-sentinel",),
-      ~s("padding":"),
-      String.duplicate("x", StreamProtocol.max_incomplete_sse_block_bytes() + 1_024),
-      ~s(","response":{"id":"resp_oversized_early","status":"failed"}})
-    ])
   end
 
   defp oversized_incomplete_sse(:late) do
