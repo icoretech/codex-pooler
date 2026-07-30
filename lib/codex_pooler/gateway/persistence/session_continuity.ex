@@ -164,8 +164,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
           {:ok, CodexSession.t()} | {:error, :stale_owner | :owner_unavailable}
   defdelegate renew_owner_token(session_ref, owner_lease_token, opts), to: OwnerLease
 
-  @spec duplicate_codex_turn?(CodexSession.t(), Ecto.UUID.t() | String.t()) :: boolean()
-  defdelegate duplicate_codex_turn?(session, request_id), to: TurnLifecycle
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   defdelegate start_codex_turn(session, request, opts), to: TurnLifecycle
   @spec complete_codex_turn(complete_turn_result(), String.t(), term()) :: term()

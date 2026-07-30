@@ -149,6 +149,66 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
   end
 
   describe "filter_runtime_compatible_candidates/1" do
+    test "mixed-key image input narrows candidates by image capability" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-image" => %{
+              "capabilities" => %{"responses" => true, "image_input" => true}
+            },
+            "assignment-text" => %{
+              "capabilities" => %{"responses" => true, "image_input" => false}
+            }
+          }
+        }
+      }
+
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => [%{:type => "input_image", "image_url" => "https://example.com/image.png"}]
+      }
+
+      candidates = [candidate("assignment-image"), candidate("assignment-text")]
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {:ok, filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, request_options, candidates)
+               )
+
+      assert candidate_ids(filtered) == ["assignment-image"]
+    end
+
+    test "string type false wins over a conflicting atom input_image type" do
+      model = model_with_image_support("assignment-text", false)
+
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => [%{:type => "input_image", "type" => false}]
+      }
+
+      candidates = [candidate("assignment-text")]
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {:ok, filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, request_options, candidates)
+               )
+
+      assert candidate_ids(filtered) == ["assignment-text"]
+    end
+
+    test "mixed-key image detection matches the prior normalization traversal" do
+      :rand.seed(:exsss, {20_260_730, 311, 907})
+
+      for _iteration <- 1..1_000 do
+        payload = %{"input" => random_image_input(3)}
+
+        assert CandidateEligibility.payload_has_input_image?(payload) ==
+                 legacy_payload_has_input_image?(payload)
+      end
+    end
+
     test "auto and default do not narrow the candidate set" do
       model = model_with_tier_support("assignment-supported", "priority")
       candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
@@ -702,4 +762,59 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       }
     }
   end
+
+  defp model_with_image_support(assignment_id, image_input?) do
+    %Model{
+      metadata: %{
+        "source_assignment_models" => %{
+          assignment_id => %{
+            "capabilities" => %{"responses" => true, "image_input" => image_input?}
+          }
+        }
+      }
+    }
+  end
+
+  defp random_image_input(0), do: Enum.random([nil, false, "input_image", "input_text"])
+
+  defp random_image_input(depth) do
+    case :rand.uniform(4) do
+      1 ->
+        %{
+          :type => Enum.random([nil, false, "input_image", "input_text"]),
+          "type" => Enum.random([nil, false, "input_image", "input_text"]),
+          :nested => random_image_input(depth - 1),
+          "nested" => random_image_input(depth - 1)
+        }
+
+      2 ->
+        %{:type => Enum.random([nil, false, "input_image", "input_text"])}
+
+      3 ->
+        %{"type" => Enum.random([nil, false, "input_image", "input_text"])}
+
+      4 ->
+        [random_image_input(depth - 1), random_image_input(depth - 1)]
+    end
+  end
+
+  defp legacy_payload_has_input_image?(payload) do
+    payload
+    |> Map.get("input")
+    |> legacy_has_input_image?()
+  end
+
+  defp legacy_has_input_image?(%{} = value) do
+    value = Map.new(value, fn {key, item_value} -> {to_string(key), item_value} end)
+
+    case value do
+      %{"type" => "input_image"} -> true
+      _value -> value |> Map.values() |> Enum.any?(&legacy_has_input_image?/1)
+    end
+  end
+
+  defp legacy_has_input_image?(values) when is_list(values),
+    do: Enum.any?(values, &legacy_has_input_image?/1)
+
+  defp legacy_has_input_image?(_value), do: false
 end

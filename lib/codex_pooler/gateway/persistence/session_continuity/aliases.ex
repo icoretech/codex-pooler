@@ -51,18 +51,33 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   @spec resolved_session_for_update(map(), RequestOptions.t(), String.t(), DateTime.t()) ::
           CodexSession.t() | nil
   def resolved_session_for_update(auth, %RequestOptions{} = opts, session_key, now) do
-    alias_candidates(opts, session_key)
-    |> Enum.find_value(fn {kind, value} ->
-      active_session_for_update(auth.pool.id, auth.api_key.id, kind, value, now)
-    end)
+    candidates = alias_candidates(opts, session_key)
+
+    case candidates do
+      [] -> nil
+      candidates -> resolved_session_query(auth, candidates, now) |> Repo.one()
+    end
   end
 
   @spec register!(CodexSession.t(), map(), RequestOptions.t(), DateTime.t()) :: :ok
   def register!(%CodexSession{} = session, auth, %RequestOptions{} = opts, now) do
-    alias_candidates(opts, session.session_key)
-    |> Enum.each(fn {alias_kind, alias_value} ->
-      upsert_session_alias!(session, auth, alias_kind, alias_value, now)
-    end)
+    expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
+
+    rows =
+      opts
+      |> alias_candidates(session.session_key)
+      |> Enum.map(fn {alias_kind, alias_value} ->
+        alias_attrs(session, auth, alias_kind, alias_value, now, expires_at)
+      end)
+
+    if rows != [] do
+      Repo.insert_all(BridgeSessionAlias, rows,
+        on_conflict: alias_upsert_query(session, now, expires_at),
+        conflict_target: @session_alias_conflict_target
+      )
+    end
+
+    :ok
   end
 
   @spec continuity_opts(RequestOptions.t(), map(), map() | binary()) :: RequestOptions.t()
@@ -78,11 +93,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     where(query, [session], session.owner_lease_expires_at > ^now)
   end
 
-  defp upsert_session_alias!(session, auth, alias_kind, alias_value, now) do
+  defp alias_attrs(session, auth, alias_kind, alias_value, now, expires_at) do
     alias_hash = alias_hash(alias_value)
-    expires_at = DateTime.add(now, expired_alias_ttl_seconds(), :second)
 
-    attrs = %{
+    %{
+      id: Ecto.UUID.generate(),
       codex_session_id: session.id,
       pool_id: auth.pool.id,
       api_key_id: auth.api_key.id,
@@ -93,32 +108,92 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
       expires_at: expires_at,
       last_seen_at: now,
       metadata: %{"source" => "gateway_continuity"},
+      created_at: now,
       updated_at: now
     }
+  end
 
-    on_conflict =
-      from alias_record in BridgeSessionAlias,
-        update: [
-          set: [
-            codex_session_id: ^session.id,
-            alias_preview: ^attrs.alias_preview,
-            expires_at: fragment("GREATEST(?, EXCLUDED.expires_at)", alias_record.expires_at),
-            last_seen_at:
-              fragment(
-                "GREATEST(COALESCE(?, EXCLUDED.last_seen_at), EXCLUDED.last_seen_at)",
-                alias_record.last_seen_at
-              ),
-            metadata: ^attrs.metadata,
-            updated_at: fragment("GREATEST(?, EXCLUDED.updated_at)", alias_record.updated_at)
-          ]
+  defp alias_upsert_query(session, now, expires_at) do
+    from alias_record in BridgeSessionAlias,
+      update: [
+        set: [
+          codex_session_id: ^session.id,
+          alias_preview: fragment("EXCLUDED.alias_preview"),
+          expires_at: fragment("GREATEST(?, ?)", alias_record.expires_at, ^expires_at),
+          last_seen_at:
+            fragment("GREATEST(COALESCE(?, ?), ?)", alias_record.last_seen_at, ^now, ^now),
+          metadata: fragment("EXCLUDED.metadata"),
+          updated_at: fragment("GREATEST(?, ?)", alias_record.updated_at, ^now)
         ]
+      ]
+  end
 
-    %BridgeSessionAlias{}
-    |> BridgeSessionAlias.changeset(Map.put(attrs, :created_at, now))
-    |> Repo.insert!(
-      on_conflict: on_conflict,
-      conflict_target: @session_alias_conflict_target
-    )
+  defp resolved_session_query(auth, candidates, now) do
+    [{kind_1, hash_1}, {kind_2, hash_2}, {kind_3, hash_3}, {kind_4, hash_4}, {kind_5, hash_5}] =
+      padded_hashed_candidates(candidates, 5)
+
+    from session in CodexSession,
+      join: alias_record in BridgeSessionAlias,
+      on: alias_record.codex_session_id == session.id,
+      where:
+        alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+          alias_record.status == ^@alias_active and alias_record.expires_at > ^now and
+          session.status in ^@session_reconnectable_statuses and
+          (alias_record.alias_kind == "previous_response_id" or
+             session.owner_lease_expires_at > ^now),
+      where:
+        fragment(
+          "(?, ?) IN ((?, ?), (?, ?), (?, ?), (?, ?), (?, ?))",
+          alias_record.alias_kind,
+          alias_record.alias_hash,
+          ^kind_1,
+          ^hash_1,
+          ^kind_2,
+          ^hash_2,
+          ^kind_3,
+          ^hash_3,
+          ^kind_4,
+          ^hash_4,
+          ^kind_5,
+          ^hash_5
+        ),
+      order_by: [
+        asc:
+          fragment(
+            "CASE WHEN ? = ? AND ? = ? THEN 1 WHEN ? = ? AND ? = ? THEN 2 WHEN ? = ? AND ? = ? THEN 3 WHEN ? = ? AND ? = ? THEN 4 WHEN ? = ? AND ? = ? THEN 5 ELSE 6 END",
+            alias_record.alias_kind,
+            ^kind_1,
+            alias_record.alias_hash,
+            ^hash_1,
+            alias_record.alias_kind,
+            ^kind_2,
+            alias_record.alias_hash,
+            ^hash_2,
+            alias_record.alias_kind,
+            ^kind_3,
+            alias_record.alias_hash,
+            ^hash_3,
+            alias_record.alias_kind,
+            ^kind_4,
+            alias_record.alias_hash,
+            ^hash_4,
+            alias_record.alias_kind,
+            ^kind_5,
+            alias_record.alias_hash,
+            ^hash_5
+          ),
+        desc: alias_record.last_seen_at,
+        desc: alias_record.updated_at
+      ],
+      limit: 1,
+      lock: "FOR UPDATE"
+  end
+
+  defp padded_hashed_candidates(candidates, size) do
+    candidates
+    |> Enum.map(fn {kind, value} -> {kind, alias_hash(value)} end)
+    |> Kernel.++(List.duplicate({"", <<>>}, size))
+    |> Enum.take(size)
   end
 
   defp alias_candidates(%RequestOptions{} = request_options, session_key) do
@@ -154,9 +229,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   defp response_id_from_sse_body(body) do
     body
     |> String.split("\n")
-    |> Enum.filter(&String.starts_with?(&1, "data: "))
-    |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
-    |> Enum.reject(&(&1 == "[DONE]"))
+    |> Stream.filter(&String.starts_with?(&1, "data: "))
+    |> Stream.map(&String.replace_prefix(&1, "data: ", ""))
+    |> Stream.filter(&String.starts_with?(&1, "{"))
     |> Enum.find_value(fn payload ->
       case Jason.decode(payload) do
         {:ok, decoded} -> response_id_from_decoded(decoded)

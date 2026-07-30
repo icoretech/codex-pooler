@@ -106,8 +106,9 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       prompt_cache_locality_context(auth, model, request_options, settings, affinity, candidates)
 
     ordered =
-      settings.routing_strategy
-      |> strategy_order(
+      strategy_order_unless_prompt_cache_locality(
+        prompt_cache_locality,
+        settings.routing_strategy,
         candidates,
         model,
         affinity.seed || route_plan_input.correlation_id,
@@ -285,6 +286,26 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       -rendezvous_score(seed, assignment.id)
     end)
   end
+
+  defp strategy_order_unless_prompt_cache_locality(
+         %{status: "applied"},
+         _strategy,
+         candidates,
+         _model,
+         _seed,
+         _route_state
+       ),
+       do: candidates
+
+  defp strategy_order_unless_prompt_cache_locality(
+         _locality,
+         strategy,
+         candidates,
+         model,
+         seed,
+         route_state
+       ),
+       do: strategy_order(strategy, candidates, model, seed, route_state)
 
   # Reason: affinity selection intentionally compares all sticky routing inputs together.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity

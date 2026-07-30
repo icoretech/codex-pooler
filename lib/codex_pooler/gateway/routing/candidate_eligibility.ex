@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
 
     alias CodexPooler.Catalog.Model
     alias CodexPooler.Gateway.Payloads.RequestOptions
+    alias CodexPooler.Gateway.Routing.CandidateEligibility
     alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
     @type auth :: CodexPooler.Access.auth_context()
@@ -29,6 +30,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
       :model,
       :endpoint,
       :payload,
+      :has_input_image?,
       :request_options,
       :candidates,
       :route_class
@@ -39,6 +41,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
             required(:model) => Model.t(),
             required(:endpoint) => String.t(),
             required(:payload) => payload(),
+            optional(:has_input_image?) => boolean(),
             required(:request_options) => RequestOptions.t(),
             required(:candidates) => [candidate()],
             optional(:auth) => auth()
@@ -49,6 +52,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
             model: Model.t(),
             endpoint: String.t(),
             payload: payload(),
+            has_input_image?: boolean(),
             request_options: RequestOptions.t(),
             candidates: [candidate()],
             route_class: String.t()
@@ -65,6 +69,10 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
         model: Map.fetch!(attrs, :model),
         endpoint: endpoint,
         payload: payload,
+        has_input_image?:
+          Map.get_lazy(attrs, :has_input_image?, fn ->
+            CandidateEligibility.payload_has_input_image?(payload)
+          end),
         request_options: request_options,
         candidates: Map.fetch!(attrs, :candidates),
         route_class: request_options.transport.route_class
@@ -240,6 +248,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
       model: model,
       endpoint: endpoint,
       payload: payload,
+      has_input_image?: has_input_image?,
       request_options: request_options,
       candidates: candidates
     } = input
@@ -256,7 +265,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
           payload,
           request_options,
           assignment,
-          enforce_service_tier?
+          enforce_service_tier?,
+          has_input_image?
         )
       end)
 
@@ -525,13 +535,15 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
          payload,
          request_options,
          assignment,
-         enforce_service_tier?
+         enforce_service_tier?,
+         has_input_image?
        ) do
     case source_assignment_model_metadata(model, assignment) do
       %{} = metadata ->
         endpoint_compatible?(endpoint, metadata, request_options) and
           streaming_compatible?(payload, metadata) and
-          image_input_compatible?(payload, metadata) and tools_compatible?(payload, metadata) and
+          image_input_compatible?(has_input_image?, metadata) and
+          tools_compatible?(payload, metadata) and
           reasoning_compatible?(payload, metadata) and
           service_tier_compatible?(payload, request_options, metadata, enforce_service_tier?)
 
@@ -571,8 +583,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
       not ModelMetadata.streaming_explicitly_unsupported?(metadata)
   end
 
-  defp image_input_compatible?(payload, metadata) do
-    not payload_has_input_image?(payload) or not ModelMetadata.has_capability_evidence?(metadata) or
+  defp image_input_compatible?(has_input_image?, metadata) do
+    not has_input_image? or not ModelMetadata.has_capability_evidence?(metadata) or
       ModelMetadata.supports_image_input?(metadata)
   end
 
@@ -659,16 +671,25 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   end
 
   defp has_input_image?(%{} = value) do
-    value = Map.new(value, fn {key, item_value} -> {to_string(key), item_value} end)
+    type =
+      case Map.fetch(value, "type") do
+        {:ok, type} -> type
+        :error -> Map.get(value, :type)
+      end
 
-    case value do
-      %{"type" => "input_image"} -> true
-      _value -> value |> Map.values() |> Enum.any?(&has_input_image?/1)
-    end
+    type == "input_image" or
+      Enum.any?(value, fn {key, item_value} ->
+        not shadowed_atom_key?(value, key) and has_input_image?(item_value)
+      end)
   end
 
   defp has_input_image?(values) when is_list(values), do: Enum.any?(values, &has_input_image?/1)
   defp has_input_image?(_value), do: false
+
+  defp shadowed_atom_key?(value, key) when is_atom(key),
+    do: Map.has_key?(value, Atom.to_string(key))
+
+  defp shadowed_atom_key?(_value, _key), do: false
 
   defp metadata_bool?(metadata, key), do: Map.get(metadata || %{}, key) == true
 

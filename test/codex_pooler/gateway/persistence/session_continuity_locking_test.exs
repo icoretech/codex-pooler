@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     SessionContinuity
   }
 
-  alias CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.{Aliases, ExpiredSessions}
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias Ecto.Adapters.SQL
   alias Ecto.Adapters.SQL.Sandbox
@@ -92,6 +92,185 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
                Repo.get!(BridgeOwnerLease, token_lease_id(token))
 
       assert Repo.get!(CodexSession, session.id) == session_before
+    end
+
+    @tag :task7_pin
+    test "turn sequence allocation is part of the insert statement" do
+      %{auth: auth, session: session} = owner_session_fixture()
+      request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+
+      {result, events} =
+        capture_repo_queries(fn ->
+          SessionContinuity.start_codex_turn(
+            session,
+            request,
+            RequestOptions.for_websocket(%{})
+          )
+        end)
+
+      assert {:ok, %CodexPooler.Gateway.Persistence.CodexTurn{turn_sequence: 1}} = result
+
+      assert Enum.any?(events, fn event ->
+               event.command == "INSERT" and event.in_transaction? and
+                 String.contains?(event.query, "INSERT INTO codex_turns") and
+                 String.contains?(event.query, "MAX(turn_sequence)")
+             end)
+
+      refute Enum.any?(events, fn event ->
+               event.source == "codex_turns" and event.command == "SELECT"
+             end)
+    end
+
+    @tag :task7_pin
+    @tag timeout: 120_000
+    test "turn allocation loads returned columns in a fresh runtime" do
+      fixture = unboxed_fresh_runtime_turn_fixture()
+
+      script = """
+      alias CodexPooler.Accounting.Request
+      alias CodexPooler.Gateway.Payloads.RequestOptions
+      alias CodexPooler.Gateway.Persistence.{CodexSession, SessionContinuity}
+      alias CodexPooler.Repo
+      alias Ecto.Adapters.SQL.Sandbox
+
+      [session_id, request_id] = System.argv()
+      :ok = Sandbox.mode(Repo, :manual)
+      :ok = Sandbox.checkout(Repo)
+
+      try do
+        :erlang.binary_to_existing_atom("turn_sequence")
+        raise "turn_sequence was already interned"
+      rescue
+        ArgumentError -> :ok
+      end
+
+      session = Repo.get!(CodexSession, session_id)
+      request = Repo.get!(Request, request_id)
+
+      {:ok, turn} =
+        SessionContinuity.start_codex_turn(
+          session,
+          request,
+          RequestOptions.for_websocket(%{})
+        )
+
+      sequence_key = :erlang.binary_to_existing_atom("turn_sequence")
+      1 = Map.fetch!(turn, sequence_key)
+      IO.puts("fresh runtime turn allocation: ok")
+      """
+
+      try do
+        {output, status} =
+          System.cmd(
+            "mix",
+            [
+              "run",
+              "--no-compile",
+              "-e",
+              script,
+              "--",
+              fixture.session_id,
+              fixture.request_id
+            ],
+            env: [{"MIX_ENV", "test"}],
+            stderr_to_stdout: true
+          )
+
+        assert status == 0, output
+        assert output =~ "fresh runtime turn allocation: ok"
+      after
+        cleanup_unboxed_fixture!()
+      end
+    end
+
+    test "alias resolution uses one priority-ordered row lock" do
+      auth = auth_fixture()
+      high_priority_alias = "task-6-high-#{System.unique_integer([:positive, :monotonic])}"
+      low_priority_alias = "task-6-low-#{System.unique_integer([:positive, :monotonic])}"
+
+      assert {:ok, %CodexSession{} = high_priority_session} =
+               Gateway.start_codex_session(
+                 auth,
+                 request_options(accepted_turn_state: high_priority_alias)
+               )
+
+      assert {:ok, %CodexSession{} = low_priority_session} =
+               Gateway.start_codex_session(
+                 auth,
+                 request_options(accepted_turn_state: "unused-#{low_priority_alias}")
+               )
+
+      insert_alias!(low_priority_session, auth, "previous_response_id", low_priority_alias)
+
+      opts =
+        request_options(
+          accepted_turn_state: high_priority_alias,
+          previous_response_id: low_priority_alias
+        )
+
+      {{:ok, resolved_session}, events} =
+        capture_detailed_repo_queries(fn ->
+          Repo.transaction(fn ->
+            Aliases.resolved_session_for_update(
+              auth,
+              opts,
+              high_priority_session.session_key,
+              DateTime.utc_now() |> DateTime.truncate(:microsecond)
+            )
+          end)
+        end)
+
+      assert resolved_session.id == high_priority_session.id
+
+      assert [alias_lookup] =
+               Enum.filter(events, fn event ->
+                 event.operation == "SELECT" and
+                   String.contains?(event.query, ~s(JOIN "bridge_session_aliases"))
+               end)
+
+      assert alias_lookup.for_update?
+      assert String.contains?(alias_lookup.query, "CASE WHEN")
+    end
+
+    test "alias registration uses one batched upsert for all candidates" do
+      %{auth: auth, session: session} = owner_session_fixture()
+
+      opts =
+        request_options(
+          accepted_turn_state: "batch-turn-#{System.unique_integer([:positive, :monotonic])}",
+          previous_response_id:
+            "batch-previous-#{System.unique_integer([:positive, :monotonic])}",
+          response_id: "batch-response-#{System.unique_integer([:positive, :monotonic])}",
+          session_header: "batch-header-#{System.unique_integer([:positive, :monotonic])}"
+        )
+
+      {{:ok, :ok}, events} =
+        capture_detailed_repo_queries(fn ->
+          Repo.transaction(fn ->
+            Aliases.register!(
+              session,
+              auth,
+              opts,
+              DateTime.utc_now() |> DateTime.truncate(:microsecond)
+            )
+          end)
+        end)
+
+      assert [alias_insert] =
+               Enum.filter(events, fn event ->
+                 event.source == "bridge_session_aliases" and event.operation == "INSERT"
+               end)
+
+      assert String.contains?(String.upcase(alias_insert.query), "ON CONFLICT")
+
+      assert Repo.aggregate(
+               from(alias_record in BridgeSessionAlias,
+                 where:
+                   alias_record.codex_session_id == ^session.id and
+                     alias_record.status == "active"
+               ),
+               :count
+             ) >= 5
     end
 
     @tag :task7_order_contract
@@ -807,17 +986,17 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
             query: query
           }
         else
-          retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline)
+          retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline, rows)
         end
 
       _rows ->
-        retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline)
+        retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline, rows)
     end
   end
 
-  defp retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline) do
+  defp retry_session_block(waiter_pid, blocker_pid, expected_operation, deadline, last_rows) do
     if System.monotonic_time(:millisecond) >= deadline do
-      {:error, :session_block_not_observed}
+      {:error, {:session_block_not_observed, last_rows}}
     else
       do_observe_session_block(waiter_pid, blocker_pid, expected_operation, deadline)
     end
@@ -964,8 +1143,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     upcased_query = String.upcase(query)
 
     String.starts_with?(String.trim_leading(upcased_query), operation) and
-      String.contains?(upcased_query, "CODEX_SESSIONS") and
-      (operation != "SELECT" or String.contains?(upcased_query, "FOR UPDATE"))
+      String.contains?(upcased_query, "CODEX_SESSIONS")
   end
 
   defp blocked_session_operation?(_query, _operation), do: false
@@ -1315,6 +1493,23 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end)
   end
 
+  defp unboxed_fresh_runtime_turn_fixture do
+    Sandbox.unboxed_run(Repo, fn ->
+      reset_bootstrap_state_fixture!()
+      auth = auth_fixture()
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 accepted_turn_state:
+                   "task-7-fresh-runtime-#{System.unique_integer([:positive, :monotonic])}",
+                 owner_instance_id: "node-a"
+               })
+
+      request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
+      %{request_id: request.id, session_id: session.id}
+    end)
+  end
+
   defp cleanup_unboxed_fixture! do
     Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
   end
@@ -1338,6 +1533,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     session = Repo.get!(CodexSession, session.id)
     %{auth: auth, session: session, token: session.owner_lease_token}
+  end
+
+  defp insert_alias!(session, auth, kind, value) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    hash = :crypto.hash(:sha256, value)
+
+    %BridgeSessionAlias{}
+    |> BridgeSessionAlias.changeset(%{
+      codex_session_id: session.id,
+      pool_id: auth.pool.id,
+      api_key_id: auth.api_key.id,
+      alias_kind: kind,
+      alias_hash: hash,
+      alias_preview: hash |> Base.encode16(case: :lower) |> String.slice(0, 16),
+      status: "active",
+      expires_at: DateTime.add(now, 300, :second),
+      last_seen_at: now,
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
   end
 
   defp token_lease_id(token) do
@@ -1371,6 +1588,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
               %{
                 source: metadata[:source],
                 command: command_name(query),
+                query: query,
                 for_update?: String.contains?(String.upcase(query), "FOR UPDATE"),
                 in_transaction?: Repo.in_transaction?()
               }

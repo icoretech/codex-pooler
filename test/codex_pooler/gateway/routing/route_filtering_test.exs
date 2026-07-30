@@ -10,12 +10,46 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
-  alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+
+  defmodule RouteFiltering do
+    alias CodexPooler.Gateway.Routing.RouteFiltering, as: ProductionRouteFiltering
+
+    defdelegate filter_candidates_with_route_state(filter_input, route_state),
+      to: ProductionRouteFiltering
+
+    defdelegate filter_candidates_with_route_state(filter_input, route_state, opts),
+      to: ProductionRouteFiltering
+
+    def filter_candidates(filter_input, opts \\ []) do
+      route_state =
+        RouteState.new(%{
+          visible_model: filter_input.model,
+          candidates: filter_input.candidates
+        })
+        |> RouteState.preload_routing_snapshots(
+          filter_input.auth,
+          filter_input.model,
+          filter_input.request_options
+        )
+
+      case ProductionRouteFiltering.filter_candidates_with_route_state(
+             filter_input,
+             route_state,
+             opts
+           ) do
+        {:ok, candidates, request_options, _route_state} ->
+          {:ok, candidates, request_options}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
 
   describe "filter_candidates/2" do
     test "allows missing quota evidence when the route marks quota optional" do

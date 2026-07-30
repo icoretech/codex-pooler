@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   }
 
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
 
   @type turn_result :: {:ok, CodexTurn.t()} | {:error, term()}
   @type request_ref :: Request.t() | Ecto.UUID.t()
@@ -23,22 +24,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
   @turn_interrupted CodexTurn.interrupted_status()
   @session_active CodexSession.active_status()
   @owner_lease_active BridgeOwnerLease.active_status()
-
-  @spec duplicate_codex_turn?(CodexSession.t(), Ecto.UUID.t() | String.t()) :: boolean()
-  def duplicate_codex_turn?(%CodexSession{id: session_id}, request_id)
-      when is_binary(request_id) do
-    request_id = String.trim(request_id)
-
-    request_id != "" and
-      Repo.exists?(
-        from turn in CodexTurn,
-          join: request in Request,
-          on: request.id == turn.request_id,
-          where: turn.codex_session_id == ^session_id and request.correlation_id == ^request_id
-      )
-  end
-
-  def duplicate_codex_turn?(_session, _request_id), do: false
 
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   def start_codex_turn(
@@ -51,27 +36,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
     Repo.transaction(fn ->
       locked_session = codex_session_for_update!(session.id)
-      ensure_codex_turn_is_unique!(locked_session, opts)
 
-      sequence =
-        Repo.one(
-          from turn in CodexTurn,
-            where: turn.codex_session_id == ^locked_session.id,
-            select: max(turn.turn_sequence)
-        ) || 0
-
-      turn =
-        %CodexTurn{
-          codex_session_id: locked_session.id,
-          request_id: request.id,
-          turn_sequence: sequence + 1,
-          transport_kind: codex_turn_transport_kind(request.transport),
-          status: @turn_in_progress,
-          started_at: now,
-          created_at: now,
-          updated_at: now
-        }
-        |> Repo.insert!()
+      turn = insert_next_codex_turn!(locked_session, request, now)
 
       case Map.get(opts, :pool_upstream_assignment_id) do
         assignment_id when is_binary(assignment_id) ->
@@ -140,33 +106,53 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     )
   end
 
+  defp insert_next_codex_turn!(%CodexSession{} = session, %Request{} = request, now) do
+    query = """
+    INSERT INTO codex_turns (
+      id,
+      codex_session_id,
+      request_id,
+      turn_sequence,
+      transport_kind,
+      status,
+      started_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      $1::uuid,
+      $2::uuid,
+      $3::uuid,
+      COALESCE(MAX(turn_sequence), 0) + 1,
+      $4,
+      $5,
+      $6,
+      $6,
+      $6
+    FROM codex_turns
+    WHERE codex_session_id = $2::uuid
+    RETURNING *
+    """
+
+    params = [
+      Ecto.UUID.generate() |> Ecto.UUID.dump!(),
+      Ecto.UUID.dump!(session.id),
+      Ecto.UUID.dump!(request.id),
+      codex_turn_transport_kind(request.transport),
+      @turn_in_progress,
+      now
+    ]
+
+    %{columns: columns, rows: [row]} = SQL.query!(Repo, query, params)
+    Repo.load(CodexTurn, {columns, row})
+  end
+
   defp turn_opts(%RequestOptions{continuity: continuity, file_bridge: file_bridge}) do
     %{
       codex_turn_id: continuity.codex_turn_id,
       pool_upstream_assignment_id: file_bridge.pool_upstream_assignment_id
     }
     |> drop_nil_values()
-  end
-
-  defp ensure_codex_turn_is_unique!(%CodexSession{} = session, opts) do
-    case opts |> Map.get(:codex_turn_id) |> blank_to_nil() do
-      nil ->
-        :ok
-
-      turn_id ->
-        case duplicate_codex_turn?(session, turn_id) do
-          true ->
-            Repo.rollback(%{
-              status: 409,
-              code: "duplicate_turn",
-              message: "duplicate Codex turn was already recorded for this session",
-              param: "request_id"
-            })
-
-          false ->
-            :ok
-        end
-    end
   end
 
   defp codex_turn_transport_kind("http_compact_json"), do: "http_json"
@@ -251,13 +237,6 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
     :ok
   end
-
-  defp blank_to_nil(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp blank_to_nil(_value), do: nil
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

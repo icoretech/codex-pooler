@@ -96,26 +96,6 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   def attach_file_affinity(_auth, _endpoint, _payload, %RequestOptions{} = request_options),
     do: {:ok, request_options}
 
-  @spec ensure_unique_turn(RequestOptions.t()) :: :ok | {:error, gateway_error()}
-  def ensure_unique_turn(%RequestOptions{
-        continuity: %{codex_session: %CodexSession{} = session, codex_turn_id: turn_id}
-      })
-      when is_binary(turn_id) do
-    if ContinuityStore.duplicate_codex_turn?(session, turn_id) do
-      {:error,
-       error(
-         409,
-         "duplicate_turn",
-         "duplicate Codex turn was already recorded for this session",
-         "request_id"
-       )}
-    else
-      :ok
-    end
-  end
-
-  def ensure_unique_turn(%RequestOptions{}), do: :ok
-
   @spec start_turn(reserved_request(), RequestOptions.t()) ::
           {:ok, reserved_request()} | {:error, term()}
   def start_turn(
@@ -545,31 +525,32 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   defp response_file_ids(payload) do
     payload
     |> Map.get("input")
-    |> collect_input_file_ids()
+    |> collect_input_file_ids([])
+    |> Enum.reverse()
     |> Enum.uniq()
   end
 
-  defp collect_input_file_ids(%{} = value) do
-    value = Map.new(value, fn {key, item_value} -> {to_string(key), item_value} end)
+  defp collect_input_file_ids(%{} = value, acc) do
+    type = Map.get(value, "type") || Map.get(value, :type)
+    file_id = Map.get(value, "file_id") || Map.get(value, :file_id)
 
-    file_ids =
-      case value do
-        %{"type" => "input_file", "file_id" => file_id} when is_binary(file_id) ->
-          [String.trim(file_id)]
-
-        _value ->
-          []
+    acc =
+      if type == "input_file" and is_binary(file_id) do
+        case String.trim(file_id) do
+          "" -> acc
+          file_id -> [file_id | acc]
+        end
+      else
+        acc
       end
 
-    nested_ids = value |> Map.values() |> Enum.flat_map(&collect_input_file_ids/1)
-    Enum.reject(file_ids ++ nested_ids, &(&1 == ""))
+    Enum.reduce(Map.values(value), acc, &collect_input_file_ids/2)
   end
 
-  defp collect_input_file_ids(values) when is_list(values) do
-    Enum.flat_map(values, &collect_input_file_ids/1)
-  end
+  defp collect_input_file_ids(values, acc) when is_list(values),
+    do: Enum.reduce(values, acc, &collect_input_file_ids/2)
 
-  defp collect_input_file_ids(_value), do: []
+  defp collect_input_file_ids(_value, acc), do: acc
 
   defp ensure_file_affinity_matches_session(auth, opts, file_assignment_id)
        when is_binary(file_assignment_id) do
@@ -601,27 +582,65 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
        ) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    request_options
-    |> codex_session_affinity_aliases()
-    |> Enum.find_value(fn {kind, value} ->
-      alias_hash = :crypto.hash(:sha256, value)
+    candidates = codex_session_affinity_aliases(request_options)
 
-      Repo.one(
-        from session in CodexSession,
-          join: alias_record in BridgeSessionAlias,
-          on: alias_record.codex_session_id == session.id,
-          where:
-            alias_record.pool_id == ^pool.id and alias_record.api_key_id == ^api_key.id and
-              alias_record.alias_kind == ^kind and alias_record.alias_hash == ^alias_hash and
-              alias_record.status == "active" and alias_record.expires_at > ^now and
-              session.status in ^["active", "interrupted"] and
-              session.owner_lease_expires_at > ^now,
-          order_by: [desc: alias_record.last_seen_at, desc: alias_record.updated_at],
-          limit: 1,
-          select: session.pool_upstream_assignment_id
-      )
-      |> clean_string()
-    end)
+    case candidates do
+      [] ->
+        nil
+
+      candidates ->
+        affinity_assignment_query(pool, api_key, candidates, now) |> Repo.one() |> clean_string()
+    end
+  end
+
+  defp affinity_assignment_query(pool, api_key, candidates, now) do
+    [{kind_1, hash_1}, {kind_2, hash_2}, {kind_3, hash_3}] =
+      candidates
+      |> Enum.map(fn {kind, value} -> {kind, :crypto.hash(:sha256, value)} end)
+      |> Kernel.++(List.duplicate({"", <<>>}, 3))
+      |> Enum.take(3)
+
+    from session in CodexSession,
+      join: alias_record in BridgeSessionAlias,
+      on: alias_record.codex_session_id == session.id,
+      where:
+        alias_record.pool_id == ^pool.id and alias_record.api_key_id == ^api_key.id and
+          alias_record.status == "active" and alias_record.expires_at > ^now and
+          session.status in ^["active", "interrupted"] and session.owner_lease_expires_at > ^now,
+      where:
+        fragment(
+          "(?, ?) IN ((?, ?), (?, ?), (?, ?))",
+          alias_record.alias_kind,
+          alias_record.alias_hash,
+          ^kind_1,
+          ^hash_1,
+          ^kind_2,
+          ^hash_2,
+          ^kind_3,
+          ^hash_3
+        ),
+      order_by: [
+        asc:
+          fragment(
+            "CASE WHEN ? = ? AND ? = ? THEN 1 WHEN ? = ? AND ? = ? THEN 2 WHEN ? = ? AND ? = ? THEN 3 ELSE 4 END",
+            alias_record.alias_kind,
+            ^kind_1,
+            alias_record.alias_hash,
+            ^hash_1,
+            alias_record.alias_kind,
+            ^kind_2,
+            alias_record.alias_hash,
+            ^hash_2,
+            alias_record.alias_kind,
+            ^kind_3,
+            alias_record.alias_hash,
+            ^hash_3
+          ),
+        desc: alias_record.last_seen_at,
+        desc: alias_record.updated_at
+      ],
+      limit: 1,
+      select: session.pool_upstream_assignment_id
   end
 
   defp codex_session_affinity_aliases(%RequestOptions{continuity: continuity}) do

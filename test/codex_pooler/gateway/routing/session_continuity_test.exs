@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Routing.SessionContinuity
@@ -13,6 +14,104 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
   @endpoint "/backend-api/codex/responses"
+
+  describe "attach_file_affinity/4" do
+    test "collects nested mixed-key file ids once while preserving one assignment" do
+      setup = active_pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+
+      first_file_id = "file-first-#{System.unique_integer([:positive])}"
+      second_file_id = "file-second-#{System.unique_integer([:positive])}"
+
+      insert_response_file!(setup, api_key.api_key, first_file_id)
+      insert_response_file!(setup, api_key.api_key, second_file_id)
+
+      payload = %{
+        "input" => [
+          %{:type => "input_file", :file_id => first_file_id},
+          %{
+            "content" => [
+              %{"type" => "input_file", "file_id" => second_file_id},
+              %{"type" => "input_file", "file_id" => first_file_id}
+            ]
+          }
+        ]
+      }
+
+      request_options = RequestOptions.build(%{}, @endpoint, payload)
+
+      assert {:ok, attached} =
+               SessionContinuity.attach_file_affinity(
+                 auth,
+                 @endpoint,
+                 payload,
+                 request_options
+               )
+
+      assert attached.routing.file_affinity_assignment_id == setup.pinned.assignment.id
+    end
+
+    test "resolves session aliases once in candidate priority order" do
+      setup = active_pinned_assignment_setup()
+      api_key = active_api_key_fixture(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(api_key.authorization)
+      file_id = "file-priority-#{System.unique_integer([:positive])}"
+      turn_state = "turn-priority-#{System.unique_integer([:positive])}"
+      previous_response_id = "previous-lower-#{System.unique_integer([:positive])}"
+
+      insert_response_file!(setup, api_key.api_key, file_id)
+
+      pinned_session =
+        setup
+        |> codex_session_fixture(setup.pinned.assignment, api_key.api_key)
+        |> activate_owner_lease!()
+
+      other_session =
+        setup
+        |> codex_session_fixture(setup.other.assignment, api_key.api_key)
+        |> activate_owner_lease!()
+
+      register_session_alias!(pinned_session, api_key.api_key, "turn_state", turn_state)
+
+      register_session_alias!(
+        other_session,
+        api_key.api_key,
+        "previous_response_id",
+        previous_response_id
+      )
+
+      payload = %{"input" => [%{"type" => "input_file", "file_id" => file_id}]}
+
+      request_options =
+        %{
+          accepted_turn_state: turn_state,
+          previous_response_id: previous_response_id
+        }
+        |> RequestOptions.build(@endpoint, payload)
+
+      {result, queries} =
+        capture_repo_queries(fn ->
+          SessionContinuity.attach_file_affinity(
+            auth,
+            @endpoint,
+            payload,
+            request_options
+          )
+        end)
+
+      assert {:ok, attached} = result
+      assert attached.routing.file_affinity_assignment_id == setup.pinned.assignment.id
+
+      assert [alias_lookup] =
+               Enum.filter(queries, fn query ->
+                 query.command == "SELECT" and
+                   String.contains?(query.query, ~s(JOIN "bridge_session_aliases"))
+               end)
+
+      assert String.contains?(alias_lookup.query, "CASE WHEN")
+    end
+  end
 
   describe "filter_codex_session_assignment/2" do
     test "returns pinned reauth recovery only for revoked-refresh-token pinned assignments outside candidates" do
@@ -590,6 +689,30 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     )
   end
 
+  defp insert_response_file!(setup, api_key, file_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %FileRecord{}
+    |> FileRecord.changeset(%{
+      pool_id: setup.pool.id,
+      api_key_id: api_key.id,
+      file_id: file_id,
+      purpose: "user_data",
+      filename: "sample.txt",
+      byte_size: 12,
+      status: "uploaded",
+      pool_upstream_assignment_id: setup.pinned.assignment.id,
+      upstream_identity_id: setup.pinned.identity.id,
+      finalize_status: "succeeded",
+      uploaded_at: now,
+      expires_at: DateTime.add(now, 3600, :second),
+      metadata: %{},
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+  end
+
   defp pinned_assignment_setup(attrs \\ []) do
     attrs = Map.new(attrs)
     pool = pool_fixture()
@@ -689,6 +812,11 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   end
 
   defp register_previous_response_alias!(%CodexSession{} = session, api_key, previous_response_id) do
+    register_session_alias!(session, api_key, "previous_response_id", previous_response_id)
+    session
+  end
+
+  defp register_session_alias!(%CodexSession{} = session, api_key, kind, value) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     %BridgeSessionAlias{}
@@ -696,9 +824,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       codex_session_id: session.id,
       pool_id: session.pool_id,
       api_key_id: api_key.id,
-      alias_kind: "previous_response_id",
-      alias_hash: :crypto.hash(:sha256, previous_response_id),
-      alias_preview: "synthetic-prev",
+      alias_kind: kind,
+      alias_hash: :crypto.hash(:sha256, value),
+      alias_preview: "synthetic-alias",
       status: "active",
       expires_at: DateTime.add(now, 300, :second),
       last_seen_at: now,
@@ -707,8 +835,68 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       updated_at: now
     })
     |> Repo.insert!()
+  end
+
+  defp activate_owner_lease!(session) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     session
+    |> Ecto.Changeset.change(%{
+      owner_instance_id: "test-node",
+      owner_lease_token: Ecto.UUID.generate(),
+      owner_lease_expires_at: DateTime.add(now, 300, :second),
+      last_heartbeat_at: now
+    })
+    |> Repo.update!()
+  end
+
+  defp capture_repo_queries(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = {__MODULE__, :query_count, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() == parent do
+            query = Map.get(metadata, :query, "")
+
+            send(parent, {
+              handler_id,
+              %{
+                source: metadata[:source],
+                command: query_command(query),
+                query: query
+              }
+            })
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_repo_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
+  end
+
+  defp query_command(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> String.upcase()
   end
 
   defp model_for_assignments(pool, assignment_ids) do
