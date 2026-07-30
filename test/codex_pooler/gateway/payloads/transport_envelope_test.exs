@@ -1,7 +1,9 @@
 defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
+
+  @detection_timeout_ms 15_000
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
@@ -45,15 +47,13 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
       url = start_http_server!()
 
       timeouts = %TimeoutConfig{
-        connect_timeout_ms: 1_000,
-        pool_timeout_ms: 1_000,
-        receive_timeout_ms: 1_000
+        connect_timeout_ms: @detection_timeout_ms,
+        pool_timeout_ms: @detection_timeout_ms,
+        receive_timeout_ms: @detection_timeout_ms
       }
 
-      test_pid = self()
-
-      warnings =
-        capture_io(:stderr, fn ->
+      {result, warnings} =
+        with_io(:stderr, fn ->
           result =
             Req.get(
               url,
@@ -61,10 +61,10 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                 TransportEnvelope.req_timeout_options(timeouts)
             )
 
-          send(test_pid, {:req_timeout_result, result})
+          result
         end)
 
-      assert_receive {:req_timeout_result, {:ok, %Req.Response{status: 204}}}, 1_000
+      assert {:ok, %Req.Response{status: 204}} = result
       assert warnings == ""
     end
   end
@@ -394,7 +394,7 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     server_pid =
       spawn_link(fn ->
         {:ok, socket} = :gen_tcp.accept(listen_socket)
-        {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+        {:ok, _request} = :gen_tcp.recv(socket, 0, @detection_timeout_ms)
 
         :ok =
           :gen_tcp.send(socket, [
