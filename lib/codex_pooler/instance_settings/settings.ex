@@ -5,7 +5,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   import Ecto.Changeset
 
-  alias CodexPooler.InstanceSettings.{AppSecretCrypto, Defaults}
+  alias CodexPooler.InstanceSettings.{AppSecretCrypto, Defaults, StaticDefaults}
   alias CodexPooler.RouteClass
 
   @primary_key {:singleton, :boolean, autogenerate: false}
@@ -13,8 +13,8 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   @tls_values ~w(always if_available never)
   @decompression_algorithms ~w(gzip deflate zstd)
-  @default_openai_pricing_url Defaults.catalog()["openai_pricing_url"]
-  @default_development Defaults.development()
+  @default_openai_pricing_url StaticDefaults.catalog()["openai_pricing_url"]
+  @default_development StaticDefaults.development()
 
   @gateway_embed_fields [
     :gateway_debug,

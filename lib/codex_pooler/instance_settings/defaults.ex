@@ -3,10 +3,10 @@ defmodule CodexPooler.InstanceSettings.Defaults do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings.Classification
+  alias CodexPooler.InstanceSettings.StaticDefaults
 
   @transcription_max_upload_bytes 26_214_400
   @operator_login_base_url "http://localhost"
-  @openai_pricing_url "https://icoretech.github.io/openai-json-pricing/pricing.json"
   @smtp_from "codex-pooler@example.com"
 
   @spec gateway() :: map()
@@ -67,12 +67,10 @@ defmodule CodexPooler.InstanceSettings.Defaults do
   def operator, do: %{"login_base_url" => @operator_login_base_url}
 
   @spec catalog() :: map()
-  def catalog, do: %{"openai_pricing_url" => @openai_pricing_url}
+  defdelegate catalog(), to: StaticDefaults
 
   @spec development() :: map()
-  def development do
-    %{"impeccable_live_enabled" => false, "account_reconciliation_paused" => false}
-  end
+  defdelegate development(), to: StaticDefaults
 
   @spec mcp() :: map()
   def mcp, do: %{"enabled" => false}
