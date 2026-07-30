@@ -9,12 +9,14 @@ defmodule CodexPooler.Jobs.TokenRefreshRecovery do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @refresh_due UpstreamIdentity.refresh_due_status()
-  @refreshing UpstreamIdentity.refreshing_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
+  @refresh_due IdentityStatus.refresh_due_status()
+  @refreshing IdentityStatus.refreshing_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
   @candidate_statuses [@refresh_due, @refreshing, @refresh_failed]
-  @assignment_active PoolUpstreamAssignment.active_status()
+  @assignment_active AssignmentStatus.active_status()
   @pool_active "active"
   @incomplete_job_states ~w(available scheduled executing retryable)
   @default_limit 100

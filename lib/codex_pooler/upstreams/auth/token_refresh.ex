@@ -11,17 +11,19 @@ defmodule CodexPooler.Upstreams.Auth.TokenRefresh do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @paused UpstreamIdentity.paused_status()
-  @refresh_due UpstreamIdentity.refresh_due_status()
-  @refreshing UpstreamIdentity.refreshing_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
-  @deleted UpstreamIdentity.deleted_status()
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
-  @assignment_ineligible PoolUpstreamAssignment.ineligible_status()
-  @assignment_disabled_health PoolUpstreamAssignment.disabled_health_status()
+  @active IdentityStatus.active_status()
+  @paused IdentityStatus.paused_status()
+  @refresh_due IdentityStatus.refresh_due_status()
+  @refreshing IdentityStatus.refreshing_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
+  @reauth_required IdentityStatus.reauth_required_status()
+  @deleted IdentityStatus.deleted_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
+  @assignment_ineligible AssignmentStatus.ineligible_status()
+  @assignment_disabled_health AssignmentStatus.disabled_health_status()
   @token_refresh_terminal_statuses [@paused, @deleted]
   @token_refresh_candidate_statuses [@active, @refresh_due, @refresh_failed, @refreshing]
   @default_receive_timeout_ms 30_000

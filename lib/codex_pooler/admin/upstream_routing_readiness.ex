@@ -10,10 +10,11 @@ defmodule CodexPooler.Admin.UpstreamRoutingReadiness do
   alias CodexPooler.Admin.{UpstreamCircuitReadiness, UpstreamQuotaReadiness}
   alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
 
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_health_active PoolUpstreamAssignment.active_health_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_health_active AssignmentStatus.active_health_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
   @circuit_blocked_projection %{
     state: "circuit_protection_active",
     label: "Circuit protection active",

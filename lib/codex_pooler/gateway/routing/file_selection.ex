@@ -15,14 +15,15 @@ defmodule CodexPooler.Gateway.Routing.FileSelection do
 
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
-  alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @file_model_identifier "backend-api/files"
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
-  @assignment_health_active PoolUpstreamAssignment.active_health_status()
-  @file_routable_identity_statuses IdentityRouting.file_routable_statuses()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
+  @assignment_health_active AssignmentStatus.active_health_status()
+  @file_routable_identity_statuses IdentityStatus.file_routable_statuses()
 
   @type candidate :: {PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
 

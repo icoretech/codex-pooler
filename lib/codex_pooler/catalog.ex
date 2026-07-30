@@ -19,17 +19,19 @@ defmodule CodexPooler.Catalog do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @active "active"
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
-  @identity_active UpstreamIdentity.active_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
+  @identity_active IdentityStatus.active_status()
   @failed "failed"
   @fresh_catalog_seconds 86_400
   @health_excluded [
-    PoolUpstreamAssignment.cooldown_health_status(),
-    PoolUpstreamAssignment.disabled_health_status(),
-    PoolUpstreamAssignment.errored_health_status()
+    AssignmentStatus.cooldown_health_status(),
+    AssignmentStatus.disabled_health_status(),
+    AssignmentStatus.errored_health_status()
   ]
   @running "running"
   @succeeded "succeeded"

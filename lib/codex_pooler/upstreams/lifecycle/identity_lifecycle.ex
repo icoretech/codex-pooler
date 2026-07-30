@@ -5,10 +5,11 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityLifecycle do
 
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @disabled UpstreamIdentity.disabled_status()
-  @pending UpstreamIdentity.pending_status()
+  @active IdentityStatus.active_status()
+  @disabled IdentityStatus.disabled_status()
+  @pending IdentityStatus.pending_status()
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()

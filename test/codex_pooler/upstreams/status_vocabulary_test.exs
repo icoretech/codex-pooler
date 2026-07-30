@@ -4,6 +4,61 @@ defmodule CodexPooler.Upstreams.StatusVocabularyTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
+
+  test "schemas and routing delegate to the dependency-free status vocabulary" do
+    assert IdentityStatus.statuses() == UpstreamIdentity.statuses()
+
+    assert helper_values(IdentityStatus, [
+             :pending_status,
+             :active_status,
+             :paused_status,
+             :refresh_due_status,
+             :refreshing_status,
+             :refresh_failed_status,
+             :reauth_required_status,
+             :deleted_status,
+             :disabled_status,
+             :errored_status
+           ]) == UpstreamIdentity.statuses()
+
+    assert IdentityStatus.model_routable_statuses() == IdentityRouting.model_routable_statuses()
+    assert IdentityStatus.file_routable_statuses() == IdentityRouting.file_routable_statuses()
+
+    assert AssignmentStatus.statuses() == PoolUpstreamAssignment.statuses()
+    assert AssignmentStatus.health_statuses() == PoolUpstreamAssignment.health_statuses()
+
+    assert AssignmentStatus.eligibility_statuses() ==
+             PoolUpstreamAssignment.eligibility_statuses()
+
+    assert helper_values(AssignmentStatus, [
+             :pending_status,
+             :active_status,
+             :paused_status,
+             :refresh_due_status,
+             :refreshing_status,
+             :refresh_failed_status,
+             :reauth_required_status,
+             :deleted_status,
+             :disabled_status,
+             :errored_status
+           ]) == PoolUpstreamAssignment.statuses()
+
+    assert helper_values(AssignmentStatus, [
+             :unknown_health_status,
+             :active_health_status,
+             :cooldown_health_status,
+             :degraded_health_status,
+             :disabled_health_status,
+             :errored_health_status
+           ]) == PoolUpstreamAssignment.health_statuses()
+
+    assert helper_values(AssignmentStatus, [
+             :eligible_status,
+             :ineligible_status
+           ]) == PoolUpstreamAssignment.eligibility_statuses()
+  end
 
   test "upstream identity exports helpers for every lifecycle status" do
     assert helper_values(UpstreamIdentity, [

@@ -7,20 +7,22 @@ defmodule CodexPooler.Upstreams.Lifecycle.CredentialFencing do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @credential_epoch_key "credential_epoch"
   @probe_sequence_key "usage_probe_sequence"
   @applied_sequence_key "usage_probe_applied_sequence"
   @completed_sequence_key "usage_probe_completed_sequence"
   @provider_auth_recovery_key "provider_auth_recovery"
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
-  @assignment_health_active PoolUpstreamAssignment.active_health_status()
-  @assignment_disabled PoolUpstreamAssignment.disabled_health_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
-  @assignment_ineligible PoolUpstreamAssignment.ineligible_status()
-  @active UpstreamIdentity.active_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
+  @assignment_health_active AssignmentStatus.active_health_status()
+  @assignment_disabled AssignmentStatus.disabled_health_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
+  @assignment_ineligible AssignmentStatus.ineligible_status()
+  @active IdentityStatus.active_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
+  @reauth_required IdentityStatus.reauth_required_status()
 
   @type fence :: %{
           required(:credential_epoch) => pos_integer(),

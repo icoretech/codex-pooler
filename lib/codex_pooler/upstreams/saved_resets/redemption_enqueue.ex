@@ -14,8 +14,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionEnqueue do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
 
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
 
   @spec enqueue_for_scope(

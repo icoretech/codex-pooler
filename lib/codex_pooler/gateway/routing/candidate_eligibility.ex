@@ -12,8 +12,9 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
-  alias CodexPooler.Upstreams.Lifecycle.IdentityRouting
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   defmodule FilterInput do
     @moduledoc false
@@ -101,11 +102,11 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   @compact_support_key "supports_compact_responses"
   @active_model_status "active"
   @health_excluded [
-    PoolUpstreamAssignment.cooldown_health_status(),
-    PoolUpstreamAssignment.disabled_health_status(),
-    PoolUpstreamAssignment.errored_health_status()
+    AssignmentStatus.cooldown_health_status(),
+    AssignmentStatus.disabled_health_status(),
+    AssignmentStatus.errored_health_status()
   ]
-  @visible_identity_statuses IdentityRouting.model_routable_statuses()
+  @visible_identity_statuses IdentityStatus.model_routable_statuses()
 
   @type candidate :: {PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
   @type gateway_error :: Contracts.gateway_error()

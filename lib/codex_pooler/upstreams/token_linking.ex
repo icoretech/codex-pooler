@@ -13,13 +13,15 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @pending UpstreamIdentity.pending_status()
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @eligible PoolUpstreamAssignment.eligible_status()
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
-  @health_active PoolUpstreamAssignment.active_health_status()
+  @active IdentityStatus.active_status()
+  @pending IdentityStatus.pending_status()
+  @assignment_active AssignmentStatus.active_status()
+  @eligible AssignmentStatus.eligible_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
+  @health_active AssignmentStatus.active_health_status()
   @identity_mismatch_message "OAuth account does not match the selected upstream account"
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}

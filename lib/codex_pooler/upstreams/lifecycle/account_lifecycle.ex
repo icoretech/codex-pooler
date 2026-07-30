@@ -12,23 +12,25 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   alias CodexPooler.Upstreams.Secrets
 
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @paused UpstreamIdentity.paused_status()
-  @refresh_due UpstreamIdentity.refresh_due_status()
-  @refreshing UpstreamIdentity.refreshing_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
-  @deleted UpstreamIdentity.deleted_status()
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_paused PoolUpstreamAssignment.paused_status()
-  @assignment_refresh_due PoolUpstreamAssignment.refresh_due_status()
-  @assignment_refresh_failed PoolUpstreamAssignment.refresh_failed_status()
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
-  @eligible PoolUpstreamAssignment.eligible_status()
-  @ineligible PoolUpstreamAssignment.ineligible_status()
-  @health_active PoolUpstreamAssignment.active_health_status()
-  @health_disabled PoolUpstreamAssignment.disabled_health_status()
+  @active IdentityStatus.active_status()
+  @paused IdentityStatus.paused_status()
+  @refresh_due IdentityStatus.refresh_due_status()
+  @refreshing IdentityStatus.refreshing_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
+  @reauth_required IdentityStatus.reauth_required_status()
+  @deleted IdentityStatus.deleted_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_paused AssignmentStatus.paused_status()
+  @assignment_refresh_due AssignmentStatus.refresh_due_status()
+  @assignment_refresh_failed AssignmentStatus.refresh_failed_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
+  @eligible AssignmentStatus.eligible_status()
+  @ineligible AssignmentStatus.ineligible_status()
+  @health_active AssignmentStatus.active_health_status()
+  @health_disabled AssignmentStatus.disabled_health_status()
   @reactivatable_statuses [@active, @paused, @refresh_due, @refresh_failed]
   @reactivatable_assignment_statuses [
     @assignment_active,

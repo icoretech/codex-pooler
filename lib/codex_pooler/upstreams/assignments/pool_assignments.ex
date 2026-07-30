@@ -7,19 +7,21 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
   alias CodexPooler.Repo
 
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @deleted UpstreamIdentity.deleted_status()
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
-  @assignment_disabled PoolUpstreamAssignment.disabled_status()
-  @eligible PoolUpstreamAssignment.eligible_status()
-  @ineligible PoolUpstreamAssignment.ineligible_status()
-  @health_unknown PoolUpstreamAssignment.unknown_health_status()
-  @health_active PoolUpstreamAssignment.active_health_status()
-  @health_cooldown PoolUpstreamAssignment.cooldown_health_status()
-  @health_disabled PoolUpstreamAssignment.disabled_health_status()
-  @pending UpstreamIdentity.pending_status()
+  @active IdentityStatus.active_status()
+  @deleted IdentityStatus.deleted_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
+  @assignment_disabled AssignmentStatus.disabled_status()
+  @eligible AssignmentStatus.eligible_status()
+  @ineligible AssignmentStatus.ineligible_status()
+  @health_unknown AssignmentStatus.unknown_health_status()
+  @health_active AssignmentStatus.active_health_status()
+  @health_cooldown AssignmentStatus.cooldown_health_status()
+  @health_disabled AssignmentStatus.disabled_health_status()
+  @pending IdentityStatus.pending_status()
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type lifecycle_result :: {:ok, map()} | {:error, lifecycle_error()}

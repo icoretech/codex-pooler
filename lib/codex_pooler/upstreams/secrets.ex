@@ -9,11 +9,12 @@ defmodule CodexPooler.Upstreams.Secrets do
   alias CodexPooler.Upstreams.Schemas.EncryptedSecret
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.SecretBox
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @active "active"
-  @deleted UpstreamIdentity.deleted_status()
-  @refresh_due UpstreamIdentity.refresh_due_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
+  @deleted IdentityStatus.deleted_status()
+  @refresh_due IdentityStatus.refresh_due_status()
+  @reauth_required IdentityStatus.reauth_required_status()
   @superseded "superseded"
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()

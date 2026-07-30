@@ -13,10 +13,12 @@ defmodule CodexPooler.Catalog.Sync do
   alias CodexPooler.Upstreams.Schemas.EncryptedSecret
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
-  @identity_active UpstreamIdentity.active_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
+  @identity_active IdentityStatus.active_status()
   @secret_active "active"
   @secret_kind "access_token"
   @cancelled "cancelled"

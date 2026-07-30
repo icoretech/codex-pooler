@@ -9,11 +9,13 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
-  @assignment_health_active PoolUpstreamAssignment.active_health_status()
-  @identity_active UpstreamIdentity.active_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
+  @assignment_health_active AssignmentStatus.active_health_status()
+  @identity_active IdentityStatus.active_status()
 
   @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
 

@@ -19,10 +19,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @identity_deleted UpstreamIdentity.deleted_status()
-  @identity_disabled UpstreamIdentity.disabled_status()
+  @assignment_active AssignmentStatus.active_status()
+  @identity_deleted IdentityStatus.deleted_status()
+  @identity_disabled IdentityStatus.disabled_status()
   @scheduled_expiry_trigger "scheduled_expiry_rescue"
   @known_noop_codes ~w(already_redeemed no_credit nothing_to_reset)
 

@@ -8,9 +8,10 @@ defmodule CodexPooler.Accounting.Metadata do
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
 
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_eligible PoolUpstreamAssignment.eligible_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_eligible AssignmentStatus.eligible_status()
   @usage_not_applicable "not_applicable"
   @redacted "[REDACTED]"
   @sensitive_key_fragments ~w(api_key apikey authorization bearer token access_token refresh_token upstream_token upstream_secret cookie set-cookie secret password prompt messages input output completion content raw_request raw_response body payload file filename audio image transcript transcription upload_url download_url sas_url signed_url auth_json chatgpt_account_id)

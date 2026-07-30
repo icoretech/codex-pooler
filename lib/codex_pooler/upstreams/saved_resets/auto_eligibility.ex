@@ -12,11 +12,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility.Context
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @max_weekly_reset_seconds 7 * 24 * 60 * 60 + 60 * 60
   @last_call_seconds 90 * 60
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @identity_active UpstreamIdentity.active_status()
+  @assignment_active AssignmentStatus.active_status()
+  @identity_active IdentityStatus.active_status()
   @type trigger :: Context.trigger()
   @type context :: Context.t()
   @type validation_result :: :ok | {:noop, String.t()} | {:error, :redemption_in_progress}

@@ -10,7 +10,9 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
 
   import Ecto.Changeset
 
-  @statuses ~w(pending active paused refresh_due refreshing refresh_failed reauth_required deleted disabled errored)
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
+
+  @statuses IdentityStatus.statuses()
   @onboarding_methods ~w(browser device import invite)
   @saved_reset_auto_redeem_trigger_modes ~w(blocked threshold)
   @plan_family_format ~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -129,40 +131,40 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
   end
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: IdentityStatus
 
   @spec onboarding_methods() :: [onboarding_method()]
   def onboarding_methods, do: @onboarding_methods
 
   @spec pending_status() :: status()
-  def pending_status, do: "pending"
+  defdelegate pending_status(), to: IdentityStatus
 
   @spec active_status() :: status()
-  def active_status, do: "active"
+  defdelegate active_status(), to: IdentityStatus
 
   @spec paused_status() :: status()
-  def paused_status, do: "paused"
+  defdelegate paused_status(), to: IdentityStatus
 
   @spec refresh_due_status() :: status()
-  def refresh_due_status, do: "refresh_due"
+  defdelegate refresh_due_status(), to: IdentityStatus
 
   @spec refreshing_status() :: status()
-  def refreshing_status, do: "refreshing"
+  defdelegate refreshing_status(), to: IdentityStatus
 
   @spec refresh_failed_status() :: status()
-  def refresh_failed_status, do: "refresh_failed"
+  defdelegate refresh_failed_status(), to: IdentityStatus
 
   @spec reauth_required_status() :: status()
-  def reauth_required_status, do: "reauth_required"
+  defdelegate reauth_required_status(), to: IdentityStatus
 
   @spec deleted_status() :: status()
-  def deleted_status, do: "deleted"
+  defdelegate deleted_status(), to: IdentityStatus
 
   @spec disabled_status() :: status()
-  def disabled_status, do: "disabled"
+  defdelegate disabled_status(), to: IdentityStatus
 
   @spec errored_status() :: status()
-  def errored_status, do: "errored"
+  defdelegate errored_status(), to: IdentityStatus
 
   defp normalize_token(value) when is_binary(value) do
     value

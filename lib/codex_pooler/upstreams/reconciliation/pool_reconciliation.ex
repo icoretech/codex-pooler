@@ -16,14 +16,16 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @active UpstreamIdentity.active_status()
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @eligible PoolUpstreamAssignment.eligible_status()
-  @assignment_ineligible PoolUpstreamAssignment.ineligible_status()
-  @health_active PoolUpstreamAssignment.active_health_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
+  @active IdentityStatus.active_status()
+  @assignment_active AssignmentStatus.active_status()
+  @eligible AssignmentStatus.eligible_status()
+  @assignment_ineligible AssignmentStatus.ineligible_status()
+  @health_active AssignmentStatus.active_health_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
+  @reauth_required IdentityStatus.reauth_required_status()
   # Auth-shaped rejections must surface instead of silently reusing
   # persisted windows. A 429 is deliberately absent: being told to slow
   # down does not invalidate a snapshot refreshed within its usable window,

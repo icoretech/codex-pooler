@@ -29,8 +29,11 @@ defmodule CodexPooler.Upstreams do
     UpstreamIdentity
   }
 
-  @deleted UpstreamIdentity.deleted_status()
-  @assignment_deleted PoolUpstreamAssignment.deleted_status()
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
+
+  @deleted IdentityStatus.deleted_status()
+  @assignment_deleted AssignmentStatus.deleted_status()
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type lifecycle_result :: {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()

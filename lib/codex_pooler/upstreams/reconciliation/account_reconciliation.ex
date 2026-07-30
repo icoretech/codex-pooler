@@ -13,17 +13,19 @@ defmodule CodexPooler.Upstreams.Reconciliation.AccountReconciliation do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @stale_after_seconds 25 * 60
   @successful_partial_codes ~w(catalog_sync_failed catalog_sync_in_progress)
   @catalog_sync_skipped_triggers ~w(scheduled gateway)
-  @active UpstreamIdentity.active_status()
-  @paused UpstreamIdentity.paused_status()
-  @refresh_failed UpstreamIdentity.refresh_failed_status()
-  @reauth_required UpstreamIdentity.reauth_required_status()
-  @assignment_active PoolUpstreamAssignment.active_status()
-  @assignment_paused PoolUpstreamAssignment.paused_status()
-  @assignment_reauth_required PoolUpstreamAssignment.reauth_required_status()
+  @active IdentityStatus.active_status()
+  @paused IdentityStatus.paused_status()
+  @refresh_failed IdentityStatus.refresh_failed_status()
+  @reauth_required IdentityStatus.reauth_required_status()
+  @assignment_active AssignmentStatus.active_status()
+  @assignment_paused AssignmentStatus.paused_status()
+  @assignment_reauth_required AssignmentStatus.reauth_required_status()
 
   @type orchestration_result :: {:ok, map()} | {:error, term()}
   @type operation_clock :: (-> DateTime.t())

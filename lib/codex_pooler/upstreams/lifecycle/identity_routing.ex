@@ -2,14 +2,10 @@ defmodule CodexPooler.Upstreams.Lifecycle.IdentityRouting do
   @moduledoc false
 
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
-  @model_routable_statuses [
-    UpstreamIdentity.active_status(),
-    UpstreamIdentity.refreshing_status()
-  ]
-  @file_routable_statuses [
-    UpstreamIdentity.active_status()
-  ]
+  @model_routable_statuses IdentityStatus.model_routable_statuses()
+  @file_routable_statuses IdentityStatus.file_routable_statuses()
 
   @type status_or_identity :: UpstreamIdentity.t() | UpstreamIdentity.status() | nil
 
