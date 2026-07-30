@@ -32,7 +32,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
           required(:max_compressed_body_bytes) => pos_integer(),
           required(:max_decompressed_body_bytes) => pos_integer(),
           required(:max_decompression_ratio) => pos_integer(),
-          required(:decompression_timeout_ms) => pos_integer()
+          required(:decompression_timeout_ms) => pos_integer(),
+          optional(atom()) => term()
         }
   @type read_result ::
           {:ok, binary(), Plug.Conn.t()}
