@@ -80,6 +80,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              estimated_input_tokens: input_tokens,
              estimated_output_tokens: output_tokens,
              estimated_total_tokens: total_tokens,
+             reservation_estimate: reservation_estimate,
              quota_window_dimension_keys: quota_window_dimension_keys
            } = route_state.reservation_snapshot_inputs
 
@@ -93,6 +94,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
                :pool_id,
                :quota_window_dimension_keys,
                :request_class,
+               :reservation_estimate,
                :route_class
              ]
 
@@ -102,6 +104,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert input_tokens >= 1
     assert output_tokens == 512
     assert total_tokens == input_tokens + output_tokens
+    assert reservation_estimate.input_tokens == input_tokens
+    assert reservation_estimate.output_tokens == output_tokens
+    assert reservation_estimate.total_tokens == total_tokens
 
     assert Enum.map(quota_window_dimension_keys, & &1.policy_field) == [
              "max_requests_per_minute",

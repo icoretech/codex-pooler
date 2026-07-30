@@ -182,21 +182,38 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp execute_visible_model(auth, endpoint, payload, request_options, model, visible_model_data) do
     case PreDispatch.prepare(auth, endpoint, payload, request_options, model, visible_model_data) do
       {:ok, prepared} ->
-        execute_session_routable_model(
-          auth,
-          endpoint,
-          payload,
-          prepared.request_options,
-          model,
-          prepared.candidates,
-          prepared.route_state
-        )
+        case claim_explicit_websocket_turn(
+               auth,
+               model,
+               payload,
+               endpoint,
+               prepared.request_options,
+               prepared.route_state
+             ) do
+          {:ok, turn_claim} ->
+            execute_session_routable_model(
+              auth,
+              endpoint,
+              payload,
+              prepared.request_options,
+              model,
+              prepared.candidates,
+              prepared.route_state,
+              turn_claim
+            )
+
+          {:error, %{code: :duplicate_request}} ->
+            {:error, duplicate_turn_error()}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, %{code: "duplicate_turn"} = reason} ->
         {:error, reason}
 
       {:error, %{code: _code} = reason} ->
-        Denials.log_gateway(
+        log_gateway_denial(
           denial_context(auth, model, reason, endpoint, payload, request_options)
         )
     end
@@ -209,13 +226,13 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          request_options,
          model,
          candidates,
-         %RouteState{} = route_state
+         %RouteState{} = route_state,
+         turn_claim
        ) do
     request_options =
       RequestOptions.put_routing(request_options, reset_probe: ResetProbe.new())
 
-    with :ok <- SessionContinuity.ensure_unique_turn(request_options),
-         {:ok, candidates, request_options, route_state} <-
+    with {:ok, candidates, request_options, route_state} <-
            route_filter_input(
              auth,
              model,
@@ -232,7 +249,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
              route_state
            ),
          {:ok, reserved} <-
-           reserve_and_start_turn(auth, model, payload, endpoint, request_options, route_state) do
+           reserve_and_start_turn(
+             auth,
+             model,
+             payload,
+             endpoint,
+             request_options,
+             route_state,
+             turn_claim
+           ) do
       dispatch_candidates(
         auth,
         endpoint,
@@ -248,11 +273,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         {:error, reason}
 
       {:error, {:reset_probe_scope_mismatch, reason}} ->
-        {:error, reason}
+        reject_claimed_turn(
+          auth,
+          model,
+          reason,
+          endpoint,
+          payload,
+          request_options,
+          turn_claim
+        )
 
       {:error, %{code: _code} = reason} ->
         Denials.log_gateway(
-          denial_context(auth, model, reason, endpoint, payload, request_options)
+          denial_context(auth, model, reason, endpoint, payload, request_options),
+          turn_claim
         )
     end
   end
@@ -370,19 +404,84 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     }
   end
 
+  defp log_gateway_denial(%Denials.Context{} = context), do: Denials.log_gateway(context)
+
+  defp reject_claimed_turn(
+         _auth,
+         _model,
+         reason,
+         _endpoint,
+         _payload,
+         _request_options,
+         nil
+       ),
+       do: {:error, reason}
+
+  defp reject_claimed_turn(
+         auth,
+         model,
+         reason,
+         endpoint,
+         payload,
+         request_options,
+         turn_claim
+       ) do
+    Denials.log_gateway(
+      denial_context(auth, model, reason, endpoint, payload, request_options),
+      turn_claim
+    )
+  end
+
+  defp claim_explicit_websocket_turn(
+         auth,
+         model,
+         payload,
+         endpoint,
+         %RequestOptions{
+           transport: %{transport: "websocket"},
+           continuity: %{codex_turn_id: turn_id}
+         } = request_options,
+         %RouteState{} = route_state
+       )
+       when is_binary(turn_id) do
+    attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
+
+    case Accounting.claim_websocket_turn(auth, model, attrs) do
+      {:ok, %{request: request}} -> {:ok, request}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{},
+         %RouteState{}
+       ),
+       do: {:ok, nil}
+
   defp reserve(
          auth,
          model,
          payload,
          endpoint,
          %RequestOptions{} = request_options,
-         %RouteState{} = route_state
+         %RouteState{} = route_state,
+         turn_claim
        ) do
+    attrs =
+      auth
+      |> AccountingReservation.attrs(payload, endpoint, request_options, route_state)
+      |> Map.put(:reservation_estimate, AccountingReservation.reservation_estimate(route_state))
+      |> Map.put(:turn_claim, turn_claim)
+
     Accounting.reserve(
       auth,
       model,
       payload,
-      AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
+      attrs
     )
   end
 
@@ -392,11 +491,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          payload,
          endpoint,
          %RequestOptions{} = request_options,
-         %RouteState{} = route_state
+         %RouteState{} = route_state,
+         turn_claim
        ) do
     Repo.transaction(fn ->
       with {:ok, reserved} <-
-             reserve(auth, model, payload, endpoint, request_options, route_state),
+             reserve(auth, model, payload, endpoint, request_options, route_state, turn_claim),
            {:ok, reserved} <- SessionContinuity.start_turn(reserved, request_options) do
         reserved
       else

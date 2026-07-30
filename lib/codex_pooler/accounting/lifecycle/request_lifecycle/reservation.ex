@@ -1,6 +1,8 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   @moduledoc false
 
+  import Ecto.Query
+
   alias CodexPooler.Accounting.{
     Metadata,
     PricingResolution,
@@ -15,6 +17,48 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   @usage_pending "usage_pending"
   @usage_not_applicable "not_applicable"
+
+  @spec claim_websocket_turn(
+          CodexPooler.Access.auth_context(),
+          Model.t(),
+          map()
+        ) :: {:ok, map()} | {:error, Metadata.accounting_error()}
+  def claim_websocket_turn(%{pool: pool, api_key: api_key}, %Model{} = model, opts) do
+    timestamp = now(opts)
+
+    Repo.transaction(fn ->
+      request =
+        %Request{
+          pool_id: pool.id,
+          api_key_id: api_key.id,
+          model_id: model.id,
+          requested_model: attr(opts, :requested_model) || model.exposed_model_id,
+          endpoint: attr(opts, :endpoint),
+          transport: "websocket",
+          status: "accepted",
+          usage_status: @usage_pending,
+          correlation_id: attr(opts, :correlation_id),
+          idempotency_key: nil,
+          client_ip: blank_to_nil(attr(opts, :client_ip)),
+          user_agent: blank_to_nil(attr(opts, :user_agent)),
+          request_metadata: Metadata.sanitize_metadata(attr(opts, :request_metadata) || %{}),
+          admitted_at: timestamp,
+          retry_count: 0
+        }
+        |> Repo.insert!()
+
+      RequestLogFacts.record_request_created!(request)
+      %{request: request}
+    end)
+    |> unwrap_transaction()
+  rescue
+    error in Ecto.ConstraintError ->
+      if error.constraint == "requests_correlation_id_uq" do
+        {:error, Metadata.accounting_error(:duplicate_request, "request was already recorded")}
+      else
+        reraise(error, __STACKTRACE__)
+      end
+  end
 
   @spec reserve_for_model(CodexPooler.Access.auth_context(), Model.t(), map(), map()) ::
           {:ok, map()} | {:error, Metadata.accounting_error()}
@@ -34,7 +78,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           effective_model
         )
 
-      {:ok, estimate} = PricingResolution.reservation_estimate(payload, pricing.snapshot, policy)
+      {:ok, estimate} =
+        PricingResolution.reservation_estimate(
+          payload,
+          pricing.snapshot,
+          policy,
+          attr(opts, :reservation_estimate)
+        )
 
       case ReservationPolicy.enforce_reservation_limits(api_key, policy, estimate, timestamp) do
         :ok -> :ok
@@ -88,35 +138,80 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     reason = attr(opts, :last_error_code) || "policy_denied"
 
     Repo.transaction(fn ->
-      request =
-        %Request{
-          pool_id: pool.id,
-          api_key_id: api_key.id,
-          model_id: model && model.id,
-          requested_model:
-            blank_to_nil(requested_model) || (model && model.exposed_model_id) || endpoint,
+      attrs =
+        denied_request_attrs(%{
+          auth: auth,
+          pool: pool,
+          api_key: api_key,
+          model: model,
+          requested_model: requested_model,
           endpoint: endpoint,
           transport: transport,
-          status: "rejected",
-          usage_status: @usage_not_applicable,
-          correlation_id: attr(opts, :correlation_id) || Ecto.UUID.generate(),
-          idempotency_key: nil,
-          client_ip: blank_to_nil(attr(opts, :client_ip)),
-          user_agent: blank_to_nil(attr(opts, :user_agent)),
-          request_metadata: denied_request_metadata(auth, opts),
-          admitted_at: timestamp,
-          completed_at: timestamp,
-          response_status_code: attr(opts, :response_status_code),
-          retry_count: 0,
-          last_error_code: to_string(reason)
-        }
-        |> Repo.insert!()
+          reason: reason,
+          timestamp: timestamp,
+          opts: opts
+        })
+
+      request = insert_or_update_claimed_request!(attrs, attr(opts, :turn_claim))
 
       RequestLogFacts.record_request_created!(request)
 
       %{request: request}
     end)
     |> unwrap_transaction()
+  end
+
+  defp denied_request_attrs(context) do
+    %{
+      pool_id: context.pool.id,
+      api_key_id: context.api_key.id,
+      model_id: context.model && context.model.id,
+      requested_model:
+        blank_to_nil(context.requested_model) ||
+          (context.model && context.model.exposed_model_id) || context.endpoint,
+      endpoint: context.endpoint,
+      transport: context.transport,
+      status: "rejected",
+      usage_status: @usage_not_applicable,
+      correlation_id: attr(context.opts, :correlation_id) || Ecto.UUID.generate(),
+      idempotency_key: nil,
+      client_ip: blank_to_nil(attr(context.opts, :client_ip)),
+      user_agent: blank_to_nil(attr(context.opts, :user_agent)),
+      request_metadata: denied_request_metadata(context.auth, context.opts),
+      admitted_at: context.timestamp,
+      completed_at: context.timestamp,
+      response_status_code: attr(context.opts, :response_status_code),
+      retry_count: 0,
+      last_error_code: to_string(context.reason)
+    }
+  end
+
+  defp insert_or_update_claimed_request!(attrs, %Request{} = turn_claim),
+    do: update_claimed_request!(turn_claim, attrs)
+
+  defp insert_or_update_claimed_request!(attrs, nil) do
+    %Request{}
+    |> Ecto.Changeset.change(attrs)
+    |> Repo.insert!()
+  end
+
+  defp update_claimed_request!(%Request{id: request_id}, attrs) do
+    request =
+      Repo.one!(
+        from request in Request,
+          where: request.id == ^request_id,
+          lock: "FOR UPDATE"
+      )
+
+    if request.status == "accepted" do
+      request
+      |> Ecto.Changeset.change(Map.delete(attrs, :admitted_at))
+      |> Repo.update!()
+    else
+      Repo.rollback(
+        Metadata.accounting_error(:request_already_finalized, "request was already finalized")
+      )
+    end
   end
 
   defp insert_reserved_request!(context) do
@@ -130,7 +225,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         context.pricing
       )
 
-    %Request{
+    attrs = %{
       pool_id: context.pool.id,
       api_key_id: context.api_key.id,
       model_id: context.model.id,
@@ -150,7 +245,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
       service_tier: settings_snapshot.service_tier,
       admitted_at: context.timestamp
     }
-    |> Repo.insert!()
+
+    case attr(context.opts, :turn_claim) do
+      %Request{} = turn_claim ->
+        update_claimed_request!(turn_claim, attrs)
+
+      nil ->
+        %Request{}
+        |> Ecto.Changeset.change(attrs)
+        |> Repo.insert!()
+    end
   end
 
   defp reserve_metadata(auth, pricing, estimate, opts) do

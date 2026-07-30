@@ -69,6 +69,20 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
       {:error,
        Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
 
+  @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
+  def claim_websocket_turn(%{pool: _pool, api_key: _api_key} = auth, model_or_id, opts) do
+    case normalize_model(model_or_id) do
+      %Model{} = model -> Reservation.claim_websocket_turn(auth, model, opts)
+      nil -> {:error, Metadata.accounting_error(:model_not_found, "model was not found")}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def claim_websocket_turn(_auth, _model_or_id, _opts),
+    do:
+      {:error,
+       Metadata.accounting_error(:invalid_request, "authenticated pool and api key are required")}
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   def record_denied_request(auth, model_or_id, opts \\ %{})
 

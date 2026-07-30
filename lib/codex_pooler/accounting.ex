@@ -31,6 +31,9 @@ defmodule CodexPooler.Accounting do
   @spec reserve(auth(), model_ref(), map(), map()) :: request_result()
   defdelegate reserve(auth, model_or_id, payload, opts \\ %{}), to: RequestLifecycle
 
+  @spec claim_websocket_turn(auth(), model_ref(), map()) :: request_result()
+  defdelegate claim_websocket_turn(auth, model_or_id, opts), to: RequestLifecycle
+
   @spec record_denied_request(auth(), model_ref(), map()) :: request_result()
   defdelegate record_denied_request(auth, model_or_id, opts \\ %{}), to: RequestLifecycle
 

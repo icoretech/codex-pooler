@@ -609,6 +609,47 @@ defmodule CodexPooler.AccountingTest do
                Accounting.recover_stale_reservations(now)
     end
 
+    test "terminalizes stale websocket turn claims without releasing their identity" do
+      setup = accounting_setup()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      stale_admitted_at = DateTime.add(now, -7, :hour)
+      turn_id = "stale-turn-claim-#{System.unique_integer([:positive, :monotonic])}"
+
+      assert {:ok, %{request: claimed_request}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: turn_id,
+                 now: stale_admitted_at
+               })
+
+      assert {:ok,
+              %{
+                stale_turn_claims_recovered: 1,
+                stale_reservations_released: 0,
+                stale_reservations_settled: 0
+              }} = Accounting.recover_stale_reservations(now)
+
+      assert %CodexPooler.Accounting.Request{
+               status: "failed",
+               usage_status: "not_applicable",
+               response_status_code: 499,
+               last_error_code: "stale_websocket_turn_claim_recovered",
+               completed_at: ^now,
+               correlation_id: ^turn_id
+             } = Repo.reload!(claimed_request)
+
+      assert Accounting.list_ledger_entries_for_request(claimed_request.id) == []
+
+      assert {:error, %{code: :duplicate_request}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: turn_id
+               })
+
+      assert {:ok, %{stale_turn_claims_recovered: 0}} =
+               Accounting.recover_stale_reservations(now)
+    end
+
     test "settles stale dispatched reservations from reserved estimate when usage is unknown" do
       setup = accounting_setup()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

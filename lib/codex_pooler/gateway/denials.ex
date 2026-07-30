@@ -53,15 +53,20 @@ defmodule CodexPooler.Gateway.Denials do
     {:error, error(status, reason_code, message)}
   end
 
-  @spec log_gateway(Context.t()) :: {:error, map()}
-  def log_gateway(%Context{
-        auth: auth,
-        model: model,
-        reason: %{code: code, message: message} = reason,
-        endpoint: endpoint,
-        payload: payload,
-        opts: opts
-      }) do
+  @spec log_gateway(Context.t(), CodexPooler.Accounting.Request.t() | nil) :: {:error, map()}
+  def log_gateway(context, turn_claim \\ nil)
+
+  def log_gateway(
+        %Context{
+          auth: auth,
+          model: model,
+          reason: %{code: code, message: message} = reason,
+          endpoint: endpoint,
+          payload: payload,
+          opts: opts
+        },
+        turn_claim
+      ) do
     status = Map.get(reason, :status) || 400
     reason_code = to_string(code)
     request_options = request_options(opts, endpoint, payload)
@@ -80,6 +85,7 @@ defmodule CodexPooler.Gateway.Denials do
           reason_code,
           %{"gateway_denial" => gateway_metadata(reason_code, message, reason)}
         )
+        |> maybe_put_turn_claim(turn_claim)
         |> update_in([:request_metadata], fn metadata ->
           metadata
           |> SessionContinuity.put_session_metadata(request_options)
@@ -90,6 +96,9 @@ defmodule CodexPooler.Gateway.Denials do
 
     {:error, reason}
   end
+
+  defp maybe_put_turn_claim(attrs, nil), do: attrs
+  defp maybe_put_turn_claim(attrs, request), do: Map.put(attrs, :turn_claim, request)
 
   @spec enforced_model_metadata(RequestOptions.t()) :: String.t() | nil
   def enforced_model_metadata(%RequestOptions{

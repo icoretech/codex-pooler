@@ -5,6 +5,7 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.LedgerEntry
+  alias CodexPooler.Accounting.PricingResolution
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
@@ -424,6 +425,34 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
 
       assert snapshot_inputs.estimated_total_tokens ==
                snapshot_inputs.estimated_input_tokens + snapshot_inputs.estimated_output_tokens
+
+      assert snapshot_inputs.reservation_estimate.input_tokens ==
+               snapshot_inputs.estimated_input_tokens
+    end
+
+    test "precomputed estimate is reused while locked policy remains authoritative" do
+      setup = accounting_setup()
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: 60,
+        max_tokens_per_day: 10_000,
+        max_tokens_per_week: 10_000,
+        max_output_tokens_per_request: 1_024
+      })
+
+      payload = %{"model" => setup.model.exposed_model_id, "input" => "reuse estimate"}
+
+      {:ok, precomputed} = PricingResolution.reservation_estimate(payload, nil, nil)
+
+      assert {:ok, reserved} =
+               Accounting.reserve(setup.auth, setup.model, payload, %{
+                 correlation_id: "corr-precomputed-locked-policy",
+                 reservation_estimate: precomputed
+               })
+
+      assert reserved.estimate.input_tokens == precomputed.input_tokens
+      assert reserved.estimate.output_tokens == 1_024
+      assert reserved.reservation.output_tokens == 1_024
     end
 
     test "concurrent token reservations near limit cannot oversubscribe with tiny caps" do

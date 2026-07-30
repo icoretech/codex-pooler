@@ -99,8 +99,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     |> Map.put(:estimated_input_tokens, estimate.input_tokens)
     |> Map.put(:estimated_output_tokens, estimate.output_tokens)
     |> Map.put(:estimated_total_tokens, estimate.total_tokens)
+    |> Map.put(:reservation_estimate, estimate)
     |> Map.put(:quota_window_dimension_keys, quota_window_dimension_keys(api_key.id))
   end
+
+  @spec reservation_estimate(RouteState.t()) :: map() | nil
+  def reservation_estimate(%RouteState{
+        reservation_snapshot_inputs: %{reservation_estimate: estimate}
+      }),
+      do: estimate
+
+  def reservation_estimate(%RouteState{}), do: nil
 
   defp accounting_endpoint(
          _endpoint,

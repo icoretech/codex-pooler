@@ -44,6 +44,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           required(:estimated_input_tokens) => non_neg_integer(),
           required(:estimated_output_tokens) => non_neg_integer(),
           required(:estimated_total_tokens) => non_neg_integer(),
+          required(:reservation_estimate) => map(),
           required(:quota_window_dimension_keys) => [map()]
         }
   @type extensions :: %{optional(atom() | String.t()) => term()}

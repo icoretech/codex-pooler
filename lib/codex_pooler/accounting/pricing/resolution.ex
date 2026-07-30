@@ -40,7 +40,15 @@ defmodule CodexPooler.Accounting.PricingResolution do
     requested_tier = requested_service_tier(payload, opts)
     actual_tier = actual_service_tier(%{}, opts)
     batch_usage? = explicit_batch_usage?(payload, opts)
-    price_bucket = Costing.price_bucket(payload)
+
+    price_bucket =
+      case attr(opts, :reservation_estimate) do
+        %{input_tokens: input_tokens} when is_integer(input_tokens) ->
+          Costing.price_bucket_for_input_tokens(input_tokens)
+
+        _estimate ->
+          Costing.price_bucket(payload)
+      end
 
     lookup_for_tier(
       model,
@@ -107,8 +115,8 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
   def latest_snapshot_for_request(%Request{}, nil), do: nil
 
-  @spec reservation_estimate(map(), struct() | nil, term()) :: {:ok, map()}
-  defdelegate reservation_estimate(payload, snapshot, policy), to: Costing
+  @spec reservation_estimate(map(), struct() | nil, term(), map() | nil) :: {:ok, map()}
+  defdelegate reservation_estimate(payload, snapshot, policy, precomputed \\ nil), to: Costing
 
   @spec cost_micros(struct() | nil, map()) :: Decimal.t() | nil
   defdelegate cost_micros(snapshot, usage), to: Costing

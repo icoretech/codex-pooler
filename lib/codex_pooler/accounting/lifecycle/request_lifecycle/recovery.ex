@@ -14,6 +14,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
   @terminal_request_statuses ~w(succeeded failed rejected cancelled)
   @open_attempt_statuses ~w(queued in_progress)
   @recovery_code "stale_reservation_recovered"
+  @turn_claim_recovery_code "stale_websocket_turn_claim_recovered"
   @terminal_attempt_recovery_code "terminal_request_attempt_recovered"
   @recovery_source "stale_reservation_recovery"
 
@@ -22,6 +23,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
            %{
              required(:stale_reservations_released) => non_neg_integer(),
              required(:stale_reservations_settled) => non_neg_integer(),
+             required(:stale_turn_claims_recovered) => non_neg_integer(),
              required(:stale_terminal_attempts_recovered) => non_neg_integer()
            }}
           | {:error, term()}
@@ -32,14 +34,80 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
     limit = Keyword.get(opts, :limit, 100)
 
     with {:ok, summary} <-
+           cutoff
+           |> stale_turn_claims(limit)
+           |> Enum.reduce_while({:ok, initial_summary()}, &recover_turn_claim(&1, &2, now)),
+         {:ok, summary} <-
            now
            |> stale_requests(cutoff, limit)
-           |> Enum.reduce_while({:ok, initial_summary()}, &recover_request(&1, &2, now)) do
+           |> Enum.reduce_while({:ok, summary}, &recover_request(&1, &2, now)) do
       cutoff
       |> stale_terminal_attempts(limit)
       |> Enum.reduce_while({:ok, summary}, &recover_terminal_attempt(&1, &2, now))
     end
   end
+
+  defp stale_turn_claims(cutoff, limit) do
+    Repo.all(
+      from request in Request,
+        left_join: reservation in LedgerEntry,
+        on:
+          reservation.request_id == request.id and reservation.entry_kind == "reservation" and
+            reservation.amount_status == "recorded",
+        where:
+          request.status == "accepted" and request.transport == "websocket" and
+            request.admitted_at <= ^cutoff and is_nil(reservation.id),
+        order_by: [asc: request.admitted_at, asc: request.id],
+        limit: ^limit,
+        select: request
+    )
+  end
+
+  defp recover_turn_claim(request, {:ok, summary}, now) do
+    case recover_turn_claim(request, now) do
+      {:ok, :recovered} -> {:cont, {:ok, increment(summary, :stale_turn_claims_recovered)}}
+      {:ok, :noop} -> {:cont, {:ok, summary}}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp recover_turn_claim(%Request{id: request_id}, now) do
+    Repo.transaction(fn ->
+      request =
+        Repo.one!(
+          from locked_request in Request,
+            where: locked_request.id == ^request_id,
+            lock: "FOR UPDATE"
+        )
+
+      if stale_turn_claim?(request) do
+        request
+        |> Ecto.Changeset.change(%{
+          status: "failed",
+          usage_status: "not_applicable",
+          completed_at: now,
+          response_status_code: 499,
+          last_error_code: @turn_claim_recovery_code
+        })
+        |> Repo.update!()
+
+        :recovered
+      else
+        :noop
+      end
+    end)
+  end
+
+  defp stale_turn_claim?(%Request{id: request_id, status: "accepted", transport: "websocket"}) do
+    not Repo.exists?(
+      from entry in LedgerEntry,
+        where:
+          entry.request_id == ^request_id and entry.entry_kind == "reservation" and
+            entry.amount_status == "recorded"
+    )
+  end
+
+  defp stale_turn_claim?(%Request{}), do: false
 
   defp stale_requests(now, cutoff, limit) do
     Repo.all(
@@ -204,6 +272,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Recovery do
     %{
       stale_reservations_released: 0,
       stale_reservations_settled: 0,
+      stale_turn_claims_recovered: 0,
       stale_terminal_attempts_recovered: 0
     }
   end

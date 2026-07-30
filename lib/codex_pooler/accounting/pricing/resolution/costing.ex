@@ -12,10 +12,14 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
   @default_output_reservation_tokens 512
   @opaque_context_output_reservation_tokens 2_048
 
-  @spec reservation_estimate(map(), struct() | nil, term()) :: {:ok, map()}
-  def reservation_estimate(payload, snapshot, policy) do
-    input_tokens = estimate_input_tokens(payload)
-    output_tokens = output_reservation_tokens(payload, snapshot, policy)
+  @spec reservation_estimate(map(), struct() | nil, term(), map() | nil) :: {:ok, map()}
+  def reservation_estimate(payload, snapshot, policy, precomputed \\ nil) do
+    input_tokens = precomputed_input_tokens(precomputed) || estimate_input_tokens(payload)
+
+    output_tokens =
+      precomputed_output_tokens(precomputed) || output_reservation_tokens(payload, snapshot, nil)
+
+    output_tokens = max(output_tokens, policy_output_tokens(policy))
     total_tokens = input_tokens + output_tokens
 
     {:ok,
@@ -113,6 +117,25 @@ defmodule CodexPooler.Accounting.PricingResolution.Costing do
     |> Enum.reject(&is_nil/1)
     |> Enum.max()
   end
+
+  defp precomputed_input_tokens(%{input_tokens: input_tokens}) when is_integer(input_tokens),
+    do: input_tokens
+
+  defp precomputed_input_tokens(_precomputed), do: nil
+
+  defp precomputed_output_tokens(%{output_tokens: output_tokens}) when is_integer(output_tokens),
+    do: output_tokens
+
+  defp precomputed_output_tokens(_precomputed), do: nil
+
+  defp policy_output_tokens(%{max_output_tokens_per_request: output_tokens})
+       when is_integer(output_tokens),
+       do: output_tokens
+
+  defp policy_output_tokens(%{max_output_tokens_per_request: %Decimal{} = output_tokens}),
+    do: decimal_to_integer(output_tokens)
+
+  defp policy_output_tokens(_policy), do: 0
 
   defp conservative_output_default(payload) do
     if opaque_context_request?(payload),

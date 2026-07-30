@@ -73,12 +73,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_model_context
       )
       when is_list(visible_models) do
+    has_input_image? = CandidateEligibility.payload_has_input_image?(payload)
+
     with :ok <- authorize_model_policy(auth, model, endpoint, payload, request_options),
          {:ok, request_options} <-
            resolve_reasoning_effort(auth, model, payload, request_options),
          {:ok, request_options} <-
            SessionContinuity.attach_file_affinity(auth, endpoint, payload, request_options),
-         :ok <- ensure_model_supports(model, endpoint, payload, request_options),
+         :ok <- ensure_model_supports(model, endpoint, payload, request_options, has_input_image?),
          :ok <- StrictSchema.validate(payload),
          :ok <- InputShape.validate(payload),
          {:ok, request_options, effective_model_serving_modes} <-
@@ -109,6 +111,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
                model: model,
                endpoint: endpoint,
                payload: payload,
+               has_input_image?: has_input_image?,
                request_options: request_options,
                candidates: candidate_snapshots
              })
@@ -315,12 +318,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          %Model{},
          "/backend-api/transcribe",
          _payload,
-         %RequestOptions{payload_context: %{forced_transcription_model: model}}
+         %RequestOptions{payload_context: %{forced_transcription_model: model}},
+         _has_input_image?
        )
        when is_binary(model),
        do: :ok
 
-  defp ensure_model_supports(%Model{} = model, "/backend-api/transcribe", _payload, _opts) do
+  defp ensure_model_supports(
+         %Model{} = model,
+         "/backend-api/transcribe",
+         _payload,
+         _opts,
+         _has_input_image?
+       ) do
     if ModelMetadata.has_capability_evidence?(model) and
          not ModelMetadata.supports_audio_transcription?(model) do
       {:error,
@@ -335,7 +345,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp ensure_model_supports(%Model{} = model, _endpoint, payload, _opts) do
+  defp ensure_model_supports(%Model{} = model, _endpoint, payload, _opts, has_input_image?) do
     cond do
       not model.supports_responses ->
         {:error,
@@ -345,7 +355,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         {:error,
          error(400, "unsupported_model_capability", "model does not support streaming", "stream")}
 
-      CandidateEligibility.payload_has_input_image?(payload) and
+      has_input_image? and
         ModelMetadata.has_capability_evidence?(model) and
           not ModelMetadata.supports_image_input?(ModelMetadata.metadata(model)) ->
         {:error,
