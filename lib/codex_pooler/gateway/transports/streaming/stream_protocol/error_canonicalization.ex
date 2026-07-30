@@ -82,11 +82,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   def canonicalize_codex_responses_json_message(data) when is_binary(data) do
     case Jason.decode(data) do
       {:ok, %{} = decoded} ->
-        canonicalize_codex_responses_json_decoded_message(decoded, data)
+        {canonical, _decoded} = canonicalize_codex_responses_json_message(data, decoded)
+        canonical
 
       _other ->
         data
     end
+  end
+
+  @spec canonicalize_codex_responses_json_message(binary(), map()) :: {binary(), map()}
+  def canonicalize_codex_responses_json_message(data, decoded)
+      when is_binary(data) and is_map(decoded) do
+    canonicalize_codex_responses_json_decoded_message(decoded, data)
   end
 
   @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
@@ -101,6 +108,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
       _other ->
         canonicalize_codex_responses_json_message(data)
+    end
+  end
+
+  @spec canonicalize_native_codex_responses_json_message(binary(), map()) :: {binary(), map()}
+  def canonicalize_native_codex_responses_json_message(data, decoded)
+      when is_binary(data) and is_map(decoded) do
+    case decoded do
+      %{
+        "type" => "error",
+        "error" => %{"code" => "previous_response_not_found"}
+      } ->
+        canonical = native_previous_response_not_found_event()
+        {Jason.encode!(canonical), canonical}
+
+      _other ->
+        canonicalize_codex_responses_json_message(data, decoded)
     end
   end
 
@@ -177,16 +200,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   defp canonicalize_codex_responses_json_decoded_message(decoded, data) do
     cond do
       EventSummary.typeless_detail_error?(decoded) ->
-        Jason.encode!(EventSummary.canonical_typeless_detail_error_event())
+        canonical = EventSummary.canonical_typeless_detail_error_event()
+        {Jason.encode!(canonical), canonical}
 
       codex_responses_error_needs_canonical_response?(
         ErrorCodes.decoded_string(decoded, "type"),
         decoded
       ) ->
-        Jason.encode!(canonical_codex_responses_error_event(decoded))
+        canonical = canonical_codex_responses_error_event(decoded)
+        {Jason.encode!(canonical), canonical}
 
       true ->
-        data
+        {data, decoded}
     end
   end
 

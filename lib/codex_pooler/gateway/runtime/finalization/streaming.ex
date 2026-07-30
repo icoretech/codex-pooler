@@ -442,7 +442,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)
 
   defp stream_usage(body, stream_state) do
-    StreamUsageObserver.resolve(stream_state_usage(stream_state), ResponseUsage.from_sse(body))
+    StreamUsageObserver.usage(stream_state_usage(stream_state)) || ResponseUsage.from_sse(body)
   end
 
   defp record_stream_finalization(usage, request_options, upstream_websocket_connection) do

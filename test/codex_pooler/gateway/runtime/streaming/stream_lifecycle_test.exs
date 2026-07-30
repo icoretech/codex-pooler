@@ -293,7 +293,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
         StreamUsageObserver.observe(StreamUsageObserver.new(), observed_event)
       )
 
-    retained_body = RetainedBody.append("", observed_event)
+    retained_body =
+      RetainedBody.empty() |> RetainedBody.append(observed_event) |> RetainedBody.read()
 
     assert byte_size(retained_body) == 65_536
 

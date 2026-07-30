@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
     retained = RetainedBody.append(RetainedBody.empty(), event)
 
     assert byte_size(event) > RetainedBody.max_bytes()
+    retained = RetainedBody.read(retained)
     assert byte_size(retained) == RetainedBody.max_bytes()
 
     assert ResponseUsage.from_sse(retained) == %{
@@ -185,6 +186,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserverTest do
       |> StreamUsageObserver.observe(missing)
 
     assert StreamUsageObserver.usage(state) == @known_usage
+  end
+
+  test "preserves all response usage precedence paths" do
+    fallback = %{@known_usage | input_tokens: 1, output_tokens: 1, total_tokens: 2}
+    progress = usage_event("response.in_progress", usage(2, 3, 5), "default")
+    terminal = usage_event("response.completed", usage(16, 5, 21), "priority")
+    later = usage_event("response.in_progress", usage(100, 100, 200), "flex")
+
+    empty = StreamUsageObserver.new()
+    progress_state = StreamUsageObserver.observe(empty, progress)
+    terminal_state = StreamUsageObserver.observe(progress_state, terminal)
+    later_state = StreamUsageObserver.observe(terminal_state, later)
+
+    assert StreamUsageObserver.resolve(empty, fallback) == fallback
+    assert StreamUsageObserver.resolve(progress_state, fallback).total_tokens == 5
+    assert StreamUsageObserver.resolve(terminal_state, fallback) == @known_usage
+    assert StreamUsageObserver.resolve(later_state, fallback) == @known_usage
   end
 
   test "reset clears failed-candidate usage and parser context" do

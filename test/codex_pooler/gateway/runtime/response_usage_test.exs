@@ -29,6 +29,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
              }
     end
 
+    test "matches decoded input without an encode-decode round trip" do
+      decoded = %{
+        "service_tier" => "priority",
+        "usage" => %{
+          "input_tokens" => 10,
+          "input_tokens_details" => %{"cached_tokens" => 4},
+          "output_tokens" => 7,
+          "total_tokens" => 17
+        }
+      }
+
+      assert ResponseUsage.from_decoded(decoded) ==
+               ResponseUsage.from_json(Jason.encode!(decoded))
+    end
+
     test "preserves absent, zero, and positive Responses cache-write counters" do
       for {reported, expected} <- [{:absent, nil}, {0, 0}, {9, 9}] do
         details = %{"cached_tokens" => 4}

@@ -17,14 +17,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.WebsocketError
   @spec websocket_error_frame_headers(term()) :: headers()
   def websocket_error_frame_headers(data) when is_binary(data) do
     case Jason.decode(data) do
-      {:ok, %{"type" => type, "headers" => %{} = headers}}
-      when type in ["response.failed", "response.incomplete", "error"] ->
-        sanitized_websocket_error_headers(headers)
+      {:ok, %{} = decoded} ->
+        websocket_error_frame_headers(decoded)
 
       _other ->
         %{}
     end
   end
+
+  def websocket_error_frame_headers(%{"type" => type, "headers" => %{} = headers})
+      when type in ["response.failed", "response.incomplete", "error"],
+      do: sanitized_websocket_error_headers(headers)
 
   def websocket_error_frame_headers(_data), do: %{}
 

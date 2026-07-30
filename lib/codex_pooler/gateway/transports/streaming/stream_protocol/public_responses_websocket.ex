@@ -15,10 +15,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize(binary(), state()) :: result()
   def normalize(data, state) when is_binary(data) do
-    data = PublicResponses.normalize_json_message(data)
-
     case Jason.decode(data) do
-      {:ok, %{} = decoded} ->
+      {:ok, %{} = source_decoded} ->
+        {_data, decoded} = PublicResponses.normalize_json_message(data, source_decoded)
         event_type = string_value(decoded, "type")
 
         case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do

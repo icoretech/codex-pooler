@@ -172,6 +172,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
              }
     end
 
+    test "canonicalizes a decoded SSE terminal identically to a direct JSON message" do
+      request_id = "websocket-decoded-sse-terminal"
+
+      frame =
+        Jason.encode!(%{
+          "type" => "error",
+          "error" => %{"code" => "previous_response_not_found"}
+        })
+
+      assert {[message], ""} =
+               WebsocketCodec.stream_messages(request_id, "data: #{frame}\n\n", "")
+
+      assert {[direct_message], ^frame} = WebsocketCodec.stream_messages(request_id, frame, "")
+      assert message == direct_message
+
+      assert %{"type" => "response.failed", "error" => %{"code" => "stream_incomplete"}} =
+               Jason.decode!(message)
+    end
+
     test "drops oversized incomplete SSE buffers instead of retaining them" do
       attach_stream_buffer_telemetry()
       request_id = "websocket-buffer-oversized"

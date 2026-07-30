@@ -198,7 +198,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
   end
 
   defp finish_stream_parts({:retry_first_event, state, chunks, failure}, _response, handlers) do
-    handlers.first_event_retry.(state, chunks, failure)
+    handlers.first_event_retry.(state, RetainedBody.read(chunks), failure)
   end
 
   defp finish_stream_parts({:error, state, chunks, reason}, _response, handlers) do
@@ -257,19 +257,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamRelay do
 
   defp finalize_success(%{finalize_success: callback}, chunks, state)
        when is_function(callback, 2),
-       do: callback.(chunks, state)
+       do: callback.(RetainedBody.read(chunks), state)
 
   defp finalize_success(%{finalize_success: callback}, chunks, _state)
        when is_function(callback, 1),
-       do: callback.(chunks)
+       do: callback.(RetainedBody.read(chunks))
 
   defp finalize_failure(%{finalize_failure: callback}, chunks, reason, state)
        when is_function(callback, 3),
-       do: callback.(chunks, reason, state)
+       do: callback.(RetainedBody.read(chunks), reason, state)
 
   defp finalize_failure(%{finalize_failure: callback}, chunks, reason, _state)
        when is_function(callback, 2),
-       do: callback.(chunks, reason)
+       do: callback.(RetainedBody.read(chunks), reason)
 
   defp stream_finalization_result({:ok, _finalized}, state), do: {:ok, state}
   defp stream_finalization_result({:error, _gateway_error} = error, _state), do: error

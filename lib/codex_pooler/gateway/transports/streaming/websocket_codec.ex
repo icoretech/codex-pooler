@@ -184,17 +184,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp messages_from_sse_blocks(blocks) do
     blocks
-    |> Enum.map(&StreamProtocol.normalize_codex_responses_sse_block/1)
-    |> Enum.map(&IO.iodata_to_binary/1)
     |> Enum.map(&StreamProtocol.sse_field(&1, "data"))
     |> Enum.reject(&(&1 in [nil, "[DONE]"]))
-    |> Enum.filter(&StreamProtocol.valid_json?/1)
+    |> Enum.flat_map(&canonical_sse_data_message/1)
+  end
+
+  defp canonical_sse_data_message(data) do
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        {canonical, _decoded} =
+          StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
+
+        [canonical]
+
+      {:ok, _decoded} ->
+        [data]
+
+      {:error, _reason} ->
+        []
+    end
   end
 
   defp direct_json_message(data) do
-    data = StreamProtocol.canonicalize_codex_responses_json_message(data)
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        {canonical, _decoded} =
+          StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
 
-    if StreamProtocol.valid_json?(data), do: [data], else: []
+        [canonical]
+
+      {:ok, _decoded} ->
+        [data]
+
+      {:error, _reason} ->
+        []
+    end
   end
 
   defp coerce_response_payload(

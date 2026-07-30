@@ -226,18 +226,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   # lives in StreamLifecycle.first_event_retry_handler (compact model misses
   # finalize without retry or health mutation).
   defp http_stream_writer(%ResponseContext{response: response} = response_context) do
+    sse_response? = sse_response?(response)
+
+    assignment_source? =
+      sse_response? and
+        ModelMetadata.assignment_source?(
+          response_context.context.model,
+          response_context.context.assignment.id
+        )
+
     fn conn, data ->
-      if sse_response?(response) do
+      if sse_response? do
         previous_state = first_event_state(conn)
 
         {classification, first_event_state} =
           StreamAttempt.classify_first_event(
             data,
             previous_state,
-            ModelMetadata.assignment_source?(
-              response_context.context.model,
-              response_context.context.assignment.id
-            )
+            assignment_source?
           )
 
         conn = put_first_event_state(conn, first_event_state)
@@ -554,7 +560,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
     state = put_usage_state(state, StreamUsageObserver.observe(usage_state(state), data))
 
-    state = maybe_mark_visible_output(state, reserved.request, visible_data?.(data))
+    state = maybe_mark_visible_output(state, reserved.request, data, visible_data?)
 
     DownstreamStream.normalize_data(
       data,
@@ -564,15 +570,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     )
   end
 
-  defp maybe_mark_visible_output(%{visible_output_marked?: true} = state, _request, _visible?),
-    do: state
+  defp maybe_mark_visible_output(
+         %{visible_output_marked?: true} = state,
+         _request,
+         _data,
+         _visible_data?
+       ),
+       do: state
 
-  defp maybe_mark_visible_output(state, request, true) do
-    mark_visible_output(request)
-    Map.put(state, :visible_output_marked?, true)
+  defp maybe_mark_visible_output(state, request, data, visible_data?) do
+    if visible_data?.(data) do
+      mark_visible_output(request)
+      Map.put(state, :visible_output_marked?, true)
+    else
+      state
+    end
   end
-
-  defp maybe_mark_visible_output(state, _request, _visible?), do: state
 
   defp stream_headers(response, %SelectedCandidateContext{} = context) do
     content_type = header(response, "content-type") || "text/event-stream"

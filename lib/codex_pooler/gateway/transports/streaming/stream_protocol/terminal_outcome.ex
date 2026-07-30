@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
   @terminal_event_types ["response.failed", "response.incomplete", "error"]
@@ -218,7 +219,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
         terminal_outcome(nil, decoded) ||
           if(success_candidate?(nil, decoded),
             do: :error,
-            else: direct_event_summary_outcome(data)
+            else: direct_event_summary_outcome(decoded)
           )
 
       _other ->
@@ -226,11 +227,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
     end
   end
 
-  defp direct_event_summary_outcome(data) do
-    case ErrorCanonicalization.incomplete_sse_or_direct_stream_event_summary(data) do
-      {:ok, event} -> terminal_outcome_event(event) || :error
-      :incomplete -> :error
-    end
+  defp direct_event_summary_outcome(decoded) do
+    decoded =
+      if EventSummary.typeless_detail_error?(decoded),
+        do: EventSummary.canonical_typeless_detail_error_event(),
+        else: decoded
+
+    ErrorCanonicalization.event_summary(
+      ErrorCanonicalization.decoded_string(decoded, "type"),
+      decoded
+    )
+    |> terminal_outcome_event()
+    |> Kernel.||(:error)
   end
 
   defp structural_success_outcome(event_type, %{} = decoded) do

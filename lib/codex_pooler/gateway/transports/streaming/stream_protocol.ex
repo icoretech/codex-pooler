@@ -52,6 +52,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     to: PublicResponses,
     as: :normalize_json_message
 
+  @spec normalize_public_openai_responses_json_message(binary(), map()) :: {binary(), map()}
+  defdelegate normalize_public_openai_responses_json_message(data, decoded),
+    to: PublicResponses,
+    as: :normalize_json_message
+
   @spec max_incomplete_sse_block_bytes() :: pos_integer()
   defdelegate max_incomplete_sse_block_bytes, to: SSEParser
 
@@ -111,10 +116,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec canonicalize_codex_responses_json_message(binary()) :: binary()
   defdelegate canonicalize_codex_responses_json_message(data), to: ErrorCanonicalization
 
+  @spec canonicalize_codex_responses_json_message(binary(), map()) :: {binary(), map()}
+  defdelegate canonicalize_codex_responses_json_message(data, decoded),
+    to: ErrorCanonicalization
+
   @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
   defdelegate canonicalize_native_codex_responses_json_message(data), to: ErrorCanonicalization
 
-  @spec websocket_error_frame_headers(binary()) :: websocket_frame_headers()
+  @spec canonicalize_native_codex_responses_json_message(binary(), map()) :: {binary(), map()}
+  defdelegate canonicalize_native_codex_responses_json_message(data, decoded),
+    to: ErrorCanonicalization
+
+  @spec websocket_error_frame_headers(binary() | map()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
 
   @spec complete_sse_blocks(binary(), binary(), keyword()) :: {[binary()], binary()}
@@ -125,6 +138,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   @spec first_complete_event(binary()) :: {:ok, map()} | :incomplete
   defdelegate first_complete_event(buffer), to: TerminalOutcome
+
+  @spec event_summary(map()) :: map()
+  def event_summary(decoded) when is_map(decoded) do
+    ErrorCanonicalization.event_summary(Map.get(decoded, "type"), decoded)
+  end
 
   @spec terminal_outcome(binary()) :: {:ok, terminal_outcome()} | :error
   defdelegate terminal_outcome(data), to: TerminalOutcome

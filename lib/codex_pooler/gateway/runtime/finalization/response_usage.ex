@@ -22,10 +22,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   @spec from_json(binary()) :: usage()
   def from_json(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, decoded} -> usage_from_decoded(decoded)
+      {:ok, decoded} -> from_decoded(decoded)
       {:error, _reason} -> %{status: "usage_unknown", source: "json_decode_failed"}
     end
   end
+
+  @spec from_decoded(term()) :: usage()
+  def from_decoded(decoded), do: usage_from_decoded(decoded)
 
   @spec from_sse(binary()) :: usage()
   def from_sse(body) when is_binary(body), do: from_sse_body(body, "sse_usage_missing")

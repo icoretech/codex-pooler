@@ -148,7 +148,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
     with {:ok, decoded_usage} <- Jason.decode(usage_object),
          true <- is_map(decoded_usage),
          envelope <- usage_envelope(decoded_usage, candidate.service_tier),
-         %{status: "usage_known"} = usage <- ResponseUsage.from_json(envelope),
+         %{status: "usage_known"} = usage <- ResponseUsage.from_decoded(envelope),
          true <- consistent_total?(usage) do
       terminal? = terminal_event?(candidate.event_type)
 
@@ -167,7 +167,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   defp usage_envelope(usage, service_tier) do
     %{"usage" => usage}
     |> maybe_put_service_tier(service_tier)
-    |> Jason.encode!()
   end
 
   defp consistent_total?(usage),
@@ -176,7 +175,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   defp update_event_context(state, scan) do
     {event_type, event_scan, new_event?} = event_context(state, scan)
     state = if new_event?, do: reset_event_context(state, event_type), else: state
-    service_tier = last_capture(@service_tier_pattern, event_scan) || state.service_tier
+
+    service_tier =
+      last_capture(@service_tier_pattern, event_scan, ~s("service_tier")) || state.service_tier
 
     state
     |> Map.put(:event_type, event_type)
@@ -185,14 +186,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
   end
 
   defp event_context(state, scan) do
-    case List.last(Regex.scan(@event_pattern, scan, return: :index)) do
+    case last_event_match(scan) do
       [{event_offset, _event_length}, {type_offset, type_length}] ->
         event_type = binary_part(scan, type_offset, type_length)
         event_scan = binary_part(scan, event_offset, byte_size(scan) - event_offset)
         {event_type, event_scan, true}
 
       _missing ->
-        event_type = last_capture(@type_pattern, scan) || state.event_type
+        event_type = last_capture(@type_pattern, scan, ~s("type")) || state.event_type
         {event_type, scan, false}
     end
   end
@@ -217,13 +218,37 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver do
 
   defp maybe_apply_pending_service_tier(state, _service_tier), do: state
 
-  defp last_capture(pattern, scan) do
-    pattern
-    |> Regex.scan(scan, capture: :all_but_first)
-    |> List.last()
-    |> case do
-      [value] -> value
-      _missing -> nil
+  defp last_capture(pattern, scan, marker) do
+    scan
+    |> :binary.matches(marker)
+    |> Enum.reduce(nil, fn {offset, _length}, latest ->
+      candidate = binary_part(scan, offset, byte_size(scan) - offset)
+
+      case Regex.run(pattern, candidate, capture: :all_but_first) do
+        [value] -> value
+        _missing -> latest
+      end
+    end)
+  end
+
+  defp last_event_match(scan) do
+    offset =
+      scan
+      |> :binary.matches("\nevent:")
+      |> Enum.reduce(if(String.starts_with?(scan, @event_prefix), do: 0), fn
+        {match_offset, _length}, _latest -> match_offset + 1
+      end)
+
+    if is_integer(offset) do
+      candidate = binary_part(scan, offset, byte_size(scan) - offset)
+
+      case Regex.run(@event_pattern, candidate, return: :index) do
+        [{0, event_length}, {type_offset, type_length}] ->
+          [{offset, event_length}, {offset + type_offset, type_length}]
+
+        _missing ->
+          nil
+      end
     end
   end
 

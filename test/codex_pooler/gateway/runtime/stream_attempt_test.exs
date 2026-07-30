@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                )
 
       assert data == "data: {\"type\":\"response.created\"}\n\n"
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
       refute Process.get({:codex_first_stream_event_state, "attempt-stream-classification"})
       refute Process.get({:codex_first_stream_event_buffer, "attempt-stream-classification"})
     end
@@ -27,7 +27,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {{:write, ^oversized}, state} = StreamAttempt.classify_first_event(oversized, state)
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
                       %{bytes: bytes, count: 1, max_bytes: 8_388_608},
@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert {{:retry, %{code: "server_error", event_type: "response.failed"}}, state} =
                StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "carries a validated upstream error param through retry and terminal classifications" do
@@ -92,7 +92,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert {{:retry, %{code: "overloaded_error", event_type: "response.failed"}}, state} =
                StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "classifies server_is_overloaded first terminal failures as retryable" do
@@ -105,7 +105,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert {{:retry, %{code: "server_is_overloaded", event_type: "response.failed"}}, state} =
                StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "classifies exact top-level websocket_connection_limit_reached wrapped errors as retryable before visible output" do
@@ -126,7 +126,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                  upstream_code: "websocket_connection_limit_reached"
                }}, state} = StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "classifies exact nested websocket_connection_limit_reached wrapped errors as retryable before visible output" do
@@ -149,7 +149,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                  upstream_code: "websocket_connection_limit_reached"
                }}, state} = StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "keeps unrelated_invalid_request wrapped 400 errors non-retryable" do
@@ -170,7 +170,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                  upstream_code: "unrelated_invalid_request"
                }}, state} = StreamAttempt.classify_first_event(data, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "allows websocket_connection_limit_reached retry after internal codex.rate_limits observation" do
@@ -205,7 +205,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                  upstream_code: "websocket_connection_limit_reached"
                }}, state} = StreamAttempt.classify_first_event(limit_error, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "does not retry websocket_connection_limit_reached after downstream-visible response.created" do
@@ -231,7 +231,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "does not retry websocket_connection_limit_reached after downstream-visible text delta" do
@@ -257,7 +257,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "does not retry websocket_connection_limit_reached after downstream-visible output item" do
@@ -283,7 +283,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                %{code: "websocket_connection_limit_reached", event_type: "error"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "keeps local first-and-only usage-limit terminal event failed and non-retryable" do
@@ -313,7 +313,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
                  upstream_code: "usage_limit_exceeded"
                }}, state} = StreamAttempt.classify_first_event(terminal, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "writes ordinary response.incomplete after visible output without terminal failure" do
@@ -338,7 +338,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
         })
 
       assert {{:write, ^terminal}, state} = StreamAttempt.classify_first_event(terminal, state)
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "detects terminal failures after the first event is classified" do
@@ -357,7 +357,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
       assert {{:write_terminal_failure, ^terminal, %{code: "bad_request"}}, state} =
                StreamAttempt.classify_first_event(terminal, state)
 
-      assert state == %{classified?: true, buffer: ""}
+      assert_classified_state(state)
     end
 
     test "rejects non-binary stream chunks instead of returning an invalid write classification" do
@@ -371,6 +371,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
   end
 
   defp dynamic_term(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
+
+  defp assert_classified_state(state) do
+    assert state == %{
+             classified?: true,
+             buffer: "",
+             parser: %{
+               residue_empty?: true,
+               residue_chunks: [],
+               pending_bytes: 0,
+               residue_tail: nil,
+               blocks_seen: 0,
+               matched: nil
+             }
+           }
+  end
 
   defp sse_event(event, payload) do
     "event: " <> event <> "\n" <> "data: " <> Jason.encode!(payload) <> "\n\n"

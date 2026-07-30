@@ -301,6 +301,26 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
     end)
   end
 
+  test "public responses terminal handling is chunking independent at every terminal position" do
+    created =
+      ~s(event: response.created\ndata: {"type":"response.created","response":{"id":"resp_terminal_positions"}}\n\n)
+
+    terminal =
+      ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_terminal_positions","status":"completed"}}\n\n)
+
+    partial = ~s(data: {"type":"response.output_text.delta","delta":"partial)
+
+    for chunks <- [
+          [created <> terminal <> partial],
+          [created, terminal <> partial],
+          [created <> terminal, partial],
+          [created, terminal, partial]
+        ] do
+      assert fold_public_normalizer(chunks) ==
+               fold_public_normalizer([created <> terminal <> partial])
+    end
+  end
+
   test "adversarial CR runs collapse to the separator fixpoint in linear time" do
     cr_run = String.duplicate("\r", 200_000)
 
