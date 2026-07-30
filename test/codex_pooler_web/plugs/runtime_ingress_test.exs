@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPoolerWeb.Plugs.RuntimeIngress
   alias CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody
 
   defp append_req_header(conn, name, value) do
@@ -43,6 +44,55 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     end)
 
     :ok
+  end
+
+  describe "JSON parser context" do
+    test "stores settings and protected-backend classification before parsing" do
+      setup_runtime_ingress(%OperationalSettings{})
+      setup = active_api_key_fixture()
+      settings = OperationalSettings.current()
+
+      conn =
+        Plug.Test.conn(:post, "/backend-api/codex/responses", "{}")
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> RuntimeIngress.call([])
+
+      assert conn.private[:codex_pooler_runtime_ingress_settings] == settings
+      assert conn.private[:codex_pooler_json_parse_error_scope] == :protected_backend
+      assert conn.private[:runtime_api_auth]
+      refute conn.halted
+    end
+
+    test "stores settings and MCP classification before parsing" do
+      setup_runtime_ingress(%OperationalSettings{})
+      settings = OperationalSettings.current()
+
+      conn =
+        Plug.Test.conn(:get, "/mcp")
+        |> RuntimeIngress.call([])
+
+      assert conn.private[:codex_pooler_runtime_ingress_settings] == settings
+      assert conn.private[:codex_pooler_json_parse_error_scope] == :mcp
+      refute conn.halted
+
+      Plug.Conn.send_resp(conn, 204, "")
+    end
+
+    test "stores settings and passthrough classification for ordinary JSON requests" do
+      setup_runtime_ingress(%OperationalSettings{})
+      settings = OperationalSettings.current()
+
+      conn =
+        Plug.Test.conn(:post, "/login", "{}")
+        |> put_req_header("content-type", "application/vnd.api+json")
+        |> RuntimeIngress.call([])
+
+      assert conn.private[:codex_pooler_runtime_ingress_settings] == settings
+      assert conn.private[:codex_pooler_json_parse_error_scope] == :passthrough
+      refute conn.private[:runtime_api_auth]
+      refute conn.halted
+    end
   end
 
   describe "runtime API firewall" do
@@ -642,15 +692,17 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 8})
 
       assert {:more, _partial, _conn} =
-               Plug.Test.conn(:post, "/backend-api/codex/responses", small_payload)
+               Plug.Test.conn(:post, "/plain-json-reader", small_payload)
                |> put_req_header("content-type", "application/json")
+               |> RuntimeIngress.call([])
                |> CompressedBody.read_plain_json_body([])
 
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 128})
 
       assert {:ok, ^small_payload, _conn} =
-               Plug.Test.conn(:post, "/backend-api/codex/responses", small_payload)
+               Plug.Test.conn(:post, "/plain-json-reader", small_payload)
                |> put_req_header("content-type", "application/json")
+               |> RuntimeIngress.call([])
                |> CompressedBody.read_plain_json_body([])
     end
 

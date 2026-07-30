@@ -3,7 +3,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
 
   import Plug.Conn
 
-  alias CodexPooler.Gateway.OperationalSettings
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
 
@@ -20,11 +19,20 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
   alias __MODULE__.DecompressionState
 
   @decompression_chunk_bytes 16_384
+  @settings_private_key :codex_pooler_runtime_ingress_settings
 
   @type error_reason :: %{
           required(:status) => pos_integer(),
           required(:code) => String.t(),
           required(:message) => String.t()
+        }
+  @type settings :: %{
+          required(:decompression_algorithms) => [String.t()],
+          required(:zstd_supported?) => boolean(),
+          required(:max_compressed_body_bytes) => pos_integer(),
+          required(:max_decompressed_body_bytes) => pos_integer(),
+          required(:max_decompression_ratio) => pos_integer(),
+          required(:decompression_timeout_ms) => pos_integer()
         }
   @type read_result ::
           {:ok, binary(), Plug.Conn.t()}
@@ -39,7 +47,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
 
   @spec read_plain_json_body(Plug.Conn.t(), keyword()) :: read_result()
   def read_plain_json_body(conn, opts) do
-    settings = OperationalSettings.current()
+    settings = Map.fetch!(conn.private, @settings_private_key)
 
     read_opts =
       opts
@@ -50,7 +58,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
     Plug.Conn.read_body(conn, read_opts)
   end
 
-  @spec decode(Plug.Conn.t(), OperationalSettings.t()) :: decode_result()
+  @spec decode(Plug.Conn.t(), settings()) :: decode_result()
   def decode(conn, settings) do
     with {:ok, encoding} <- content_encoding(conn),
          :ok <- supported_encoding?(settings, encoding),

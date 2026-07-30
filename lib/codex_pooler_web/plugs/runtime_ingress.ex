@@ -23,6 +23,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   ]
 
   @json_error_type "invalid_request_error"
+  @parser_settings_private_key :codex_pooler_runtime_ingress_settings
+  @parser_error_scope_private_key :codex_pooler_json_parse_error_scope
 
   @pruned_runtime_helper_routes [
     {"GET", ["backend-api", "codex", "agent-identities", "jwks"]},
@@ -48,6 +50,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         settings = OperationalSettings.current()
 
         conn
+        |> put_json_parser_context(settings, :mcp)
         |> enforce_mcp_firewall(settings)
         |> admit_mcp_request()
         |> prepare_mcp_body(settings)
@@ -59,6 +62,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         settings = OperationalSettings.current()
 
         conn
+        |> put_json_parser_context(settings, json_parse_error_scope(conn))
         |> enforce_firewall(settings)
         |> authenticate_v1_request()
         |> reject_unsupported_v1_request()
@@ -67,6 +71,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         |> authenticate_protected_backend_json_request()
         |> enforce_image_generation_permission()
         |> maybe_decode_compressed_body(settings)
+
+      json_request?(conn) ->
+        put_json_parser_context(conn, OperationalSettings.current(), :passthrough)
 
       true ->
         conn
@@ -169,6 +176,26 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
       _other ->
         false
     end
+  end
+
+  defp json_request?(conn) do
+    conn
+    |> get_req_header("content-type")
+    |> List.first()
+    |> case do
+      nil -> false
+      content_type -> json_content_type?(content_type)
+    end
+  end
+
+  defp json_parse_error_scope(conn) do
+    if protected_backend_json_request?(conn), do: :protected_backend, else: :passthrough
+  end
+
+  defp put_json_parser_context(conn, settings, error_scope) do
+    conn
+    |> put_private(@parser_settings_private_key, settings)
+    |> put_private(@parser_error_scope_private_key, error_scope)
   end
 
   defp read_mcp_body(conn, settings) do
