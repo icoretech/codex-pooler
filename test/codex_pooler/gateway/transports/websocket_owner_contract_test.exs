@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerDefaults
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
@@ -135,6 +136,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
 
   describe "timeout defaults" do
     test "exposes bounded positive timeout defaults" do
+      assert OwnerDefaults.forward_timeout_ms() ==
+               WebsocketOwnerContract.default_forward_timeout_ms()
+
+      assert OwnerDefaults.owner_call_timeout_ms() ==
+               WebsocketOwnerContract.default_owner_call_timeout_ms()
+
+      assert OwnerDefaults.downstream_send_timeout_ms() ==
+               WebsocketOwnerContract.default_downstream_send_timeout_ms()
+
       assert WebsocketOwnerContract.default_forward_timeout_ms() == 5_000
       assert WebsocketOwnerContract.default_owner_call_timeout_ms() == 5_000
       assert WebsocketOwnerContract.default_downstream_send_timeout_ms() == 1_000

@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerDefaults
 
   @type owner_key :: Ecto.UUID.t()
   @type owner_token :: Ecto.UUID.t()
@@ -125,7 +126,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     upstream_stream_error: [
       status: 502,
       code: "server_error",
-      message: StreamProtocol.synthetic_public_openai_responses_failure_message(),
+      message: :synthetic_public_openai_responses_failure_message,
       reason: "upstream_stream_error"
     ],
     upstream_websocket_terminal_delivery_timeout: [
@@ -160,10 +161,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
     ]
   }
 
-  @default_forward_timeout_ms 5_000
-  @default_owner_call_timeout_ms 5_000
-  @default_downstream_send_timeout_ms 1_000
-
   @spec owner_errors() :: [owner_error()]
   def owner_errors, do: @owner_errors
 
@@ -171,19 +168,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   def owner_error?(error), do: error in @owner_errors
 
   @spec default_forward_timeout_ms() :: pos_integer()
-  def default_forward_timeout_ms, do: @default_forward_timeout_ms
+  defdelegate default_forward_timeout_ms(), to: OwnerDefaults, as: :forward_timeout_ms
 
   @spec default_owner_call_timeout_ms() :: pos_integer()
-  def default_owner_call_timeout_ms, do: @default_owner_call_timeout_ms
+  defdelegate default_owner_call_timeout_ms(), to: OwnerDefaults, as: :owner_call_timeout_ms
 
   @spec default_downstream_send_timeout_ms() :: pos_integer()
-  def default_downstream_send_timeout_ms, do: @default_downstream_send_timeout_ms
+  defdelegate default_downstream_send_timeout_ms(),
+    to: OwnerDefaults,
+    as: :downstream_send_timeout_ms
 
   @spec safe_error_payload(term(), term()) ::
           {:ok, safe_error_payload()} | {:error, :unknown_owner_error}
   def safe_error_payload(error, _unsafe_context) do
     case Map.fetch(@safe_error_payloads, error) do
-      {:ok, payload_attrs} -> {:ok, payload(payload_attrs)}
+      {:ok, payload_attrs} -> {:ok, payload(resolve_payload_attrs(payload_attrs))}
       :error -> {:error, :unknown_owner_error}
     end
   end
@@ -375,6 +374,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
 
   defp downstream_payload?(:complete), do: true
   defp downstream_payload?(_payload), do: false
+
+  defp resolve_payload_attrs(payload_attrs) do
+    Keyword.update!(payload_attrs, :message, &resolve_message/1)
+  end
+
+  defp resolve_message(:synthetic_public_openai_responses_failure_message) do
+    StreamProtocol.synthetic_public_openai_responses_failure_message()
+  end
+
+  defp resolve_message(message), do: message
 
   defp payload(status: status, code: code, message: message, reason: reason) do
     %{

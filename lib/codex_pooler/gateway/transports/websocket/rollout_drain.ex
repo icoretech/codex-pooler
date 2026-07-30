@@ -6,14 +6,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   require Logger
 
   alias CodexPooler.Gateway.Transports.Websocket.{
-    WebsocketOwnerContract,
+    OwnerDefaults,
     WebsocketOwnerSession
   }
 
   @registry WebsocketOwnerSession.Registry
   @default_timeout_ms 50_000
   @drain_poll_interval_ms 200
-  @owner_call_timeout_ms WebsocketOwnerContract.default_owner_call_timeout_ms()
+  @owner_call_timeout_ms OwnerDefaults.owner_call_timeout_ms()
   @default_owner_post_deadline_call_budget_ms @owner_call_timeout_ms * 2
   @owner_task_finish_margin_ms 500
   @drain_deadline_floor_ms 10
