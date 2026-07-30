@@ -2,7 +2,11 @@ defmodule CodexPoolerWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :codex_pooler
   use Plug.ErrorHandler
 
-  alias CodexPoolerWeb.Plugs.{RuntimeIngress, TrustedProxyRemoteIp}
+  alias CodexPoolerWeb.Plugs.{
+    BackendFilesMultipartGuard,
+    RuntimeIngress,
+    TrustedProxyRemoteIp
+  }
 
   @multipart_parser_length 2_147_483_647
 
@@ -39,14 +43,14 @@ defmodule CodexPoolerWeb.Endpoint do
   end
 
   plug Plug.RequestId
-  plug TrustedProxyRemoteIp
+  plug :trusted_proxy_remote_ip
 
   plug Plug.Telemetry,
     event_prefix: [:phoenix, :endpoint],
     log: {__MODULE__, :request_log_level, []}
 
-  plug CodexPoolerWeb.Plugs.RuntimeIngress
-  plug CodexPoolerWeb.Plugs.BackendFilesMultipartGuard
+  plug :runtime_ingress
+  plug :backend_files_multipart_guard
 
   plug Plug.Parsers,
     parsers: [
@@ -62,9 +66,17 @@ defmodule CodexPoolerWeb.Endpoint do
   plug Plug.MethodOverride
   plug Plug.Head
   plug Plug.Session, @session_options
-  plug CodexPoolerWeb.Router
+  plug :dispatch_router
 
   def multipart_parser_length, do: @multipart_parser_length
+
+  defp trusted_proxy_remote_ip(conn, opts), do: TrustedProxyRemoteIp.call(conn, opts)
+  defp runtime_ingress(conn, opts), do: RuntimeIngress.call(conn, opts)
+
+  defp backend_files_multipart_guard(conn, opts),
+    do: BackendFilesMultipartGuard.call(conn, opts)
+
+  defp dispatch_router(conn, opts), do: CodexPoolerWeb.Router.call(conn, opts)
 
   def maybe_live_reloader(conn, opts) do
     if CodexPoolerWeb.BrowserSecurity.codex_desktop_browser?(conn) or

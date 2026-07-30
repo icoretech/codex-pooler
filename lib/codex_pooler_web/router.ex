@@ -2,6 +2,8 @@ defmodule CodexPoolerWeb.Router do
   use CodexPoolerWeb, :router
 
   import CodexPoolerWeb.UserAuth
+  alias CodexPoolerWeb.Layouts
+  alias CodexPoolerWeb.Plugs.{AdminBrowserAdmission, ObservatoryAuth}
   alias CodexPoolerWeb.V1.UnsupportedRoutes
   require CodexPoolerWeb.DevRoutes
 
@@ -9,7 +11,7 @@ defmodule CodexPoolerWeb.Router do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
-    plug :put_root_layout, html: {CodexPoolerWeb.Layouts, :root}
+    plug :put_browser_root_layout
     plug :protect_from_forgery
 
     plug :put_secure_browser_headers, %{
@@ -17,14 +19,14 @@ defmodule CodexPoolerWeb.Router do
     }
 
     plug :fetch_current_scope_for_user
-    plug CodexPoolerWeb.Plugs.AdminBrowserAdmission
+    plug :admin_browser_admission
   end
 
   pipeline :observatory_browser do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
-    plug :put_root_layout, html: {CodexPoolerWeb.Layouts, :root}
+    plug :put_browser_root_layout
     plug :protect_from_forgery
 
     plug :put_secure_browser_headers, %{
@@ -33,7 +35,7 @@ defmodule CodexPoolerWeb.Router do
   end
 
   pipeline :observatory_authenticated_browser do
-    plug CodexPoolerWeb.Plugs.ObservatoryAuth
+    plug :observatory_auth
   end
 
   pipeline :api do
@@ -187,6 +189,18 @@ defmodule CodexPoolerWeb.Router do
 
   # Enable LiveDashboard and Swoosh mailbox preview in development.
   CodexPoolerWeb.DevRoutes.live_dashboard_routes()
+
+  defp put_browser_root_layout(conn, _opts) do
+    Phoenix.Controller.put_root_layout(conn, html: {Layouts, :root})
+  end
+
+  defp admin_browser_admission(conn, opts) do
+    AdminBrowserAdmission.call(conn, opts)
+  end
+
+  defp observatory_auth(conn, opts) do
+    ObservatoryAuth.call(conn, opts)
+  end
 
   defp put_secure_browser_headers(conn, _baseline_headers) do
     Phoenix.Controller.put_secure_browser_headers(
