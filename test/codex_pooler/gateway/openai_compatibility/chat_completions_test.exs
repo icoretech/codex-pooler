@@ -185,6 +185,43 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       assert {"", state} = ChatCompletions.normalize_stream_data(mismatch, state)
       refute state.terminal_seen?
     end
+
+    test "clears only a buffer whose current batch contains a terminal" do
+      terminal =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_current_batch", "status" => "completed"}
+        })
+        |> IO.iodata_to_binary()
+
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+      assert {_output, terminal_state} = ChatCompletions.normalize_stream_data(terminal, state)
+      assert terminal_state.terminal_seen?
+      assert terminal_state.buffer == ""
+
+      assert {"", later_state} =
+               ChatCompletions.normalize_stream_data("data: partial", terminal_state)
+
+      assert later_state.terminal_seen?
+      assert later_state.buffer == "data: partial"
+
+      assert {"", repeated_terminal_state} =
+               ChatCompletions.normalize_stream_data(
+                 terminal <> "data: partial",
+                 terminal_state
+               )
+
+      assert repeated_terminal_state.terminal_seen?
+      assert repeated_terminal_state.buffer == ""
+
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+
+      assert {_output, same_batch_state} =
+               ChatCompletions.normalize_stream_data(terminal <> "data: partial", state)
+
+      assert same_batch_state.terminal_seen?
+      assert same_batch_state.buffer == ""
+    end
   end
 
   describe "synthetic_terminal_failure_chunk/2" do

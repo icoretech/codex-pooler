@@ -280,15 +280,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
     |> Enum.reduce({[], []}, fn part, {items, pending_parts} ->
       case special_content_item(part) do
         nil ->
-          {items, pending_parts ++ [normalize_content_part(part, role)]}
+          {items, [normalize_content_part(part, role) | pending_parts]}
 
         item ->
           items = flush_message_item(items, pending_parts, role, message)
-          {items ++ [item], []}
+          {[item | items], []}
       end
     end)
     |> then(fn {items, pending_parts} ->
-      flush_message_item(items, pending_parts, role, message)
+      items |> flush_message_item(pending_parts, role, message) |> Enum.reverse()
     end)
   end
 
@@ -296,11 +296,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp flush_message_item(items, pending_parts, role, message) do
     item =
-      %{"type" => "message", "role" => role, "content" => pending_parts}
+      %{"type" => "message", "role" => role, "content" => Enum.reverse(pending_parts)}
       |> maybe_put(message, "name")
       |> maybe_put(message, "tool_call_id")
 
-    items ++ [item]
+    [item | items]
   end
 
   defp normalize_content_part(text, "assistant") when is_binary(text),

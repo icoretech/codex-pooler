@@ -26,6 +26,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   def normalize_input(payload), do: {:ok, payload}
 
+  def finalize_normalized_input(%{"input" => input} = payload) when is_binary(input),
+    do: {:ok, Map.put(payload, "input", [input_text_message(input)])}
+
+  def finalize_normalized_input(%{"input" => input} = payload) when is_list(input),
+    do: {:ok, InstructionLifter.lift(payload)}
+
+  def finalize_normalized_input(payload), do: {:ok, payload}
+
   @spec normalize_audio_input(map()) :: audio_normalization_result()
   def normalize_audio_input(%{"input" => input} = payload) when is_list(input) do
     with {:ok, input} <- normalize_audio_input_items(input) do

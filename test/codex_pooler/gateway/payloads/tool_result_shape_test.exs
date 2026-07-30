@@ -49,6 +49,31 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
            })
   end
 
+  test "preserves depth-first ordering across mixed keys and repeated tool outputs" do
+    input = [
+      %{
+        :type => "response",
+        "items" => [
+          %{"call_id" => "call_first", "output" => "ok", "type" => "function_call_output"},
+          %{
+            "nested" => %{
+              :type => "future_tool_output",
+              "call_id" => "call_nested",
+              "result" => %{"ok" => true}
+            }
+          }
+        ]
+      },
+      %{"call_id" => "call_last", "output" => ["ok"], "type" => "custom_tool_call_output"}
+    ]
+
+    assert ToolResultShape.items(input) == [
+             %{type: "function_call_output", call_id: "call_first"},
+             %{type: "unknown_tool_output", call_id: "call_nested"},
+             %{type: "custom_tool_call_output", call_id: "call_last"}
+           ]
+  end
+
   @tag :structured_tool_result_pass_through
   test "debug payload summary keeps structured tool output shape-only" do
     previous_config = Application.get_env(:codex_pooler, OperationalSettings, [])

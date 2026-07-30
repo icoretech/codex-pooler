@@ -2173,6 +2173,37 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                })
     end
 
+    test "item-reference-heavy continuations preserve every reference and one normalized tool result" do
+      references =
+        Enum.map(1..200, fn index ->
+          %{"type" => "item_reference", "id" => "msg_fixture_#{index}"}
+        end)
+
+      tool_result = %{
+        "type" => "function_call_output",
+        "call_id" => "call_fixture_heavy",
+        "output" => "ok"
+      }
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "previous_response_id" => "resp_fixture_heavy",
+        "input" => references ++ [tool_result]
+      }
+
+      assert {:ok, validated} = Responses.validate(payload)
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+      assert coerced == Map.take(validated, Map.keys(coerced))
+      assert Enum.take(coerced["input"], 200) == references
+
+      assert List.last(coerced["input"]) == %{
+               "type" => "function_call_output",
+               "call_id" => "call_fixture_heavy",
+               "output" => "ok"
+             }
+    end
+
     test "previous_response_id without semantic tool output is rejected" do
       invalid_payloads = [
         %{
@@ -3843,6 +3874,31 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              ]
     end
 
+    test "Responses data URL validation preserves case whitespace and malformed-base64 semantics" do
+      valid_cases = [
+        "data:image/png;base64,YWJj",
+        "data:IMAGE/PNG;BASE64,YWJj",
+        "data:image/png;base64,Y W\nJj"
+      ]
+
+      invalid_cases = [
+        "DATA:image/png;base64,YWJj",
+        "data:image/png;base64,",
+        "data:image/png;base64,YW!j",
+        "data:image/png;base64,YWJj!A==",
+        "data:text/plain;base64,YWJj"
+      ]
+
+      for image_url <- valid_cases do
+        assert {:ok, _result} = Responses.coerce(image_payload(image_url))
+      end
+
+      for image_url <- invalid_cases do
+        assert {:error, %{code: "unsupported_input_image_format", param: "input"}} =
+                 Responses.coerce(image_payload(image_url))
+      end
+    end
+
     test "Responses rejects unsupported image/file media references deterministically" do
       assert {:ok, result} =
                Responses.coerce(%{
@@ -4345,6 +4401,38 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert result.request_options.routing.prompt_cache_key == nil
   end
 
+  test "Chat preserves message-part grouping around repeated special tool parts" do
+    payload = %{
+      "model" => "gpt-5.6",
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "text", "text" => "before"},
+            %{
+              "type" => "tool-call",
+              "toolCallId" => "call_grouped",
+              "toolName" => "lookup",
+              "input" => %{"query" => "fixture"}
+            },
+            %{"type" => "text", "text" => "between"},
+            %{"type" => "tool-result", "toolCallId" => "call_grouped", "output" => "ok"},
+            %{"type" => "text", "text" => "after"}
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, result} = Chat.coerce(payload)
+
+    assert [before, tool_call, between, tool_result, after_part] = result.payload["input"]
+    assert get_in(before, ["content", Access.at(0), "text"]) == "before"
+    assert tool_call["type"] == "function_call"
+    assert get_in(between, ["content", Access.at(0), "text"]) == "between"
+    assert tool_result["type"] == "function_call_output"
+    assert get_in(after_part, ["content", Access.at(0), "text"]) == "after"
+  end
+
   @tag :prompt_cache_controls
   test "Chat rejects marked assistant text and input audio instead of dropping breakpoints" do
     breakpoint = prompt_cache_breakpoint()
@@ -4727,6 +4815,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         ],
         "ok" => true
       }
+    }
+  end
+
+  defp image_payload(image_url) do
+    %{
+      "model" => "gpt-fixture-text",
+      "input" => [
+        %{
+          "role" => "user",
+          "content" => [%{"type" => "input_image", "image_url" => image_url}]
+        }
+      ]
     }
   end
 

@@ -4,25 +4,14 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShape do
   @type item :: %{type: String.t(), call_id: String.t()}
 
   @spec items(term()) :: [item()]
-  def items(input) when is_list(input), do: Enum.flat_map(input, &items/1)
+  def items(input), do: input |> collect_items([]) |> Enum.reverse()
 
-  def items(%{} = item) do
-    nested = item |> Map.values() |> Enum.flat_map(&items/1)
+  @spec any?(term()) :: boolean()
+  def any?(%{} = item),
+    do: tool_result?(item) or Enum.any?(Map.values(item), &any?/1)
 
-    if tool_result?(item) do
-      [
-        %{
-          type: clean_string(Map.get(item, "type")) || "unknown_tool_output",
-          call_id: call_id(item)
-        }
-        | nested
-      ]
-    else
-      nested
-    end
-  end
-
-  def items(_input), do: []
+  def any?(items) when is_list(items), do: Enum.any?(items, &any?/1)
+  def any?(_input), do: false
 
   @spec tool_result?(term()) :: boolean()
   def tool_result?(%{} = item) do
@@ -42,6 +31,28 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShape do
     do: Map.has_key?(item, "output") or Map.has_key?(item, "result")
 
   defp call_id(%{} = item), do: clean_string(Map.get(item, "call_id"))
+
+  defp collect_items(%{} = item, acc) do
+    acc =
+      if tool_result?(item) do
+        [
+          %{
+            type: clean_string(Map.get(item, "type")) || "unknown_tool_output",
+            call_id: call_id(item)
+          }
+          | acc
+        ]
+      else
+        acc
+      end
+
+    Enum.reduce(Map.values(item), acc, &collect_items/2)
+  end
+
+  defp collect_items(items, acc) when is_list(items),
+    do: Enum.reduce(items, acc, &collect_items/2)
+
+  defp collect_items(_input, acc), do: acc
 
   defp clean_string(value) when is_binary(value) do
     value = String.trim(value)

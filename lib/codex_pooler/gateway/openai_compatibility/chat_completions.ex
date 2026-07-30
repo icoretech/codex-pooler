@@ -88,7 +88,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         @max_incomplete_chat_sse_block_bytes
       )
 
-      {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: ""})
+      {iodata, state, _terminal_in_batch?} =
+        normalize_complete_blocks(blocks, %{state | buffer: ""})
+
       {oversized_iodata, state} = oversized_incomplete_prefix_chunk(buffer, state)
 
       {
@@ -119,21 +121,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   defp normalize_stream_blocks(blocks, buffer, state) do
-    {iodata, state} = normalize_complete_blocks(blocks, %{state | buffer: buffer})
+    {iodata, state, terminal_in_batch?} =
+      normalize_complete_blocks(blocks, %{state | buffer: buffer})
 
-    state = if terminal_blocks?(blocks), do: %{state | buffer: ""}, else: state
+    state = if terminal_in_batch?, do: %{state | buffer: ""}, else: state
 
     {IO.iodata_to_binary(iodata), state}
   end
 
   defp normalize_complete_blocks(blocks, state) do
-    Enum.map_reduce(blocks, state, fn block, stream_state ->
-      normalize_stream_block(block, stream_state)
+    Enum.reduce(blocks, {[], state, false}, fn block, {iodata, stream_state, terminal?} ->
+      {normalized, stream_state, terminal_in_block?} =
+        normalize_stream_block(block, stream_state)
+
+      {[iodata, normalized], stream_state, terminal? or terminal_in_block?}
     end)
   end
 
-  defp normalize_stream_block(_block, %{terminal_seen?: true} = state), do: {[], state}
-  defp normalize_stream_block("data: [DONE]", state), do: {[], state}
+  defp normalize_stream_block("data: [DONE]", state), do: {[], state, true}
 
   defp normalize_stream_block(block, state) do
     event_type =
@@ -143,8 +148,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
     decoded = block |> StreamProtocol.sse_field("data") |> StreamProtocol.decode_sse_data()
     type = effective_stream_type(event_type, decoded_string(decoded, "type"))
+    terminal_in_block? = terminal_event?(type)
 
-    normalize_stream_event(type, decoded, state)
+    if state.terminal_seen? do
+      {[], state, terminal_in_block?}
+    else
+      {normalized, state} = normalize_stream_event(type, decoded, state)
+      {normalized, state, terminal_in_block?}
+    end
   end
 
   defp normalize_stream_event("response.created", decoded, state) do
@@ -512,22 +523,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp tool_call_index(%{"output_index" => index}, _context) when is_integer(index), do: index
   defp tool_call_index(_item, %{"output_index" => index}) when is_integer(index), do: index
   defp tool_call_index(_item, _context), do: 0
-
-  defp terminal_blocks?(blocks) do
-    Enum.any?(blocks, fn
-      "data: [DONE]" ->
-        true
-
-      block ->
-        event_type =
-          block
-          |> StreamProtocol.sse_field("event")
-          |> StreamProtocol.normalize_sse_event_label()
-
-        decoded = block |> StreamProtocol.sse_field("data") |> StreamProtocol.decode_sse_data()
-        terminal_event?(effective_stream_type(event_type, decoded_string(decoded, "type")))
-    end)
-  end
 
   defp effective_stream_type(event_type, data_type)
        when is_binary(event_type) and is_binary(data_type) and event_type != data_type,

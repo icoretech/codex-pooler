@@ -420,30 +420,27 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
   defp validate_required_coverage(nil, _required, _path), do: :ok
 
   defp validate_required_coverage(properties, required, path) do
-    missing_properties = missing_required_properties(properties, required)
-    extra_required = extra_required_properties(properties, required)
+    property_names = properties |> Map.keys() |> MapSet.new()
+    required_names = MapSet.new(required)
 
-    required_coverage_result(missing_properties, extra_required, path)
+    if MapSet.equal?(property_names, required_names) do
+      :ok
+    else
+      missing_property =
+        property_names
+        |> MapSet.difference(required_names)
+        |> Enum.min(fn -> nil end)
+
+      extra_required =
+        required_names
+        |> MapSet.difference(property_names)
+        |> Enum.min(fn -> nil end)
+
+      required_coverage_result(missing_property, extra_required, path)
+    end
   end
 
-  defp missing_required_properties(properties, required) do
-    properties
-    |> Map.keys()
-    |> Enum.sort()
-    |> Enum.reject(&(&1 in required))
-  end
-
-  defp extra_required_properties(properties, required) do
-    property_names = Map.keys(properties)
-
-    required
-    |> Enum.sort()
-    |> Enum.reject(&(&1 in property_names))
-  end
-
-  defp required_coverage_result([], [], _path), do: :ok
-
-  defp required_coverage_result([property | _rest], _extra_required, path) do
+  defp required_coverage_result(property, _extra_required, path) when is_binary(property) do
     {:error,
      invalid_schema(
        path <> ".required",
@@ -451,7 +448,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
      )}
   end
 
-  defp required_coverage_result([], [property | _rest], path) do
+  defp required_coverage_result(nil, property, path) when is_binary(property) do
     {:error,
      invalid_schema(
        path <> ".required",

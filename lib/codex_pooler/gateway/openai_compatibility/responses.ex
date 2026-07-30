@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     InputShape,
     RequestOptions,
     StrictSchema,
+    ToolResultShape,
     ToolSchemaLowering
   }
 
@@ -30,8 +31,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
          {:ok, payload} <- Input.normalize_list_input(payload),
          payload = ToolSchemaLowering.lower_non_strict_function_tools(payload),
-         :ok <- Input.validate_input(payload),
-         :ok <- Input.validate_previous_response_continuation(payload),
+         has_tool_result? = ToolResultShape.any?(Map.get(payload, "input")),
+         :ok <- Input.validate_input(payload, has_tool_result?),
+         :ok <- Input.validate_previous_response_continuation(payload, has_tool_result?),
          :ok <- validate_tools(payload),
          :ok <- validate_tool_choice(payload),
          :ok <- validate_max_output_tokens(payload),
@@ -55,7 +57,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
            payload
            |> Map.take(Matrix.forwarded_fields(:responses))
            |> normalize_forwarded_enums()
-           |> Input.normalize_input() do
+           |> Input.finalize_normalized_input() do
       payload =
         maybe_force_backend_streaming(payload, opts)
 

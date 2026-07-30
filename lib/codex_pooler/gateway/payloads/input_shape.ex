@@ -6,6 +6,19 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
 
   @supported_input_image_data_mimes ~w(image/gif image/jpeg image/png image/webp)
   @supported_input_file_data_mimes ~w(application/pdf text/plain)
+  @base64_whitespace [" ", "\t", "\r", "\n"]
+  @base64_invalid_bytes (
+                          allowed =
+                            MapSet.new(
+                              Enum.to_list(?A..?Z) ++
+                                Enum.to_list(?a..?z) ++
+                                Enum.to_list(?0..?9) ++ ~c"+/="
+                            )
+
+                          for byte <- 0..255,
+                              not MapSet.member?(allowed, byte),
+                              do: <<byte>>
+                        )
   @unsupported_input_image_message "Responses input_image values must use https image URLs or supported image data URLs, or nonblank file_id references; Codex sediment:// references are unsupported"
 
   @spec validate(term()) :: :ok | {:error, Error.reason()}
@@ -85,13 +98,11 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
   defp valid_image_reference?(""), do: false
 
   defp valid_image_reference?(reference) do
-    normalized = String.downcase(reference)
-
     cond do
-      String.starts_with?(normalized, "https://") ->
+      https_reference?(reference) ->
         true
 
-      String.starts_with?(normalized, "data:") ->
+      String.starts_with?(reference, "data:") ->
         valid_data_url?(reference, @supported_input_image_data_mimes)
 
       true ->
@@ -112,14 +123,72 @@ defmodule CodexPooler.Gateway.Payloads.InputShape do
          [mime, encoding] <- String.split(metadata, ";", parts: 2),
          true <- String.downcase(mime) in supported_mimes,
          true <- String.downcase(encoding) == "base64",
-         {:ok, bytes} <- Base.decode64(encoded, ignore: :whitespace) do
-      byte_size(bytes) > 0
+         true <- valid_nonempty_base64?(encoded) do
+      true
     else
       _value -> false
     end
   end
 
   defp valid_data_url?(_reference, _supported_mimes), do: false
+
+  defp https_reference?(reference) when byte_size(reference) >= 8 do
+    reference |> binary_part(0, 8) |> String.downcase() == "https://"
+  end
+
+  defp https_reference?(_reference), do: false
+
+  defp valid_nonempty_base64?(encoded) do
+    case :binary.match(encoded, @base64_whitespace) do
+      :nomatch ->
+        valid_unspaced_base64?(encoded)
+
+      {_position, _length} ->
+        case scan_base64(encoded, 0, 0) do
+          {count, padding} when count >= 4 and rem(count, 4) == 0 and padding <= 2 -> true
+          _result -> false
+        end
+    end
+  end
+
+  defp valid_unspaced_base64?(encoded) do
+    size = byte_size(encoded)
+
+    size >= 4 and rem(size, 4) == 0 and
+      :binary.match(encoded, @base64_invalid_bytes) == :nomatch and
+      valid_unspaced_padding?(encoded, size)
+  end
+
+  defp valid_unspaced_padding?(encoded, size) do
+    case :binary.match(encoded, "=") do
+      :nomatch ->
+        true
+
+      {position, 1} when position == size - 1 ->
+        true
+
+      {position, 1} when position == size - 2 ->
+        binary_part(encoded, size - 1, 1) == "="
+
+      {_position, 1} ->
+        false
+    end
+  end
+
+  defp scan_base64(<<>>, count, padding), do: {count, padding}
+
+  defp scan_base64(<<byte, rest::binary>>, count, padding)
+       when byte in [32, 9, 13, 10],
+       do: scan_base64(rest, count, padding)
+
+  defp scan_base64(<<"=", rest::binary>>, count, padding) when padding < 2,
+    do: scan_base64(rest, count + 1, padding + 1)
+
+  defp scan_base64(<<byte, rest::binary>>, count, 0)
+       when byte in ?A..?Z or byte in ?a..?z or byte in ?0..?9 or byte in ~c"+/",
+       do: scan_base64(rest, count + 1, 0)
+
+  defp scan_base64(_encoded, _count, _padding), do: :error
 
   defp unsupported_input_image_error do
     %{

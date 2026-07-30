@@ -7,19 +7,29 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   @metadata_passthrough_key "internal_chat_message_metadata_passthrough"
 
-  def validate_input(%{"input" => input}) when is_binary(input), do: :ok
+  def validate_input(payload),
+    do: validate_input(payload, payload |> Map.get("input") |> ToolResultShape.any?())
 
-  def validate_input(%{"input" => input} = payload) when is_list(input) and input != [] do
-    validate_each(input, &validate_input_item(&1, payload))
+  def validate_input(%{"input" => input}, _has_tool_result?) when is_binary(input), do: :ok
+
+  def validate_input(%{"input" => input} = payload, has_tool_result?)
+      when is_list(input) and input != [] do
+    validate_each(input, &validate_input_item(&1, payload, has_tool_result?))
   end
 
-  def validate_input(%{"input" => input}) when is_list(input),
+  def validate_input(%{"input" => input}, _has_tool_result?) when is_list(input),
     do: {:error, Error.invalid_request("input must be a non-empty string or array", "input")}
 
-  def validate_input(%{"input" => _input}),
+  def validate_input(%{"input" => _input}, _has_tool_result?),
     do: {:error, Error.invalid_request("input must be a string or array", "input")}
 
-  def validate_input(_payload), do: :ok
+  def validate_input(_payload, _has_tool_result?), do: :ok
+
+  defp validate_input_item(%{"type" => "item_reference"} = item, payload, has_tool_result?),
+    do: validate_item_reference(item, payload, has_tool_result?)
+
+  defp validate_input_item(item, payload, _has_tool_result?),
+    do: validate_input_item(item, payload)
 
   defp validate_input_item(%{"type" => "additional_tools"} = item, _payload),
     do: validate_additional_tools_item(item)
@@ -114,7 +124,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_additional_tool(_tool), do: :ok
 
-  defp validate_item_reference(%{"id" => id} = item, payload) when is_binary(id) do
+  defp validate_item_reference(%{"id" => id} = item, payload, has_tool_result?)
+       when is_binary(id) do
     cond do
       !bare_item_reference?(item) ->
         {:error, Error.invalid_request("input item shape is not translatable", "input")}
@@ -125,7 +136,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
       !previous_response_id?(payload) ->
         {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-      ToolResultShape.items(Map.get(payload, "input")) == [] ->
+      not has_tool_result? ->
         {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
       true ->
@@ -133,10 +144,28 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     end
   end
 
-  defp validate_item_reference(_item, _payload),
+  defp validate_item_reference(_item, _payload, _has_tool_result?),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  def validate_previous_response_continuation(%{"previous_response_id" => response_id} = payload)
+  defp validate_item_reference(item, payload),
+    do:
+      validate_item_reference(
+        item,
+        payload,
+        payload |> Map.get("input") |> ToolResultShape.any?()
+      )
+
+  def validate_previous_response_continuation(payload),
+    do:
+      validate_previous_response_continuation(
+        payload,
+        payload |> Map.get("input") |> ToolResultShape.any?()
+      )
+
+  def validate_previous_response_continuation(
+        %{"previous_response_id" => response_id},
+        has_tool_result?
+      )
       when is_binary(response_id) do
     cond do
       String.trim(response_id) == "" ->
@@ -146,7 +175,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
            "previous_response_id"
          )}
 
-      payload |> Map.get("input") |> ToolResultShape.items() |> Enum.empty?() ->
+      not has_tool_result? ->
         {:error,
          Error.invalid_request(
            "previous_response_id requires a tool-output continuation",
@@ -158,15 +187,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     end
   end
 
-  def validate_previous_response_continuation(%{"previous_response_id" => _response_id}),
-    do:
-      {:error,
-       Error.invalid_request(
-         "previous_response_id requires a tool-output continuation",
-         "previous_response_id"
-       )}
+  def validate_previous_response_continuation(
+        %{"previous_response_id" => _response_id},
+        _has_tool_result?
+      ),
+      do:
+        {:error,
+         Error.invalid_request(
+           "previous_response_id requires a tool-output continuation",
+           "previous_response_id"
+         )}
 
-  def validate_previous_response_continuation(_payload), do: :ok
+  def validate_previous_response_continuation(_payload, _has_tool_result?), do: :ok
 
   defp bare_item_reference?(item),
     do: map_size(item) == 2 and Map.has_key?(item, "id") and Map.has_key?(item, "type")
