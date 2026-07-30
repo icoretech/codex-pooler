@@ -64,6 +64,7 @@ local nodeImage = 'node:26.5.0-slim';
           'mix deps.get',
           'mix format --check-formatted',
           'mix compile --warnings-as-errors',
+          'mix quality.xref',
           'mix ecto.create --quiet',
           'mix ecto.migrate --quiet',
           'mix test',

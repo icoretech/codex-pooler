@@ -122,10 +122,11 @@ defmodule CodexPooler.MixProject do
         "esbuild codex_pooler --minify",
         "phx.digest"
       ],
+      "quality.xref": ["xref graph --format plain --label compile-connected --fail-above 0"],
       "quality.credo": ["credo --strict"],
       "quality.dialyzer": ["dialyzer"],
       "quality.security": ["sobelow --exit --threshold medium --skip"],
-      quality: ["quality.credo", "quality.dialyzer", "quality.security"],
+      quality: ["quality.xref", "quality.credo", "quality.dialyzer", "quality.security"],
       coverage: ["test --cover"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
