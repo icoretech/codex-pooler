@@ -2549,6 +2549,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  test "POST /backend-api/codex/responses preserves namespace tools and lowers ordinary functions",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_namespace_tools",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    namespace_tool = backend_namespace_tool()
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic namespace request",
+        "tools" => [namespace_tool, backend_ordinary_function_tool()]
+      })
+
+    assert %{"id" => "resp_backend_namespace_tools"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert Enum.at(captured.json["tools"], 0) == namespace_tool
+
+    assert captured.json["tools"] |> Enum.at(1) |> Map.fetch!("parameters") ==
+             lowered_backend_function_schema()
+
+    refute Map.has_key?(Enum.at(captured.json["tools"], 1), "encrypted")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
   test "POST /backend-api/codex/responses applies the selected non-compact reasoning envelope",
        %{conn: conn} do
     upstream =
@@ -12999,6 +13039,75 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert attempt.status == "succeeded"
       assert Map.take(attempt.response_metadata["routing"], expected_keys) == expected
     end
+  end
+
+  defp backend_namespace_tool do
+    %{
+      "type" => "namespace",
+      "name" => "fixture_namespace",
+      "description" => "Synthetic namespace tools",
+      "encrypted" => true,
+      "unknown_namespace_key" => %{"encrypted" => true, "preserve" => [1, nil, false]},
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespaced_lookup",
+          "strict" => false,
+          "encrypted" => true,
+          "parameters" => backend_function_schema(),
+          "unknown_function_key" => %{"encrypted" => true}
+        },
+        %{
+          "type" => "namespace",
+          "name" => "nested_namespace",
+          "tools" => [%{"type" => "future_tool", "encrypted" => true}],
+          "unknown_nested_key" => true
+        }
+      ]
+    }
+  end
+
+  defp backend_ordinary_function_tool do
+    %{
+      "type" => "function",
+      "name" => "ordinary_lookup",
+      "strict" => false,
+      "encrypted" => true,
+      "parameters" => backend_function_schema()
+    }
+  end
+
+  defp backend_function_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me", "encrypted" => true},
+        "nested" => %{
+          "properties" => %{"value" => %{"type" => "string", "encrypted" => true}},
+          "required" => ["value"],
+          "encrypted" => true
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false,
+      "encrypted" => true
+    }
+  end
+
+  defp lowered_backend_function_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "nested" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"type" => "string"}},
+          "required" => ["value"]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false
+    }
   end
 
   defp start_invalid_content_length_server! do

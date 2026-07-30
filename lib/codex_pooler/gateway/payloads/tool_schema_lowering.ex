@@ -11,6 +11,17 @@ defmodule CodexPooler.Gateway.Payloads.ToolSchemaLowering do
 
   def lower_non_strict_function_tools(payload), do: payload
 
+  @spec lower_backend_non_strict_function_tools(map()) :: map()
+  def lower_backend_non_strict_function_tools(%{"tools" => tools} = payload)
+      when is_list(tools) do
+    Map.put(payload, "tools", Enum.map(tools, &lower_backend_tool/1))
+  end
+
+  def lower_backend_non_strict_function_tools(payload), do: payload
+
+  defp lower_backend_tool(%{"type" => "namespace"} = tool), do: tool
+  defp lower_backend_tool(tool), do: lower_tool(tool)
+
   defp lower_tool(%{"type" => "function", "function" => %{} = function} = tool) do
     if strict_function_tool?(function, tool) do
       tool

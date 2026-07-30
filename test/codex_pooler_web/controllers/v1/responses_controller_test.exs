@@ -2620,7 +2620,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
-  test "POST /v1/responses forwards namespace tools unchanged", %{conn: conn} do
+  test "POST /v1/responses keeps nested namespace lowering and strict function handling", %{
+    conn: conn
+  } do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -2643,6 +2645,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       "name" => "fixture_namespace",
       "description" => "Synthetic namespace tools",
       "tools" => [
+        %{
+          "type" => "function",
+          "name" => "lower_namespaced_fixture",
+          "description" => "Lower synthetic namespaced fixture",
+          "parameters" => non_strict_tool_schema(),
+          "strict" => false,
+          "defer_loading" => false
+        },
         %{
           "type" => "function",
           "name" => "lookup_namespaced_fixture",
@@ -2676,7 +2686,19 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
-    assert captured.json["tools"] == [namespace_tool]
+
+    [non_strict_function, strict_function] = namespace_tool["tools"]
+
+    expected_namespace_tool =
+      Map.put(namespace_tool, "tools", [
+        Map.put(non_strict_function, "parameters", lowered_tool_schema()),
+        strict_function
+      ])
+
+    assert captured.json["tools"] == [expected_namespace_tool]
+
+    [captured_namespace] = captured.json["tools"]
+    assert Enum.at(captured_namespace["tools"], 1) == strict_function
 
     assert captured.json["tool_choice"] == %{
              "type" => "function",
@@ -2689,6 +2711,45 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     metadata = inspect(request.request_metadata)
     refute metadata =~ "synthetic namespace request"
     refute metadata =~ "lookup_namespaced_fixture"
+  end
+
+  test "POST /v1/responses rejects malformed namespace and unsupported tools before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_tools = [
+      %{
+        "type" => "namespace",
+        "name" => "fixture_namespace",
+        "description" => "Synthetic namespace tools",
+        "tools" => [%{"type" => "function", "name" => "missing_parameters"}]
+      },
+      %{"type" => "unsupported_tool", "name" => "fixture"}
+    ]
+
+    for invalid_tool <- invalid_tools do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic invalid tool request",
+          "tools" => [invalid_tool]
+        })
+
+      assert %{"error" => error} = json_response(response, 400)
+      assert error["type"] == "invalid_request_error"
+      assert error["code"] == "invalid_request"
+      assert error["param"] == "tools"
+      refute response.resp_body =~ "missing_parameters"
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   @tag :tool_result_previous_response

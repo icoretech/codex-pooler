@@ -523,7 +523,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :function_tool_schema_lowering,
       contract:
-        "non-strict function tool schemas are lowered for backend Responses HTTP, backend Responses websocket response.create, and public /v1 Responses compatibility before local validation or upstream dispatch; lowering is limited to function tools including nested namespace function tools, converts boolean schemas and const values into supported schema shapes, infers missing object or array structure, drops unsupported JSON Schema keywords, preserves supported refs/definitions/combinators recursively, and never weakens strict function tools or strict structured-output schemas"
+        "backend Responses HTTP and websocket response.create lower and remove encrypted markers only for ordinary top-level non-strict function tool schemas while preserving every decoded top-level namespace tool term exactly; public /v1 Responses HTTP and websocket recursively lower nested namespace function tools before local validation or upstream dispatch; lowering converts boolean schemas and const values into supported schema shapes, infers missing object or array structure, drops unsupported JSON Schema keywords, preserves supported refs/definitions/combinators recursively, and never weakens strict function tools or strict structured-output schemas"
     },
     %{
       slug: :v1_supported_surface,
@@ -1259,6 +1259,18 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     function_tool_schema_lowering: %{
+      backend_namespace_passthrough: %{
+        scope: "top_level_decoded_namespace_term",
+        transports: ["http_sse", "websocket_response_create"],
+        exact_term_preserved: true,
+        nested_schema_lowering: false,
+        encrypted_marker_cleanup: false
+      },
+      public_v1_nested_lowering: %{
+        scope: "namespace_nested_function",
+        transports: ["http_sse", "websocket_response_create"],
+        recursive: true
+      },
       lowered_tool_types: [
         "flat_function",
         "nested_function",

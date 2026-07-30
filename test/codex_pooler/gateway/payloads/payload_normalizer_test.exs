@@ -148,6 +148,33 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "preserves backend Codex namespace subtrees while lowering ordinary function tools" do
+      namespace_tool = backend_namespace_tool()
+      payload = backend_mixed_tool_payload(namespace_tool)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      for request_options <- [http_options, websocket_options] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+        assert Enum.at(upstream["tools"], 0) == namespace_tool
+
+        assert get_in(upstream, ["tools", Access.at(1), "parameters"]) ==
+                 lowered_backend_function_schema()
+
+        refute Map.has_key?(Enum.at(upstream["tools"], 1), "encrypted")
+      end
+    end
+
     test "removes backend Codex encrypted-only agent messages from websocket upstream JSON" do
       payload = %{
         "model" => "gpt-5.5",
@@ -1859,6 +1886,82 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           "parameters" => non_strict_tool_schema()
         }
       ]
+    }
+  end
+
+  defp backend_mixed_tool_payload(namespace_tool) do
+    %{
+      "model" => "gpt-5.5",
+      "input" => [%{"role" => "user", "content" => "hello"}],
+      "tools" => [
+        namespace_tool,
+        %{
+          "type" => "function",
+          "name" => "ordinary_lookup",
+          "strict" => false,
+          "encrypted" => true,
+          "parameters" => backend_function_schema()
+        }
+      ]
+    }
+  end
+
+  defp backend_namespace_tool do
+    %{
+      "type" => "namespace",
+      "name" => "fixture_namespace",
+      "description" => "Synthetic namespace tools",
+      "encrypted" => true,
+      "unknown_namespace_key" => %{"encrypted" => true, "preserve" => [1, nil, false]},
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespaced_lookup",
+          "strict" => false,
+          "encrypted" => true,
+          "parameters" => backend_function_schema(),
+          "unknown_function_key" => %{"encrypted" => true}
+        },
+        %{
+          "type" => "namespace",
+          "name" => "nested_namespace",
+          "tools" => [%{"type" => "future_tool", "encrypted" => true}],
+          "unknown_nested_key" => true
+        }
+      ]
+    }
+  end
+
+  defp backend_function_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me", "encrypted" => true},
+        "nested" => %{
+          "properties" => %{"value" => %{"type" => "string", "encrypted" => true}},
+          "required" => ["value"],
+          "encrypted" => true
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false,
+      "encrypted" => true
+    }
+  end
+
+  defp lowered_backend_function_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "nested" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"type" => "string"}},
+          "required" => ["value"]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false
     }
   end
 

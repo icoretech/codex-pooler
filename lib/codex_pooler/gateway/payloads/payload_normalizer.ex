@@ -172,7 +172,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_websocket_input()
     |> normalize_backend_codex_reasoning_effort()
-    |> ToolSchemaLowering.lower_non_strict_function_tools()
+    |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(request_options)
     |> normalize_backend_codex_responses_lite_input(request_options)
@@ -230,7 +230,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.put_new("instructions", "")
     |> normalize_backend_codex_http_input()
     |> normalize_backend_codex_reasoning_effort()
-    |> ToolSchemaLowering.lower_non_strict_function_tools()
+    |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
     |> normalize_backend_codex_responses_lite_input(opts)
@@ -386,10 +386,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp remove_backend_codex_encrypted_tool_schema_markers(%{"tools" => tools} = payload)
        when is_list(tools) do
-    Map.put(payload, "tools", Enum.map(tools, &remove_schema_encrypted_markers/1))
+    Map.put(payload, "tools", Enum.map(tools, &remove_backend_tool_encrypted_markers/1))
   end
 
   defp remove_backend_codex_encrypted_tool_schema_markers(payload), do: payload
+
+  defp remove_backend_tool_encrypted_markers(%{"type" => "namespace"} = tool), do: tool
+
+  defp remove_backend_tool_encrypted_markers(%{"type" => "function"} = tool),
+    do: remove_schema_encrypted_markers(tool)
+
+  defp remove_backend_tool_encrypted_markers(tool), do: tool
 
   defp remove_schema_encrypted_markers(%{} = value) do
     value

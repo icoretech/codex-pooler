@@ -824,6 +824,57 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "backend websocket preserves namespace tools and lowers ordinary functions" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_namespace_tools",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    turn_state = "ws-namespace-tools-#{System.unique_integer([:positive])}"
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+    namespace_tool = backend_namespace_tool()
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic namespace request",
+          "tools" => [namespace_tool, backend_ordinary_function_tool()],
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"id" => "resp_ws_namespace_tools"} = Jason.decode!(frame)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert Enum.at(captured.json["tools"], 0) == namespace_tool
+
+      assert captured.json["tools"] |> Enum.at(1) |> Map.fetch!("parameters") ==
+               lowered_backend_function_schema()
+
+      refute Map.has_key?(Enum.at(captured.json["tools"], 1), "encrypted")
+
+      assert [request] = await_succeeded_pool_requests!(setup.pool.id, 1)
+      assert request.status == "succeeded"
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /backend-api/codex/responses keeps production-min idle open before delayed response" do
     setup_runtime_ingress_override(%OperationalSettings{
       max_decompressed_body_bytes: 12_000,
@@ -10239,6 +10290,75 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key])
     assert captured.json["parallel_tool_calls"] == true
     assert get_in(captured.json, ["reasoning", "context"]) == "current_turn"
+  end
+
+  defp backend_namespace_tool do
+    %{
+      "type" => "namespace",
+      "name" => "fixture_namespace",
+      "description" => "Synthetic namespace tools",
+      "encrypted" => true,
+      "unknown_namespace_key" => %{"encrypted" => true, "preserve" => [1, nil, false]},
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespaced_lookup",
+          "strict" => false,
+          "encrypted" => true,
+          "parameters" => backend_function_schema(),
+          "unknown_function_key" => %{"encrypted" => true}
+        },
+        %{
+          "type" => "namespace",
+          "name" => "nested_namespace",
+          "tools" => [%{"type" => "future_tool", "encrypted" => true}],
+          "unknown_nested_key" => true
+        }
+      ]
+    }
+  end
+
+  defp backend_ordinary_function_tool do
+    %{
+      "type" => "function",
+      "name" => "ordinary_lookup",
+      "strict" => false,
+      "encrypted" => true,
+      "parameters" => backend_function_schema()
+    }
+  end
+
+  defp backend_function_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me", "encrypted" => true},
+        "nested" => %{
+          "properties" => %{"value" => %{"type" => "string", "encrypted" => true}},
+          "required" => ["value"],
+          "encrypted" => true
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false,
+      "encrypted" => true
+    }
+  end
+
+  defp lowered_backend_function_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "nested" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"type" => "string"}},
+          "required" => ["value"]
+        }
+      },
+      "required" => ["mode"],
+      "additionalProperties" => false
+    }
   end
 
   defp assert_catalog_etag_header!(headers, true) do
