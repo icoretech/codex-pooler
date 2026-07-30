@@ -4,7 +4,9 @@ defmodule CodexPooler.Gateway.Persistence.BridgeOwnerLease do
 
   import Ecto.Changeset
 
-  @statuses ~w(active expired released)
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+
+  @statuses OwnerLeaseStatus.statuses()
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -64,14 +66,14 @@ defmodule CodexPooler.Gateway.Persistence.BridgeOwnerLease do
   end
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: OwnerLeaseStatus
 
   @spec active_status() :: status()
-  def active_status, do: "active"
+  defdelegate active_status(), to: OwnerLeaseStatus
 
   @spec expired_status() :: status()
-  def expired_status, do: "expired"
+  defdelegate expired_status(), to: OwnerLeaseStatus
 
   @spec released_status() :: status()
-  def released_status, do: "released"
+  defdelegate released_status(), to: OwnerLeaseStatus
 end

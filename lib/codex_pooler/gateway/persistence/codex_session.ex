@@ -2,8 +2,7 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
   @moduledoc false
   use CodexPooler.Schema
 
-  @statuses ~w(active interrupted closed)
-  @reconnectable_statuses ~w(active interrupted)
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
   @type t :: %__MODULE__{}
   @type status :: String.t()
@@ -26,19 +25,19 @@ defmodule CodexPooler.Gateway.Persistence.CodexSession do
   end
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: SessionStatus
 
   @spec active_status() :: status()
-  def active_status, do: "active"
+  defdelegate active_status(), to: SessionStatus
 
   @spec interrupted_status() :: status()
-  def interrupted_status, do: "interrupted"
+  defdelegate interrupted_status(), to: SessionStatus
 
   @spec closed_status() :: status()
-  def closed_status, do: "closed"
+  defdelegate closed_status(), to: SessionStatus
 
   @spec reconnectable_statuses() :: [status()]
-  def reconnectable_statuses, do: @reconnectable_statuses
+  defdelegate reconnectable_statuses(), to: SessionStatus
 
   @spec reconnectable?(t() | status() | nil) :: boolean()
   def reconnectable?(%__MODULE__{status: status}), do: reconnectable?(status)

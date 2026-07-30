@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.Persistence.CodexTurn do
   @moduledoc false
   use CodexPooler.Schema
 
-  @statuses ~w(in_progress succeeded failed interrupted)
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
 
   @type t :: %__MODULE__{}
   @type status :: String.t()
@@ -23,19 +23,19 @@ defmodule CodexPooler.Gateway.Persistence.CodexTurn do
   end
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: TurnStatus
 
   @spec in_progress_status() :: status()
-  def in_progress_status, do: "in_progress"
+  defdelegate in_progress_status(), to: TurnStatus
 
   @spec succeeded_status() :: status()
-  def succeeded_status, do: "succeeded"
+  defdelegate succeeded_status(), to: TurnStatus
 
   @spec failed_status() :: status()
-  def failed_status, do: "failed"
+  defdelegate failed_status(), to: TurnStatus
 
   @spec interrupted_status() :: status()
-  def interrupted_status, do: "interrupted"
+  defdelegate interrupted_status(), to: TurnStatus
 
   @spec in_progress?(t() | status() | nil) :: boolean()
   def in_progress?(%__MODULE__{status: status}), do: in_progress?(status)

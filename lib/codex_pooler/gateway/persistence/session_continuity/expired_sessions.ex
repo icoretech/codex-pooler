@@ -10,13 +10,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
   }
 
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
-  @alias_active BridgeSessionAlias.active_status()
-  @alias_expired BridgeSessionAlias.expired_status()
-  @lease_active BridgeOwnerLease.active_status()
-  @lease_expired BridgeOwnerLease.expired_status()
-  @session_closed CodexSession.closed_status()
-  @session_reconnectable_statuses CodexSession.reconnectable_statuses()
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
+    as: SessionAliasStatus
+
+  @alias_active SessionAliasStatus.active_status()
+  @alias_expired SessionAliasStatus.expired_status()
+  @lease_active OwnerLeaseStatus.active_status()
+  @lease_expired OwnerLeaseStatus.expired_status()
+  @session_closed SessionStatus.closed_status()
+  @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
 
   @spec close_for_key!(Ecto.UUID.t(), String.t(), DateTime.t()) ::
           {non_neg_integer(), nil | [term()]}

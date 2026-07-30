@@ -13,9 +13,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
   }
 
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
-  @session_reconnectable_statuses CodexSession.reconnectable_statuses()
-  @alias_active BridgeSessionAlias.active_status()
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
+    as: SessionAliasStatus
+
+  @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
+  @alias_active SessionAliasStatus.active_status()
 
   @session_alias_conflict_target {:unsafe_fragment,
                                   "(pool_id, api_key_id, alias_kind, alias_hash) WHERE status = 'active'"}

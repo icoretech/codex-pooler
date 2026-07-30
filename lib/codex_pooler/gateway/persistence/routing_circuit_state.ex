@@ -4,7 +4,9 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitState do
 
   import Ecto.Changeset
 
-  @statuses ~w(closed open half_open)
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Circuit, as: CircuitStatus
+
+  @statuses CircuitStatus.statuses()
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -74,14 +76,14 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitState do
   end
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: CircuitStatus
 
   @spec closed_status() :: status()
-  def closed_status, do: "closed"
+  defdelegate closed_status(), to: CircuitStatus
 
   @spec open_status() :: status()
-  def open_status, do: "open"
+  defdelegate open_status(), to: CircuitStatus
 
   @spec half_open_status() :: status()
-  def half_open_status, do: "half_open"
+  defdelegate half_open_status(), to: CircuitStatus
 end

@@ -4,8 +4,11 @@ defmodule CodexPooler.Gateway.Persistence.BridgeSessionAlias do
 
   import Ecto.Changeset
 
-  @alias_kinds ~w(turn_state previous_response_id session_header canonical_session_key)
-  @statuses ~w(active expired replaced)
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
+    as: SessionAliasStatus
+
+  @alias_kinds SessionAliasStatus.alias_kinds()
+  @statuses SessionAliasStatus.statuses()
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -61,17 +64,17 @@ defmodule CodexPooler.Gateway.Persistence.BridgeSessionAlias do
   end
 
   @spec alias_kinds() :: [alias_kind()]
-  def alias_kinds, do: @alias_kinds
+  defdelegate alias_kinds(), to: SessionAliasStatus
 
   @spec statuses() :: [status()]
-  def statuses, do: @statuses
+  defdelegate statuses(), to: SessionAliasStatus
 
   @spec active_status() :: status()
-  def active_status, do: "active"
+  defdelegate active_status(), to: SessionAliasStatus
 
   @spec expired_status() :: status()
-  def expired_status, do: "expired"
+  defdelegate expired_status(), to: SessionAliasStatus
 
   @spec replaced_status() :: status()
-  def replaced_status, do: "replaced"
+  defdelegate replaced_status(), to: SessionAliasStatus
 end

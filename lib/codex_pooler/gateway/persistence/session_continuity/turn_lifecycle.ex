@@ -14,16 +14,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
 
   @type turn_result :: {:ok, CodexTurn.t()} | {:error, term()}
   @type request_ref :: Request.t() | Ecto.UUID.t()
   @type opts :: RequestOptions.t()
 
-  @turn_in_progress CodexTurn.in_progress_status()
-  @turn_succeeded CodexTurn.succeeded_status()
-  @turn_interrupted CodexTurn.interrupted_status()
-  @session_active CodexSession.active_status()
-  @owner_lease_active BridgeOwnerLease.active_status()
+  @turn_in_progress TurnStatus.in_progress_status()
+  @turn_succeeded TurnStatus.succeeded_status()
+  @turn_interrupted TurnStatus.interrupted_status()
+  @session_active SessionStatus.active_status()
+  @owner_lease_active OwnerLeaseStatus.active_status()
 
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   def start_codex_turn(

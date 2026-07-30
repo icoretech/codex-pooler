@@ -18,10 +18,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
 
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
-  @owner_lease_active BridgeOwnerLease.active_status()
-  @session_active CodexSession.active_status()
-  @session_alias_active BridgeSessionAlias.active_status()
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
+    as: SessionAliasStatus
+
+  @owner_lease_active OwnerLeaseStatus.active_status()
+  @session_active SessionStatus.active_status()
+  @session_alias_active SessionAliasStatus.active_status()
 
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
   @type session_row :: %{

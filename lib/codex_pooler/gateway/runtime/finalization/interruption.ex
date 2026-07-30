@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Repo
 
@@ -17,12 +19,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   @type opts :: RequestOptions.t()
   @type session_ref :: CodexSession.t() | Ecto.UUID.t()
 
-  @session_interrupted CodexSession.interrupted_status()
-  @session_closed CodexSession.closed_status()
-  @turn_in_progress CodexTurn.in_progress_status()
-  @turn_succeeded CodexTurn.succeeded_status()
-  @turn_failed CodexTurn.failed_status()
-  @turn_interrupted CodexTurn.interrupted_status()
+  @session_interrupted SessionStatus.interrupted_status()
+  @session_closed SessionStatus.closed_status()
+  @turn_in_progress TurnStatus.in_progress_status()
+  @turn_succeeded TurnStatus.succeeded_status()
+  @turn_failed TurnStatus.failed_status()
+  @turn_interrupted TurnStatus.interrupted_status()
 
   @spec interrupt_codex_session(session_ref(), opts()) :: {:ok, term()} | {:error, term()}
   def interrupt_codex_session(%CodexSession{id: id}, opts), do: interrupt_codex_session(id, opts)

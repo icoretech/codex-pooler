@@ -12,14 +12,16 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
   }
 
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()
 
-  @session_reconnectable_statuses CodexSession.reconnectable_statuses()
-  @lease_active BridgeOwnerLease.active_status()
-  @lease_expired BridgeOwnerLease.expired_status()
-  @lease_released BridgeOwnerLease.released_status()
+  @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
+  @lease_active OwnerLeaseStatus.active_status()
+  @lease_expired OwnerLeaseStatus.expired_status()
+  @lease_released OwnerLeaseStatus.released_status()
 
   @spec acquire!(CodexSession.t(), map(), RequestOptions.t(), String.t(), DateTime.t()) ::
           BridgeOwnerLease.t()

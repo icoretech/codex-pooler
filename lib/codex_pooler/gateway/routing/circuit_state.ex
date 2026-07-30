@@ -10,14 +10,15 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Circuit, as: CircuitStatus
   alias CodexPooler.Gateway.Routing.{CircuitHealth, CircuitTelemetry}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
-  @closed_status RoutingCircuitState.closed_status()
-  @open_status RoutingCircuitState.open_status()
-  @half_open_status RoutingCircuitState.half_open_status()
+  @closed_status CircuitStatus.closed_status()
+  @open_status CircuitStatus.open_status()
+  @half_open_status CircuitStatus.half_open_status()
 
   @type auth :: CodexPooler.Access.auth_context()
   @type eligibility_snapshot :: %{

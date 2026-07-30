@@ -19,9 +19,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
   }
 
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
-  @session_active CodexSession.active_status()
-  @session_reconnectable_statuses CodexSession.reconnectable_statuses()
+  @session_active SessionStatus.active_status()
+  @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: RequestOptions.t()
   @type payload :: map()

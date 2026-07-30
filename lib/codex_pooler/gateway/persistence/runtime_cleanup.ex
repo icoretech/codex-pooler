@@ -16,8 +16,9 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
 
-  @owner_lease_active BridgeOwnerLease.active_status()
+  @owner_lease_active OwnerLeaseStatus.active_status()
 
   @type request_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()}
   @type attempt_ref :: Ecto.UUID.t() | %{required(:id) => Ecto.UUID.t()} | nil

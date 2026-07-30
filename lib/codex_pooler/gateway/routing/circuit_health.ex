@@ -5,11 +5,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.Circuit, as: CircuitStatus
   alias CodexPooler.Repo
 
   @circuit_probe_in_flight_key "probe_in_flight_count"
-  @open_status RoutingCircuitState.open_status()
-  @half_open_status RoutingCircuitState.half_open_status()
+  @open_status CircuitStatus.open_status()
+  @half_open_status CircuitStatus.half_open_status()
 
   @spec blocked?(
           RoutingCircuitState.t() | nil,
