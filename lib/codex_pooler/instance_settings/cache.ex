@@ -11,16 +11,20 @@ defmodule CodexPooler.InstanceSettings.Cache do
   @pubsub CodexPooler.PubSub
   @topic "instance_settings"
   @message_tag __MODULE__
+  @cache_key {__MODULE__, :current}
+  @cache_version 1
+  @cache_miss {__MODULE__, :cache_miss}
 
   @spec start_link(term()) :: GenServer.on_start()
   def start_link(_opts), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @spec current() :: Settings.t()
   def current do
-    GenServer.call(__MODULE__, :current)
-  catch
-    :exit, {:noproc, {GenServer, :call, [__MODULE__, :current, _timeout]}} ->
-      Settings.fallback_default()
+    case :persistent_term.get(@cache_key, @cache_miss) do
+      {@cache_version, %Settings{} = settings} -> settings
+      @cache_miss -> load_current()
+      {_other_version, %Settings{}} -> load_current()
+    end
   end
 
   @spec put(Settings.t()) :: :ok
@@ -45,23 +49,22 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   @impl true
   def handle_call(:current, _from, %{cached: %Settings{} = settings} = state) do
-    settings = Settings.mark_loaded(settings, :database)
-
-    {:reply, settings, %{state | cached: settings}}
+    {:reply, settings, publish(state, settings)}
   end
 
   def handle_call(:current, _from, %{cached: nil} = state) do
     case load_settings(state.cached) do
-      {:ok, settings} -> {:reply, settings, %{state | cached: settings}}
+      {:ok, settings} -> {:reply, settings, publish(state, settings)}
       {:fallback, settings} -> {:reply, settings, state}
     end
   end
 
   def handle_call({:put, %Settings{} = settings}, _from, state) do
-    {:reply, :ok, %{state | cached: Settings.mark_loaded(settings, :database)}}
+    {:reply, :ok, publish(state, settings)}
   end
 
   def handle_call(:reset, _from, _state) do
+    :persistent_term.erase(@cache_key)
     {:reply, :ok, %{cached: nil}}
   end
 
@@ -75,12 +78,33 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   def handle_info({@message_tag, {:updated, _lock_version}}, state) do
     case load_settings(state.cached) do
-      {:ok, settings} -> {:noreply, %{state | cached: settings}}
+      {:ok, settings} -> {:noreply, publish(state, settings)}
       {:fallback, _settings} -> {:noreply, state}
     end
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp load_current do
+    GenServer.call(__MODULE__, :current)
+  catch
+    :exit, {:noproc, {GenServer, :call, [__MODULE__, :current, _timeout]}} ->
+      Settings.fallback_default()
+  end
+
+  defp publish(state, %Settings{} = settings) do
+    settings = settings |> Settings.mark_loaded(:database) |> clear_virtual_secrets()
+    :persistent_term.put(@cache_key, {@cache_version, settings})
+    %{state | cached: settings}
+  end
+
+  defp clear_virtual_secrets(%Settings{} = settings) do
+    %Settings{
+      settings
+      | metrics: %{settings.metrics | bearer_token: nil, bearer_token_action: nil},
+        smtp: %{settings.smtp | password: nil, password_action: nil}
+    }
+  end
 
   defp load_settings(last_known_good) do
     settings = ensure_singleton_with_repo!()

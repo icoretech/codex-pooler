@@ -174,7 +174,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
       | gateway: Map.delete(Settings.default().gateway, :websocket_idle_timeout_ms)
     }
 
-    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+    :ok = Cache.put(stale_settings)
 
     assert OperationalSettings.current().websocket_idle_timeout_ms == 1_800_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 1_800_000
@@ -186,7 +186,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
       | gateway: %{Settings.default().gateway | websocket_idle_timeout_ms: 9_000_000}
     }
 
-    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+    :ok = Cache.put(stale_settings)
 
     assert OperationalSettings.current().websocket_idle_timeout_ms == 3_600_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 9_000_000
@@ -198,7 +198,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
       | gateway: %{Settings.default().gateway | websocket_idle_timeout_ms: 0}
     }
 
-    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+    :ok = Cache.put(stale_settings)
 
     assert OperationalSettings.current().websocket_idle_timeout_ms == 60_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 0
@@ -212,7 +212,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
       | gateway: Map.delete(defaults.gateway, :websocket_owner_idle_timeout_ms)
     }
 
-    :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+    :ok = Cache.put(stale_settings)
 
     settings = OperationalSettings.current()
 
@@ -236,7 +236,7 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
         | gateway: Map.put(defaults.gateway, :websocket_owner_idle_timeout_ms, value)
       }
 
-      :sys.replace_state(Cache, fn state -> %{state | cached: stale_settings} end)
+      :ok = Cache.put(stale_settings)
 
       settings = OperationalSettings.current()
 

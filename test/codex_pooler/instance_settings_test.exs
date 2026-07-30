@@ -18,6 +18,45 @@ defmodule CodexPooler.InstanceSettingsTest do
       do: raise(DBConnection.ConnectionError, message: "settings db unavailable")
   end
 
+  defmodule PeerRepo do
+    def insert(settings, _opts), do: {:ok, settings}
+
+    def get!(Settings, true) do
+      Application.fetch_env!(:codex_pooler, __MODULE__)
+    end
+  end
+
+  defmodule PeerHarness do
+    def start(settings) do
+      Application.put_env(:codex_pooler, InstanceSettings, repo: PeerRepo)
+      Application.put_env(:codex_pooler, PeerRepo, settings)
+
+      {:ok, supervisor} =
+        Supervisor.start_link(
+          [
+            {Phoenix.PubSub, name: CodexPooler.PubSub},
+            Cache
+          ],
+          strategy: :one_for_one
+        )
+
+      Process.unlink(supervisor)
+      supervisor
+    end
+
+    def replace_repo_settings(settings) do
+      Application.put_env(:codex_pooler, PeerRepo, settings)
+    end
+
+    def current_lock_version do
+      InstanceSettings.current().lock_version
+    end
+
+    def hide_cache_name do
+      Process.unregister(Cache)
+    end
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, InstanceSettings, [])
     Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
@@ -408,6 +447,86 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().gateway.gateway_debug == true
   end
 
+  test "primed current/0 reads do not require a synchronous cache process call" do
+    expected = InstanceSettings.current()
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      assert InstanceSettings.current() == expected
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
+  end
+
+  test "cache publication clears virtual secret inputs and actions" do
+    settings = InstanceSettings.current()
+
+    candidate = %{
+      settings
+      | metrics: %{
+          settings.metrics
+          | bearer_token: "transient-metrics-token",
+            bearer_token_action: "set"
+        },
+        smtp: %{settings.smtp | password: "transient-smtp-password", password_action: "set"}
+    }
+
+    assert :ok = Cache.put(candidate)
+
+    published = InstanceSettings.current()
+    assert published.metrics.bearer_token == nil
+    assert published.metrics.bearer_token_action == nil
+    assert published.smtp.password == nil
+    assert published.smtp.password_action == nil
+  end
+
+  test "cache misses and incompatible publication versions reload through the writer" do
+    settings = InstanceSettings.current()
+    :persistent_term.put({Cache, :current}, {0, %{settings | lock_version: 999}})
+
+    assert InstanceSettings.current().lock_version == settings.lock_version
+
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      assert InstanceSettings.current().lock_version == settings.lock_version
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
+  end
+
+  test "cache reset erases the published value" do
+    _settings = InstanceSettings.current()
+    assert :ok = InstanceSettings.reset_cache_for_test()
+
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      assert InstanceSettings.current().source == :fallback_defaults
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
+  end
+
+  @tag :distributed
+  test "PubSub invalidation refreshes the published read value on a peer node" do
+    settings = InstanceSettings.current()
+    peer = start_instance_settings_peer!(settings)
+
+    on_exit(fn -> stop_instance_settings_peer(peer) end)
+
+    assert true = :erpc.call(peer.node, PeerHarness, :hide_cache_name, [])
+
+    updated = %{settings | lock_version: settings.lock_version + 1}
+    assert :ok = :erpc.call(peer.node, PeerHarness, :replace_repo_settings, [updated])
+    assert :ok = Cache.broadcast_update(updated)
+
+    assert :ok = await_peer_lock_version(peer.node, updated.lock_version)
+  end
+
   @tag :failure_modes
   test "current/0 returns fallback defaults before the cache process starts" do
     cache = Process.whereis(Cache)
@@ -785,6 +904,153 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert_received {^ref, result}
     {result, log}
+  end
+
+  defp start_instance_settings_peer!(settings) do
+    distribution = ensure_test_distribution_started!()
+    peer_name = String.to_atom("instance_settings_peer_#{System.unique_integer([:positive])}")
+
+    assert {:ok, peer_pid, peer_node} =
+             :peer.start_link(%{
+               name: peer_name,
+               args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
+             })
+
+    Process.unlink(peer_pid)
+    assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
+
+    assert {:ok, _applications} =
+             :erpc.call(peer_node, Application, :ensure_all_started, [:elixir])
+
+    assert [{PeerRepo, _repo_beam}, {PeerHarness, _harness_beam}] =
+             :erpc.call(peer_node, Code, :compile_string, [peer_harness_source()])
+
+    assert {:ok, _applications} =
+             :erpc.call(peer_node, Application, :ensure_all_started, [:phoenix_pubsub])
+
+    supervisor = :erpc.call(peer_node, PeerHarness, :start, [settings])
+    assert is_pid(supervisor)
+
+    %{
+      distribution: distribution,
+      node: peer_node,
+      pid: peer_pid,
+      supervisor: supervisor
+    }
+  end
+
+  defp stop_instance_settings_peer(%{pid: peer_pid, distribution: distribution}) do
+    if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
+
+    if distribution.node_started? do
+      :ok = :net_kernel.stop()
+      restore_partition_guard(distribution.previous_partition_guard)
+    end
+
+    if distribution.epmd_started?, do: System.cmd("epmd", ["-kill"])
+    :ok
+  end
+
+  defp ensure_test_distribution_started! do
+    case Node.alive?() do
+      true ->
+        %{epmd_started?: false, node_started?: false, previous_partition_guard: :unchanged}
+
+      false ->
+        epmd_started? = ensure_epmd_started!()
+        previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
+        Application.put_env(:kernel, :prevent_overlapping_partitions, false)
+        node_name = String.to_atom("instance_settings_test_#{System.unique_integer([:positive])}")
+        assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
+
+        %{
+          epmd_started?: epmd_started?,
+          node_started?: true,
+          previous_partition_guard: previous_partition_guard
+        }
+    end
+  end
+
+  defp ensure_epmd_started! do
+    case :erl_epmd.names() do
+      {:ok, _names} ->
+        false
+
+      {:error, _reason} ->
+        assert {_output, 0} = System.cmd("epmd", ["-daemon"])
+        true
+    end
+  end
+
+  defp restore_partition_guard({:ok, value}) do
+    Application.put_env(:kernel, :prevent_overlapping_partitions, value)
+  end
+
+  defp restore_partition_guard(:error) do
+    Application.delete_env(:kernel, :prevent_overlapping_partitions)
+  end
+
+  defp restore_partition_guard(:unchanged), do: :ok
+
+  defp peer_harness_source do
+    """
+    defmodule #{inspect(PeerRepo)} do
+      def insert(settings, _opts), do: {:ok, settings}
+
+      def get!(CodexPooler.InstanceSettings.Settings, true) do
+        Application.fetch_env!(:codex_pooler, __MODULE__)
+      end
+    end
+
+    defmodule #{inspect(PeerHarness)} do
+      alias CodexPooler.InstanceSettings
+      alias CodexPooler.InstanceSettings.Cache
+      alias #{inspect(PeerRepo)}
+
+      def start(settings) do
+        Application.put_env(:codex_pooler, InstanceSettings, repo: PeerRepo)
+        Application.put_env(:codex_pooler, PeerRepo, settings)
+
+        {:ok, supervisor} =
+          Supervisor.start_link(
+            [{Phoenix.PubSub, name: CodexPooler.PubSub}, Cache],
+            strategy: :one_for_one
+          )
+
+        Process.unlink(supervisor)
+        supervisor
+      end
+
+      def replace_repo_settings(settings) do
+        Application.put_env(:codex_pooler, PeerRepo, settings)
+      end
+
+      def current_lock_version do
+        InstanceSettings.current().lock_version
+      end
+
+      def hide_cache_name do
+        Process.unregister(Cache)
+      end
+    end
+    """
+  end
+
+  defp await_peer_lock_version(peer_node, lock_version, attempts \\ 100)
+
+  defp await_peer_lock_version(peer_node, lock_version, attempts) when attempts > 0 do
+    if :erpc.call(peer_node, PeerHarness, :current_lock_version, []) == lock_version do
+      :ok
+    else
+      receive do
+      after
+        10 -> await_peer_lock_version(peer_node, lock_version, attempts - 1)
+      end
+    end
+  end
+
+  defp await_peer_lock_version(_peer_node, lock_version, 0) do
+    flunk("peer cache did not publish lock version #{lock_version}")
   end
 
   defp free_port do
