@@ -3223,7 +3223,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       |> Ecto.Changeset.change(%{
         exposed_model_id: "gpt-5.5",
         upstream_model_id: "gpt-5.5",
-        pricing_ref: "gpt-5.5"
+        pricing_ref: "gpt-5.5",
+        metadata:
+          put_in(
+            setup.model.metadata,
+            ["source_assignment_models", setup.assignment.id, "slug"],
+            "gpt-5.5"
+          )
       })
       |> Repo.update!()
 

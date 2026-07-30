@@ -58,8 +58,9 @@ defmodule CodexPooler.Gateway.Metadata do
         effective_model_serving_modes(auth, hydration, visible_models)
 
       catalog =
-        CodexCatalog.build(
+        CodexCatalog.build_canonical(
           visible_models,
+          hydration.candidates_by_model_id,
           policy,
           pricing_buckets,
           context_window_overrides,

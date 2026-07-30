@@ -347,7 +347,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         exposed_model_id: "gpt-backend-policy-denied-etag",
         upstream_model_id: "provider-gpt-backend-policy-denied-etag",
         display_name: "Backend Policy Denied ETag",
-        metadata: %{"source_assignment_ids" => [denied_assignment.id]}
+        metadata: %{
+          "source_assignment_ids" => [denied_assignment.id],
+          "source_assignment_models" => %{
+            denied_assignment.id =>
+              pristine_catalog_source("gpt-backend-policy-denied-etag", "policy-denied")
+          }
+        }
       })
 
     setup.api_key
@@ -392,6 +398,96 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
+  test "backend catalog serves the oldest pristine partition and ignores non-selected divergence",
+       %{
+         conn: conn
+       } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+
+    %{assignment: matching_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Synthetic matching catalog source"
+      })
+
+    %{assignment: divergent_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Synthetic divergent catalog source"
+      })
+
+    source = pristine_catalog_source(setup.model.exposed_model_id, "selected")
+    divergent = pristine_catalog_source(setup.model.exposed_model_id, "divergent-one")
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(
+        source_assignment_count: 3,
+        metadata: %{
+          "upstream_model" => %{"description" => "lossy aggregate must not emit"},
+          "source_assignment_ids" =>
+            Enum.sort([setup.assignment.id, matching_assignment.id, divergent_assignment.id]),
+          "source_assignment_models" => %{
+            setup.assignment.id => source,
+            matching_assignment.id => source,
+            divergent_assignment.id => divergent
+          }
+        }
+      )
+      |> Repo.update!()
+
+    first = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
+    first_body = json_response(first, 200)
+    [first_etag] = get_resp_header(first, "etag")
+
+    assert hd(first_body["models"])["future_schema_field"] == source["future_schema_field"]
+
+    assert first_etag == CodexCatalog.etag(first_body)
+
+    model
+    |> Ecto.Changeset.change(
+      metadata:
+        put_in(
+          model.metadata,
+          ["source_assignment_models", divergent_assignment.id],
+          pristine_catalog_source(setup.model.exposed_model_id, "divergent-two")
+        )
+    )
+    |> Repo.update!()
+
+    second = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/v1/models")
+    second_body = json_response(second, 200)
+
+    assert second_body == first_body
+    assert second.resp_body == first.resp_body
+    assert get_resp_header(second, "etag") == [first_etag]
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "backend catalog omits a model with no valid routable pristine source", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+
+    setup.model
+    |> Ecto.Changeset.change(
+      metadata: %{
+        "source_assignment_ids" => [setup.assignment.id],
+        "source_assignment_models" => %{
+          setup.assignment.id => "not-a-map"
+        },
+        "upstream_model" => pristine_catalog_source(setup.model.exposed_model_id, "aggregate")
+      }
+    )
+    |> Repo.update!()
+
+    response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
+    body = json_response(response, 200)
+
+    assert body == %{"models" => []}
+    assert get_resp_header(response, "etag") == [CodexCatalog.etag(body)]
+    refute response.resp_body =~ "aggregate"
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "backend model aliases expose fresh effective Pool modes without leaking hidden modes", %{
     conn: conn
   } do
@@ -401,7 +497,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       gateway_setup(upstream,
         model_metadata: %{
           "source_assignment_models" => %{
-            "placeholder" => %{"use_responses_lite" => false}
+            "placeholder" => pristine_catalog_source("gpt-test-model", "placeholder-serving-mode")
           },
           "use_responses_lite" => true
         }
@@ -412,7 +508,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       metadata: %{
         "source_assignment_ids" => [setup.assignment.id],
         "source_assignment_models" => %{
-          setup.assignment.id => %{"use_responses_lite" => true}
+          setup.assignment.id =>
+            setup.model.exposed_model_id
+            |> pristine_catalog_source("visible-serving-mode")
+            |> Map.put("use_responses_lite", true)
         },
         "use_responses_lite" => false
       }
@@ -432,7 +531,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [hidden_assignment.id],
           "source_assignment_models" => %{
-            hidden_assignment.id => %{"use_responses_lite" => false}
+            hidden_assignment.id =>
+              pristine_catalog_source("gpt-hidden-serving-mode", "hidden-serving-mode")
           }
         }
       })
@@ -540,7 +640,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :model_serving_modes
-  test "backend pre-visible cross-assignment failover preserves the selected Pool mode", %{
+  test "backend pre-visible failover does not cross a divergent Lite schema partition", %{
     conn: conn
   } do
     first_upstream =
@@ -584,8 +684,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id, second.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{"use_responses_lite" => false},
-            second.assignment.id => %{"use_responses_lite" => true}
+            setup.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => false
+            },
+            second.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => true
+            }
           }
         }
       })
@@ -612,20 +718,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         ]
       })
 
-    assert %{"id" => "resp_backend_mode_failover"} = json_response(response, 200)
+    assert %{"error" => %{"code" => "model_not_found"}} = json_response(response, 500)
 
     assert [%{json: first_payload}] = FakeUpstream.requests(first_upstream)
-    assert [%{json: second_payload}] = FakeUpstream.requests(second_upstream)
-    assert first_payload == second_payload
-
-    assert_backend_lite_mode_headers!(
-      hd(FakeUpstream.requests(first_upstream)),
-      hd(FakeUpstream.requests(second_upstream))
-    )
+    assert FakeUpstream.requests(second_upstream) == []
+    assert first_payload["model"] == setup.model.upstream_model_id
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.status == "succeeded"
-    assert request.retry_count == 1
+    assert request.status == "failed"
+    assert request.retry_count == 0
 
     expected_mode_metadata = %{
       "model_serving_mode_configured" => "lite",
@@ -636,23 +737,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
              expected_mode_metadata
 
-    assert [first_attempt, second_attempt] =
-             Repo.all(
-               from(a in Attempt,
-                 where: a.request_id == ^request.id,
-                 order_by: [asc: a.attempt_number]
-               )
-             )
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
 
-    assert first_attempt.status == "retryable_failed"
-    assert second_attempt.status == "succeeded"
-    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
-    assert second_attempt.pool_upstream_assignment_id == second.assignment.id
-
-    for attempt <- [first_attempt, second_attempt] do
-      assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
-               expected_mode_metadata
-    end
+    assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
   end
 
   @tag :task_15_sanitization
@@ -1149,9 +1239,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "upstream_status"
   end
 
-  test "GET /backend-api/codex/models filters reasoning metadata through API key policy", %{
-    conn: conn
-  } do
+  test "GET /backend-api/codex/models preserves pristine reasoning metadata across API key policy",
+       %{
+         conn: conn
+       } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
     setup =
@@ -1176,13 +1267,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert model["supported_reasoning_levels"] == [
              %{"effort" => "low", "description" => "Quick"},
-             %{"effort" => "medium", "description" => "Balanced"}
+             %{"effort" => "medium", "description" => "Balanced"},
+             %{"effort" => "high", "description" => "Deep"}
            ]
 
-    assert model["default_reasoning_level"] == "medium"
+    assert model["default_reasoning_level"] == "high"
   end
 
-  test "GET /backend-api/codex/models preserves level order and canonicalizes known semantics", %{
+  test "GET /backend-api/codex/models preserves pristine reasoning level values and order", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -1209,11 +1301,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert model["supported_reasoning_levels"] == [
              %{"effort" => "medium", "description" => "Balanced"},
-             %{"effort" => "high", "description" => "Deep", "extra" => "preserved"},
+             %{"effort" => " HIGH ", "description" => "Deep", "extra" => "preserved"},
              %{"effort" => "low", "description" => "Quick"}
            ]
 
-    assert model["default_reasoning_level"] == "high"
+    assert model["default_reasoning_level"] == " HIGH "
   end
 
   test "GET /backend-api/codex/models keeps models visible when enforced reasoning is unavailable",
@@ -1236,11 +1328,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"models" => [model]} = json_response(conn, 200)
     assert model["slug"] == setup.model.exposed_model_id
-    assert model["supported_reasoning_levels"] == []
-    assert is_nil(model["default_reasoning_level"])
+    assert model["supported_reasoning_levels"] == ~w(low medium)
+    assert model["default_reasoning_level"] == "medium"
   end
 
-  test "GET /backend-api/codex/models advertises only an available enforced reasoning level", %{
+  test "GET /backend-api/codex/models keeps pristine reasoning metadata with enforced effort", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -1261,11 +1353,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"models" => [model]} = json_response(conn, 200)
 
-    assert model["supported_reasoning_levels"] == [
-             %{"effort" => "medium", "description" => "medium"}
-           ]
+    assert model["supported_reasoning_levels"] == ~w(low medium high)
 
-    assert model["default_reasoning_level"] == "medium"
+    assert model["default_reasoning_level"] == "high"
   end
 
   test "GET /backend-api/codex/models records unique server correlation ids for repeated client request ids",
@@ -1432,7 +1522,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         exposed_model_id: "gpt-backend-visible-allowed",
         upstream_model_id: "provider-gpt-backend-visible-allowed",
         display_name: "Backend Visible Allowed",
-        metadata: %{"source_assignment_ids" => [allowed_assignment.id]}
+        metadata: %{
+          "source_assignment_ids" => [allowed_assignment.id],
+          "source_assignment_models" => %{
+            allowed_assignment.id =>
+              pristine_catalog_source("gpt-backend-visible-allowed", "policy-allowed")
+          }
+        }
       })
 
     %{assignment: hidden_assignment} =
@@ -1445,7 +1541,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         exposed_model_id: "gpt-backend-policy-hidden",
         upstream_model_id: "provider-gpt-backend-policy-hidden",
         display_name: "Backend Policy Hidden",
-        metadata: %{"source_assignment_ids" => [hidden_assignment.id]}
+        metadata: %{
+          "source_assignment_ids" => [hidden_assignment.id],
+          "source_assignment_models" => %{
+            hidden_assignment.id =>
+              pristine_catalog_source("gpt-backend-policy-hidden", "policy-hidden")
+          }
+        }
       })
 
     setup.api_key
@@ -1488,7 +1590,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup.model
     |> Ecto.Changeset.change(%{
       source_assignment_count: 2,
-      metadata: %{"source_assignment_ids" => [setup.assignment.id, pro_assignment.id]}
+      metadata: %{
+        "source_assignment_ids" => [setup.assignment.id, pro_assignment.id],
+        "source_assignment_models" =>
+          setup.model.metadata["source_assignment_models"]
+          |> Map.put(
+            pro_assignment.id,
+            pristine_catalog_source(setup.model.exposed_model_id, "pro-source")
+          )
+      }
     })
     |> Repo.update!()
 
@@ -1513,7 +1623,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       gateway_setup(upstream,
         model_metadata: %{
           "upstream_model" => %{
-            "supported_input_modalities" => ["text", "image"],
+            "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true
           }
         }
@@ -1924,9 +2034,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
-  test "GET /backend-api/codex/models passes through guarded upstream model metadata fields", %{
-    conn: conn
-  } do
+  test "GET /backend-api/codex/models preserves pristine upstream fields and strips provenance",
+       %{
+         conn: conn
+       } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
     setup =
@@ -1986,21 +2097,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert model["prefer_websockets"] == true
     assert model["reasoning_summary_format"] == "json"
 
-    assert model["supported_reasoning_levels"] == [
-             %{"description" => "max", "effort" => "max"},
-             %{"description" => "low", "effort" => "low"},
-             %{"description" => "focused", "effort" => "focused"}
-           ]
+    assert model["supported_reasoning_levels"] == ["max", "low", "focused"]
 
     assert model["default_reasoning_level"] == "focused"
-    assert model["comp_hash"] == "comp-fixture-hash"
+    assert model["comp_hash"] == " comp-fixture-hash "
     assert model["tool_mode"] == "code_mode_only"
     assert model["use_responses_lite"] == true
     assert model["include_skills_usage_instructions"] == true
     refute Map.has_key?(model, "upstream_model")
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
-    refute Map.has_key?(model, "raw_model_listing")
+    assert model["raw_model_listing"] == %{"id" => "provider"}
     assert FakeUpstream.count(upstream) == 0
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -2010,7 +2117,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ setup.raw_key
   end
 
-  test "GET /backend-api/codex/models normalizes source-specific lifecycle metadata", %{
+  test "GET /backend-api/codex/models preserves pristine source lifecycle metadata", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -2024,6 +2131,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           "source_assignment_ids" => [setup.assignment.id],
           "source_assignment_models" => %{
             setup.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
               "visibility" => "hide",
               "upgrade" => %{
                 "model" => "gpt-source-replacement",
@@ -2047,8 +2155,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["visibility"] == "list"
-    assert Map.fetch!(model, "upgrade") == nil
+    assert model["visibility"] == "hide"
+
+    assert model["upgrade"] == %{
+             "model" => "gpt-source-replacement",
+             "migration_markdown" => "Use the replacement model."
+           }
+
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
     assert FakeUpstream.count(upstream) == 0
@@ -2087,7 +2200,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     |> Ecto.Changeset.change(%{
       source_assignment_count: 2,
       metadata: %{
-        "source_assignment_ids" => [setup.assignment.id, unavailable_assignment.id]
+        "source_assignment_ids" => [setup.assignment.id, unavailable_assignment.id],
+        "source_assignment_models" =>
+          setup.model.metadata["source_assignment_models"]
+          |> Map.put(
+            unavailable_assignment.id,
+            pristine_catalog_source(setup.model.exposed_model_id, "unavailable-source")
+          )
       }
     })
     |> Repo.update!()
@@ -2110,7 +2229,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
-  test "GET /backend-api/codex/models neutralizes missing and malformed guarded metadata", %{
+  test "GET /backend-api/codex/models preserves JSON-safe pristine metadata verbatim", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -2135,15 +2254,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["available_in_plans"] == []
-    assert is_nil(model["default_service_tier"])
+    assert model["available_in_plans"] == "pro"
+    assert model["default_service_tier"] == 123
     assert is_nil(model["minimal_client_version"])
-    assert is_nil(model["model_messages"])
-    assert model["prefer_websockets"] == false
-    assert model["include_skills_usage_instructions"] == false
-    assert is_nil(model["reasoning_summary_format"])
-    refute Map.has_key?(model, "comp_hash")
-    assert is_nil(model["tool_mode"])
+    assert model["model_messages"] == ["unexpected"]
+    assert model["prefer_websockets"] == "true"
+    assert model["include_skills_usage_instructions"] == "true"
+    assert model["reasoning_summary_format"] == %{"format" => "json"}
+    assert model["comp_hash"] == ["unexpected"]
+    assert model["tool_mode"] == "future_mode"
     assert FakeUpstream.count(upstream) == 0
   end
 
@@ -2300,7 +2419,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  test "POST /backend-api/codex/responses routes requested service tiers to compatible assignments",
+  test "POST /backend-api/codex/responses forwards a supported service tier within the selected partition",
        %{conn: conn} do
     free_upstream =
       start_upstream(
@@ -2331,13 +2450,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     prime_routing_quota!(pro.identity)
 
-    free_model = %{
-      "id" => setup.model.upstream_model_id,
-      "service_tiers" => [],
-      "capabilities" => %{"responses" => true, "streaming" => true}
-    }
-
-    pro_model = %{
+    tier_model = %{
+      "slug" => setup.model.exposed_model_id,
       "id" => setup.model.upstream_model_id,
       "service_tiers" => [
         %{
@@ -2356,10 +2470,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id, pro.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => free_model,
-            pro.assignment.id => pro_model
+            setup.assignment.id => tier_model,
+            pro.assignment.id => tier_model
           },
-          "upstream_model" => pro_model
+          "upstream_model" => tier_model
         }
       })
       |> Repo.update!()
@@ -2390,10 +2504,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "service_tier" => "latency_preview"
       })
 
-    assert %{"id" => "resp_latency_preview_tier"} = json_response(conn, 200)
-    assert FakeUpstream.count(free_upstream) == free_count_before_latency_preview
-    assert FakeUpstream.count(pro_upstream) == pro_count_before_latency_preview + 1
-    captured = pro_upstream |> FakeUpstream.requests() |> List.last()
+    assert %{"id" => tier_response_id} = json_response(conn, 200)
+    assert tier_response_id in ["resp_free_tier", "resp_latency_preview_tier"]
+
+    assert FakeUpstream.count(free_upstream) + FakeUpstream.count(pro_upstream) == 2
+
+    assert [captured] =
+             [free_upstream, pro_upstream]
+             |> Enum.flat_map(&FakeUpstream.requests/1)
+             |> Enum.filter(&(&1.json["service_tier"] == "latency_preview"))
+
     assert captured.json["service_tier"] == "latency_preview"
   end
 
@@ -3715,7 +3835,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     |> Ecto.Changeset.change(%{
       metadata:
         Map.put(setup.model.metadata, "source_assignment_models", %{
-          setup.assignment.id => setup.model.metadata["upstream_model"]
+          setup.assignment.id =>
+            Map.put(
+              setup.model.metadata["upstream_model"],
+              "slug",
+              setup.model.exposed_model_id
+            )
         })
     })
     |> Repo.update!()
@@ -3785,7 +3910,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ "upstream-token"
   end
 
-  test "POST /backend-api/codex/responses skips assignments without response capability",
+  test "POST /backend-api/codex/responses does not cross a divergent capability partition",
        %{conn: conn} do
     incompatible_upstream =
       start_upstream(
@@ -3817,11 +3942,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     prime_routing_quota!(compatible.identity)
 
     incompatible_model = %{
+      "slug" => setup.model.exposed_model_id,
       "id" => setup.model.upstream_model_id,
       "capabilities" => %{"responses" => false, "streaming" => true}
     }
 
     compatible_model = %{
+      "slug" => setup.model.exposed_model_id,
       "id" => setup.model.upstream_model_id,
       "capabilities" => %{"responses" => true, "streaming" => true}
     }
@@ -3851,9 +3978,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "use responses"
       })
 
-    assert %{"id" => "resp_compatible"} = json_response(conn, 200)
+    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(conn, 503)
     assert FakeUpstream.requests(incompatible_upstream) == []
-    assert [_captured] = FakeUpstream.requests(compatible_upstream)
+    assert FakeUpstream.requests(compatible_upstream) == []
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+  end
+
+  test "POST /backend-api/codex/responses rejects a malformed canonical hard pin without accounting work",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_models" => %{setup.assignment.id => "malformed"}
+        }
+      })
+      |> Repo.update!()
+
+    setup = Map.put(setup, :model, model)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    previous_response_id = "resp_malformed_canonical_pin_#{System.unique_integer([:positive])}"
+    register_previous_response_anchor!(auth, setup.assignment, previous_response_id)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => model.exposed_model_id,
+        "input" => "synthetic malformed canonical pin",
+        "previous_response_id" => previous_response_id
+      })
+
+    assert %{"error" => %{"code" => "pinned_continuation_unavailable"}} =
+             json_response(response, 503)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
   end
 
   test "POST /backend-api/codex/responses accepts sparse real Codex model metadata", %{conn: conn} do
@@ -3869,6 +4037,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup = gateway_setup(upstream)
 
     sparse_model = %{
+      "slug" => setup.model.exposed_model_id,
       "id" => setup.model.upstream_model_id,
       "capabilities" => %{},
       "input_modalities" => ["text", "image"],
@@ -3912,10 +4081,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     setup =
       gateway_setup(upstream,
         model_metadata: %{
-          "supported_input_modalities" => ["text", "image"],
+          "input_modalities" => ["text", "image"],
           "supports_image_detail_original" => true,
           "upstream_model" => %{
-            "supported_input_modalities" => ["text"],
+            "input_modalities" => ["text"],
             "supports_image_detail_original" => false
           }
         }
@@ -4974,7 +5143,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   test "POST /backend-api/codex/responses preserves input_image.file_id", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_file_id"}))
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
     file_id = "file_backend_upload_reference"
 
     conn =
@@ -5656,12 +5825,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     prime_routing_quota!(other.identity)
 
     model =
-      setup.model
-      |> Ecto.Changeset.change(%{
-        source_assignment_count: 2,
-        metadata: %{"source_assignment_ids" => [setup.assignment.id, other.assignment.id]}
-      })
-      |> Repo.update!()
+      put_model_source_assignments!(setup.model, [setup.assignment, other.assignment])
 
     setup = Map.merge(setup, %{model: model})
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -12078,6 +12242,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp put_setup_model_source_metadata!(setup, source_metadata) when is_map(source_metadata) do
+    source_metadata = Map.put_new(source_metadata, "slug", setup.model.exposed_model_id)
+
     metadata =
       setup.model.metadata
       |> Map.put("source_assignment_models", %{setup.assignment.id => source_metadata})
@@ -12088,6 +12254,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp pristine_catalog_source(slug, marker) do
+    %{
+      "slug" => slug,
+      "display_name" => "Synthetic Canonical Catalog",
+      "description" => "Synthetic canonical catalog source",
+      "multi_agent_version" => "v2",
+      "default_reasoning_level" => "high",
+      "supported_reasoning_levels" => [
+        %{"effort" => "high", "description" => "High"}
+      ],
+      "service_tiers" => [%{"id" => "priority", "name" => "Priority"}],
+      "future_schema_field" => %{"marker" => marker},
+      "use_responses_lite" => false
+    }
   end
 
   defp lineage_request_headers(metadata) do
@@ -12761,16 +12943,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(full_headers, mode_header)
     assert lite_headers[mode_header] == "true"
     assert comparable_backend_headers(full_headers) == comparable_backend_headers(lite_headers)
-  end
-
-  defp assert_backend_lite_mode_headers!(first_capture, second_capture) do
-    mode_header = "x-openai-internal-codex-responses-lite"
-    first_headers = Map.new(first_capture.headers)
-    second_headers = Map.new(second_capture.headers)
-
-    assert first_headers[mode_header] == "true"
-    assert second_headers[mode_header] == "true"
-    assert comparable_backend_headers(first_headers) == comparable_backend_headers(second_headers)
   end
 
   defp comparable_backend_headers(headers) do

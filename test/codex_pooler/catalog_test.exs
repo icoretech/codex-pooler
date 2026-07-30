@@ -222,6 +222,38 @@ defmodule CodexPooler.CatalogTest do
       assert Repo.get!(Model, model.id).last_sync_run_id == sync_run.id
     end
 
+    test "persists each assignment model entry without reconstructing its schema" do
+      pool = pool_fixture()
+
+      {_pool, assignment} =
+        active_assignment_fixture(pool, %{}, %{
+          account_label: "Schema source",
+          assignment_label: "Schema assignment"
+        })
+
+      source = %{
+        "id" => "gpt-schema-persistence",
+        "description" => "Synthetic compatibility model",
+        "multi_agent_version" => "v2",
+        "supported_reasoning_levels" => [
+          %{"effort" => "future", "description" => "Future effort"}
+        ],
+        "service_tiers" => [
+          %{"id" => "priority", "name" => "Priority", "description" => "Synthetic tier"}
+        ],
+        "future_schema_field" => %{"nested" => [true, 7, nil]}
+      }
+
+      assignment_id = assignment.id
+
+      assert {:ok, %{models: [model]}} =
+               Catalog.sync_pool_catalog(pool,
+                 fetcher: fn %{assignment: %{id: ^assignment_id}} -> {:ok, [source]} end
+               )
+
+      assert get_in(model.metadata, ["source_assignment_models", assignment.id]) == source
+    end
+
     test "sync is idempotent and marks missing active models stale" do
       upstream =
         start_upstream(FakeUpstream.json_response(%{"data" => [%{"id" => "gpt-5.4-mini"}]}))

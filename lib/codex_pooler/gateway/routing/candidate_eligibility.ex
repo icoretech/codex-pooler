@@ -126,6 +126,8 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
           required(:candidates_by_model_id) => %{optional(Ecto.UUID.t()) => [candidate()]},
           required(:visible_candidates_by_model_id) => %{optional(Ecto.UUID.t()) => [candidate()]},
           required(:candidate_snapshots) => [candidate()],
+          optional(:selected_partition_assignment_ids) => [Ecto.UUID.t()],
+          optional(:valid_canonical_assignment_ids) => [Ecto.UUID.t()],
           required(:hydrated_at) => DateTime.t()
         }
   @type quota_refresh_plan :: %{
@@ -281,6 +283,31 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     else
       {:ok, candidates}
     end
+  end
+
+  @spec filter_selected_partition_candidates(
+          [candidate()],
+          [Ecto.UUID.t()],
+          [Ecto.UUID.t()]
+        ) :: {:ok, [candidate()]}
+  def filter_selected_partition_candidates(
+        candidates,
+        selected_assignment_ids,
+        pinned_assignment_ids
+      )
+      when is_list(candidates) and is_list(selected_assignment_ids) and
+             is_list(pinned_assignment_ids) do
+    allowed_assignment_ids =
+      selected_assignment_ids
+      |> Kernel.++(pinned_assignment_ids)
+      |> MapSet.new()
+
+    candidates =
+      Enum.filter(candidates, fn {assignment, _identity} ->
+        MapSet.member?(allowed_assignment_ids, assignment.id)
+      end)
+
+    {:ok, candidates}
   end
 
   @spec maybe_filter_compact(String.t(), [candidate()]) :: {:ok, [candidate()]}

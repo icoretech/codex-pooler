@@ -124,8 +124,14 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id, fallback_assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{"use_responses_lite" => false},
-            fallback_assignment.id => %{"use_responses_lite" => false}
+            setup.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => false
+            },
+            fallback_assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => false
+            }
           }
         }
       })

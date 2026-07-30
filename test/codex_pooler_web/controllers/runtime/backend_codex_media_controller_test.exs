@@ -222,7 +222,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
         setup.model
         |> Ecto.Changeset.change(%{
           source_assignment_count: 2,
-          metadata: %{"source_assignment_ids" => [setup.assignment.id, healthy.assignment.id]}
+          metadata:
+            setup.model.metadata
+            |> Map.put("source_assignment_ids", [setup.assignment.id, healthy.assignment.id])
+            |> put_in(
+              ["source_assignment_models", healthy.assignment.id],
+              setup.model.metadata["source_assignment_models"][setup.assignment.id]
+            )
         })
         |> Repo.update!()
 
@@ -289,13 +295,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
     upstream_model_id = Keyword.get(opts, :upstream_model_id, "provider-gpt-media-model")
     supports_responses = Keyword.get(opts, :supports_responses, true)
 
+    source_metadata =
+      %{
+        "slug" => exposed_model_id,
+        "id" => upstream_model_id
+      }
+      |> Map.merge(Map.get(model_metadata, "upstream_model", %{}))
+      |> Map.merge(Map.drop(model_metadata, ["upstream_model"]))
+
     model =
       model_fixture(pool, %{
         exposed_model_id: exposed_model_id,
         upstream_model_id: upstream_model_id,
         pricing_ref: upstream_model_id,
         metadata:
-          Map.merge(%{"source_assignment_ids" => [upstream.assignment.id]}, model_metadata),
+          model_metadata
+          |> Map.put("source_assignment_ids", [upstream.assignment.id])
+          |> Map.put("source_assignment_models", %{upstream.assignment.id => source_metadata}),
         supports_responses: supports_responses,
         supports_streaming: false
       })

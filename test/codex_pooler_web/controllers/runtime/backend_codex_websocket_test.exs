@@ -1292,6 +1292,167 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "backend websocket selected partition failure creates no accounting work" do
+    selected_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch_selected"}))
+
+    divergent_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch_divergent"}))
+
+    setup = gateway_setup(selected_upstream)
+
+    divergent =
+      gateway_upstream(
+        setup.pool,
+        divergent_upstream,
+        "upstream-token-ws-divergent-partition",
+        compact?: false
+      )
+
+    prime_routing_quota!(divergent.identity)
+
+    canonical_anchor_time = ~U[2026-07-30 08:00:00.000000Z]
+
+    Repo.update_all(
+      from(assignment in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+        where: assignment.id == ^setup.assignment.id
+      ),
+      set: [created_at: canonical_anchor_time]
+    )
+
+    Repo.update_all(
+      from(assignment in CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment,
+        where: assignment.id == ^divergent.assignment.id
+      ),
+      set: [created_at: DateTime.add(canonical_anchor_time, 1, :second)]
+    )
+
+    selected_source = %{
+      "slug" => setup.model.exposed_model_id,
+      "id" => setup.model.upstream_model_id,
+      "capabilities" => %{"responses" => false, "streaming" => true}
+    }
+
+    divergent_source = %{
+      "slug" => setup.model.exposed_model_id,
+      "id" => setup.model.upstream_model_id,
+      "capabilities" => %{"responses" => true, "streaming" => true}
+    }
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 2,
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id, divergent.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => selected_source,
+            divergent.assignment.id => divergent_source
+          },
+          "upstream_model" => divergent_source
+        }
+      })
+      |> Repo.update!()
+
+    setup = Map.put(setup, :model, model)
+    port = start_public_endpoint!()
+    turn_state = "ws-selected-partition-#{System.unique_integer([:positive])}"
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => model.exposed_model_id,
+          "input" => "synthetic selected partition failure",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{"code" => "no_eligible_backend"}
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(selected_upstream) == 0
+      assert FakeUpstream.count(divergent_upstream) == 0
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "backend websocket malformed canonical hard pin creates no accounting work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_models" => %{setup.assignment.id => "malformed"}
+        }
+      })
+      |> Repo.update!()
+
+    setup = Map.put(setup, :model, model)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    source_turn_state = "ws-malformed-source-#{System.unique_integer([:positive])}"
+    previous_response_id = "resp_ws_malformed_source_#{System.unique_integer([:positive])}"
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: source_turn_state})
+    session = pin_session_to_assignment!(session, setup.assignment)
+
+    assert :ok =
+             Gateway.register_codex_session_continuity(
+               session,
+               %{},
+               Jason.encode!(%{"id" => previous_response_id})
+             )
+
+    port = start_public_endpoint!()
+    turn_state = "ws-malformed-pin-#{System.unique_integer([:positive])}"
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => model.exposed_model_id,
+          "input" => "synthetic malformed canonical pin",
+          "previous_response_id" => previous_response_id,
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{"code" => "pinned_continuation_unavailable"}
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "socket init failure before request reservation logs one bounded warning and creates no request row" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
@@ -2302,7 +2463,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> Ecto.Changeset.change(%{
         exposed_model_id: "gpt-5.5",
         upstream_model_id: "gpt-5.5",
-        pricing_ref: "gpt-5.5"
+        pricing_ref: "gpt-5.5",
+        metadata:
+          put_in(
+            setup.model.metadata,
+            ["source_assignment_models", setup.assignment.id, "slug"],
+            "gpt-5.5"
+          )
       })
       |> Repo.update!()
 
@@ -4796,12 +4963,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     prime_routing_quota!(second.identity)
 
     model =
-      setup.model
-      |> Ecto.Changeset.change(%{
-        source_assignment_count: 2,
-        metadata: %{"source_assignment_ids" => [setup.assignment.id, second.assignment.id]}
-      })
-      |> Repo.update!()
+      put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
 
     setup = Map.put(setup, :model, model)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -5967,12 +6129,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     prime_routing_quota!(second.identity)
 
     model =
-      setup.model
-      |> Ecto.Changeset.change(%{
-        source_assignment_count: 2,
-        metadata: %{"source_assignment_ids" => [setup.assignment.id, second.assignment.id]}
-      })
-      |> Repo.update!()
+      put_model_source_assignments!(setup.model, [setup.assignment, second.assignment])
 
     setup = Map.put(setup, :model, model)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -6044,12 +6201,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     prime_routing_quota!(fallback.identity)
 
     model =
-      setup.model
-      |> Ecto.Changeset.change(%{
-        source_assignment_count: 2,
-        metadata: %{"source_assignment_ids" => [setup.assignment.id, fallback.assignment.id]}
-      })
-      |> Repo.update!()
+      put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
 
     setup = Map.put(setup, :model, model)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -9897,6 +10049,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   defp put_setup_model_source_metadata!(setup, source_metadata) when is_map(source_metadata) do
+    source_metadata = Map.put_new(source_metadata, "slug", setup.model.exposed_model_id)
+
     metadata =
       setup.model.metadata
       |> Map.put("source_assignment_models", %{setup.assignment.id => source_metadata})

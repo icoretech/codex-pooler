@@ -900,10 +900,16 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
   end
 
   defp model_for_assignments(pool, assignment_ids) do
+    exposed_model_id = "gpt-5.5-#{System.unique_integer([:positive])}"
+
     model_fixture(pool, %{
-      exposed_model_id: "gpt-5.5-#{System.unique_integer([:positive])}",
+      exposed_model_id: exposed_model_id,
       source_assignment_count: length(assignment_ids),
-      metadata: %{"source_assignment_ids" => assignment_ids}
+      metadata: %{
+        "source_assignment_ids" => assignment_ids,
+        "source_assignment_models" =>
+          Map.new(assignment_ids, &{&1, %{"slug" => exposed_model_id}})
+      }
     })
   end
 

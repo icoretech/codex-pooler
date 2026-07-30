@@ -637,7 +637,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     |> Ecto.Changeset.change(%{
       metadata:
         Map.put(setup.model.metadata, "source_assignment_models", %{
-          setup.assignment.id => setup.model.metadata["upstream_model"]
+          setup.assignment.id =>
+            Map.put(
+              setup.model.metadata["upstream_model"],
+              "slug",
+              setup.model.exposed_model_id
+            )
         })
     })
     |> Repo.update!()

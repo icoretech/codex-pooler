@@ -1481,7 +1481,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       model_fixture(pool, %{
         exposed_model_id: "gpt-task-15-red",
         upstream_model_id: "provider-gpt-task-15-red",
-        metadata: %{"source_assignment_ids" => [upstream_ref.assignment.id]}
+        metadata: %{
+          "source_assignment_ids" => [upstream_ref.assignment.id],
+          "source_assignment_models" => %{
+            upstream_ref.assignment.id => %{
+              "slug" => "gpt-task-15-red",
+              "use_responses_lite" => false
+            }
+          }
+        }
       })
 
     setup =
@@ -2073,8 +2081,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         metadata: %{
           "source_assignment_ids" => [ineligible_lite.id, active_full.assignment.id],
           "source_assignment_models" => %{
-            ineligible_lite.id => %{"use_responses_lite" => true},
-            active_full.assignment.id => %{"use_responses_lite" => false}
+            ineligible_lite.id => %{
+              "slug" => "gpt-auto-routability",
+              "use_responses_lite" => true
+            },
+            active_full.assignment.id => %{
+              "slug" => "gpt-auto-routability",
+              "use_responses_lite" => false
+            }
           },
           "use_responses_lite" => true
         }

@@ -365,6 +365,44 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     end
   end
 
+  describe "filter_selected_partition_candidates/3" do
+    test "keeps selected partition assignments and an otherwise eligible continuity assignment" do
+      selected = candidate("assignment-selected")
+      pinned = candidate("assignment-pinned")
+      divergent = candidate("assignment-divergent")
+
+      assert {:ok, filtered} =
+               CandidateEligibility.filter_selected_partition_candidates(
+                 [selected, pinned, divergent],
+                 ["assignment-selected"],
+                 ["assignment-pinned"]
+               )
+
+      assert candidate_ids(filtered) == ["assignment-selected", "assignment-pinned"]
+    end
+
+    test "restricts an unpinned turn to the selected partition" do
+      selected = candidate("assignment-selected")
+      divergent = candidate("assignment-divergent")
+
+      assert {:ok, [^selected]} =
+               CandidateEligibility.filter_selected_partition_candidates(
+                 [selected, divergent],
+                 ["assignment-selected"],
+                 []
+               )
+    end
+
+    test "returns an empty shortlist when neither a selected nor continuity assignment remains" do
+      assert {:ok, []} =
+               CandidateEligibility.filter_selected_partition_candidates(
+                 [candidate("assignment-divergent")],
+                 [],
+                 []
+               )
+    end
+  end
+
   describe "preloaded routing state" do
     test "quota eligibility consumes route-state windows without querying the repository" do
       eligible_identity = upstream_identity("eligible-identity")

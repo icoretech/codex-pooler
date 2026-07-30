@@ -489,17 +489,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       prime_routing_quota!(upstream.identity)
     end
 
-    model_metadata =
-      %{"source_assignment_ids" => [upstream.assignment.id]}
-      |> Map.merge(Keyword.get(opts, :model_metadata, %{}))
-
     exposed_model_id = Keyword.get(opts, :exposed_model_id, "gpt-test-model")
     upstream_model_id = Keyword.get(opts, :upstream_model_id, "provider-gpt-test-model")
+    display_name = Keyword.get(opts, :display_name, "GPT 5.4 Mini")
+
+    requested_metadata = Keyword.get(opts, :model_metadata, %{})
+
+    model_metadata =
+      %{
+        "source_assignment_ids" => [upstream.assignment.id],
+        "source_assignment_models" => %{
+          upstream.assignment.id =>
+            default_codex_source(exposed_model_id, upstream_model_id, display_name)
+        }
+      }
+      |> Map.merge(requested_metadata)
+      |> enrich_test_source_models(
+        exposed_model_id,
+        upstream_model_id,
+        display_name,
+        requested_metadata
+      )
 
     model =
       model_fixture(pool, %{
         exposed_model_id: exposed_model_id,
         upstream_model_id: upstream_model_id,
+        display_name: display_name,
         pricing_ref: Keyword.get(opts, :pricing_ref, upstream_model_id),
         metadata: model_metadata,
         supports_responses: true,
@@ -508,6 +524,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     pricing_snapshot!(model)
     Map.merge(key, %{identity: upstream.identity, assignment: upstream.assignment, model: model})
+  end
+
+  defp default_codex_source(exposed_model_id, upstream_model_id, display_name) do
+    %{
+      "slug" => exposed_model_id,
+      "display_name" => display_name,
+      "description" => display_name,
+      "supported_reasoning_levels" => [
+        %{"effort" => "low", "description" => "low"},
+        %{"effort" => "medium", "description" => "medium"},
+        %{"effort" => "high", "description" => "high"},
+        %{"effort" => "xhigh", "description" => "xhigh"}
+      ],
+      "default_reasoning_level" => "medium",
+      "shell_type" => "shell_command",
+      "visibility" => "list",
+      "base_instructions" => "",
+      "truncation_policy" => %{"mode" => "bytes", "limit" => 10_000},
+      "include_skills_usage_instructions" => false,
+      "supports_parallel_tool_calls" => true,
+      "input_modalities" => ["text"],
+      "upstream_model_id" => upstream_model_id,
+      "supported_in_api" => true,
+      "use_responses_lite" => false
+    }
+  end
+
+  defp enrich_test_source_models(
+         metadata,
+         exposed_model_id,
+         upstream_model_id,
+         display_name,
+         requested_metadata
+       ) do
+    if Map.has_key?(requested_metadata, "source_assignment_models") do
+      metadata
+    else
+      requested_source_fields =
+        requested_metadata
+        |> Map.get("upstream_model", %{})
+        |> Map.merge(
+          Map.drop(requested_metadata, [
+            "source_assignment_ids",
+            "source_assignment_missing_sync_run_ids",
+            "upstream_model"
+          ])
+        )
+
+      put_in(
+        metadata["source_assignment_models"],
+        %{
+          hd(metadata["source_assignment_ids"]) =>
+            exposed_model_id
+            |> default_codex_source(upstream_model_id, display_name)
+            |> Map.merge(requested_source_fields)
+        }
+      )
+    end
   end
 
   def strict_text_format_payload(schema, strict \\ true) do
@@ -745,11 +819,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   def put_model_source_assignments!(model, assignments) do
     assignment_ids = Enum.map(assignments, & &1.id)
+    source_models = Map.get(model.metadata || %{}, "source_assignment_models", %{})
+
+    source_template =
+      assignment_ids
+      |> Enum.find_value(&Map.get(source_models, &1))
+      |> Kernel.||(%{"slug" => model.exposed_model_id})
+
+    source_models =
+      Map.new(assignment_ids, fn assignment_id ->
+        {assignment_id, Map.get(source_models, assignment_id, source_template)}
+      end)
 
     model
     |> Ecto.Changeset.change(%{
       source_assignment_count: length(assignment_ids),
-      metadata: %{"source_assignment_ids" => assignment_ids}
+      metadata:
+        model.metadata
+        |> Kernel.||(%{})
+        |> Map.put("source_assignment_ids", assignment_ids)
+        |> Map.put("source_assignment_models", source_models)
     })
     |> Repo.update!()
   end

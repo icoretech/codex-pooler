@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   import CodexPooler.PoolerFixtures
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
@@ -335,7 +335,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup =
+        gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
+
       passthrough_key = "internal_chat_message_metadata_passthrough"
 
       response_conn =

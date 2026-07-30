@@ -17,7 +17,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     ]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, start_upstream: 1]
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
@@ -1678,7 +1678,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         })
       )
 
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
 
     payload = %{
       "model" => setup.model.exposed_model_id,

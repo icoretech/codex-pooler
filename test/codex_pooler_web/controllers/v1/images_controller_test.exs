@@ -197,7 +197,17 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
         upstream_model_id: "provider-host-responses-model",
         supports_responses: true,
         supports_streaming: true,
-        metadata: %{"source_assignment_ids" => [setup.assignment.id]}
+        metadata:
+          setup.model.metadata
+          |> Map.put("source_assignment_ids", [setup.assignment.id])
+          |> put_in(
+            ["source_assignment_models", setup.assignment.id, "slug"],
+            model_id
+          )
+          |> put_in(
+            ["source_assignment_models", setup.assignment.id, "input_modalities"],
+            ["text", "image"]
+          )
       })
       |> Repo.update!()
 

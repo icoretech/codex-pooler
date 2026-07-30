@@ -73,6 +73,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_model_context
       )
       when is_list(visible_models) do
+    visible_model_context =
+      put_selected_partition_assignment_ids(visible_model_context, model)
+
     has_input_image? = CandidateEligibility.payload_has_input_image?(payload)
 
     with :ok <- authorize_model_policy(auth, model, endpoint, payload, request_options),
@@ -116,12 +119,27 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
                candidates: candidate_snapshots
              })
            ),
-         {:ok, candidates} <- SessionContinuity.filter_file_affinity(candidates, request_options),
-         {:ok, candidates} <- CandidateEligibility.maybe_filter_compact(endpoint, candidates),
          {:ok, request_options} <-
            SessionContinuity.attach_codex_session(auth, payload, request_options),
+         partition_input_candidates = candidates,
          {:ok, candidates} <-
-           SessionContinuity.apply_codex_session_assignment(candidates, request_options, model) do
+           CandidateEligibility.filter_selected_partition_candidates(
+             candidates,
+             visible_model_context.selected_partition_assignment_ids,
+             continuity_assignment_ids(
+               request_options,
+               visible_model_context.valid_canonical_assignment_ids
+             )
+           ),
+         {:ok, candidates} <-
+           finish_partition_filtering(
+             candidates,
+             partition_input_candidates,
+             visible_model_context.valid_canonical_assignment_ids,
+             endpoint,
+             request_options,
+             model
+           ) do
       route_state =
         route_state
         |> RouteState.put_candidates(candidates)
@@ -140,6 +158,123 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
+  defp put_selected_partition_assignment_ids(visible_model_context, %Model{} = model) do
+    candidates_by_model_id = Map.get(visible_model_context, :candidates_by_model_id, %{})
+    candidates = Map.get(candidates_by_model_id, model.id, [])
+
+    assignment_ids =
+      case CodexCatalog.select_canonical_sources([model], candidates_by_model_id) do
+        [%{assignment_ids: assignment_ids}] -> assignment_ids
+        [] -> []
+      end
+
+    visible_model_context
+    |> Map.put(:selected_partition_assignment_ids, assignment_ids)
+    |> Map.put(
+      :valid_canonical_assignment_ids,
+      CodexCatalog.valid_canonical_assignment_ids(model, candidates)
+    )
+  end
+
+  defp continuity_assignment_ids(%RequestOptions{} = request_options, valid_assignment_ids) do
+    valid_assignment_ids = MapSet.new(valid_assignment_ids)
+
+    [
+      request_options.routing.file_affinity_assignment_id,
+      codex_session_assignment_id(request_options)
+    ]
+    |> Enum.filter(&(is_binary(&1) and MapSet.member?(valid_assignment_ids, &1)))
+    |> Enum.uniq()
+  end
+
+  defp codex_session_assignment_id(%RequestOptions{
+         continuity: %{codex_session: %{pool_upstream_assignment_id: assignment_id}}
+       }),
+       do: assignment_id
+
+  defp codex_session_assignment_id(%RequestOptions{}), do: nil
+
+  defp finish_partition_filtering(
+         candidates,
+         partition_input_candidates,
+         valid_canonical_assignment_ids,
+         endpoint,
+         %RequestOptions{} = request_options,
+         %Model{} = model
+       ) do
+    result =
+      with {:ok, candidates} <-
+             SessionContinuity.filter_file_affinity(candidates, request_options),
+           {:ok, candidates} <- CandidateEligibility.maybe_filter_compact(endpoint, candidates),
+           {:ok, candidates} <-
+             SessionContinuity.apply_codex_session_assignment(candidates, request_options, model),
+           :ok <- ensure_candidates_available(candidates) do
+        {:ok, candidates}
+      end
+
+    if canonical_partition_zero_work?(
+         result,
+         candidates,
+         partition_input_candidates,
+         valid_canonical_assignment_ids,
+         request_options
+       ) do
+      mark_zero_work_error(result)
+    else
+      result
+    end
+  end
+
+  defp canonical_partition_zero_work?(
+         _result,
+         [],
+         _partition_input_candidates,
+         _valid_canonical_assignment_ids,
+         %RequestOptions{}
+       ),
+       do: true
+
+  defp canonical_partition_zero_work?(
+         {:error, %{code: "pinned_continuation_unavailable"}},
+         _candidates,
+         partition_input_candidates,
+         valid_canonical_assignment_ids,
+         %RequestOptions{} = request_options
+       ) do
+    assignment_id = codex_session_assignment_id(request_options)
+
+    is_binary(assignment_id) and
+      Enum.any?(partition_input_candidates, fn {assignment, _identity} ->
+        assignment.id == assignment_id
+      end) and assignment_id not in valid_canonical_assignment_ids
+  end
+
+  defp canonical_partition_zero_work?(
+         _result,
+         _candidates,
+         _partition_input_candidates,
+         _valid_canonical_assignment_ids,
+         %RequestOptions{}
+       ),
+       do: false
+
+  defp mark_zero_work_error({:error, reason}),
+    do: {:error, Map.put(reason, :accounting_disposition, :zero_work)}
+
+  defp mark_zero_work_error(result), do: result
+
+  defp ensure_candidates_available([_candidate | _candidates]), do: :ok
+
+  defp ensure_candidates_available([]) do
+    {:error,
+     error(
+       503,
+       "no_eligible_backend",
+       "no healthy eligible backend is currently available",
+       "model"
+     )}
+  end
+
   defp maybe_put_codex_models_etag(
          %RouteState{} = route_state,
          endpoint,
@@ -153,9 +288,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       pricing_buckets = CodexPooler.Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
+      candidates_by_model_id =
+        Map.get(route_state.visible_model_context, :candidates_by_model_id, %{})
+
       %{etag: etag} =
-        CodexCatalog.build(
+        CodexCatalog.build_canonical(
           route_state.visible_models,
+          candidates_by_model_id,
           policy,
           pricing_buckets,
           context_window_overrides,

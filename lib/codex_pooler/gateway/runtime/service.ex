@@ -404,6 +404,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     }
   end
 
+  defp log_gateway_denial(%Denials.Context{
+         reason: %{accounting_disposition: :zero_work} = reason
+       }),
+       do: {:error, reason}
+
   defp log_gateway_denial(%Denials.Context{} = context), do: Denials.log_gateway(context)
 
   defp reject_claimed_turn(

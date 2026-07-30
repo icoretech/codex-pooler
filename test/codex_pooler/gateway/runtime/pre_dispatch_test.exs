@@ -64,10 +64,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Map.fetch!(route_state.circuit_eligibility_snapshots, assignment.id).eligible? == true
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
     pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
-    %{"models" => [catalog_model]} = CodexCatalog.build([setup.model], policy, pricing, %{}).body
 
-    assert RouteState.codex_models_etag(route_state) ==
-             CodexCatalog.etag(%{"models" => [catalog_model]})
+    catalog =
+      CodexCatalog.build_canonical(
+        [setup.model],
+        route_state.visible_model_context.candidates_by_model_id,
+        policy,
+        pricing,
+        %{},
+        route_state.effective_model_serving_modes
+      )
+
+    %{"models" => [catalog_model]} = catalog.body
+
+    assert RouteState.codex_models_etag(route_state) == catalog.etag
 
     assert catalog_model["slug"] == setup.model.exposed_model_id
 
@@ -380,10 +390,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
 
     expected_catalog =
-      CodexCatalog.build(context.visible_models, policy, pricing, %{}, %{
-        requested_model.exposed_model_id => "lite",
-        setup.model.exposed_model_id => "full"
-      })
+      CodexCatalog.build_canonical(
+        context.visible_models,
+        context.candidates_by_model_id,
+        policy,
+        pricing,
+        %{},
+        %{
+          requested_model.exposed_model_id => "lite",
+          setup.model.exposed_model_id => "full"
+        }
+      )
 
     assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
   end
@@ -401,7 +418,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{"use_responses_lite" => true}
+            setup.assignment.id => %{"slug" => "GPT-5", "use_responses_lite" => true}
           },
           "use_responses_lite" => true
         }
@@ -443,7 +460,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{"use_responses_lite" => true}
+            setup.assignment.id => %{"slug" => "GPT-5", "use_responses_lite" => true}
           },
           "use_responses_lite" => true
         }
@@ -558,7 +575,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert RouteState.codex_models_etag(second_turn.route_state) == nil
   end
 
-  test "opposite assignment Lite source flags do not alter candidate membership" do
+  test "opposite assignment Lite source flags partition new-turn candidate membership" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
 
     %{assignment: fallback_assignment} =
@@ -588,12 +605,160 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert {:ok, full_prepared} =
              PreDispatch.prepare(auth, @endpoint_path, payload, options, full_model)
 
-    assert candidate_ids(lite_prepared.candidates) == candidate_ids(full_prepared.candidates)
+    assert candidate_ids(lite_prepared.candidates) == [setup.assignment.id]
+
+    assert Enum.sort(candidate_ids(full_prepared.candidates)) ==
+             Enum.sort([setup.assignment.id, fallback_assignment.id])
+
     assert RequestOptions.model_serving_mode(lite_prepared.request_options) == "lite"
     assert RequestOptions.model_serving_mode(full_prepared.request_options) == "full"
   end
 
-  test "malformed source metadata falls back to the aggregate Lite flag" do
+  test "new turns use only assignments from the selected canonical schema partition" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => "new partitioned turn"}
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               model
+             )
+
+    assert candidate_ids(prepared.route_state.candidate_snapshots) == [
+             setup.assignment.id,
+             divergent.assignment.id
+           ]
+
+    assert prepared.route_state.visible_model_context.selected_partition_assignment_ids == [
+             setup.assignment.id
+           ]
+
+    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+  end
+
+  test "a compatible hard-pinned continuation stays on a non-selected schema partition" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      %CodexSession{
+        pool_id: setup.pool.id,
+        api_key_id: auth.api_key.id,
+        session_key: "partition-session-#{System.unique_integer([:positive])}",
+        pool_upstream_assignment_id: divergent.assignment.id,
+        status: "active",
+        created_at: now,
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => "continue divergent partition",
+      "previous_response_id" => "response-partition-anchor"
+    }
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.put_continuity(
+        codex_session: session,
+        previous_response_id: payload["previous_response_id"]
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert prepared.route_state.visible_model_context.selected_partition_assignment_ids == [
+             setup.assignment.id
+           ]
+
+    assert candidate_ids(prepared.candidates) == [divergent.assignment.id]
+  end
+
+  test "a new turn fails closed when no routable assignment has a valid canonical source" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_models" => %{setup.assignment.id => "malformed"}
+        }
+      })
+      |> Repo.update!()
+
+    payload = %{"model" => model.exposed_model_id, "input" => "missing partition"}
+
+    assert {:error, %{status: 503, code: "no_eligible_backend"}} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               model
+             )
+
+    assert Repo.all(Request) == []
+  end
+
+  test "a hard-pinned continuation rejects an assignment with malformed canonical source metadata" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_models" => %{setup.assignment.id => "malformed"}
+        }
+      })
+      |> Repo.update!()
+
+    session =
+      %CodexSession{
+        pool_id: setup.pool.id,
+        api_key_id: auth.api_key.id,
+        session_key: "invalid-partition-session-#{System.unique_integer([:positive])}",
+        pool_upstream_assignment_id: setup.assignment.id,
+        status: "active",
+        created_at: now,
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => "invalid pinned partition",
+      "previous_response_id" => "response-invalid-partition"
+    }
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.put_continuity(
+        codex_session: session,
+        previous_response_id: payload["previous_response_id"]
+      )
+
+    assert {:error, %{status: 503, code: "pinned_continuation_unavailable"}} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert Repo.all(Request) == []
+  end
+
+  test "malformed source metadata fails closed instead of using aggregate metadata" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -610,7 +775,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{"model" => model.exposed_model_id, "input" => "malformed source metadata"}
 
-    assert {:ok, prepared} =
+    assert {:error, %{status: 503, code: "no_eligible_backend"}} =
              PreDispatch.prepare(
                auth,
                @endpoint_path,
@@ -619,11 +784,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
                model
              )
 
-    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == %{
-             configured_mode: "auto",
-             effective_mode: "lite",
-             source: "catalog"
-           }
+    assert Repo.all(Request) == []
   end
 
   test "prepare attaches defaulted routing settings to the request-local route state without persisting" do
@@ -751,7 +912,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert length(first_prepared.route_state.candidates) == 1
     assert length(first_prepared.route_state.candidate_snapshots) == 1
-    assert length(second_prepared.route_state.candidates) == 2
+    assert length(second_prepared.route_state.candidates) == 1
     assert length(second_prepared.route_state.candidate_snapshots) == 2
 
     assert first_prepared.route_state.routing_settings.routing_strategy ==
@@ -772,7 +933,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              setup.assignment.id
            ]
 
-    assert second_assignment.id in Enum.map(
+    refute second_assignment.id in Enum.map(
              second_prepared.route_state.candidates,
              fn {assignment, _identity} -> assignment.id end
            )
@@ -1089,6 +1250,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   defp put_assignment_lite_flag!(model, assignment_id, enabled?) do
     source_models = Map.get(model.metadata, "source_assignment_models", %{})
+    source = Map.get(source_models, assignment_id, %{"slug" => model.exposed_model_id})
 
     model
     |> Ecto.Changeset.change(%{
@@ -1096,16 +1258,23 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         Map.put(
           model.metadata,
           "source_assignment_models",
-          Map.put(source_models, assignment_id, %{"use_responses_lite" => enabled?})
+          Map.put(source_models, assignment_id, Map.put(source, "use_responses_lite", enabled?))
         )
     })
     |> Repo.update!()
   end
 
   defp put_assignment_lite_flags!(model, flags) do
+    template =
+      model.metadata
+      |> Map.get("source_assignment_models", %{})
+      |> Map.values()
+      |> List.first()
+      |> Kernel.||(%{"slug" => model.exposed_model_id})
+
     source_models =
       Map.new(flags, fn {assignment_id, enabled?} ->
-        {assignment_id, %{"use_responses_lite" => enabled?}}
+        {assignment_id, Map.put(template, "use_responses_lite", enabled?)}
       end)
 
     model
@@ -1116,6 +1285,39 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         |> Map.put("source_assignment_models", source_models)
     })
     |> Repo.update!()
+  end
+
+  defp add_divergent_assignment!(setup) do
+    divergent =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Divergent canonical partition upstream"
+      })
+
+    divergent_assignment =
+      divergent.assignment
+      |> Ecto.Changeset.change(created_at: DateTime.add(setup.assignment.created_at, 1, :second))
+      |> Repo.update!()
+
+    divergent = %{divergent | assignment: divergent_assignment}
+
+    source = get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id])
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 2,
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_ids" => [setup.assignment.id, divergent.assignment.id],
+            "source_assignment_models" => %{
+              setup.assignment.id => source,
+              divergent.assignment.id => Map.put(source, "description", "divergent schema")
+            }
+        }
+      })
+      |> Repo.update!()
+
+    {model, divergent}
   end
 
   defp candidate_ids(candidates),

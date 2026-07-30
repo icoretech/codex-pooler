@@ -778,7 +778,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(public_websocket_completed_response("resp_v1_websocket_opencode_replay"))
 
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
     assert :ok = Events.subscribe_pool(setup.pool)
     port = start_public_endpoint!()
     request_id = "v1-public-ws-opencode-#{System.unique_integer([:positive])}"
@@ -6814,7 +6814,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         })
       )
 
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
 
     conn =
       conn
@@ -7751,6 +7751,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   defp put_setup_model_source_metadata!(setup, source_metadata) when is_map(source_metadata) do
+    source_metadata = Map.put_new(source_metadata, "slug", setup.model.exposed_model_id)
+
     metadata =
       setup.model.metadata
       |> Map.put("source_assignment_models", %{setup.assignment.id => source_metadata})

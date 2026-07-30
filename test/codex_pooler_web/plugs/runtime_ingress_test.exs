@@ -960,7 +960,12 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         exposed_model_id: "gpt-test-model",
         upstream_model_id: "provider-gpt-test-model",
         pricing_ref: "provider-gpt-test-model",
-        metadata: %{"source_assignment_ids" => [upstream.assignment.id]},
+        metadata: %{
+          "source_assignment_ids" => [upstream.assignment.id],
+          "source_assignment_models" => %{
+            upstream.assignment.id => %{"slug" => "gpt-test-model"}
+          }
+        },
         supports_responses: true,
         supports_streaming: true
       })

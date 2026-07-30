@@ -61,8 +61,14 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id, second.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{"use_responses_lite" => false},
-            second.assignment.id => %{"use_responses_lite" => true}
+            setup.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => false
+            },
+            second.assignment.id => %{
+              "slug" => setup.model.exposed_model_id,
+              "use_responses_lite" => false
+            }
           }
         }
       })

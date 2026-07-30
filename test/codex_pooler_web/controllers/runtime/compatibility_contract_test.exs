@@ -1803,7 +1803,20 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         exposed_model_id: "gpt-contract-model",
         upstream_model_id: "provider-gpt-contract-model",
         pricing_ref: "provider-gpt-contract-model",
-        metadata: %{"source_assignment_ids" => [upstream.assignment.id]},
+        metadata: %{
+          "source_assignment_ids" => [upstream.assignment.id],
+          "source_assignment_models" => %{
+            upstream.assignment.id => %{
+              "slug" => "gpt-contract-model",
+              "capabilities" => %{
+                "reasoning" => true,
+                "responses" => true,
+                "streaming" => true,
+                "tools" => true
+              }
+            }
+          }
+        },
         supports_responses: true,
         supports_streaming: true
       })

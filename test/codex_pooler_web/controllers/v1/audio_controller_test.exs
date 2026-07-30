@@ -125,6 +125,13 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
         supports_streaming: false,
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => %{
+              "slug" => Gateway.backend_transcription_model(),
+              "input_modalities" => ["audio"],
+              "modes" => ["transcription"]
+            }
+          },
           "input_modalities" => ["audio"],
           "modes" => ["transcription"]
         }
