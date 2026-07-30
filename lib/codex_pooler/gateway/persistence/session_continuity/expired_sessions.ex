@@ -9,12 +9,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.ExpiredSessions do
     CodexSession
   }
 
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
     as: SessionAliasStatus
+
+  alias CodexPooler.Repo
 
   @alias_active SessionAliasStatus.active_status()
   @alias_expired SessionAliasStatus.expired_status()

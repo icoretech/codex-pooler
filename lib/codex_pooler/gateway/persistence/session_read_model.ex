@@ -16,13 +16,14 @@ defmodule CodexPooler.Gateway.Persistence.SessionReadModel do
     RuntimeCleanup
   }
 
-  alias CodexPooler.Pools.Pool
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
     as: SessionAliasStatus
+
+  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Repo
 
   @owner_lease_active OwnerLeaseStatus.active_status()
   @session_active SessionStatus.active_status()

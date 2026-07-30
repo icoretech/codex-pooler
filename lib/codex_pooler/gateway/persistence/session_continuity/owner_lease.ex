@@ -11,9 +11,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.OwnerLease do
     CodexSession
   }
 
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Repo
 
   @type owner_token_result :: :ok | {:error, :stale_owner | :owner_unavailable}
   @type session_ref :: CodexSession.t() | Ecto.UUID.t() | String.t()

@@ -12,11 +12,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
     CodexSession
   }
 
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
 
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.SessionAlias,
     as: SessionAliasStatus
+
+  alias CodexPooler.Repo
 
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
   @alias_active SessionAliasStatus.active_status()

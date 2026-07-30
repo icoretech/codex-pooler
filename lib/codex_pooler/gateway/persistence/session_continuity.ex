@@ -18,8 +18,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     SessionContinuity.TurnLifecycle
   }
 
-  alias CodexPooler.Repo
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
+  alias CodexPooler.Repo
 
   @session_active SessionStatus.active_status()
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()

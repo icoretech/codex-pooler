@@ -5,6 +5,8 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
 
   import Ecto.Query
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
     BridgeSessionAlias,
@@ -13,10 +15,9 @@ defmodule CodexPooler.Gateway.Persistence.RuntimeCleanup do
     IdempotencyKey
   }
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Repo
-  alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
 
   @owner_lease_active OwnerLeaseStatus.active_status()
 

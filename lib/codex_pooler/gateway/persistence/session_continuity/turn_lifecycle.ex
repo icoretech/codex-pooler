@@ -12,11 +12,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     CodexTurn
   }
 
-  alias CodexPooler.Repo
-  alias Ecto.Adapters.SQL
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.OwnerLease, as: OwnerLeaseStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
+  alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
 
   @type turn_result :: {:ok, CodexTurn.t()} | {:error, term()}
   @type request_ref :: Request.t() | Ecto.UUID.t()
