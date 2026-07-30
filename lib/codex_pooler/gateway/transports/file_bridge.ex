@@ -311,7 +311,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     case File.open(path, [:read]) do
       {:ok, file} ->
         File.close(file)
-        {:ok, File.stream!(path, 2048, [])}
+        {:ok, File.stream!(path, 64 * 1024, [])}
 
       {:error, _reason} ->
         {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}

@@ -138,7 +138,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
                  code: "model_not_found",
                  upstream_code: "model_not_found",
                  upstream_error_param: "model"
-               }}, %{classified?: true, buffer: ""}} =
+               }}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  terminal,
                  StreamAttempt.first_event_state(),
@@ -154,7 +154,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
                  code: "invalid_request_error",
                  upstream_code: "invalid_request_error",
                  upstream_error_param: "model"
-               }}, %{classified?: true, buffer: ""}} =
+               }}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  terminal,
                  StreamAttempt.first_event_state(),
@@ -167,7 +167,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       coalesced = ": upstream keepalive\n\n" <> terminal
 
       assert {{:retry, %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: ""}} =
+              %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  coalesced,
                  StreamAttempt.first_event_state(),
@@ -185,7 +185,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       terminal = terminal_event(code_less_model_param_payload())
 
       assert {{:retry, %{code: "invalid_request_error", upstream_error_param: "model"}},
-              %{classified?: true, buffer: ""}} =
+              %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  rate_limits <> terminal,
                  StreamAttempt.first_event_state(),
@@ -198,7 +198,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       terminal = terminal_event(error_payload("model_not_found", "model"))
       stream = comments <> terminal
 
-      assert {{:write, ^stream}, %{classified?: true, buffer: ""}} =
+      assert {{:write, ^stream}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  stream,
                  StreamAttempt.first_event_state(),
@@ -215,7 +215,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       stream = ": upstream keepalive\n\n" <> completed
 
-      assert {{:write, ^stream}, %{classified?: true, buffer: ""}} =
+      assert {{:write, ^stream}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  stream,
                  StreamAttempt.first_event_state(),
@@ -230,7 +230,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       assert {{:write_terminal_failure, ^terminal,
                %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: ""}} =
+              %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  terminal,
                  StreamAttempt.first_event_state()
@@ -245,7 +245,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
                  code: "invalid_request_error",
                  upstream_code: "invalid_request_error",
                  upstream_error_param: "model"
-               }}, %{classified?: true, buffer: ""}} =
+               }}, %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(
                  terminal,
                  StreamAttempt.first_event_state(),
@@ -264,7 +264,8 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       for {_label, payload} <- controls do
         terminal = terminal_event(payload)
 
-        assert {{:write_terminal_failure, ^terminal, _failure}, %{classified?: true, buffer: ""}} =
+        assert {{:write_terminal_failure, ^terminal, _failure},
+                %{classified?: true, buffer: "", parser: _parser}} =
                  StreamAttempt.classify_first_event(terminal, StreamAttempt.first_event_state())
       end
     end
@@ -287,7 +288,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
 
       assert {{:write_terminal_failure, ^terminal,
                %{code: "model_not_found", upstream_error_param: "model"}},
-              %{classified?: true, buffer: ""}} =
+              %{classified?: true, buffer: "", parser: _parser}} =
                StreamAttempt.classify_first_event(terminal, state, true)
     end
   end

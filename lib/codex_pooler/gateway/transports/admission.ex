@@ -12,6 +12,14 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   @default_queue_timeout_ms 5_000
   @telemetry_prefix [:codex_pooler, :gateway, :admission]
+  @class_defaults %{
+    running: 0,
+    queue: :queue.new(),
+    leases: MapSet.new(),
+    monitors: %{},
+    lease_monitors: %{},
+    lease_owners: %{}
+  }
 
   defstruct classes: %{}
 
@@ -291,18 +299,7 @@ defmodule CodexPooler.Gateway.Transports.Admission do
   end
 
   defp normalize_class(class) do
-    Map.merge(class_defaults(), class || %{})
-  end
-
-  defp class_defaults do
-    %{
-      running: 0,
-      queue: :queue.new(),
-      leases: MapSet.new(),
-      monitors: %{},
-      lease_monitors: %{},
-      lease_owners: %{}
-    }
+    Map.merge(@class_defaults, class || %{})
   end
 
   defp put_class(state, route_class, class) do

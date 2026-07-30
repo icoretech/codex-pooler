@@ -443,7 +443,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert byte_size(completed_event) > RetainedBody.max_bytes()
 
-    retained_suffix = RetainedBody.append(RetainedBody.empty(), completed_event)
+    retained_suffix =
+      RetainedBody.empty() |> RetainedBody.append(completed_event) |> RetainedBody.read()
+
     assert byte_size(retained_suffix) == RetainedBody.max_bytes()
     refute retained_suffix =~ ~s("usage")
 

@@ -2058,7 +2058,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     terminal_event = "event: response.completed\ndata: " <> terminal_payload <> "\n\n"
     assert byte_size(terminal_event) > RetainedBody.max_bytes()
 
-    retained_terminal = RetainedBody.append(RetainedBody.empty(), terminal_event)
+    retained_terminal =
+      RetainedBody.empty() |> RetainedBody.append(terminal_event) |> RetainedBody.read()
 
     assert byte_size(retained_terminal) == RetainedBody.max_bytes()
 
