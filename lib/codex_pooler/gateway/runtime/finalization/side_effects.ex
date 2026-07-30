@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Jobs
+  alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Upstreams.SavedResets.ProbeLease
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
 
@@ -96,13 +97,23 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.SideEffects do
 
   @spec maybe_enqueue_gateway_reconciliation(Jobs.pool_ref(), PoolUpstreamAssignment.t()) :: :ok
   def maybe_enqueue_gateway_reconciliation(pool_id, assignment) do
-    result = Jobs.enqueue_gateway_account_reconciliation(pool_id, assignment)
+    case UpstreamEnqueue.claim_gateway_reconciliation_gate(assignment.upstream_identity_id) do
+      :duplicate ->
+        :ok
 
-    case result do
+      :ok ->
+        enqueue_gateway_reconciliation(pool_id, assignment)
+    end
+  end
+
+  defp enqueue_gateway_reconciliation(pool_id, assignment) do
+    case Jobs.enqueue_gateway_account_reconciliation(pool_id, assignment) do
       {:ok, _job} ->
         :ok
 
       {:error, reason} ->
+        UpstreamEnqueue.release_gateway_reconciliation_gate(assignment.upstream_identity_id)
+
         RateLimitObserver.log_failure(
           "gateway_reconciliation_enqueue",
           [pool_id: pool_id, pool_upstream_assignment_id: assignment.id],

@@ -16,6 +16,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Jobs.AccountReconciliationWorker
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
+  alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Pools.Membership
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -5420,6 +5421,36 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                    where: job.worker == ^worker_name(AccountReconciliationWorker)
                  )
                )
+    end
+
+    test "gateway reconciliation gate admits one simultaneous claim per identity" do
+      identity_id = Ecto.UUID.generate()
+      parent = self()
+
+      on_exit(fn -> UpstreamEnqueue.release_gateway_reconciliation_gate(identity_id) end)
+
+      tasks =
+        for _index <- 1..32 do
+          Task.async(fn ->
+            send(parent, {:gate_claim_ready, self()})
+
+            receive do
+              :claim_gate -> UpstreamEnqueue.claim_gateway_reconciliation_gate(identity_id)
+            end
+          end)
+        end
+
+      task_pids =
+        for _index <- 1..32 do
+          assert_receive {:gate_claim_ready, task_pid}
+          task_pid
+        end
+
+      Enum.each(task_pids, &send(&1, :claim_gate))
+      results = Enum.map(tasks, &Task.await/1)
+
+      assert Enum.count(results, &(&1 == :ok)) == 1
+      assert Enum.count(results, &(&1 == :duplicate)) == 31
     end
 
     test "automatic reconciliation blocks incomplete jobs older than the cooldown" do

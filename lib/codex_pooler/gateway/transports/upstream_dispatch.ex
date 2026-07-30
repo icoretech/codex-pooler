@@ -720,8 +720,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp websocket_frame_observer(identity) do
-    fn frame ->
-      RateLimitObserver.record_complete_events(identity, frame)
+    fn
+      _frame, %{} = decoded -> RateLimitObserver.record_complete_event(identity, decoded)
+      frame, _decoded -> RateLimitObserver.record_complete_events(identity, frame)
     end
   end
 

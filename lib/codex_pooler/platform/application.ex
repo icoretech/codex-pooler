@@ -10,6 +10,7 @@ defmodule CodexPooler.Application do
     children = [
       CodexPoolerWeb.Telemetry,
       CodexPooler.Repo,
+      CodexPooler.Jobs.UpstreamEnqueue.GatewayReconciliationGate,
       CodexPooler.Access.APIKeys.TouchDebounce,
       CodexPooler.Upstreams.CloudflareCookies,
       CodexPooler.Gateway.Transports.Admission,

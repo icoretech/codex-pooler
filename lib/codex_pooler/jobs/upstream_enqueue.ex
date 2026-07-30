@@ -46,6 +46,54 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   # inserts. The untimed incomplete-state guard below keeps at most one
   # non-terminal automatic reconciliation per identity regardless of its age.
   @incomplete_job_states ~w(suspended available scheduled executing retryable)
+  @gateway_reconciliation_gate_seconds 60
+
+  defmodule GatewayReconciliationGate do
+    @moduledoc false
+    use GenServer
+
+    @table __MODULE__
+
+    @spec start_link(keyword()) :: GenServer.on_start()
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+
+    @impl GenServer
+    def init(_opts) do
+      table =
+        :ets.new(@table, [
+          :named_table,
+          :public,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      {:ok, %{table: table}}
+    end
+
+    @spec claim(String.t(), pos_integer()) :: :ok | :duplicate
+    def claim(identity_id, ttl_seconds) do
+      now = System.monotonic_time(:second)
+
+      case :ets.lookup(@table, identity_id) do
+        [{^identity_id, expires_at}] when expires_at > now ->
+          :duplicate
+
+        [{^identity_id, _expires_at} = expired_claim] ->
+          :ets.delete_object(@table, expired_claim)
+          insert_claim(identity_id, now + ttl_seconds)
+
+        [] ->
+          insert_claim(identity_id, now + ttl_seconds)
+      end
+    end
+
+    @spec release(String.t()) :: true
+    def release(identity_id), do: :ets.delete(@table, identity_id)
+
+    defp insert_claim(identity_id, expires_at) do
+      if :ets.insert_new(@table, {identity_id, expires_at}), do: :ok, else: :duplicate
+    end
+  end
 
   @spec enqueue_token_refresh(identity_ref(), keyword()) :: job_insert_result()
   def enqueue_token_refresh(identity_or_id, opts \\ []) do
@@ -154,6 +202,22 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
         assignment,
         trigger_kind: "gateway"
       )
+    end
+  end
+
+  @spec claim_gateway_reconciliation_gate(UpstreamIdentity.t() | Ecto.UUID.t()) ::
+          :ok | :duplicate
+  def claim_gateway_reconciliation_gate(identity_or_id) do
+    with {:ok, identity_id} <- identity_id(identity_or_id) do
+      GatewayReconciliationGate.claim(identity_id, @gateway_reconciliation_gate_seconds)
+    end
+  end
+
+  @spec release_gateway_reconciliation_gate(UpstreamIdentity.t() | Ecto.UUID.t()) :: true
+  def release_gateway_reconciliation_gate(identity_or_id) do
+    case identity_id(identity_or_id) do
+      {:ok, identity_id} -> GatewayReconciliationGate.release(identity_id)
+      {:error, _reason} -> true
     end
   end
 

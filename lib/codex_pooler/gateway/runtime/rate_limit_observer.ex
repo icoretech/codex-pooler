@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @max_event_buffer_bytes 16_384
+  @rate_limit_marker "codex.rate_limits"
   @event_supervisor CodexPooler.RateLimitEventSupervisor
 
   @type observer_result :: :ok
@@ -64,6 +65,16 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     _ignored = record_events(identity, data, event_state())
     :ok
   end
+
+  @spec record_complete_event(UpstreamIdentity.t() | term(), map() | term()) :: observer_result()
+  def record_complete_event(
+        %UpstreamIdentity{} = identity,
+        %{"type" => "codex.rate_limits"} = event
+      ) do
+    persist_events_async(identity, [event])
+  end
+
+  def record_complete_event(_identity, _event), do: :ok
 
   @spec record_events(UpstreamIdentity.t() | term(), binary() | term(), event_state()) ::
           {:ok, event_state()}
@@ -201,18 +212,24 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   end
 
   defp rate_limit_event_payloads(data, previous_buffer) do
-    direct_events =
-      data
-      |> String.trim()
-      |> rate_limit_events_from_json()
+    scan = previous_buffer <> data
+    {complete_blocks, buffer} = complete_sse_blocks(scan)
 
-    {complete_blocks, buffer} = complete_sse_blocks(previous_buffer <> data)
-    events = direct_events ++ rate_limit_events_from_sse_blocks(complete_blocks)
-    {events, buffer}
+    # Compatibility stance: the provider emits the event type as the literal
+    # `codex.rate_limits`, not as a JSON unicode escape. Scan retained+current
+    # bytes together so a transport split inside the literal cannot hide it.
+    if :binary.match(scan, @rate_limit_marker) != :nomatch do
+      direct_events = data |> String.trim() |> rate_limit_events_from_json()
+      events = direct_events ++ rate_limit_events_from_sse_blocks(complete_blocks)
+      {events, buffer}
+    else
+      {[], buffer}
+    end
   end
 
   defp complete_sse_blocks(data) do
-    data = String.replace(data, "\r\n", "\n")
+    data =
+      if :binary.match(data, "\r") == :nomatch, do: data, else: String.replace(data, "\r\n", "\n")
 
     if String.contains?(data, "\n\n") do
       parts = String.split(data, "\n\n")

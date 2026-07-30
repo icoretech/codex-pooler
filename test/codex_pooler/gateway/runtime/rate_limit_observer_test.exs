@@ -150,6 +150,51 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
                  RateLimitObserver.event_state()
                )
     end
+
+    test "persists a literal rate-limit marker split at every junction" do
+      identity = active_upstream_assignment_fixture().identity
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+      event =
+        "event: codex.rate_limits\n" <>
+          "data: #{Jason.encode!(codex_rate_limits_payload(42, reset_at))}\n\n"
+
+      {marker_offset, marker_size} = :binary.match(event, "codex.rate_limits")
+
+      for split_at <- marker_offset..(marker_offset + marker_size) do
+        <<first::binary-size(^split_at), second::binary>> = event
+
+        assert {:ok, state} =
+                 RateLimitObserver.record_events(identity, first, RateLimitObserver.event_state())
+
+        assert {:ok, %{buffer: ""}} = RateLimitObserver.record_events(identity, second, state)
+      end
+
+      assert window = wait_for_rate_limit_event_window(identity, "primary")
+      assert DateTime.compare(window.reset_at, reset_at) == :eq
+      wait_for_rate_limit_event_tasks()
+    end
+
+    test "keeps a carriage-return junction while finding a split marker" do
+      identity = active_upstream_assignment_fixture().identity
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+      event =
+        "event: codex.rate_limits\r\n" <>
+          "data: #{Jason.encode!(codex_rate_limits_payload(43, reset_at))}\r\n\r\n"
+
+      {split_at, _length} = :binary.match(event, "\r\n")
+      split_at = split_at + 1
+      <<first::binary-size(^split_at), second::binary>> = event
+
+      assert {:ok, state} =
+               RateLimitObserver.record_events(identity, first, RateLimitObserver.event_state())
+
+      assert {:ok, %{buffer: ""}} = RateLimitObserver.record_events(identity, second, state)
+      assert window = wait_for_rate_limit_event_window(identity, "primary")
+      assert Decimal.equal?(window.used_percent, Decimal.new("43.0"))
+      wait_for_rate_limit_event_tasks()
+    end
   end
 
   describe "saved reset convergence from runtime evidence" do
