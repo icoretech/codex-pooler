@@ -14,9 +14,10 @@ defmodule CodexPooler.Alerts.Delivery.AttemptLifecycle do
     AlertRuleChannel
   }
 
+  alias CodexPooler.Alerts.StatusVocabulary.Rule, as: RuleStatus
   alias CodexPooler.Repo
 
-  @default_cooldown_minutes AlertRule.default_cooldown_minutes()
+  @default_cooldown_minutes RuleStatus.default_cooldown_minutes()
 
   @type delivery_adapter :: String.t()
   @type failure_code :: String.t()

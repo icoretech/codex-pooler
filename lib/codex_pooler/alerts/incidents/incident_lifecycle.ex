@@ -12,9 +12,10 @@ defmodule CodexPooler.Alerts.Incidents.IncidentLifecycle do
   }
 
   alias CodexPooler.Alerts.Incidents.OnceOnlyIncidentLifecycle
+  alias CodexPooler.Alerts.StatusVocabulary.Incident, as: IncidentStatus
   alias CodexPooler.Repo
 
-  @unresolved_states [AlertIncident.open_state(), AlertIncident.acknowledged_state()]
+  @unresolved_states [IncidentStatus.open_state(), IncidentStatus.acknowledged_state()]
 
   @type match_attrs :: IncidentMatchInput.match_attrs()
   @type clear_attrs :: IncidentMatchInput.clear_attrs()

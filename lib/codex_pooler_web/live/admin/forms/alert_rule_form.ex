@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Alerts.Schemas.AlertRule
+  alias CodexPooler.Alerts.StatusVocabulary.Rule, as: RuleStatus
   alias CodexPooler.Pools.Pool
 
   @type option :: {String.t(), String.t()}
@@ -12,7 +13,7 @@ defmodule CodexPoolerWeb.Admin.AlertRuleForm do
   @default_rule_kind "pool_no_usable_assignments"
   @default_severity "critical"
   @saved_reset_rule_kind "upstream_saved_reset_banked_first_seen"
-  @default_state AlertRule.active_state()
+  @default_state RuleStatus.active_state()
   @default_scope_type "pool"
 
   @rule_kind_options [

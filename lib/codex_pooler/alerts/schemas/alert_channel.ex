@@ -5,6 +5,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
   import Ecto.Changeset
 
   alias CodexPooler.Alerts.Delivery.ChannelEndpoint
+  alias CodexPooler.Alerts.StatusVocabulary.Channel, as: ChannelStatus
   alias CodexPooler.InstanceSettings.AppSecretCrypto
 
   @derive {Inspect,
@@ -20,9 +21,9 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
              :webhook_signing_secret_aad
            ]}
 
-  @channel_types ~w(email webhook)
-  @states ~w(active disabled)
-  @endpoint_schemes ~w(https)
+  @channel_types ChannelStatus.channel_types()
+  @states ChannelStatus.states()
+  @endpoint_schemes ChannelStatus.endpoint_schemes()
   @endpoint_secret_kind "alert_webhook_endpoint_url"
   @webhook_secret_kind "alert_webhook_signing_secret"
 
@@ -129,19 +130,19 @@ defmodule CodexPooler.Alerts.Schemas.AlertChannel do
   end
 
   @spec channel_types() :: [channel_type()]
-  def channel_types, do: @channel_types
+  defdelegate channel_types(), to: ChannelStatus
 
   @spec states() :: [state()]
-  def states, do: @states
+  defdelegate states(), to: ChannelStatus
 
   @spec endpoint_schemes() :: [endpoint_scheme()]
-  def endpoint_schemes, do: @endpoint_schemes
+  defdelegate endpoint_schemes(), to: ChannelStatus
 
   @spec active_state() :: state()
-  def active_state, do: "active"
+  defdelegate active_state(), to: ChannelStatus
 
   @spec disabled_state() :: state()
-  def disabled_state, do: "disabled"
+  defdelegate disabled_state(), to: ChannelStatus
 
   defp normalize_endpoint_url(changeset) do
     case get_change(changeset, :endpoint_url) do

@@ -4,10 +4,12 @@ defmodule CodexPooler.Alerts.Schemas.AlertIncident do
 
   import Ecto.Changeset
 
-  @scope_types ~w(pool upstream_identity)
-  @rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments pool_all_assignments_in_state upstream_quota_threshold upstream_auth_state upstream_saved_reset_banked_first_seen)
-  @severities ~w(info warning critical)
-  @states ~w(open acknowledged resolved)
+  alias CodexPooler.Alerts.StatusVocabulary.Incident, as: IncidentStatus
+
+  @scope_types IncidentStatus.scope_types()
+  @rule_kinds IncidentStatus.rule_kinds()
+  @severities IncidentStatus.severities()
+  @states IncidentStatus.states()
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -96,23 +98,23 @@ defmodule CodexPooler.Alerts.Schemas.AlertIncident do
   end
 
   @spec scope_types() :: [scope_type()]
-  def scope_types, do: @scope_types
+  defdelegate scope_types(), to: IncidentStatus
 
   @spec rule_kinds() :: [rule_kind()]
-  def rule_kinds, do: @rule_kinds
+  defdelegate rule_kinds(), to: IncidentStatus
 
   @spec severities() :: [severity()]
-  def severities, do: @severities
+  defdelegate severities(), to: IncidentStatus
 
   @spec states() :: [state()]
-  def states, do: @states
+  defdelegate states(), to: IncidentStatus
 
   @spec open_state() :: state()
-  def open_state, do: "open"
+  defdelegate open_state(), to: IncidentStatus
 
   @spec acknowledged_state() :: state()
-  def acknowledged_state, do: "acknowledged"
+  defdelegate acknowledged_state(), to: IncidentStatus
 
   @spec resolved_state() :: state()
-  def resolved_state, do: "resolved"
+  defdelegate resolved_state(), to: IncidentStatus
 end

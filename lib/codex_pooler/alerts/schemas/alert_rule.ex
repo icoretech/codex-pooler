@@ -4,20 +4,21 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
 
   import Ecto.Changeset
 
+  alias CodexPooler.Alerts.StatusVocabulary.Rule, as: RuleStatus
   alias CodexPooler.RouteClass
 
-  @scope_types ~w(pool upstream_identity)
-  @rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments pool_all_assignments_in_state upstream_quota_threshold upstream_auth_state upstream_saved_reset_banked_first_seen)
-  @route_class_rule_kinds ~w(pool_no_usable_assignments pool_low_usable_assignments)
-  @severities ~w(info warning critical)
-  @states ~w(active disabled)
-  @target_states ~w(missing_evidence stale weekly_only exhausted reauth_required refresh_failed)
-  @window_selectors ~w(account_primary account_secondary model_primary model_secondary any)
-  @cooldown_minimum_minutes 5
-  @cooldown_maximum_minutes 1440
-  @default_cooldown_minutes 30
-  @saved_reset_first_seen_rule_kind "upstream_saved_reset_banked_first_seen"
-  @saved_reset_first_seen_baseline_key "saved_reset_first_seen_baseline_at"
+  @scope_types RuleStatus.scope_types()
+  @rule_kinds RuleStatus.rule_kinds()
+  @route_class_rule_kinds RuleStatus.route_class_rule_kinds()
+  @severities RuleStatus.severities()
+  @states RuleStatus.states()
+  @target_states RuleStatus.target_states()
+  @window_selectors RuleStatus.window_selectors()
+  @cooldown_minimum_minutes RuleStatus.cooldown_minimum_minutes()
+  @cooldown_maximum_minutes RuleStatus.cooldown_maximum_minutes()
+  @default_cooldown_minutes RuleStatus.default_cooldown_minutes()
+  @saved_reset_first_seen_rule_kind RuleStatus.saved_reset_first_seen_rule_kind()
+  @saved_reset_first_seen_baseline_key RuleStatus.saved_reset_first_seen_baseline_key()
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -119,43 +120,43 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   end
 
   @spec scope_types() :: [scope_type()]
-  def scope_types, do: @scope_types
+  defdelegate scope_types(), to: RuleStatus
 
   @spec rule_kinds() :: [rule_kind()]
-  def rule_kinds, do: @rule_kinds
+  defdelegate rule_kinds(), to: RuleStatus
 
   @spec route_classes() :: [RouteClass.t()]
   def route_classes, do: RouteClass.all()
 
   @spec route_class_rule_kinds() :: [rule_kind()]
-  def route_class_rule_kinds, do: @route_class_rule_kinds
+  defdelegate route_class_rule_kinds(), to: RuleStatus
 
   @spec severities() :: [severity()]
-  def severities, do: @severities
+  defdelegate severities(), to: RuleStatus
 
   @spec states() :: [state()]
-  def states, do: @states
+  defdelegate states(), to: RuleStatus
 
   @spec target_states() :: [target_state()]
-  def target_states, do: @target_states
+  defdelegate target_states(), to: RuleStatus
 
   @spec window_selectors() :: [window_selector()]
-  def window_selectors, do: @window_selectors
+  defdelegate window_selectors(), to: RuleStatus
 
   @spec default_cooldown_minutes() :: pos_integer()
-  def default_cooldown_minutes, do: @default_cooldown_minutes
+  defdelegate default_cooldown_minutes(), to: RuleStatus
 
   @spec cooldown_minimum_minutes() :: pos_integer()
-  def cooldown_minimum_minutes, do: @cooldown_minimum_minutes
+  defdelegate cooldown_minimum_minutes(), to: RuleStatus
 
   @spec cooldown_maximum_minutes() :: pos_integer()
-  def cooldown_maximum_minutes, do: @cooldown_maximum_minutes
+  defdelegate cooldown_maximum_minutes(), to: RuleStatus
 
   @spec active_state() :: state()
-  def active_state, do: "active"
+  defdelegate active_state(), to: RuleStatus
 
   @spec disabled_state() :: state()
-  def disabled_state, do: "disabled"
+  defdelegate disabled_state(), to: RuleStatus
 
   @spec saved_reset_first_seen_baseline_at(t()) :: DateTime.t() | nil
   def saved_reset_first_seen_baseline_at(%__MODULE__{} = rule) do
@@ -165,7 +166,7 @@ defmodule CodexPooler.Alerts.Schemas.AlertRule do
   end
 
   @spec saved_reset_first_seen_baseline_key() :: String.t()
-  def saved_reset_first_seen_baseline_key, do: @saved_reset_first_seen_baseline_key
+  defdelegate saved_reset_first_seen_baseline_key(), to: RuleStatus
 
   defp trim_optional_string(value) when is_binary(value) do
     case String.trim(value) do

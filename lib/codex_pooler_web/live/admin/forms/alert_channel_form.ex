@@ -4,13 +4,14 @@ defmodule CodexPoolerWeb.Admin.AlertChannelForm do
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.Alerts.Schemas.AlertChannel
+  alias CodexPooler.Alerts.StatusVocabulary.Channel, as: ChannelStatus
 
   @type attrs :: %{String.t() => term()}
   @type channel_projection :: CodexPooler.Alerts.channel_projection()
   @type option :: {String.t(), String.t()}
 
   @default_channel_type "email"
-  @default_state AlertChannel.active_state()
+  @default_state ChannelStatus.active_state()
 
   @channel_type_options [
     {"Email", "email"},
