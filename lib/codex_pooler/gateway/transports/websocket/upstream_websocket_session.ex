@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   @fifteen_minutes_ms :timer.minutes(15)
   @thirty_minutes_ms :timer.minutes(30)
   @type response_headers :: [{binary(), binary()}]
+  @type decoded_frame :: map() | :non_object_json | :undecodable
   @type message_mapper :: (binary() -> binary()) | nil
   @type connection_lifecycle_state :: %{
           required(:lifecycle_id) => Ecto.UUID.t(),
@@ -345,8 +346,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         ~s({"type":"error","error":{"code":"previous_response_not_found"}})
       )
 
+    decoded = decode_text_frame(terminal)
+
     {:halt, {:terminal, state, receive_state, "error"}} =
-      handle_text_frame(state, receive_state, terminal, terminal)
+      handle_text_frame(state, receive_state, terminal, decoded, decoded)
 
     {{:ok, result}, state} =
       finish_receive_result({:terminal, state, receive_state, "error"})
@@ -804,12 +807,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp handle_frames(state, frames, %ReceiveState{} = receive_state) do
     Enum.reduce_while(frames, {:continue, state, receive_state}, fn
       {:text, raw_text}, {:continue, state, receive_state} ->
-        text =
+        raw_decoded = decode_text_frame(raw_text)
+
+        {text, decoded} =
           raw_text
-          |> map_message(receive_state.message_mapper)
+          |> map_message(raw_decoded, receive_state.message_mapper)
           |> sanitize_downstream_text()
 
-        handle_text_frame(state, receive_state, raw_text, text)
+        handle_text_frame(state, receive_state, text, raw_decoded, decoded)
 
       {:ping, payload}, {:continue, state, receive_state} ->
         case send_frame(state, {:pong, payload}) do
@@ -847,27 +852,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     %{receive_state | body: RetainedBody.append(body, ["data: ", text, "\n\n"])}
   end
 
-  defp handle_text_frame(state, %ReceiveState{} = receive_state, raw_text, text) do
-    terminal_discriminator = TerminalDiscriminator.classify(text)
+  defp handle_text_frame(
+         state,
+         %ReceiveState{} = receive_state,
+         text,
+         raw_decoded,
+         decoded
+       ) do
+    terminal_discriminator = TerminalDiscriminator.classify(decoded)
 
     receive_state =
-      raw_text
+      raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
-      |> put_websocket_frame_headers(raw_text)
+      |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
       |> append_receive_body(text)
       |> put_terminal_discriminator(terminal_discriminator)
 
-    case retryable_first_text_frame(raw_text, receive_state) do
+    case retryable_first_text_frame(raw_decoded, receive_state) do
       {:ok, reason} ->
         receive_state = %{receive_state | termination_source: :upstream_terminal_event}
         {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
-        observe_frame(receive_state, text)
-        receive_state.writer.(text)
+        observe_frame(receive_state, text, decoded)
+        write_frame(receive_state.writer, text, terminal_discriminator)
 
-        receive_state = maybe_mark_downstream_output_started(receive_state, raw_text)
+        receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
 
         case terminal_discriminator.terminal do
           nil -> {:cont, {:continue, state, receive_state}}
@@ -951,13 +962,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp websocket_buffer_bucket(_buffer), do: nil
 
   defp retryable_first_text_frame(
-         raw_text,
+         %{} = decoded,
          %ReceiveState{downstream_output_started?: false} = receive_state
        ) do
-    case StreamProtocol.first_complete_event(raw_text) do
-      {:ok, event} -> retryable_pre_visible_terminal_event(event, receive_state)
-      :incomplete -> :error
-    end
+    decoded
+    |> StreamProtocol.event_summary()
+    |> retryable_pre_visible_terminal_event(receive_state)
   end
 
   defp retryable_first_text_frame(_raw_text, %ReceiveState{}), do: :error
@@ -993,8 +1003,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp maybe_mark_downstream_output_started(%ReceiveState{} = receive_state, raw_text) do
-    if StreamProtocol.internal_rate_limit_event?(raw_text) do
+  defp maybe_mark_downstream_output_started(%ReceiveState{} = receive_state, decoded) do
+    if StreamProtocol.internal_rate_limit_event?(decoded) do
       receive_state
     else
       %{receive_state | downstream_output_started?: true}
@@ -1031,25 +1041,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp mark_terminal_seen(%ReceiveState{} = receive_state),
     do: %{receive_state | terminal_seen?: true}
 
-  defp maybe_put_terminal_upstream_error(raw_text, %ReceiveState{} = receive_state) do
-    with {:ok, %{} = decoded} <- Jason.decode(raw_text),
-         type when type in ["response.failed", "response.incomplete", "error"] <-
-           Map.get(decoded, "type") do
-      %{
+  defp maybe_put_terminal_upstream_error(%{} = decoded, %ReceiveState{} = receive_state) do
+    case Map.get(decoded, "type") do
+      type when type in ["response.failed", "response.incomplete", "error"] ->
+        %{
+          receive_state
+          | terminal_upstream_error_code:
+              receive_state.terminal_upstream_error_code ||
+                StreamProtocol.upstream_error_code(decoded),
+            terminal_upstream_error_param:
+              receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
+        }
+
+      _other ->
         receive_state
-        | terminal_upstream_error_code:
-            receive_state.terminal_upstream_error_code ||
-              StreamProtocol.upstream_error_code(decoded),
-          terminal_upstream_error_param:
-            receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
-      }
-    else
-      _other -> receive_state
     end
   end
 
-  defp put_websocket_frame_headers(%ReceiveState{} = receive_state, raw_text) do
-    case StreamProtocol.websocket_error_frame_headers(raw_text) do
+  defp maybe_put_terminal_upstream_error(_decoded, %ReceiveState{} = receive_state),
+    do: receive_state
+
+  defp put_websocket_frame_headers(%ReceiveState{} = receive_state, decoded) do
+    case StreamProtocol.websocket_error_frame_headers(decoded) do
       headers when map_size(headers) > 0 ->
         %{
           receive_state
@@ -1063,32 +1076,73 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
 
-  defp observe_frame(%ReceiveState{frame_observer: observer}, text)
+  defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded)
+       when is_function(observer, 2) do
+    observer.(text, decoded)
+  end
+
+  defp observe_frame(%ReceiveState{frame_observer: observer}, text, _decoded)
        when is_function(observer, 1) do
     observer.(text)
   end
 
-  defp observe_frame(%ReceiveState{}, _text), do: :ok
+  defp observe_frame(%ReceiveState{}, _text, _decoded), do: :ok
 
-  defp map_message(text, mapper) when is_function(mapper, 1), do: mapper.(text)
-  defp map_message(text, _mapper), do: text
+  defp write_frame(writer, text, terminal_discriminator) when is_function(writer, 2),
+    do: writer.(text, terminal_discriminator)
 
-  defp sanitize_downstream_text(text) when is_binary(text) do
-    with {:ok, %{} = decoded} <- Jason.decode(text),
-         type
-         when type in ["response.completed", "response.failed", "response.incomplete", "error"] <-
-           Map.get(decoded, "type") do
-      decoded
-      |> Map.drop(["headers"])
-      |> Jason.encode!()
-    else
-      _other -> text
+  defp write_frame(writer, text, _terminal_discriminator) when is_function(writer, 1),
+    do: writer.(text)
+
+  defp map_message(text, %{} = decoded, mapper) when is_function(mapper, 1) do
+    cond do
+      mapper == (&StreamProtocol.normalize_public_openai_responses_json_message/1) ->
+        StreamProtocol.normalize_public_openai_responses_json_message(text, decoded)
+
+      mapper == (&StreamProtocol.canonicalize_native_codex_responses_json_message/1) ->
+        StreamProtocol.canonicalize_native_codex_responses_json_message(text, decoded)
+
+      mapper == (&StreamProtocol.canonicalize_codex_responses_json_message/1) ->
+        StreamProtocol.canonicalize_codex_responses_json_message(text, decoded)
+
+      true ->
+        mapped = mapper.(text)
+        {mapped, if(mapped == text, do: decoded, else: decode_text_frame(mapped))}
+    end
+  end
+
+  defp map_message(text, decoded, mapper) when is_function(mapper, 1) do
+    mapped = mapper.(text)
+    {mapped, if(mapped == text, do: decoded, else: decode_text_frame(mapped))}
+  end
+
+  defp map_message(text, decoded, _mapper), do: {text, decoded}
+
+  defp sanitize_downstream_text({text, %{} = decoded}) when is_binary(text) do
+    case Map.get(decoded, "type") do
+      type
+      when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
+        sanitized = Map.drop(decoded, ["headers"])
+        {Jason.encode!(sanitized), sanitized}
+
+      _other ->
+        {text, decoded}
+    end
+  end
+
+  defp sanitize_downstream_text({text, decoded}), do: {text, decoded}
+
+  defp decode_text_frame(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = decoded} -> decoded
+      {:ok, _decoded} -> :non_object_json
+      {:error, _reason} -> :undecodable
     end
   end
 
   defp send_frame(state, frame), do: WebsocketFrameWriter.send_frame(state, frame)
 
-  defp websocket_body(body) when is_binary(body), do: body
+  defp websocket_body(body), do: RetainedBody.read(body)
 
   defp mint_socket(conn), do: Mint.HTTP.get_socket(conn)
 

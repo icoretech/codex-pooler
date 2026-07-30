@@ -29,23 +29,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
   def classify(text) when is_binary(text) do
     case Jason.decode(text) do
       {:ok, %{} = decoded} ->
-        classify_decoded(decoded)
+        classify(decoded)
 
       {:ok, _decoded} ->
-        %__MODULE__{
-          last_upstream_event_type: "non_object_json",
-          last_upstream_event_class: "invalid_frame"
-        }
+        classify(:non_object_json)
 
       {:error, _reason} ->
-        %__MODULE__{
-          last_upstream_event_type: "invalid_json",
-          last_upstream_event_class: "invalid_frame"
-        }
+        classify(:undecodable)
     end
   end
 
-  defp classify_decoded(decoded) do
+  @spec classify(map() | :non_object_json | :undecodable) :: t()
+  def classify(%{} = decoded) do
     outcome = StreamProtocol.terminal_outcome(nil, decoded)
     {last_upstream_event_type, last_upstream_event_class} = last_upstream_event(decoded)
 
@@ -62,6 +57,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Term
       terminal_candidate_rejection: terminal_candidate_rejection
     }
   end
+
+  def classify(:non_object_json) do
+    %__MODULE__{
+      last_upstream_event_type: "non_object_json",
+      last_upstream_event_class: "invalid_frame"
+    }
+  end
+
+  def classify(:undecodable) do
+    %__MODULE__{
+      last_upstream_event_type: "invalid_json",
+      last_upstream_event_class: "invalid_frame"
+    }
+  end
+
+  @spec terminal?(t()) :: boolean()
+  def terminal?(%__MODULE__{terminal: terminal}), do: is_binary(terminal)
 
   defp terminal_candidate(decoded, outcome) do
     type = Map.get(decoded, "type")

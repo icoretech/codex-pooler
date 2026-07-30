@@ -17,8 +17,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     forward_error_body?: true
   ]
 
-  @type writer :: (binary() -> any())
-  @type frame_observer :: (binary() -> any()) | nil
+  @type writer ::
+          (binary() -> any())
+          | (binary(),
+             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.t() ->
+               any())
+  @type frame_observer ::
+          (binary() -> any())
+          | (binary(),
+             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.decoded_frame() ->
+               any())
+          | nil
 
   @type t :: %__MODULE__{
           url: binary(),

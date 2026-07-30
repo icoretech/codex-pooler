@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   use ExUnit.Case, async: false
 
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
@@ -121,6 +122,78 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            end)
 
     refute inspect(result) =~ "private-header-characterization"
+  end
+
+  test "decoded observer sees mapped frames while malformed frames preserve fallback state" do
+    rate_limit = ~s({"type":"codex.rate_limits","rate_limits":{}})
+    malformed = ~s({"type":"response.output_text.delta")
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "response" => %{
+          "id" => "resp_decoded_observer",
+          "status" => "failed",
+          "error" => %{"code" => "server_error"}
+        },
+        "headers" => %{"openai-request-id" => "observer-request"}
+      })
+
+    upstream =
+      start_upstream(FakeUpstream.websocket_text_frames([rate_limit, malformed, terminal]))
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | message_mapper: &StreamProtocol.normalize_public_openai_responses_json_message/1,
+        frame_observer: fn frame, decoded ->
+          send(parent, {:observed_frame, byte_size(frame), decoded})
+        end
+    }
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:observed_frame, rate_limit_bytes, %{"type" => "codex.rate_limits"}}
+    assert rate_limit_bytes == byte_size(rate_limit)
+    assert_receive {:observed_frame, malformed_bytes, :undecodable}
+    assert malformed_bytes == byte_size(malformed)
+
+    assert_receive {:observed_frame, terminal_bytes,
+                    %{"type" => "response.failed", "response" => %{"status" => "failed"}}}
+
+    assert terminal_bytes < byte_size(terminal) + 1_000
+    assert result.terminal == "response.failed"
+    assert result.websocket_frame_headers == %{"openai-request-id" => "observer-request"}
+    assert result.body =~ "data: #{rate_limit}\n\ndata: #{malformed}\n\n"
+    refute result.body =~ "observer-request"
+  end
+
+  test "two-argument writers receive the mapped terminal discriminator" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_writer_discriminator", "status" => "completed"}
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | writer: fn frame, discriminator ->
+          send(parent, {:classified_writer_frame, frame, discriminator})
+        end
+    }
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:classified_writer_frame, ^terminal, %{terminal: "response.completed"}}
   end
 
   test "same-key requests reuse one FakeUpstream connection and process replacement opens another" do

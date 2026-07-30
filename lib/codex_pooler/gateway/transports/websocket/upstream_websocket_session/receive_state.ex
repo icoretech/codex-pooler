@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
+
   defstruct [
     :writer,
     :timeouts,
@@ -24,13 +26,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     terminal_candidate_class: nil,
     terminal_candidate_rejection: nil,
     text_frame_count: 0,
-    body: "",
+    body: {[], 0},
     websocket_frame_headers: %{},
     peer_close_metadata: %{}
   ]
 
   @type t :: %__MODULE__{
-          writer: (binary() -> any()),
+          writer:
+            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.writer(),
           timeouts: map(),
           message_mapper:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
@@ -57,6 +60,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           websocket_frame_headers: %{optional(String.t()) => String.t()},
           peer_close_metadata:
             CodexPooler.Gateway.Transports.TransportFailureReason.transport_failure_metadata(),
-          body: binary()
+          body: RetainedBody.t()
         }
 end
