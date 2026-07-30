@@ -50,14 +50,7 @@ defmodule CodexPooler.Gateway.RequestCompression.JsonStringRanges do
           {:ok, binary()} | {:error, :invalid_range}
   def replace_ranges(json, replacements) when is_binary(json) and is_list(replacements) do
     with {:ok, replacements} <- normalize_replacements(replacements, byte_size(json)) do
-      replaced =
-        replacements
-        |> Enum.sort_by(& &1.byte_start, :desc)
-        |> Enum.reduce(json, fn replacement, acc ->
-          replace_range(acc, replacement)
-        end)
-
-      {:ok, replaced}
+      {:ok, build_replacement(json, replacements)}
     end
   end
 
@@ -411,17 +404,15 @@ defmodule CodexPooler.Gateway.RequestCompression.JsonStringRanges do
     end
   end
 
-  defp replace_range(json, %{
-         byte_start: byte_start,
-         byte_end: byte_end,
-         replacement: replacement
-       }) do
-    [
-      binary_part(json, 0, byte_start),
-      replacement,
-      binary_part(json, byte_end, byte_size(json) - byte_end)
-    ]
-    |> IO.iodata_to_binary()
+  defp build_replacement(json, replacements) do
+    {parts, cursor} =
+      Enum.reduce(replacements, {[], 0}, fn replacement, {parts, cursor} ->
+        unchanged = binary_part(json, cursor, replacement.byte_start - cursor)
+        {[replacement.replacement, unchanged | parts], replacement.byte_end}
+      end)
+
+    suffix = binary_part(json, cursor, byte_size(json) - cursor)
+    IO.iodata_to_binary(Enum.reverse([suffix | parts]))
   end
 
   defp skip_whitespace(json, offset, size) when offset < size do

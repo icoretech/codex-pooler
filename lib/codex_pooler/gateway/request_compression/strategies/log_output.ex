@@ -33,9 +33,10 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
          {:ok, lines} <- Strategies.lines(content),
          line_count when line_count >= min_lines <- length(lines),
          important_indexes when important_indexes != [] <- important_indexes(lines) do
-      selected_indexes = selected_indexes(lines, important_indexes, opts)
+      failure_analysis = failure_analysis(lines)
+      selected_indexes = selected_indexes(lines, important_indexes, failure_analysis, opts)
 
-      if incomplete_failure_details?(lines, selected_indexes) do
+      if incomplete_failure_details?(failure_analysis, selected_indexes) do
         :skip
       else
         {compressed_lines, omitted_line_count} = collapse(lines, selected_indexes)
@@ -77,32 +78,43 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
     |> Enum.reverse()
   end
 
-  defp incomplete_failure_details?(lines, selected_indexes) do
-    case failure_summary_count(lines) do
+  defp incomplete_failure_details?(failure_analysis, selected_indexes) do
+    case failure_analysis.summary_count do
       0 ->
         false
 
       summary_count ->
-        failure_blocks = failure_detail_blocks(lines)
+        failure_blocks = failure_analysis.detail_blocks
 
         length(failure_blocks) < summary_count or
           retained_failure_detail_block_count(failure_blocks, selected_indexes) < summary_count
     end
   end
 
-  defp failure_summary_count(lines) do
-    lines
-    |> Enum.map(&failure_summary_counts_for_line/1)
-    |> Enum.reduce(%{}, &merge_summary_counts/2)
-    |> Map.values()
-    |> Enum.sum()
-  end
+  defp failure_analysis(lines) do
+    {summary_counts, summary_indexes, detail_indexes} =
+      lines
+      |> Enum.with_index()
+      |> Enum.reduce({%{}, [], []}, fn {line, index},
+                                       {summary_counts, summary_indexes, detail_indexes} ->
+        line_summary_counts = failure_summary_counts_for_line(line)
+        summary? = map_size(line_summary_counts) > 0
 
-  defp failure_summary_count_for_line(line) do
-    line
-    |> failure_summary_counts_for_line()
-    |> Map.values()
-    |> Enum.sum()
+        {
+          merge_summary_counts(summary_counts, line_summary_counts),
+          if(summary?, do: [index | summary_indexes], else: summary_indexes),
+          if(Regex.match?(@failure_detail_regex, line) and not summary?,
+            do: [index | detail_indexes],
+            else: detail_indexes
+          )
+        }
+      end)
+
+    %{
+      summary_count: summary_counts |> Map.values() |> Enum.sum(),
+      summary_indexes: Enum.reverse(summary_indexes),
+      detail_blocks: detail_indexes |> Enum.reverse() |> failure_indexes_to_blocks()
+    }
   end
 
   defp failure_summary_counts_for_line(line) do
@@ -152,42 +164,12 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
     Map.merge(left, right, fn _kind, left_count, right_count -> max(left_count, right_count) end)
   end
 
-  defp failure_summary_line?(line), do: failure_summary_count_for_line(line) > 0
-
-  defp failure_summary_indexes(lines) do
-    lines
-    |> Enum.with_index()
-    |> Enum.reduce([], fn {line, index}, indexes ->
-      if failure_summary_line?(line), do: [index | indexes], else: indexes
-    end)
-    |> Enum.reverse()
-  end
-
   defp retained_failure_detail_block_count(failure_blocks, selected_indexes) do
     selected_indexes = MapSet.new(selected_indexes)
 
     Enum.count(failure_blocks, fn {first, last} ->
       Enum.any?(first..last//1, &MapSet.member?(selected_indexes, &1))
     end)
-  end
-
-  defp failure_detail_indexes(lines) do
-    lines
-    |> Enum.with_index()
-    |> Enum.reduce([], fn {line, index}, indexes ->
-      if failure_detail_line?(line) do
-        [index | indexes]
-      else
-        indexes
-      end
-    end)
-    |> Enum.reverse()
-  end
-
-  defp failure_detail_blocks(lines) do
-    lines
-    |> failure_detail_indexes()
-    |> failure_indexes_to_blocks()
   end
 
   defp failure_indexes_to_blocks([]), do: []
@@ -204,11 +186,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
     |> Enum.reverse()
   end
 
-  defp failure_detail_line?(line) do
-    Regex.match?(@failure_detail_regex, line) and not failure_summary_line?(line)
-  end
-
-  defp selected_indexes(lines, important_indexes, opts) do
+  defp selected_indexes(lines, important_indexes, failure_analysis, opts) do
     line_count = length(lines)
     head_lines = Strategies.integer_option(opts, :head_lines, @default_head_lines, 0)
     tail_lines = Strategies.integer_option(opts, :tail_lines, @default_tail_lines, 0)
@@ -226,26 +204,23 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.LogOutput do
       context_indexes(line_count, important_indexes, context_lines)
     ]
     |> List.flatten()
-    |> include_failure_detail_blocks(lines, context_lines)
+    |> include_failure_detail_blocks(line_count, failure_analysis, context_lines)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  defp include_failure_detail_blocks(indexes, lines, context_lines) do
-    case failure_summary_count(lines) do
+  defp include_failure_detail_blocks(indexes, line_count, failure_analysis, context_lines) do
+    case failure_analysis.summary_count do
       0 ->
         indexes
 
       _summary_count ->
-        line_count = length(lines)
-
         failure_indexes =
-          lines
-          |> failure_detail_blocks()
+          failure_analysis.detail_blocks
           |> Enum.flat_map(fn {first, last} -> Enum.to_list(first..last//1) end)
 
         indexes ++
-          failure_summary_indexes(lines) ++
+          failure_analysis.summary_indexes ++
           context_indexes(line_count, failure_indexes, context_lines)
     end
   end

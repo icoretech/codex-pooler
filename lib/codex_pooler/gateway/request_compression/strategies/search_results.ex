@@ -34,8 +34,9 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
 
     with true <- byte_size(content) >= min_bytes,
          {:ok, lines} <- Strategies.lines(content),
-         false <- unsafe_search_output?(lines),
-         entries <- parse_entries(lines),
+         grouped_entries = parse_grouped_entries(lines),
+         false <- unsafe_search_output?(lines, grouped_entries),
+         entries <- parse_entries(lines, grouped_entries),
          true <- count_matches(entries) >= min_matches,
          groups when groups != [] <- group_entries(entries) do
       selected_groups = select_groups(groups, opts)
@@ -81,8 +82,9 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
 
   def compress(_content, _opts), do: :skip
 
-  defp unsafe_search_output?(lines) do
-    Enum.any?(lines, &unsafe_passthrough_line?/1) or ungrouped_line_match_output?(lines)
+  defp unsafe_search_output?(lines, grouped_entries) do
+    Enum.any?(lines, &unsafe_passthrough_line?/1) or
+      ungrouped_line_match_output?(lines, grouped_entries)
   end
 
   defp unsafe_passthrough_line?(line) do
@@ -90,10 +92,9 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
       Regex.match?(@engine_stderr_regex, line) or Regex.match?(@exit_code_regex, line)
   end
 
-  defp ungrouped_line_match_output?(lines) do
+  defp ungrouped_line_match_output?(lines, grouped_entries) do
     grouped_indexes =
-      lines
-      |> parse_grouped_entries()
+      grouped_entries
       |> Enum.map(& &1.index)
       |> MapSet.new()
 
@@ -105,13 +106,11 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
     end)
   end
 
-  defp parse_entries(lines) do
+  defp parse_entries(lines, grouped_entries) do
     direct_entries =
       lines
       |> Enum.with_index()
       |> parse_direct_entries()
-
-    grouped_entries = parse_grouped_entries(lines)
 
     (direct_entries ++ grouped_entries)
     |> Enum.sort_by(& &1.index)
@@ -180,33 +179,46 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.SearchResults do
   end
 
   defp parse_grouped_entries(lines) do
-    lines
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {line, index} ->
-      path = String.trim(line)
-
-      if path_like_heading?(path) do
-        grouped_entries_after(lines, path, index)
-      else
-        []
-      end
-    end)
+    parse_grouped_entries(lines, 0, nil, [])
   end
 
-  defp grouped_entries_after(lines, path, heading_index) do
-    entries =
-      lines
-      |> Enum.drop(heading_index + 1)
-      |> Enum.with_index(heading_index + 1)
-      |> Enum.reduce_while([], fn {line, index}, entries ->
-        case parse_grouped_fragment(path, line, index) do
-          {:ok, entry} -> {:cont, [entry | entries]}
-          :skip -> {:halt, entries}
-        end
-      end)
-      |> Enum.reverse()
+  defp parse_grouped_entries([], _index, current, entries) do
+    entries
+    |> finish_grouped_entries(current)
+    |> Enum.reverse()
+  end
 
-    if count_matches(entries) >= 2, do: entries, else: []
+  defp parse_grouped_entries([line | rest], index, nil, entries) do
+    path = String.trim(line)
+    current = if path_like_heading?(path), do: %{path: path, entries: []}, else: nil
+    parse_grouped_entries(rest, index + 1, current, entries)
+  end
+
+  defp parse_grouped_entries([line | rest] = lines, index, current, entries) do
+    case parse_grouped_fragment(current.path, line, index) do
+      {:ok, entry} ->
+        parse_grouped_entries(
+          rest,
+          index + 1,
+          %{current | entries: [entry | current.entries]},
+          entries
+        )
+
+      :skip ->
+        parse_grouped_entries(lines, index, nil, finish_grouped_entries(entries, current))
+    end
+  end
+
+  defp finish_grouped_entries(entries, nil), do: entries
+
+  defp finish_grouped_entries(entries, current) do
+    current_entries = Enum.reverse(current.entries)
+
+    if count_matches(current_entries) >= 2 do
+      Enum.reverse(current_entries, entries)
+    else
+      entries
+    end
   end
 
   defp parse_grouped_fragment(path, line, index) do

@@ -519,6 +519,77 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert captured.json["input"] == body["input"]
     end
 
+    test "decodes zstd JSON bodies that require multiple decoder outputs", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        max_decompressed_body_bytes: 1_048_576,
+        max_decompression_ratio: 1_000_000
+      })
+
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_multi_output_ok"}))
+      setup = gateway_setup(upstream)
+      input = String.duplicate("a", 500_000)
+      body = gateway_body(setup) |> Map.put("input", input)
+      compressed = zstd(body)
+
+      assert zstd_first_output_shape(compressed) == {:remainder, 131_072}
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post("/backend-api/codex/responses", "zstd", compressed)
+
+      assert %{"id" => "zstd_multi_output_ok"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+    end
+
+    test "decodes zstd JSON bodies across multiple decoder input chunks", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        max_decompressed_body_bytes: 1_048_576,
+        max_decompression_ratio: 100
+      })
+
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_chunked_ok"}))
+      setup = gateway_setup(upstream)
+      input = deterministic_input(450_000)
+      body = gateway_body(setup) |> Map.put("input", input)
+      compressed = zstd(body)
+
+      assert byte_size(compressed) > 16_384
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post("/backend-api/codex/responses", "zstd", compressed)
+
+      assert %{"id" => "zstd_chunked_ok"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+    end
+
+    test "accepts a zstd JSON body at the exact one MiB decompressed limit", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        max_decompressed_body_bytes: 1_048_576,
+        max_decompression_ratio: 1_000_000
+      })
+
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_one_mib_ok"}))
+      setup = gateway_setup(upstream)
+      body = fixed_size_gateway_body(setup, 1_048_576)
+      encoded = Jason.encode!(body)
+
+      assert byte_size(encoded) == 1_048_576
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post("/backend-api/codex/responses", "zstd", zstd_encoded(encoded))
+
+      assert %{"id" => "zstd_one_mib_ok"} = json_response(conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert byte_size(captured.json["input"]) > 1_000_000
+    end
+
     test "rejects zstd when runtime support is unavailable", %{conn: conn} do
       setup_runtime_ingress_override(%OperationalSettings{
         decompression_algorithms: ["zstd"],
@@ -832,7 +903,25 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   defp deflate(body) when is_map(body), do: body |> Jason.encode!() |> :zlib.compress()
 
   defp zstd(body) when is_map(body) do
-    body |> Jason.encode!() |> :zstd.compress() |> IO.iodata_to_binary()
+    body |> Jason.encode!() |> zstd_encoded()
+  end
+
+  defp zstd_encoded(body), do: body |> :zstd.compress() |> IO.iodata_to_binary()
+
+  defp zstd_first_output_shape(compressed) do
+    {:ok, context} = :zstd.context(:decompress)
+
+    try do
+      case :zstd.stream(context, compressed) do
+        {:continue, remainder, output} when byte_size(remainder) > 0 ->
+          {:remainder, IO.iodata_length(output)}
+
+        {:continue, output} ->
+          {:consumed, IO.iodata_length(output)}
+      end
+    after
+      :zstd.close(context)
+    end
   end
 
   defp gateway_body(setup) do
@@ -840,6 +929,24 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       "model" => setup.model.exposed_model_id,
       "input" => "hello"
     }
+  end
+
+  defp fixed_size_gateway_body(setup, target_bytes) do
+    body = gateway_body(setup) |> Map.put("input", "")
+    padding_bytes = target_bytes - byte_size(Jason.encode!(body))
+    Map.put(body, "input", String.duplicate("a", padding_bytes))
+  end
+
+  defp deterministic_input(target_bytes) do
+    1..ceil(target_bytes / 64)
+    |> Enum.map(fn index ->
+      index
+      |> Integer.to_string()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+    end)
+    |> IO.iodata_to_binary()
+    |> binary_part(0, target_bytes)
   end
 
   defp gateway_setup(upstream) do

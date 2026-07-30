@@ -272,7 +272,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
           zstream,
           compressed,
           settings,
-          %DecompressionState{state | pending: IO.iodata_to_binary([remainder, state.pending])},
+          %DecompressionState{
+            state
+            | pending: remainder |> IO.iodata_to_binary() |> :binary.copy()
+          },
           output
         )
 
@@ -296,12 +299,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody do
          } = state
        )
        when byte_size(pending) > 0 do
-    chunk_size = min(@decompression_chunk_bytes, byte_size(pending))
-    chunk = binary_part(pending, 0, chunk_size)
-    rest = binary_part(pending, chunk_size, byte_size(pending) - chunk_size)
-
-    {chunk,
-     %DecompressionState{state | offset: offset, compressed_size: compressed_size, pending: rest}}
+    {pending,
+     %DecompressionState{state | offset: offset, compressed_size: compressed_size, pending: <<>>}}
   end
 
   defp zstd_next_chunk(

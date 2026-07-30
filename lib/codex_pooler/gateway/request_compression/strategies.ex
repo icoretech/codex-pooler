@@ -118,17 +118,21 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies do
     {[marker_fun.(line_count)], line_count}
   end
 
-  defp collapse_selected_lines(lines, selected_indexes, marker_fun, line_count) do
-    {output, omitted_count, previous_index} =
-      Enum.reduce(selected_indexes, {[], 0, -1}, fn index,
-                                                    {output, omitted_count, previous_index} ->
-        gap = index - previous_index - 1
-        {output, omitted_count} = append_omission(output, omitted_count, gap, marker_fun)
+  defp collapse_selected_lines(lines, selected_indexes, marker_fun, _line_count) do
+    selected_indexes = MapSet.new(selected_indexes)
 
-        {[Enum.at(lines, index) | output], omitted_count, index}
+    {output, omitted_count, gap} =
+      lines
+      |> Enum.with_index()
+      |> Enum.reduce({[], 0, 0}, fn {line, index}, {output, omitted_count, gap} ->
+        if MapSet.member?(selected_indexes, index) do
+          {output, omitted_count} = append_omission(output, omitted_count, gap, marker_fun)
+          {[line | output], omitted_count, 0}
+        else
+          {output, omitted_count, gap + 1}
+        end
       end)
 
-    gap = line_count - previous_index - 1
     {output, omitted_count} = append_omission(output, omitted_count, gap, marker_fun)
 
     {Enum.reverse(output), omitted_count}

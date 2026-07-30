@@ -268,6 +268,30 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
       end
     end
 
+    test "detects many grouped headings in one forward scan" do
+      grouped =
+        1..1_000
+        |> Enum.flat_map(fn file ->
+          [
+            "lib/grouped_#{file}.ex",
+            "1: first grouped match #{file}",
+            "2: second grouped match #{file}"
+          ]
+        end)
+        |> Enum.join("\n")
+
+      started = System.monotonic_time(:millisecond)
+
+      assert %{
+               kind: :search,
+               confidence: 0.7,
+               compressible: true,
+               strategy: :search_results
+             } = ContentDetector.detect(grouped)
+
+      assert System.monotonic_time(:millisecond) - started < 1_000
+    end
+
     test "detects column-bearing direct search output" do
       column_bearing =
         1..3

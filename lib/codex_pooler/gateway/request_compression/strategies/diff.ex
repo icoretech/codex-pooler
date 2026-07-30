@@ -109,9 +109,10 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
     hunks =
       hunks
       |> append_hunk(current_hunk)
+      |> Enum.reverse()
       |> Enum.filter(&(change_count(&1) > 0))
 
-    %{header: header, hunks: hunks}
+    %{header: Enum.reverse(header), hunks: hunks}
   end
 
   defp new_hunk(header), do: %{header: header, body: [], prefix_width: hunk_prefix_width(header)}
@@ -125,14 +126,17 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
     |> max(1)
   end
 
-  defp append_line(line, header, hunks, nil), do: {header ++ [line], hunks, nil}
+  defp append_line(line, header, hunks, nil), do: {[line | header], hunks, nil}
 
   defp append_line(line, header, hunks, current_hunk) do
-    {header, hunks, %{current_hunk | body: current_hunk.body ++ [line]}}
+    {header, hunks, %{current_hunk | body: [line | current_hunk.body]}}
   end
 
   defp append_hunk(hunks, nil), do: hunks
-  defp append_hunk(hunks, hunk), do: hunks ++ [hunk]
+
+  defp append_hunk(hunks, hunk) do
+    [%{hunk | body: Enum.reverse(hunk.body)} | hunks]
+  end
 
   defp select_files(files, opts) do
     max_files = Strategies.integer_option(opts, :max_files, @default_max_files, 1)
@@ -141,14 +145,14 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
     max_hunks_per_file =
       Strategies.integer_option(opts, :max_hunks_per_file, @default_max_hunks_per_file, 1)
 
-    {selected_files, _kept_hunks} =
-      Enum.reduce_while(files, {[], 0}, fn file, {selected_files, kept_hunks} ->
+    {selected_files, _file_count, _kept_hunks} =
+      Enum.reduce_while(files, {[], 0, 0}, fn file, {selected_files, file_count, kept_hunks} ->
         cond do
-          length(selected_files) >= max_files ->
-            {:halt, {selected_files, kept_hunks}}
+          file_count >= max_files ->
+            {:halt, {selected_files, file_count, kept_hunks}}
 
           kept_hunks >= max_hunks ->
-            {:halt, {selected_files, kept_hunks}}
+            {:halt, {selected_files, file_count, kept_hunks}}
 
           true ->
             remaining_hunks = max_hunks - kept_hunks
@@ -161,7 +165,9 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
               omitted_hunk_count: length(file.hunks) - length(selected_hunks)
             }
 
-            {:cont, {[selected_file | selected_files], kept_hunks + length(selected_hunks)}}
+            {:cont,
+             {[selected_file | selected_files], file_count + 1,
+              kept_hunks + length(selected_hunks)}}
         end
       end)
 
@@ -171,35 +177,44 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   defp render_files(files, selected_files, opts) do
     context_lines = Strategies.integer_option(opts, :context_lines, @default_context_lines, 0)
 
-    {file_lines, kept_context_line_count, omitted_context_line_count} =
+    {file_chunks, kept_context_line_count, omitted_context_line_count} =
       Enum.reduce(selected_files, {[], 0, 0}, fn file, {lines, kept_context, omitted_context} ->
         {hunk_lines, file_kept_context, file_omitted_context} =
           render_hunks(file.hunks, context_lines)
 
         file_lines = file.header ++ hunk_lines ++ omitted_hunk_marker(file.omitted_hunk_count)
 
-        {lines ++ file_lines, kept_context + file_kept_context,
+        {[file_lines | lines], kept_context + file_kept_context,
          omitted_context + file_omitted_context}
       end)
 
     omitted_file_count = length(files) - length(selected_files)
-    file_lines = file_lines ++ omitted_file_marker(omitted_file_count)
+
+    file_lines =
+      file_chunks
+      |> Enum.reverse()
+      |> Kernel.++([omitted_file_marker(omitted_file_count)])
+      |> List.flatten()
 
     {file_lines, kept_context_line_count, omitted_context_line_count}
   end
 
   defp render_hunks(hunks, context_lines) do
-    Enum.reduce(hunks, {[], 0, 0}, fn hunk, {lines, kept_context, omitted_context} ->
-      {hunk_lines, hunk_kept_context, hunk_omitted_context} =
-        render_hunk(hunk, context_lines)
+    {chunks, kept_context, omitted_context} =
+      Enum.reduce(hunks, {[], 0, 0}, fn hunk, {chunks, kept_context, omitted_context} ->
+        {hunk_lines, hunk_kept_context, hunk_omitted_context} =
+          render_hunk(hunk, context_lines)
 
-      {lines ++ hunk_lines, kept_context + hunk_kept_context,
-       omitted_context + hunk_omitted_context}
-    end)
+        {[hunk_lines | chunks], kept_context + hunk_kept_context,
+         omitted_context + hunk_omitted_context}
+      end)
+
+    {chunks |> Enum.reverse() |> List.flatten(), kept_context, omitted_context}
   end
 
   defp render_hunk(hunk, context_lines) do
     selected_indexes = selected_hunk_indexes(hunk, context_lines)
+    selected_index_set = MapSet.new(selected_indexes)
 
     {body_lines, omitted_context_line_count} =
       Strategies.collapse_lines(hunk.body, selected_indexes, fn count ->
@@ -210,7 +225,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
       hunk.body
       |> Enum.with_index()
       |> Enum.count(fn {line, index} ->
-        not changed_line?(line, hunk) and index in selected_indexes
+        not changed_line?(line, hunk) and MapSet.member?(selected_index_set, index)
       end)
 
     hunk_lines =
@@ -228,12 +243,18 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
 
     lines
     |> Enum.with_index()
-    |> Enum.filter(fn {line, _index} -> changed_line?(line, hunk) end)
-    |> Enum.flat_map(fn {_line, index} ->
-      max(index - context_lines, 0)..min(index + context_lines, last_index)//1
-      |> Enum.to_list()
+    |> Enum.reduce(MapSet.new(), fn {line, index}, indexes ->
+      if changed_line?(line, hunk) do
+        Enum.reduce(
+          max(index - context_lines, 0)..min(index + context_lines, last_index)//1,
+          indexes,
+          &MapSet.put(&2, &1)
+        )
+      else
+        indexes
+      end
     end)
-    |> Enum.uniq()
+    |> MapSet.to_list()
     |> Enum.sort()
   end
 
@@ -250,27 +271,19 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   end
 
   defp total_hunk_count(files) do
-    files
-    |> Enum.map(&hunk_count/1)
-    |> Enum.sum()
+    Enum.reduce(files, 0, &(hunk_count(&1) + &2))
   end
 
   defp hunk_count(file), do: length(file.hunks)
 
   defp total_change_count(files) do
-    files
-    |> Enum.flat_map(& &1.hunks)
-    |> Enum.map(&change_count/1)
-    |> Enum.sum()
+    sum_hunks(files, &change_count/1)
   end
 
   defp change_count(hunk), do: addition_count(hunk) + deletion_count(hunk)
 
   defp addition_line_count(files) do
-    files
-    |> Enum.flat_map(& &1.hunks)
-    |> Enum.map(&addition_count/1)
-    |> Enum.sum()
+    sum_hunks(files, &addition_count/1)
   end
 
   defp addition_count(hunk) do
@@ -280,10 +293,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   end
 
   defp deletion_line_count(files) do
-    files
-    |> Enum.flat_map(& &1.hunks)
-    |> Enum.map(&deletion_count/1)
-    |> Enum.sum()
+    sum_hunks(files, &deletion_count/1)
   end
 
   defp deletion_count(hunk) do
@@ -293,10 +303,15 @@ defmodule CodexPooler.Gateway.RequestCompression.Strategies.Diff do
   end
 
   defp context_line_count(files) do
-    files
-    |> Enum.flat_map(& &1.hunks)
-    |> Enum.map(fn hunk -> Enum.count(hunk.body, &(not changed_line?(&1, hunk))) end)
-    |> Enum.sum()
+    sum_hunks(files, fn hunk ->
+      Enum.count(hunk.body, &(not changed_line?(&1, hunk)))
+    end)
+  end
+
+  defp sum_hunks(files, count_fun) do
+    Enum.reduce(files, 0, fn file, total ->
+      Enum.reduce(file.hunks, total, &(count_fun.(&1) + &2))
+    end)
   end
 
   defp changed_line?(line, hunk) do

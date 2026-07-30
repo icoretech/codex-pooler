@@ -67,21 +67,13 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   def detect(content) when is_binary(content) do
     trimmed = String.trim(content)
 
-    cond do
-      trimmed == "" ->
-        decision(:text, 100)
-
-      json_array?(trimmed) ->
-        decision(:json_array, 100)
-
-      concatenated_json_objects?(trimmed) ->
-        decision(:json_array, 100)
-
-      json_document?(trimmed) ->
-        decision(:json_document, 100)
-
-      true ->
-        scored_decision(content)
+    if trimmed == "" do
+      decision(:text, 100)
+    else
+      case json_kind(trimmed) do
+        {:ok, kind} -> decision(kind, 100)
+        :error -> scored_decision(content)
+      end
     end
   end
 
@@ -96,13 +88,20 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
       (points = html_points(content)) >= 70 ->
         decision(:html, points)
 
-      (points = search_points(content)) >= 60 ->
+      true ->
+        scored_text_decision(content, lines(content))
+    end
+  end
+
+  defp scored_text_decision(content, lines) do
+    cond do
+      (points = search_points(content, lines)) >= 60 ->
         decision(:search, points)
 
-      (points = build_points(content)) >= 50 ->
+      (points = build_points(content, lines)) >= 50 ->
         decision(:build, points)
 
-      (points = source_points(content)) >= 50 ->
+      (points = source_points(content, lines)) >= 50 ->
         decision(:source_code, points)
 
       true ->
@@ -136,17 +135,26 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
 
   def normalize_concatenated_json_objects(_content), do: :error
 
-  defp concatenated_json_objects?(content) do
-    case decode_concatenated_json_objects(content) do
-      {:ok, [_first, _second | _rest]} -> true
-      _other -> false
-    end
-  end
-
   defp decode_concatenated_json_objects(content) do
     content
     |> String.trim()
     |> decode_object_stream([])
+  end
+
+  defp json_kind(content) do
+    case Jason.decode(content) do
+      {:ok, value} when is_list(value) -> {:ok, :json_array}
+      {:ok, value} when is_map(value) -> {:ok, :json_document}
+      {:error, _reason} -> concatenated_json_kind(content)
+      _other -> :error
+    end
+  end
+
+  defp concatenated_json_kind(content) do
+    case decode_concatenated_json_objects(content) do
+      {:ok, [_first, _second | _rest]} -> {:ok, :json_array}
+      _other -> :error
+    end
   end
 
   defp decode_object_stream("", _rows), do: :error
@@ -226,20 +234,6 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
 
   defp trim_leading_json_whitespace(content, count), do: {content, count}
 
-  defp json_array?(content) do
-    case Jason.decode(content) do
-      {:ok, value} when is_list(value) -> true
-      _other -> false
-    end
-  end
-
-  defp json_document?(content) do
-    case Jason.decode(content) do
-      {:ok, value} when is_map(value) -> true
-      _other -> false
-    end
-  end
-
   defp diff_points(content) do
     hunks = scan_count(@diff_hunk_regex, content)
     additions = scan_count(@diff_addition_regex, content)
@@ -283,12 +277,12 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
     |> Enum.sum()
   end
 
-  defp search_points(content) do
+  defp search_points(content, lines) do
     numbered_results = scan_count(@numbered_result_regex, content)
     path_matches = scan_count(@path_match_regex, content)
     path_context_lines = scan_count(@path_context_regex, content)
     nul_matches = scan_count(@nul_path_match_regex, content)
-    grouped_matches = grouped_search_match_count(content)
+    grouped_matches = grouped_search_match_count(lines)
     structural_matches = path_matches + nul_matches + grouped_matches
     urls = scan_count(@url_regex, content)
     separators = scan_count(@snippet_separator_regex, content)
@@ -306,8 +300,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
     |> min(100)
   end
 
-  defp build_points(content) do
-    lines = lines(content)
+  defp build_points(content, lines) do
     severities = scan_count(@severity_regex, content)
     diagnostic_paths = scan_count(@diagnostic_path_regex, content)
     diagnostic_summaries = scan_count(@diagnostic_summary_regex, content)
@@ -327,8 +320,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
     |> min(100)
   end
 
-  defp source_points(content) do
-    lines = lines(content)
+  defp source_points(content, lines) do
     keywords = scan_count(@source_keyword_regex, content)
     punctuation = scan_count(@source_punctuation_regex, content)
     operators = scan_count(@source_operator_regex, content)
@@ -347,43 +339,42 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
     |> min(100)
   end
 
-  defp grouped_search_match_count(content) do
-    content
-    |> lines()
-    |> Enum.with_index()
-    |> Enum.map(fn {line, index} ->
-      path = String.trim(line)
-
-      if grouped_heading?(path) do
-        count_grouped_lines_after(content, index)
-      else
-        0
-      end
-    end)
-    |> Enum.sum()
+  defp grouped_search_match_count(lines) do
+    grouped_search_match_count(lines, nil, 0)
   end
 
-  defp count_grouped_lines_after(content, heading_index) do
-    {matches, _context_lines} =
-      content
-      |> lines()
-      |> Enum.drop(heading_index + 1)
-      |> Enum.reduce_while({0, 0}, fn line, {matches, context_lines} ->
-        cond do
-          Regex.match?(@grouped_line_match_regex, line) ->
-            {:cont, {matches + 1, context_lines}}
-
-          Regex.match?(@grouped_line_context_regex, line) or
-              Regex.match?(@grouped_separator_regex, line) ->
-            {:cont, {matches, context_lines + 1}}
-
-          true ->
-            {:halt, {matches, context_lines}}
-        end
-      end)
-
-    if matches >= 2, do: matches, else: 0
+  defp grouped_search_match_count([], current_matches, count) do
+    count + completed_group_match_count(current_matches)
   end
+
+  defp grouped_search_match_count([line | rest], nil, count) do
+    if grouped_heading?(String.trim(line)) do
+      grouped_search_match_count(rest, 0, count)
+    else
+      grouped_search_match_count(rest, nil, count)
+    end
+  end
+
+  defp grouped_search_match_count([line | rest] = lines, current_matches, count) do
+    cond do
+      Regex.match?(@grouped_line_match_regex, line) ->
+        grouped_search_match_count(rest, current_matches + 1, count)
+
+      Regex.match?(@grouped_line_context_regex, line) or
+          Regex.match?(@grouped_separator_regex, line) ->
+        grouped_search_match_count(rest, current_matches, count)
+
+      true ->
+        grouped_search_match_count(
+          lines,
+          nil,
+          count + completed_group_match_count(current_matches)
+        )
+    end
+  end
+
+  defp completed_group_match_count(matches) when is_integer(matches) and matches >= 2, do: matches
+  defp completed_group_match_count(_matches), do: 0
 
   defp grouped_heading?(path) do
     byte_size(path) in 1..@max_grouped_heading_bytes and
@@ -411,7 +402,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   defp score(false, _points), do: 0
 
   defp regex_match?(regex, content), do: Regex.match?(regex, content)
-  defp scan_count(regex, content), do: regex |> Regex.scan(content) |> length()
+  defp scan_count(regex, content), do: regex |> Regex.scan(content, capture: :first) |> length()
 
   defp lines(content) do
     String.split(content, ["\r\n", "\n", "\r"], trim: true)
