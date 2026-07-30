@@ -666,9 +666,6 @@ defmodule CodexPooler.Gateway.Websocket do
     )
   end
 
-  @spec duplicate_codex_turn?(CodexSession.t(), Ecto.UUID.t() | String.t()) :: boolean()
-  defdelegate duplicate_codex_turn?(session, request_id), to: SessionContinuity
-
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   def start_codex_turn(session, request, opts \\ %{}) do
     SessionContinuity.start_codex_turn(session, request, websocket_request_options(opts))

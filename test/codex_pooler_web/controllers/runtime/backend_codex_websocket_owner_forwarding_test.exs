@@ -53,6 +53,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -6910,7 +6911,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         case {count, upstream_payload} do
           {1, %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{}} ->
-            writer.(Jason.encode!(%{"id" => "resp_owner_queue_first", "object" => "response"}))
+            frame = Jason.encode!(%{"id" => "resp_owner_queue_first", "object" => "response"})
+            writer.(frame, TerminalDiscriminator.classify(frame))
             :ok
 
           {2, payload} when is_binary(payload) ->
@@ -6924,7 +6926,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           {3, %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{}} ->
             send(test_pid, {:chained_owner_upstream_tool_started, release_ref})
-            writer.(Jason.encode!(%{"id" => "resp_owner_queue_tool", "object" => "response"}))
+            frame = Jason.encode!(%{"id" => "resp_owner_queue_tool", "object" => "response"})
+            writer.(frame, TerminalDiscriminator.classify(frame))
             :ok
         end
       end,
@@ -6959,8 +6962,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         frame =
           Jason.encode!(%{"id" => "resp_owner_visible_before_crash", "object" => "response"})
 
-        if is_function(request.frame_observer, 1), do: request.frame_observer.(frame)
-        writer.(frame)
+        decoded = Jason.decode!(frame)
+
+        cond do
+          is_function(request.frame_observer, 2) -> request.frame_observer.(frame, decoded)
+          is_function(request.frame_observer, 1) -> request.frame_observer.(frame)
+          true -> :ok
+        end
+
+        writer.(frame, TerminalDiscriminator.classify(frame))
         send(test_pid, {:visible_blocking_owner_upstream, self(), release_ref})
 
         receive do

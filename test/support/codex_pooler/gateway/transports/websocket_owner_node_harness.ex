@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   @moduledoc false
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @controlled_stages [
@@ -261,9 +262,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
        ) do
     spawn_link(fn ->
       await_controlled_release(test_pid, controls, :nonterminal_frames)
-      Enum.each(nonterminal_frames, writer)
+      Enum.each(nonterminal_frames, &emit_frame(writer, &1))
       await_controlled_release(test_pid, controls, :terminal_frames)
-      Enum.each(terminal_frames, writer)
+      Enum.each(terminal_frames, &emit_frame(writer, &1))
     end)
   end
 
@@ -279,12 +280,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   end
 
   defp emit_messages(messages, writer, nil, _test_pid) do
-    Enum.each(messages, writer)
+    Enum.each(messages, &emit_frame(writer, &1))
   end
 
   defp emit_messages(messages, writer, block_ref, test_pid) when is_reference(block_ref) do
     {before_barrier, after_barrier} = Enum.split(messages, 1)
-    Enum.each(before_barrier, writer)
+    Enum.each(before_barrier, &emit_frame(writer, &1))
     send(test_pid, {:websocket_owner_harness_barrier, self(), block_ref})
 
     receive do
@@ -293,8 +294,13 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
       5_000 -> raise "timed out waiting for websocket owner harness release"
     end
 
-    Enum.each(after_barrier, writer)
+    Enum.each(after_barrier, &emit_frame(writer, &1))
   end
+
+  defp emit_frame(writer, frame) when is_function(writer, 2),
+    do: writer.(frame, TerminalDiscriminator.classify(frame))
+
+  defp emit_frame(writer, frame) when is_function(writer, 1), do: writer.(frame)
 
   defp stop_fake_upstream(upstream_pid, test_pid) do
     Agent.update(upstream_pid, fn state -> %{state | closed?: true} end)

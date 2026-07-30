@@ -383,9 +383,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     visibility = :atomics.new(1, [])
     observer = request.frame_observer
 
-    tracked_observer = fn frame ->
-      if is_function(observer, 1), do: observer.(frame)
-      unless StreamProtocol.internal_rate_limit_event?(frame), do: :atomics.put(visibility, 1, 1)
+    tracked_observer = fn frame, decoded ->
+      cond do
+        is_function(observer, 2) -> observer.(frame, decoded)
+        is_function(observer, 1) -> observer.(frame)
+        true -> :ok
+      end
+
+      unless StreamProtocol.internal_rate_limit_event?(decoded),
+        do: :atomics.put(visibility, 1, 1)
     end
 
     {%{request | frame_observer: tracked_observer}, visibility}

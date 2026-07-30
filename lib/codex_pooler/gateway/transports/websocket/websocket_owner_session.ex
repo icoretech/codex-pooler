@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.{
     DownstreamState,
@@ -434,19 +435,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:websocket_owner_upstream_frame, ref, payload},
         %{active_turn: %{ref: ref}} = state
       ) do
-    if terminal_frame?(payload) and state.active_turn.terminal_forwarded? do
-      {:noreply, state}
-    else
-      case send_downstream(
-             state,
-             DownstreamState.active_turn_downstream(state),
-             {:data, payload}
-           ) do
-        :ok -> {:noreply, maybe_complete_terminal_delivery(state, payload)}
-        {:error, reason} -> {:noreply, fail_terminal_delivery(state, payload, reason)}
-      end
-    end
+    handle_upstream_frame(state, payload, terminal_frame?(payload))
   end
+
+  def handle_info(
+        {:websocket_owner_upstream_frame, ref, payload, %TerminalDiscriminator{} = discriminator},
+        %{active_turn: %{ref: ref}} = state
+      ) do
+    handle_upstream_frame(state, payload, TerminalDiscriminator.terminal?(discriminator))
+  end
+
+  def handle_info({:websocket_owner_upstream_frame, _ref, _payload, _discriminator}, state),
+    do: {:noreply, state}
 
   def handle_info({:websocket_owner_upstream_frame, _ref, _payload}, state), do: {:noreply, state}
 
@@ -643,6 +643,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end)
   end
 
+  defp handle_upstream_frame(state, payload, terminal?) do
+    case classify_terminal_delivery_frame(state.active_turn.terminal_forwarded?, terminal?) do
+      :duplicate_terminal ->
+        {:noreply, state}
+
+      {:forward, terminal?} ->
+        case send_downstream(
+               state,
+               DownstreamState.active_turn_downstream(state),
+               {:data, payload}
+             ) do
+          :ok -> {:noreply, maybe_complete_terminal_delivery(state, terminal?)}
+          {:error, reason} -> {:noreply, fail_terminal_delivery(state, terminal?, reason)}
+        end
+    end
+  end
+
   defp send_upstream(
          %{
            owner: owner,
@@ -653,7 +670,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          },
          upstream_payload
        ) do
-    writer = fn frame -> send(owner, {:websocket_owner_upstream_frame, ref, frame}) end
+    writer = fn frame, discriminator ->
+      send(owner, {:websocket_owner_upstream_frame, ref, frame, discriminator})
+    end
 
     case sender.(upstream_pid, upstream_payload, writer) do
       {:error, response} when is_map(response) ->
@@ -897,8 +916,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp output_commit_probe_required?(_state, _result), do: false
 
-  defp maybe_complete_terminal_delivery(state, payload) do
-    if terminal_frame?(payload) do
+  defp maybe_complete_terminal_delivery(state, terminal?) do
+    if terminal? do
       state = put_in(state.active_turn.terminal_forwarded?, true)
 
       case state.active_turn.pending_result do
@@ -910,8 +929,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
-  defp fail_terminal_delivery(state, payload, reason) do
-    if terminal_frame?(payload) do
+  defp fail_terminal_delivery(state, terminal?, reason) do
+    if terminal? do
       settle_active_turn(state, {:error, reason})
     else
       state
@@ -943,6 +962,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     do: terminal in @terminal_result_types
 
   defp terminal_bearing_result?(_result), do: false
+
+  defp classify_terminal_delivery_frame(true, true), do: :duplicate_terminal
+  defp classify_terminal_delivery_frame(true, false), do: {:forward, false}
+
+  defp classify_terminal_delivery_frame(false, terminal?), do: {:forward, terminal?}
 
   defp terminal_frame?(payload) when is_binary(payload),
     do: match?({:ok, _outcome}, StreamProtocol.terminal_outcome(payload))

@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -644,6 +645,38 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
 
+  test "classified terminal delivery does not reparse a non-JSON downstream frame", context do
+    terminal_frame = "terminal-frame-already-classified"
+    terminal_result = terminal_result(terminal_frame, "response.completed")
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, writer ->
+        writer.(
+          terminal_frame,
+          %TerminalDiscriminator{terminal: "response.completed"}
+        )
+
+        terminal_result
+      end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
+    }
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("classified-terminal"))
+
+    assert WebsocketOwnerSession.submit_request(owner, downstream, websocket_request()) ==
+             terminal_result
+
+    assert_receive {:websocket_owner_frame, "classified-terminal", 1, {:data, ^terminal_frame}}
+    assert_receive {:websocket_owner_frame, "classified-terminal", 1, :complete}
+    refute_received {:websocket_owner_frame, "classified-terminal", 1, {:data, ^terminal_frame}}
+    refute_received {:websocket_owner_frame, "classified-terminal", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
   test "result-first settlement preserves every normalized terminal class exactly once",
        context do
     for {frame_type, result_type} <- [
@@ -794,8 +827,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     upstream = %{
       start: fn -> Agent.start_link(fn -> :ready end) end,
       send: fn _upstream_pid, _request, writer ->
-        _result = writer.(visible_frame)
-        _result = writer.(overflow_frame)
+        _result = writer.(visible_frame, TerminalDiscriminator.classify(visible_frame))
+        _result = writer.(overflow_frame, TerminalDiscriminator.classify(overflow_frame))
         interrupted_result()
       end,
       close: fn upstream_pid -> Agent.stop(upstream_pid) end
@@ -2576,7 +2609,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       start: fn -> Agent.start_link(fn -> :ready end) end,
       send: fn _upstream_pid, _request, writer ->
         send(parent, {:interrupted_upstream_writer, frame})
-        _message = writer.(frame)
+        _message = writer.(frame, TerminalDiscriminator.classify(frame))
         interrupted_result()
       end,
       close: fn upstream_pid -> Agent.stop(upstream_pid) end
