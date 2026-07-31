@@ -71,20 +71,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
           {:websocket_owner_output_commit_ack, correlation_id(), downstream_epoch(),
            owner_turn_id(), reference(), reference(), boolean()}
 
-  @owner_errors [
-    :owner_unavailable,
-    :stale_owner,
-    :owner_forward_timeout,
-    :owner_crashed,
-    :owner_drained,
-    :duplicate_downstream,
-    :stale_downstream,
-    :owner_forwarding_disabled,
-    :owner_busy,
-    :client_disconnected,
-    :upstream_stream_error,
-    :upstream_websocket_terminal_delivery_timeout
-  ]
+  @owner_errors CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary.owner_errors()
 
   @safe_error_payloads %{
     owner_busy: [

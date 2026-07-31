@@ -2,11 +2,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
 
   @fingerprint_length 12
   @max_correlator_length 120
-  @known_error_codes MapSet.new(ErrorCodes.known_error_codes())
+  @known_error_codes MapSet.new(
+                       OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()
+                     )
   @sensitive_value_patterns [
     "auth.json",
     "authorization",
@@ -59,10 +61,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   def safe_correlator(_value), do: "none"
 
-  defp known_error_code?(value) do
-    MapSet.member?(@known_error_codes, value) or
-      Enum.any?(WebsocketOwnerContract.owner_errors(), &(Atom.to_string(&1) == value))
-  end
+  defp known_error_code?(value), do: MapSet.member?(@known_error_codes, value)
 
   defp fingerprint(value) do
     "sha256_" <>
