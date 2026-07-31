@@ -544,10 +544,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     malformed_replies = [
       {:ok, :banana},
-      {:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}}
+      {:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}},
+      {:ok, %{terminal: "response.completed", status: 200, headers: []}}
     ]
 
-    expected_shapes = ["non_map", "map_without_terminal"]
+    expected_shapes = ["non_map", "map_without_terminal", "map_without_body"]
 
     for {{malformed_reply, expected_shape}, index} <-
           Enum.with_index(Enum.zip(malformed_replies, expected_shapes), 1) do

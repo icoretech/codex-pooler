@@ -38,6 +38,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
       # Control characters must not survive: a trailing newline would otherwise
       # split a log line and let the tail forge diagnostic key=value pairs.
       assert DiagnosticTaxonomy.identifier("clean_code\n") =~ ~r/^sha256_[0-9a-f]{12}$/
+
       assert DiagnosticTaxonomy.identifier("clean_code\nerror_code=forged") =~
                ~r/^sha256_[0-9a-f]{12}$/
 

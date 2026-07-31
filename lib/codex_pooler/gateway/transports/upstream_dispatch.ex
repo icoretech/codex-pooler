@@ -659,16 +659,17 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   defp owner_request_result({:ok, result}, identity, request)
-       when is_map(result) and is_map_key(result, :terminal) do
+       when is_map(result) and is_map_key(result, :terminal) and is_map_key(result, :body) do
     {:ok, result}
     |> record_upstream_websocket_body(identity, request)
   end
 
-  # A malformed owner success reply (non-map, or a map without a terminal) must
-  # settle as one normal owner-crash failure instead of crashing the response
-  # task after the reply already crossed the node boundary. The containment is
-  # announced with a bounded shape label so it stays distinguishable from a real
-  # owner crash without putting the reply itself in a log.
+  # A malformed owner success reply — not a map, or a map missing either field
+  # every downstream consumer requires — must settle as one normal owner-crash
+  # failure instead of crashing the response task after the reply already
+  # crossed the node boundary. The containment is announced with a bounded shape
+  # label so it stays distinguishable from a real owner crash without putting
+  # the reply itself in a log.
   defp owner_request_result({:ok, malformed_reply}, _identity, request) do
     Logger.warning(
       "websocket owner reply malformed boundary=submit " <>
@@ -692,7 +693,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
-  defp owner_reply_shape(reply) when is_map(reply), do: "map_without_terminal"
+  defp owner_reply_shape(reply) when is_map(reply) do
+    if is_map_key(reply, :terminal), do: "map_without_body", else: "map_without_terminal"
+  end
+
   defp owner_reply_shape(_reply), do: "non_map"
 
   # `request` here is the accounting row, not the dispatch struct, so the

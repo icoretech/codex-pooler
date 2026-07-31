@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummary do
   def record(endpoint, payload, upstream_payload, opts, transport) do
     if enabled?() do
       summary = summary(endpoint, payload, upstream_payload, opts, transport)
+
       previous_response_id_clear_preview =
         previous_response_id_clear_preview(Map.get(payload, "previous_response_id"))
 

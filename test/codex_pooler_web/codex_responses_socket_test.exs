@@ -29,7 +29,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
       assert pushed == frame
       assert next_state.native_turn_output_task_pids == MapSet.new([task_pid])
-      assert Map.delete(next_state, :native_turn_output_task_pids) == Map.delete(state, :native_turn_output_task_pids)
+
+      assert Map.delete(next_state, :native_turn_output_task_pids) ==
+               Map.delete(state, :native_turn_output_task_pids)
     end
   end
 
