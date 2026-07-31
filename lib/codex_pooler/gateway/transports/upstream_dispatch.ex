@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
@@ -656,9 +657,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> record_upstream_websocket_body(identity, request)
   end
 
-  defp owner_request_result({:ok, result}, identity, request) when is_map(result) do
+  defp owner_request_result({:ok, result}, identity, request)
+       when is_map(result) and is_map_key(result, :terminal) do
     {:ok, result}
     |> record_upstream_websocket_body(identity, request)
+  end
+
+  # A malformed owner success reply (non-map, or a map without a terminal) must
+  # settle as one normal owner-crash failure instead of crashing the response
+  # task after the reply already crossed the node boundary. The containment is
+  # announced with a bounded shape label so it stays distinguishable from a real
+  # owner crash without putting the reply itself in a log.
+  defp owner_request_result({:ok, malformed_reply}, _identity, request) do
+    Logger.warning(
+      "websocket owner reply malformed boundary=submit " <>
+        "reply_shape=#{owner_reply_shape(malformed_reply)} " <>
+        "canonical_error=owner_crashed " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request))}"
+    )
+
+    {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
   end
 
   defp owner_request_result(
@@ -672,6 +690,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_result({:error, reason}, _identity, _request) do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
+
+  defp owner_reply_shape(reply) when is_map(reply), do: "map_without_terminal"
+  defp owner_reply_shape(_reply), do: "non_map"
+
+  defp owner_request_id(%Request{request_options: %RequestOptions{} = request_options}),
+    do: request_options.request_metadata.request_id
+
+  defp owner_request_id(_request), do: nil
 
   defp record_upstream_websocket_body(result, identity, request)
 

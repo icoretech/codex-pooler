@@ -527,6 +527,78 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                     %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
   end
 
+  test "malformed owner replies settle as owner_crashed and register no alias", %{auth: auth} do
+    remote_node = :"codex_pooler@malformed-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    alias_ids_before =
+      Repo.all(
+        from(alias_record in BridgeSessionAlias,
+          where: alias_record.codex_session_id == ^session.id,
+          select: alias_record.id,
+          order_by: [asc: alias_record.id]
+        )
+      )
+
+    malformed_replies = [
+      {:ok, :banana},
+      {:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}}
+    ]
+
+    expected_shapes = ["non_map", "map_without_terminal"]
+
+    for {{malformed_reply, expected_shape}, index} <-
+          Enum.with_index(Enum.zip(malformed_replies, expected_shapes), 1) do
+      forwarder_opts =
+        WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+          calls: %{remote_node => {:return, malformed_reply}}
+        )
+
+      request_options =
+        websocket_owner_request_options(
+          session,
+          lease_token,
+          %{pid: self(), epoch: 1, correlation_id: "corr-malformed-owner-result-#{index}"},
+          forwarder_opts
+        )
+
+      request = %UpstreamDispatch.Request{
+        url: "https://upstream.example.test/backend-api/codex/responses",
+        token: "redacted",
+        upstream_payload: "{}",
+        identity: upstream_identity(),
+        accounting_request: nil,
+        writer: fn _message -> :ok end,
+        request_options: request_options
+      }
+
+      logs =
+        capture_log([level: :warning], fn ->
+          assert UpstreamDispatch.websocket_request(request) ==
+                   {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
+        end)
+
+      assert logs =~ "websocket owner reply malformed boundary=submit"
+      assert logs =~ "reply_shape=#{expected_shape}"
+      assert logs =~ "canonical_error=owner_crashed"
+      refute logs =~ "banana"
+      refute logs =~ "resp_owner_no_terminal"
+
+      assert_receive {:websocket_owner_harness_node_call,
+                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+    end
+
+    assert Repo.all(
+             from(alias_record in BridgeSessionAlias,
+               where: alias_record.codex_session_id == ^session.id,
+               select: alias_record.id,
+               order_by: [asc: alias_record.id]
+             )
+           ) == alias_ids_before
+  end
+
   test "one-shot websocket request omits connection metadata on initial upgrade failure" do
     {:ok, failed_upstream} =
       FakeUpstream.start_link(

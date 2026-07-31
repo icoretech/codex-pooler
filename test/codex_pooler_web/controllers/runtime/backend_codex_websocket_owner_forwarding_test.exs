@@ -1927,6 +1927,85 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "malformed remote owner reply settles once as owner_crashed" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} = owner_socket(auth, "ws-owner-malformed-reply", "owner-malformed-reply")
+    remote_node = :"codex_pooler@malformed-reply-owner.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => {:return, {:ok, :banana}}}
+      )
+
+    remote_state = remote_owner_state(state, remote_node, node_opts)
+
+    alias_ids_before =
+      Repo.all(
+        from(alias_record in BridgeSessionAlias,
+          where: alias_record.codex_session_id == ^remote_state.codex_session.id,
+          select: alias_record.id,
+          order_by: [asc: alias_record.id]
+        )
+      )
+
+    logs =
+      capture_log(fn ->
+        try do
+          assert {:error, %{code: "owner_crashed", status: 502}} =
+                   Gateway.run_websocket_response(
+                     auth,
+                     websocket_payload(setup, "malformed owner reply"),
+                     owner_response_options(remote_state, node_opts),
+                     fn _data -> :ok end
+                   )
+        after
+          # The forced malformed reply also reaches the remote detach call, so
+          # terminate doubles as the detach-containment regression.
+          assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+        end
+      end)
+
+    refute logs =~ "banana"
+    refute logs =~ "websocket response task failed"
+
+    # Both containment boundaries announce themselves with a bounded shape label
+    # instead of silently masquerading as a real owner crash.
+    assert logs =~ "websocket owner reply malformed boundary=submit reply_shape=non_map"
+    assert logs =~ "websocket owner reply malformed boundary=detach"
+
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "failed"
+    assert request.transport == "websocket"
+    assert request.response_status_code == 502
+    assert request.last_error_code == "owner_crashed"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+
+    assert [turn] =
+             Repo.all(
+               from(t in CodexTurn, where: t.codex_session_id == ^remote_state.codex_session.id)
+             )
+
+    assert turn.status == "failed"
+
+    assert Repo.all(
+             from(alias_record in BridgeSessionAlias,
+               where: alias_record.codex_session_id == ^remote_state.codex_session.id,
+               select: alias_record.id,
+               order_by: [asc: alias_record.id]
+             )
+           ) == alias_ids_before
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+  end
+
   test "live owner-forwarded websocket keeps an accepted model miss on its established lane" do
     pinned_upstream =
       start_upstream(

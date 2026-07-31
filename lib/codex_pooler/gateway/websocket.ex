@@ -677,6 +677,20 @@ defmodule CodexPooler.Gateway.Websocket do
   defp owner_detach_result({:error, reason}, session, opts),
     do: owner_detach_error(reason, session, opts)
 
+  # A malformed owner detach reply — the `{:ok, value}` shape that a remote owner
+  # can still produce where only `:ok` or `{:error, owner_error}` is allowed — is
+  # contained like any other owner failure so socket terminate cleanup keeps
+  # running instead of crashing mid-detach, and is announced so the containment
+  # stays visible rather than masquerading as a real owner crash.
+  defp owner_detach_result(_malformed_reply, session, opts) do
+    Logger.warning(
+      "websocket owner reply malformed boundary=detach " <>
+        "reply_shape=ok_tuple_with_value canonical_error=owner_crashed"
+    )
+
+    owner_detach_error(:owner_crashed, session, opts)
+  end
+
   defp active_turn_reconnect?(%{active_turn_reconnect?: true}), do: true
   defp active_turn_reconnect?(_downstream), do: false
 
