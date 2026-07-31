@@ -483,7 +483,23 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   @tag :v1_websocket
   test "GET /v1/responses upgrades and dispatches through the public websocket route" do
     upstream =
-      start_upstream(public_websocket_completed_response("resp_v1_websocket_public"))
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_websocket_public",
+                 "status" => "completed",
+                 "service_tier" => "fast",
+                 "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
 
     setup =
       gateway_setup(upstream,
@@ -527,7 +543,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{
                "type" => "response.completed",
-               "response" => %{"id" => "resp_v1_websocket_public"}
+               "response" => %{
+                 "id" => "resp_v1_websocket_public",
+                 "service_tier" => "fast"
+               }
              } = Jason.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
@@ -5550,6 +5569,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "response" => %{
                "id" => "resp_v1_stream",
                "status" => "completed",
+               "service_tier" => "fast",
                "usage" => %{
                  "input_tokens" => 53,
                  "input_tokens_details" => input_tokens_details,
@@ -5562,7 +5582,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         ])
       )
 
-    setup = gateway_setup(upstream)
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
 
     conn =
       conn
@@ -5570,7 +5595,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic stream request",
-        "stream" => true
+        "stream" => true,
+        "service_tier" => "fast"
       })
 
     assert [content_type] = get_resp_header(conn, "content-type")
@@ -5585,12 +5611,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     events = public_sse_events(conn.resp_body)
 
+    assert List.last(events)["event"] == "response.completed"
+
     assert %{
              "event" => "response.completed",
              "data" => %{
                "type" => "response.completed",
                "response" => %{
                  "id" => "resp_v1_stream",
+                 "service_tier" => "fast",
                  "usage" => usage
                }
              }
@@ -5604,6 +5633,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["service_tier"] == "priority"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
