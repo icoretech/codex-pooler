@@ -3,7 +3,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   require Logger
 
-  alias CodexPooler.Accounting.Request, as: AccountingRequest
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
@@ -389,13 +388,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           upstream_request,
           owner_request_forwarder_opts(forwarder_opts, request_options)
         )
-        |> owner_request_result(identity, request)
+        |> owner_request_result(identity, request, request_options)
 
       :local ->
         direct_websocket_request(request_options, upstream_request, identity, request)
 
       {:error, reason} ->
-        owner_request_result({:error, reason}, identity, request)
+        owner_request_result({:error, reason}, identity, request, request_options)
     end
   end
 
@@ -653,12 +652,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_instance_matches?(_owner_instance_id, _owner_session), do: false
 
-  defp owner_request_result(:ok, identity, request) do
+  defp owner_request_result(:ok, identity, request, _request_options) do
     {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []}}
     |> record_upstream_websocket_body(identity, request)
   end
 
-  defp owner_request_result({:ok, result}, identity, request)
+  defp owner_request_result({:ok, result}, identity, request, _request_options)
        when is_map(result) and is_map_key(result, :terminal) and is_map_key(result, :body) do
     {:ok, result}
     |> record_upstream_websocket_body(identity, request)
@@ -670,12 +669,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   # crossed the node boundary. The containment is announced with a bounded shape
   # label so it stays distinguishable from a real owner crash without putting
   # the reply itself in a log.
-  defp owner_request_result({:ok, malformed_reply}, _identity, request) do
+  defp owner_request_result({:ok, malformed_reply}, _identity, _request, request_options) do
     Logger.warning(
       "websocket owner reply malformed boundary=submit " <>
         "reply_shape=#{owner_reply_shape(malformed_reply)} " <>
         "canonical_error=owner_crashed " <>
-        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request))}"
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request_options))}"
     )
 
     {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
@@ -684,12 +683,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_request_result(
          {:error, %{body: _body, reason: _reason} = response},
          _identity,
-         _request
+         _request,
+         _request_options
        ) do
     {:error, response}
   end
 
-  defp owner_request_result({:error, reason}, _identity, _request) do
+  defp owner_request_result({:error, reason}, _identity, _request, _request_options) do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
@@ -699,10 +699,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp owner_reply_shape(_reply), do: "non_map"
 
-  # `request` here is the accounting row, not the dispatch struct, so the
-  # correlator comes from its correlation id.
-  defp owner_request_id(%AccountingRequest{correlation_id: correlation_id}), do: correlation_id
-  defp owner_request_id(_request), do: nil
+  # The correlator is the upgrade request id every other websocket diagnostic
+  # emits under this key, so the containment warning joins the rest of the
+  # turn's log lines rather than sharing a key name with a different id space.
+  defp owner_request_id(%RequestOptions{request_metadata: %{request_id: request_id}}),
+    do: request_id
 
   defp record_upstream_websocket_body(result, identity, request)
 
