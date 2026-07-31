@@ -224,6 +224,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#filters_date_from")
     assert has_element?(view, "#filters_date_to")
     assert has_element?(view, "#filters_request_id")
+    refute has_element?(view, "#filters_service_tier")
+    refute has_element?(view, "[name='filters[service_tier]']")
     assert has_element?(view, "#request-log-pool-filter [aria-label='Pool']")
     assert has_element?(view, "#request-log-status-filter [aria-label='Status']")
 

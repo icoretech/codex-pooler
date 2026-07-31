@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
   @moduledoc false
 
+  alias CodexPooler.ServiceTier
   alias CodexPoolerWeb.Admin.Format
   alias CodexPoolerWeb.Admin.RequestLogsDisplay.{Errors, Status, UserAgents}
   alias CodexPoolerWeb.DateTimeDisplay
@@ -404,12 +405,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsDisplay do
 
   def option_icon_class(option), do: Map.get(option, :icon_class, "text-base-content/60")
 
-  defp fast_service_tier?(tier), do: normalize_service_tier(tier) in ["fast", "priority"]
-
-  defp normalize_service_tier(tier) when is_binary(tier),
-    do: tier |> String.trim() |> String.downcase()
-
-  defp normalize_service_tier(_tier), do: nil
+  defp fast_service_tier?(tier), do: ServiceTier.fast_mode?(tier)
 
   defp requested_tier_detail?(log, requested, effective) when is_binary(requested) do
     requested = String.trim(requested)
