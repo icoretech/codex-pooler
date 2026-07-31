@@ -448,7 +448,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         refute Map.has_key?(Jason.decode!(encoded), "service_tier")
       end
 
-      for tier <- ["priority", "flex", "scale", "latency_preview"] do
+      for tier <- ["priority", " PRIORITY ", "flex", "scale", "latency_preview", " "] do
         payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -463,18 +463,20 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert Jason.decode!(encoded)["service_tier"] == tier
       end
 
-      fast_payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "fast"}
-      fast_options = RequestOptions.build(%{}, "/backend-api/codex/responses", fast_payload)
+      for tier <- ["fast", " FAST ", "Fast"] do
+        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+        request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
-      assert {:ok, fast_encoded} =
-               PayloadNormalizer.upstream_payload(
-                 fast_payload,
-                 model,
-                 "/backend-api/codex/responses",
-                 fast_options
-               )
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
 
-      assert Jason.decode!(fast_encoded)["service_tier"] == "priority"
+        assert Jason.decode!(encoded)["service_tier"] == "priority"
+      end
 
       for tier <- [123, nil, ["fast"], %{"id" => "fast"}] do
         payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
